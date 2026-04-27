@@ -583,10 +583,10 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
   }
 
   try {
-    // Find user with timeout handling
+    // Find user with password field (password has select: false by default)
     const user = await User.findOne({ email: email.toLowerCase().trim() })
-      .maxTimeMS(10000) // 10 second timeout
-      .lean();
+      .select('+password') // CRITICAL: Include password field
+      .maxTimeMS(10000); // 10 second timeout
     
     if (!user) {
       logger.warn('Login attempt with non-existent email', { ip: clientIP, email });
@@ -599,9 +599,19 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
     // Check if user is active
     if (user.isActive === false) {
       logger.warn('Login attempt for inactive user', { ip: clientIP, email });
-      return res.status(401).json({ 
+      return res.status(403).json({ 
         success: false, 
         message: "Account is deactivated. Please contact administrator." 
+      });
+    }
+
+    // Verify password exists
+    if (!user.password) {
+      logger.error('User has no password set', { userId: user._id, email: user.email });
+      return res.status(500).json({ 
+        success: false, 
+        message: "Account configuration error. Please contact administrator.",
+        code: "NO_PASSWORD"
       });
     }
 
@@ -612,6 +622,16 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
       return res.status(401).json({ 
         success: false, 
         message: "Invalid credentials" 
+      });
+    }
+
+    // Verify JWT_SECRET exists
+    if (!process.env.JWT_SECRET) {
+      logger.error('JWT_SECRET not configured');
+      return res.status(500).json({ 
+        success: false, 
+        message: "Authentication system not configured. Please contact administrator.",
+        code: "NO_JWT_SECRET"
       });
     }
 
@@ -630,6 +650,11 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
         audience: 'workplus-client'
       }
     );
+
+    // Update last login
+    user.lastLogin = new Date();
+    user.loginAttempts = 0;
+    await user.save();
 
     logger.info('User logged in successfully', { 
       userId: user._id, 
@@ -655,18 +680,32 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
     });
   } catch (dbError) {
     // Handle database errors
-    if (dbError.name === 'MongooseError' || dbError.name === 'MongoError') {
-      logger.error('Database error during login', { 
-        error: dbError.message, 
-        ip: clientIP 
-      });
+    logger.error('Database error during login', { 
+      error: dbError.message,
+      stack: dbError.stack,
+      ip: clientIP 
+    });
+    
+    if (dbError.name === 'MongooseError' || dbError.name === 'MongoError' || dbError.name === 'MongoServerError') {
       return res.status(503).json({ 
         success: false, 
         message: "Database temporarily unavailable. Please try again later.",
         code: "DATABASE_ERROR"
       });
     }
-    throw dbError; // Re-throw for global error handler
+    
+    // Log unexpected errors but don't expose details to client
+    logger.error('Unexpected error during login', {
+      error: dbError.message,
+      stack: dbError.stack,
+      name: dbError.name
+    });
+    
+    return res.status(500).json({ 
+      success: false, 
+      message: "An authentication error occurred. Please try again later.",
+      code: "AUTH_ERROR"
+    });
   }
 }));
 
@@ -1485,7 +1524,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 /**
  * Ensure Super Admin exists in database
- * Creates if missing, updates if exists
+ * Creates if missing, updates if exists with correct password
  */
 const seedSuperAdmin = async () => {
   try {
@@ -1498,20 +1537,58 @@ const seedSuperAdmin = async () => {
     const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || 'Jadu@123';
     const superAdminName = process.env.SUPER_ADMIN_NAME || 'Super Admin';
 
-    // Check if super admin exists
-    let superAdmin = await User.findOne({ email: superAdminEmail.toLowerCase() });
+    // Check if super admin exists (include password field)
+    let superAdmin = await User.findOne({ email: superAdminEmail.toLowerCase() }).select('+password');
 
     if (superAdmin) {
-      // Update existing super admin if needed
+      let needsUpdate = false;
+      
+      // Update role if needed
       if (superAdmin.role !== 'super_admin') {
         superAdmin.role = 'super_admin';
+        needsUpdate = true;
+        logger.info('Updating super admin role');
+      }
+      
+      // Update name if needed
+      if (superAdmin.name !== superAdminName) {
         superAdmin.name = superAdminName;
-        await superAdmin.save();
-        logger.info('✅ Super Admin role updated', { email: superAdminEmail });
-        console.log('✅ Super Admin role updated');
+        needsUpdate = true;
+      }
+      
+      // Ensure account is active
+      if (superAdmin.isActive !== true) {
+        superAdmin.isActive = true;
+        needsUpdate = true;
+      }
+      
+      // CRITICAL: Always verify/update password to ensure it's correct
+      if (superAdmin.password) {
+        const isPasswordCorrect = await bcrypt.compare(superAdminPassword, superAdmin.password);
+        if (!isPasswordCorrect) {
+          logger.warn('Super admin password mismatch - updating password');
+          superAdmin.password = await bcrypt.hash(superAdminPassword, 12);
+          needsUpdate = true;
+        }
       } else {
-        logger.info('✅ Super Admin already exists', { email: superAdminEmail });
+        // No password set - set it now
+        logger.warn('Super admin has no password - setting password');
+        superAdmin.password = await bcrypt.hash(superAdminPassword, 12);
+        needsUpdate = true;
+      }
+      
+      if (needsUpdate) {
+        await superAdmin.save();
+        logger.info('✅ Super Admin updated', { email: superAdminEmail });
+        console.log('✅ Super Admin updated');
+        console.log(`   Email: ${superAdminEmail}`);
+        console.log(`   Password: ${superAdminPassword}`);
+        console.log(`   Role: super_admin`);
+      } else {
+        logger.info('✅ Super Admin already exists with correct configuration', { email: superAdminEmail });
         console.log('✅ Super Admin already exists');
+        console.log(`   Email: ${superAdminEmail}`);
+        console.log(`   Role: super_admin`);
       }
     } else {
       // Create new super admin
@@ -1523,7 +1600,8 @@ const seedSuperAdmin = async () => {
         password: hashedPassword,
         role: 'super_admin',
         organization: 'WorkPlus Inc.',
-        isActive: true
+        isActive: true,
+        orgId: 'system'
       });
 
       logger.info('✅ Super Admin created successfully', { 
@@ -1533,12 +1611,27 @@ const seedSuperAdmin = async () => {
       console.log('✅ Super Admin created successfully');
       console.log(`   Email: ${superAdminEmail}`);
       console.log(`   Password: ${superAdminPassword}`);
+      console.log(`   Role: super_admin`);
+    }
+
+    // Verify super admin can be found and logged in
+    const verifyUser = await User.findOne({ email: superAdminEmail.toLowerCase() }).select('+password');
+    if (verifyUser && verifyUser.password) {
+      const canLogin = await bcrypt.compare(superAdminPassword, verifyUser.password);
+      if (canLogin) {
+        logger.info('✅ Super Admin login verified');
+        console.log('✅ Super Admin login credentials verified');
+      } else {
+        logger.error('❌ Super Admin password verification failed');
+        console.error('❌ WARNING: Super Admin password verification failed!');
+      }
     }
 
     return true;
   } catch (error) {
-    logger.error('Failed to seed super admin', { error: error.message });
+    logger.error('Failed to seed super admin', { error: error.message, stack: error.stack });
     console.error('❌ Failed to seed super admin:', error.message);
+    console.error(error.stack);
     return false;
   }
 };

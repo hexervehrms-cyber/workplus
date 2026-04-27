@@ -2,25 +2,128 @@ import mongoose from "mongoose";
 
 const employeeSchema = new mongoose.Schema(
   {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, unique: true },
-    employeeCode: { type: String, unique: true },
-    designation: { type: String },
-    department: { type: String },
-    baseSalary: { type: Number, default: 0 },
-    hra: { type: Number, default: 0 },
-    bonus: { type: Number, default: 0 },
-    incentives: { type: Number, default: 0 },
-    allowances: { type: Number, default: 0 },
-    providentFund: { type: Number, default: 0 },
-    tax: { type: Number, default: 0 },
-    insurance: { type: Number, default: 0 },
-    otherDeductions: { type: Number, default: 0 },
-    joiningDate: { type: Date },
-    phone: { type: String },
-    address: { type: String },
-    status: { type: String, enum: ["active", "inactive", "terminated"], default: "active" }
+    userId: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: "User", 
+      required: true, 
+      unique: true 
+    },
+    employeeCode: { 
+      type: String, 
+      unique: true,
+      sparse: true, // Allow null values but ensure uniqueness when set
+      uppercase: true,
+      trim: true
+    },
+    designation: { 
+      type: String,
+      trim: true
+    },
+    department: { 
+      type: String,
+      trim: true,
+      index: true // Index for department queries
+    },
+    baseSalary: { 
+      type: Number, 
+      default: 0,
+      min: [0, 'Salary cannot be negative']
+    },
+    hra: { 
+      type: Number, 
+      default: 0,
+      min: [0, 'HRA cannot be negative']
+    },
+    bonus: { 
+      type: Number, 
+      default: 0 
+    },
+    incentives: { 
+      type: Number, 
+      default: 0 
+    },
+    allowances: { 
+      type: Number, 
+      default: 0 
+    },
+    providentFund: { 
+      type: Number, 
+      default: 0 
+    },
+    tax: { 
+      type: Number, 
+      default: 0 
+    },
+    insurance: { 
+      type: Number, 
+      default: 0 
+    },
+    otherDeductions: { 
+      type: Number, 
+      default: 0 
+    },
+    joiningDate: { 
+      type: Date,
+      index: true // Index for date-based queries
+    },
+    phone: { 
+      type: String,
+      trim: true
+    },
+    address: { 
+      type: String,
+      trim: true
+    },
+    status: { 
+      type: String, 
+      enum: ["active", "inactive", "terminated"], 
+      default: "active",
+      index: true // Index for status queries
+    },
+    orgId: {
+      type: String,
+      index: true // Index for tenant queries
+    }
   },
-  { timestamps: true }
+  { 
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+  }
 );
 
-export default mongoose.model("Employee", employeeSchema);
+// Compound indexes for common queries
+employeeSchema.index({ orgId: 1, status: 1 });
+employeeSchema.index({ orgId: 1, department: 1 });
+employeeSchema.index({ userId: 1 }, { unique: true });
+employeeSchema.index({ employeeCode: 1 }, { 
+  unique: true, 
+  sparse: true,
+  partialFilterExpression: { employeeCode: { $exists: true, $ne: null } }
+});
+
+// Virtual for user details
+employeeSchema.virtual('user', {
+  ref: 'User',
+  localField: 'userId',
+  foreignField: '_id',
+  justOne: true
+});
+
+// Static method to find active employees
+employeeSchema.statics.findActive = function(orgId) {
+  return this.find({ status: 'active', orgId })
+    .populate('userId', 'name email avatar role')
+    .lean();
+};
+
+// Static method to find by department
+employeeSchema.statics.findByDepartment = function(department, orgId) {
+  return this.find({ department, orgId, status: 'active' })
+    .populate('userId', 'name email avatar')
+    .lean();
+};
+
+const Employee = mongoose.model("Employee", employeeSchema);
+
+export default Employee;

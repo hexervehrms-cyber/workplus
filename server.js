@@ -2,14 +2,18 @@
  * WorkPlus Backend Server - Production Stable Version
  * 
  * STABILITY FEATURES:
- * - Global error handling
- * - Graceful shutdown
- * - Database retry logic
+ * - Global error handling with specific error types
+ * - Graceful shutdown with cleanup
+ * - Database retry logic with auto-reconnect
  * - Async route wrapping
- * - Socket.IO error handling
- * - Request logging
- * - Health checks
+ * - Socket.IO error handling and memory management
+ * - Request logging with Winston
+ * - Health checks with detailed status
  * - Environment validation
+ * - Render proxy compatibility
+ * - Rate limiting with correct IP detection
+ * - MongoDB connection pooling
+ * - Security hardening with Helmet
  */
 
 import express from "express";
@@ -26,9 +30,10 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import jwt from "jsonwebtoken";
 import multer from "multer";
+import compression from "compression";
 
 // Import database connection
-import connectDB, { isDBConnected, getDBStatus } from "./config/db.js";
+import connectDB, { isDBConnected, getDBStatus, closeDB } from "./config/db.js";
 
 // Import models
 import User from "./models/User.js";
@@ -52,10 +57,21 @@ import GeneratedDocument from "./models/GeneratedDocument.js";
 import Reminder from "./models/Reminder.js";
 
 // Import middleware
-import { errorHandler, requestIdMiddleware, asyncHandler } from "./middleware/errorHandler.js";
+import { 
+  errorHandler, 
+  requestIdMiddleware, 
+  asyncHandler, 
+  notFoundHandler,
+  DatabaseError 
+} from "./middleware/errorHandler.js";
 import { tenantMiddleware, subscriptionMiddleware } from "./middleware/tenant.js";
 import fileValidator from "./middleware/fileValidator.js";
-import { loginLimiter, registerLimiter } from "./middleware/rateLimiter.js";
+import { 
+  loginLimiter, 
+  registerLimiter, 
+  apiLimiter,
+  getClientIP 
+} from "./middleware/rateLimiter.js";
 
 // Import logger
 import logger from "./utils/logger.js";
@@ -73,15 +89,27 @@ const validateEnvironment = () => {
   
   if (missing.length > 0) {
     console.error('❌ Missing required environment variables:', missing.join(', '));
+    logger.error('Missing required environment variables', { missing });
     process.exit(1);
   }
 
   // Validate JWT_SECRET is not default
-  if (process.env.JWT_SECRET === 'supersecretkey') {
+  if (process.env.JWT_SECRET === 'supersecretkey' || process.env.JWT_SECRET === 'your-super-secret-jwt-key-change-this-in-production') {
     console.warn('⚠️  WARNING: JWT_SECRET is using default value. Change this in production!');
+    logger.warn('JWT_SECRET is using default value - security risk!');
+  }
+
+  // Validate JWT_SECRET length
+  if (process.env.JWT_SECRET.length < 32) {
+    console.warn('⚠️  WARNING: JWT_SECRET should be at least 32 characters for security');
+    logger.warn('JWT_SECRET is too short - security risk!');
   }
 
   console.log('✅ Environment validation passed');
+  logger.info('Environment validation passed', {
+    nodeEnv: process.env.NODE_ENV,
+    port: process.env.PORT || 5000
+  });
 };
 
 validateEnvironment();
@@ -97,6 +125,18 @@ const __dirname = path.dirname(__filename);
 // Create HTTP server for Socket.IO
 const server = createServer(app);
 
+// ============================================================================
+// TRUST PROXY - CRITICAL FOR RENDER DEPLOYMENT
+// Fixes ERR_ERL_UNEXPECTED_X_FORWARDED_FOR error
+// ============================================================================
+
+// Trust first proxy (Render uses a single proxy layer)
+app.set('trust proxy', 1);
+
+// ============================================================================
+// CORS CONFIGURATION
+// ============================================================================
+
 // CORS whitelist - MUST be defined BEFORE Socket.IO initialization
 const allowedOrigins = [
   "https://workplus-murex.vercel.app",
@@ -108,9 +148,14 @@ const allowedOrigins = [
   process.env.CORS_ORIGIN
 ].filter(Boolean);
 
+// Log allowed origins for debugging
+logger.info('CORS allowed origins', { origins: allowedOrigins });
+
 const corsOptions = {
   origin: function(origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
+    
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -120,9 +165,15 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-  optionsSuccessStatus: 200
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Request-ID"],
+  exposedHeaders: ["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
+  optionsSuccessStatus: 200,
+  maxAge: 86400 // 24 hours
 };
+
+// ============================================================================
+// SOCKET.IO SETUP
+// ============================================================================
 
 // Initialize Socket.IO with CORS options
 const io = new Server(server, {
@@ -130,21 +181,67 @@ const io = new Server(server, {
   transports: ['websocket', 'polling'],
   pingInterval: 25000,
   pingTimeout: 60000,
+  // Connection state recovery
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
+    skipMiddlewares: true
+  }
 });
+
+// Track connected sockets for cleanup
+const connectedSockets = new Map();
+
+// ============================================================================
+// SECURITY MIDDLEWARE
+// ============================================================================
+
+// Helmet for security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      connectSrc: ["'self'", ...allowedOrigins],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"]
+    }
+  },
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
+
+// Compression middleware
+app.use(compression({
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    return compression.filter(req, res);
+  },
+  threshold: 1024 // Only compress responses > 1KB
+}));
+
+// ============================================================================
+// REQUEST LOGGING
+// ============================================================================
+
+app.use(morgan('combined', {
+  stream: {
+    write: (message) => logger.http(message.trim())
+  },
+  skip: (req) => {
+    // Skip logging health checks
+    return req.path === '/health' || req.path === '/api/health';
+  }
+}));
 
 // ============================================================================
 // MIDDLEWARE SETUP
 // ============================================================================
-
-// Security middleware
-app.use(helmet());
-
-// Request logging
-app.use(morgan('combined', {
-  stream: {
-    write: (message) => logger.http(message.trim())
-  }
-}));
 
 // CORS
 app.use(cors(corsOptions));
@@ -158,7 +255,10 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Static files
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  maxAge: '1d',
+  etag: true
+}));
 
 // ============================================================================
 // MULTER CONFIGURATION
@@ -216,43 +316,62 @@ app.get("/", (req, res) => {
 });
 
 app.get("/health", asyncHandler(async (req, res) => {
-  const mongoStatus = mongoose.connection.readyState;
-  const isConnected = mongoStatus === 1;
+  const dbStatus = getDBStatus();
+  const isConnected = isDBConnected();
   
   res.json({
     success: true,
     status: isConnected ? "healthy" : "degraded",
-    database: getDBStatus(),
+    database: dbStatus,
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    memory: process.memoryUsage()
+    memory: {
+      heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+      heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+      rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
+      unit: 'MB'
+    },
+    environment: process.env.NODE_ENV
   });
 }));
 
 app.get("/api/health", asyncHandler(async (req, res) => {
-  const mongoStatus = mongoose.connection.readyState;
-  const isConnected = mongoStatus === 1;
+  const dbStatus = getDBStatus();
+  const isConnected = isDBConnected();
   
   res.json({
     success: true,
     status: isConnected ? "healthy" : "degraded",
-    database: getDBStatus(),
+    database: dbStatus,
     timestamp: new Date().toISOString()
   });
 }));
 
 app.get("/api/health/db", asyncHandler(async (req, res) => {
   try {
-    // Test database connection
+    if (!isDBConnected()) {
+      return res.status(503).json({
+        success: false,
+        status: "disconnected",
+        message: "Database not connected",
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Test database connection with ping
+    const startTime = Date.now();
     await mongoose.connection.db.admin().ping();
+    const latency = Date.now() - startTime;
     
     res.json({
       success: true,
       status: "connected",
       database: getDBStatus(),
+      latency: `${latency}ms`,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
+    logger.error('Database health check failed', { error: error.message });
     res.status(503).json({
       success: false,
       status: "disconnected",
@@ -262,238 +381,303 @@ app.get("/api/health/db", asyncHandler(async (req, res) => {
   }
 }));
 
+app.get("/api/health/full", asyncHandler(async (req, res) => {
+  const startTime = Date.now();
+  
+  // Check database
+  let dbHealth = { status: 'unknown', latency: null };
+  try {
+    if (isDBConnected()) {
+      const dbStart = Date.now();
+      await mongoose.connection.db.admin().ping();
+      dbHealth = {
+        status: 'connected',
+        latency: `${Date.now() - dbStart}ms`
+      };
+    } else {
+      dbHealth = { status: 'disconnected', latency: null };
+    }
+  } catch (error) {
+    dbHealth = { status: 'error', error: error.message };
+  }
+  
+  // Memory usage
+  const mem = process.memoryUsage();
+  
+  // CPU usage (simplified)
+  const cpuUsage = process.cpuUsage();
+  
+  res.json({
+    success: true,
+    timestamp: new Date().toISOString(),
+    uptime: {
+      seconds: Math.floor(process.uptime()),
+      human: `${Math.floor(process.uptime() / 3600)}h ${Math.floor((process.uptime() % 3600) / 60)}m ${Math.floor(process.uptime() % 60)}s`
+    },
+    responseTime: `${Date.now() - startTime}ms`,
+    database: dbHealth,
+    memory: {
+      heapUsed: `${Math.round(mem.heapUsed / 1024 / 1024)} MB`,
+      heapTotal: `${Math.round(mem.heapTotal / 1024 / 1024)} MB`,
+      rss: `${Math.round(mem.rss / 1024 / 1024)} MB`,
+      external: `${Math.round(mem.external / 1024 / 1024)} MB`
+    },
+    cpu: {
+      user: cpuUsage.user,
+      system: cpuUsage.system
+    },
+    environment: process.env.NODE_ENV,
+    version: "1.0.0",
+    nodeVersion: process.version
+  });
+}));
+
 // ============================================================================
-// SOCKET.IO SETUP
+// SOCKET.IO EVENT HANDLERS
 // ============================================================================
 
 io.on('connection', (socket) => {
-  try {
-    logger.info(`User connected: ${socket.id}`);
+  const socketId = socket.id;
+  const clientIP = socket.handshake.address || 'unknown';
+  
+  // Track socket
+  connectedSockets.set(socketId, {
+    id: socketId,
+    ip: clientIP,
+    connectedAt: new Date(),
+    userId: null,
+    tenantId: null
+  });
+  
+  logger.info(`Socket connected`, { socketId, ip: clientIP, total: connectedSockets.size });
 
-    // Handle user authentication
-    socket.on('authenticate', (data) => {
+  // Handle user authentication
+  socket.on('authenticate', (data) => {
+    try {
+      const { userId, role, tenantId } = data;
+      
+      if (!userId || !tenantId) {
+        logger.warn(`Invalid socket auth data`, { socketId });
+        socket.emit('auth_error', { message: 'Invalid authentication data' });
+        return;
+      }
+
+      // Leave previous rooms if any
+      if (connectedSockets.get(socketId)?.tenantId) {
+        socket.leave(`tenant_${connectedSockets.get(socketId).tenantId}`);
+      }
+
+      // Join new rooms
+      socket.join(`tenant_${tenantId}`);
+      socket.join(role);
+      
+      // Update socket tracking
+      connectedSockets.set(socketId, {
+        ...connectedSockets.get(socketId),
+        userId,
+        role,
+        tenantId
+      });
+      
+      socket.userId = userId;
+      socket.role = role;
+      socket.tenantId = tenantId;
+
+      if (role === 'admin' || role === 'superadmin' || role === 'super_admin') {
+        socket.join('management');
+      }
+
+      logger.info(`Socket authenticated`, { socketId, userId, tenantId, role });
+      socket.emit('authenticated', { success: true });
+    } catch (error) {
+      logger.error(`Socket auth error`, { socketId, error: error.message });
+      socket.emit('auth_error', { message: 'Authentication failed' });
+    }
+  });
+
+  // Employee events
+  const handleSocketEvent = (eventName) => {
+    socket.on(eventName, (data) => {
       try {
-        const { userId, role, tenantId } = data;
+        const socketInfo = connectedSockets.get(socketId);
+        const tenantId = socketInfo?.tenantId || data?.tenantId;
         
-        if (!userId || !tenantId) {
-          logger.warn(`Invalid authentication data from ${socket.id}`);
-          return;
-        }
-
-        socket.join(`tenant_${tenantId}`);
-        socket.join(role);
-        socket.userId = userId;
-        socket.role = role;
-        socket.tenantId = tenantId;
-
-        if (role === 'admin' || role === 'superadmin') {
-          socket.join('management');
-        }
-
-        logger.info(`User ${userId} authenticated for tenant ${tenantId}`);
-      } catch (error) {
-        logger.error(`Socket authenticate error: ${error.message}`);
-      }
-    });
-
-    // Employee events
-    socket.on('employee_created', (data) => {
-      try {
-        const tenantId = socket.tenantId || data?.tenantId;
         if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('employee_created', data);
+          io.to(`tenant_${tenantId}`).emit(eventName, data);
+          logger.debug(`Socket event: ${eventName}`, { tenantId });
         }
       } catch (error) {
-        logger.error(`Socket employee_created error: ${error.message}`);
+        logger.error(`Socket event error: ${eventName}`, { error: error.message });
       }
     });
+  };
 
-    socket.on('employee_updated', (data) => {
-      try {
-        const tenantId = socket.tenantId || data?.tenantId;
-        if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('employee_updated', data);
-        }
-      } catch (error) {
-        logger.error(`Socket employee_updated error: ${error.message}`);
-      }
-    });
+  // Register event handlers
+  ['employee_created', 'employee_updated', 'employee_deleted',
+   'leave_created', 'leave_updated', 'leave_deleted',
+   'expense_created', 'expense_updated', 'expense_deleted',
+   'attendance:create'].forEach(handleSocketEvent);
 
-    socket.on('employee_deleted', (data) => {
-      try {
-        const tenantId = socket.tenantId || data?.tenantId;
-        if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('employee_deleted', data);
-        }
-      } catch (error) {
-        logger.error(`Socket employee_deleted error: ${error.message}`);
-      }
+  // Disconnect handler
+  socket.on('disconnect', (reason) => {
+    connectedSockets.delete(socketId);
+    logger.info(`Socket disconnected`, { 
+      socketId, 
+      reason, 
+      total: connectedSockets.size 
     });
+  });
 
-    // Leave events
-    socket.on('leave_created', (data) => {
-      try {
-        const tenantId = socket.tenantId || data?.tenantId;
-        if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('leave_created', data);
-        }
-      } catch (error) {
-        logger.error(`Socket leave_created error: ${error.message}`);
-      }
-    });
-
-    socket.on('leave_updated', (data) => {
-      try {
-        const tenantId = socket.tenantId || data?.tenantId;
-        if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('leave_updated', data);
-        }
-      } catch (error) {
-        logger.error(`Socket leave_updated error: ${error.message}`);
-      }
-    });
-
-    socket.on('leave_deleted', (data) => {
-      try {
-        const tenantId = socket.tenantId || data?.tenantId;
-        if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('leave_deleted', data);
-        }
-      } catch (error) {
-        logger.error(`Socket leave_deleted error: ${error.message}`);
-      }
-    });
-
-    // Expense events
-    socket.on('expense_created', (data) => {
-      try {
-        const tenantId = socket.tenantId || data?.tenantId;
-        if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('expense_created', data);
-        }
-      } catch (error) {
-        logger.error(`Socket expense_created error: ${error.message}`);
-      }
-    });
-
-    socket.on('expense_updated', (data) => {
-      try {
-        const tenantId = socket.tenantId || data?.tenantId;
-        if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('expense_updated', data);
-        }
-      } catch (error) {
-        logger.error(`Socket expense_updated error: ${error.message}`);
-      }
-    });
-
-    socket.on('expense_deleted', (data) => {
-      try {
-        const tenantId = socket.tenantId || data?.tenantId;
-        if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('expense_deleted', data);
-        }
-      } catch (error) {
-        logger.error(`Socket expense_deleted error: ${error.message}`);
-      }
-    });
-
-    // Attendance events
-    socket.on('attendance:create', (data) => {
-      try {
-        const tenantId = socket.tenantId || data?.tenantId;
-        if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('attendance:create', data);
-        }
-      } catch (error) {
-        logger.error(`Socket attendance:create error: ${error.message}`);
-      }
-    });
-
-    // Disconnect
-    socket.on('disconnect', () => {
-      try {
-        logger.info(`User disconnected: ${socket.id}`);
-      } catch (error) {
-        logger.error(`Socket disconnect error: ${error.message}`);
-      }
-    });
-
-    // Error handler
-    socket.on('error', (error) => {
-      logger.error(`Socket error for ${socket.id}: ${error.message}`);
-    });
-  } catch (error) {
-    logger.error(`Socket connection error: ${error.message}`);
-  }
+  // Error handler
+  socket.on('error', (error) => {
+    logger.error(`Socket error`, { socketId, error: error.message });
+  });
 });
 
-// Socket.IO error handler
-io.on('error', (error) => {
-  logger.error(`Socket.IO error: ${error.message}`);
+// Socket.IO server error handler
+io.engine.on('connection_error', (err) => {
+  logger.error('Socket.IO connection error', { 
+    message: err.message, 
+    code: err.code 
+  });
 });
 
 // ============================================================================
 // AUTHENTICATION ROUTES
 // ============================================================================
 
+/**
+ * Login endpoint with comprehensive error handling
+ */
 app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
   const { email, password } = req.body;
+  const clientIP = getClientIP(req);
 
+  // Validate input
   if (!email || !password) {
+    logger.warn('Login attempt missing credentials', { ip: clientIP });
     return res.status(400).json({ 
       success: false, 
       message: "Email and password are required" 
     });
   }
 
-  const user = await User.findOne({ email });
-  if (!user) {
-    return res.status(401).json({ 
+  // Validate email format
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    logger.warn('Login attempt with invalid email format', { ip: clientIP, email });
+    return res.status(400).json({ 
       success: false, 
-      message: "Invalid credentials" 
+      message: "Invalid email format" 
     });
   }
 
-  const isPasswordValid = await bcrypt.compare(password, user.password);
-  if (!isPasswordValid) {
-    return res.status(401).json({ 
+  // Check database connection
+  if (!isDBConnected()) {
+    logger.error('Login failed - database not connected', { ip: clientIP });
+    return res.status(503).json({ 
       success: false, 
-      message: "Invalid credentials" 
+      message: "Database temporarily unavailable. Please try again later.",
+      code: "DATABASE_UNAVAILABLE"
     });
   }
 
-  const token = jwt.sign(
-    { 
-      userId: user._id,
-      email: user.email,
-      role: user.role,
-      tenantId: user.orgId || 'system'
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '24h' }
-  );
+  try {
+    // Find user with timeout handling
+    const user = await User.findOne({ email: email.toLowerCase().trim() })
+      .maxTimeMS(10000) // 10 second timeout
+      .lean();
+    
+    if (!user) {
+      logger.warn('Login attempt with non-existent email', { ip: clientIP, email });
+      return res.status(401).json({ 
+        success: false, 
+        message: "Invalid credentials" 
+      });
+    }
 
-  res.json({
-    success: true,
-    message: "Login successful",
-    data: {
-      user: {
-        id: user._id,
-        name: user.name,
+    // Check if user is active
+    if (user.isActive === false) {
+      logger.warn('Login attempt for inactive user', { ip: clientIP, email });
+      return res.status(401).json({ 
+        success: false, 
+        message: "Account is deactivated. Please contact administrator." 
+      });
+    }
+
+    // Compare password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      logger.warn('Login attempt with wrong password', { ip: clientIP, email });
+      return res.status(401).json({ 
+        success: false, 
+        message: "Invalid credentials" 
+      });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        userId: user._id,
         email: user.email,
         role: user.role,
-        avatar: user.avatar || null,
-        organization: user.organization || 'WorkPlus Inc.'
+        tenantId: user.orgId || 'system'
       },
-      token: token
+      process.env.JWT_SECRET,
+      { 
+        expiresIn: '24h',
+        issuer: 'workplus-api',
+        audience: 'workplus-client'
+      }
+    );
+
+    logger.info('User logged in successfully', { 
+      userId: user._id, 
+      email: user.email, 
+      role: user.role,
+      ip: clientIP
+    });
+
+    res.json({
+      success: true,
+      message: "Login successful",
+      data: {
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          avatar: user.avatar || null,
+          organization: user.organization || 'WorkPlus Inc.'
+        },
+        token: token
+      }
+    });
+  } catch (dbError) {
+    // Handle database errors
+    if (dbError.name === 'MongooseError' || dbError.name === 'MongoError') {
+      logger.error('Database error during login', { 
+        error: dbError.message, 
+        ip: clientIP 
+      });
+      return res.status(503).json({ 
+        success: false, 
+        message: "Database temporarily unavailable. Please try again later.",
+        code: "DATABASE_ERROR"
+      });
     }
-  });
+    throw dbError; // Re-throw for global error handler
+  }
 }));
 
+/**
+ * Register endpoint
+ */
 app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) => {
   const { name, email, password, role, organization } = req.body;
+  const clientIP = getClientIP(req);
 
+  // Validate input
   if (!name || !email || !password) {
     return res.status(400).json({ 
       success: false, 
@@ -501,23 +685,54 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
     });
   }
 
-  const existingUser = await User.findOne({ email });
-  if (existingUser) {
+  // Validate email format
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
     return res.status(400).json({ 
       success: false, 
-      message: "User already exists" 
+      message: "Invalid email format" 
     });
   }
 
-  const hashedPassword = await bcrypt.hash(password, 10);
+  // Validate password strength
+  if (password.length < 8) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Password must be at least 8 characters long" 
+    });
+  }
+
+  // Check database connection
+  if (!isDBConnected()) {
+    return res.status(503).json({ 
+      success: false, 
+      message: "Database temporarily unavailable. Please try again later.",
+      code: "DATABASE_UNAVAILABLE"
+    });
+  }
+
+  // Check for existing user
+  const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
+  if (existingUser) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "User already exists with this email" 
+    });
+  }
+
+  // Hash password
+  const hashedPassword = await bcrypt.hash(password, 12);
+
+  // Create user
   const user = await User.create({
-    name,
-    email,
+    name: name.trim(),
+    email: email.toLowerCase().trim(),
     password: hashedPassword,
     role: role || 'employee',
     organization: organization || 'WorkPlus Inc.'
   });
 
+  // Generate token
   const token = jwt.sign(
     { 
       userId: user._id,
@@ -538,7 +753,10 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
     organization: user.organization || 'WorkPlus Inc.'
   };
 
+  // Emit socket event
   io.emit('employee_created', userData);
+
+  logger.info('User registered', { userId: user._id, email: user.email, ip: clientIP });
 
   res.status(201).json({
     success: true,
@@ -550,6 +768,9 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
   });
 }));
 
+/**
+ * Get current user
+ */
 app.get("/api/auth/me", asyncHandler(async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
@@ -571,7 +792,15 @@ app.get("/api/auth/me", asyncHandler(async (req, res) => {
     });
   }
   
-  const user = await User.findById(decoded.userId);
+  // Check database connection
+  if (!isDBConnected()) {
+    return res.status(503).json({ 
+      success: false, 
+      message: "Database temporarily unavailable" 
+    });
+  }
+
+  const user = await User.findById(decoded.userId).select('-password').lean();
   if (!user) {
     return res.status(401).json({ 
       success: false, 
@@ -592,26 +821,12 @@ app.get("/api/auth/me", asyncHandler(async (req, res) => {
   });
 }));
 
+/**
+ * Logout endpoint
+ */
 app.post("/api/auth/logout", asyncHandler(async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ 
-      success: false, 
-      message: "No token provided" 
-    });
-  }
-
-  const token = authHeader.replace('Bearer ', '');
-  
-  try {
-    jwt.verify(token, process.env.JWT_SECRET);
-  } catch (jwtError) {
-    return res.status(401).json({ 
-      success: false, 
-      message: "Invalid or expired token" 
-    });
-  }
-
+  // JWT is stateless, so logout is handled client-side
+  // This endpoint exists for future token blacklisting if needed
   res.json({ 
     success: true, 
     message: "Logout successful" 
@@ -626,7 +841,17 @@ app.post("/api/documents/upload", upload.single('document'), fileValidator, asyn
   const { userId, name, type } = req.body;
   
   if (!req.file) {
-    return res.status(400).json({ message: "No file uploaded" });
+    return res.status(400).json({ 
+      success: false,
+      message: "No file uploaded" 
+    });
+  }
+
+  if (!isDBConnected()) {
+    return res.status(503).json({ 
+      success: false, 
+      message: "Database temporarily unavailable" 
+    });
   }
 
   const document = new Document({
@@ -639,7 +864,13 @@ app.post("/api/documents/upload", upload.single('document'), fileValidator, asyn
   });
 
   await document.save();
-  res.status(201).json(document);
+  
+  logger.info('Document uploaded', { documentId: document._id, userId });
+  
+  res.status(201).json({
+    success: true,
+    data: document
+  });
 }));
 
 app.get("/api/documents/:userId", asyncHandler(async (req, res) => {
@@ -647,112 +878,31 @@ app.get("/api/documents/:userId", asyncHandler(async (req, res) => {
   
   // Validate ObjectId
   if (!mongoose.Types.ObjectId.isValid(userId)) {
-    return res.status(400).json({ message: "Invalid user ID" });
+    return res.status(400).json({ 
+      success: false,
+      message: "Invalid user ID" 
+    });
   }
 
-  const documents = await Document.find({ userId }).sort({ uploadedAt: -1 });
-  res.json(documents);
+  if (!isDBConnected()) {
+    return res.status(503).json({ 
+      success: false, 
+      message: "Database temporarily unavailable" 
+    });
+  }
+
+  const documents = await Document.find({ userId })
+    .sort({ uploadedAt: -1 })
+    .lean();
+    
+  res.json({
+    success: true,
+    data: documents
+  });
 }));
 
 // ============================================================================
-// ERROR HANDLER (MUST BE LAST)
-// ============================================================================
-
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: "Route not found"
-  });
-});
-
-app.use(errorHandler);
-
-// ============================================================================
-// GRACEFUL SHUTDOWN
-// ============================================================================
-
-const gracefulShutdown = async (signal) => {
-  logger.info(`${signal} received. Starting graceful shutdown...`);
-  
-  try {
-    // Close server
-    server.close(() => {
-      logger.info('HTTP server closed');
-    });
-
-    // Close Socket.IO
-    io.close();
-    logger.info('Socket.IO closed');
-
-    // Close database connection
-    await mongoose.connection.close();
-    logger.info('Database connection closed');
-
-    process.exit(0);
-  } catch (error) {
-    logger.error(`Error during shutdown: ${error.message}`);
-    process.exit(1);
-  }
-};
-
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-// ============================================================================
-// UNCAUGHT EXCEPTION HANDLER
-// ============================================================================
-
-process.on('uncaughtException', (error) => {
-  logger.error(`Uncaught Exception: ${error.message}`);
-  logger.error(error.stack);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error(`Unhandled Rejection at ${promise}: ${reason}`);
-});
-
-// ============================================================================
-// SERVER STARTUP
-// ============================================================================
-
-const startServer = async () => {
-  try {
-    logger.info('🚀 Starting WorkPlus Backend Server...');
-    logger.info(`Environment: ${process.env.NODE_ENV}`);
-
-    // Connect to database
-    logger.info('Connecting to MongoDB...');
-    const dbConnected = await connectDB();
-    
-    if (!dbConnected) {
-      logger.warn('⚠️  Database connection failed. Server starting in degraded mode.');
-    } else {
-      logger.info('✅ Database connected successfully');
-    }
-
-    // Start server
-    const PORT = process.env.PORT || 5000;
-    server.listen(PORT, () => {
-      logger.info(`✅ Server running on port ${PORT}`);
-      logger.info(`📊 Health check: http://localhost:${PORT}/health`);
-      logger.info(`🔗 API: http://localhost:${PORT}/api`);
-    });
-
-  } catch (error) {
-    logger.error(`Failed to start server: ${error.message}`);
-    process.exit(1);
-  }
-};
-
-// Start the server
-startServer();
-
-export { app, server, io };
-
-
-// ============================================================================
-// ADDITIONAL ROUTES (Preserved from original)
+// ADDITIONAL ROUTES
 // ============================================================================
 
 // Create Admin (Super Admin only)
@@ -781,20 +931,26 @@ app.post("/api/auth/create-admin", asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: "Name, email and password are required" });
   }
 
-  const existingUser = await User.findOne({ email });
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
+  }
+
+  const existingUser = await User.findOne({ email: email.toLowerCase() });
   if (existingUser) {
     return res.status(400).json({ success: false, message: "User already exists with this email" });
   }
 
-  const hashedPassword = await bcrypt.hash(password, 10);
+  const hashedPassword = await bcrypt.hash(password, 12);
   const user = await User.create({
-    name,
-    email,
+    name: name.trim(),
+    email: email.toLowerCase().trim(),
     password: hashedPassword,
     role: 'admin',
     organization: organization || 'WorkPlus Inc.',
     orgId: orgId || decoded.tenantId || 'system'
   });
+
+  logger.info('Admin created', { adminId: user._id, createdBy: decoded.userId });
 
   res.status(201).json({
     success: true,
@@ -829,7 +985,11 @@ app.get("/api/users", asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: "Access denied" });
   }
 
-  const users = await User.find({}, { password: 0 });
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
+  }
+
+  const users = await User.find({}, { password: 0 }).lean();
   res.json({
     success: true,
     data: users
@@ -841,7 +1001,11 @@ app.get("/api/experience-documents/:userId", asyncHandler(async (req, res) => {
   const { userId } = req.params;
   
   if (!mongoose.Types.ObjectId.isValid(userId)) {
-    return res.status(400).json({ message: "Invalid user ID" });
+    return res.status(400).json({ success: false, message: "Invalid user ID" });
+  }
+
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
   }
 
   const experienceTypes = [
@@ -856,9 +1020,12 @@ app.get("/api/experience-documents/:userId", asyncHandler(async (req, res) => {
   const documents = await Document.find({ 
     userId, 
     type: { $in: experienceTypes } 
-  }).sort({ uploadedAt: -1 });
+  }).sort({ uploadedAt: -1 }).lean();
   
-  res.json(documents);
+  res.json({
+    success: true,
+    data: documents
+  });
 }));
 
 // Update document status
@@ -867,75 +1034,76 @@ app.patch("/api/documents/:id/status", asyncHandler(async (req, res) => {
   const { status } = req.body;
   
   if (!mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({ message: "Invalid document ID" });
+    return res.status(400).json({ success: false, message: "Invalid document ID" });
+  }
+
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
   }
   
   const document = await Document.findByIdAndUpdate(
     id, 
     { status }, 
     { new: true }
-  );
+  ).lean();
   
   if (!document) {
-    return res.status(404).json({ message: "Document not found" });
+    return res.status(404).json({ success: false, message: "Document not found" });
   }
   
-  res.json(document);
+  res.json({
+    success: true,
+    data: document
+  });
 }));
 
 // Onboarding form submission
 app.post("/api/onboarding/submit", upload.array('documents'), asyncHandler(async (req, res) => {
   const {
-    firstName,
-    lastName,
-    email,
-    phone,
-    dateOfBirth,
-    gender,
-    address,
-    avatar,
-    employeeId,
-    joiningDate,
-    department,
-    designation,
-    employmentType,
-    workLocation,
-    aadharNumber,
-    panNumber,
-    bankAccount,
-    ifscCode,
-    emergencyName,
-    emergencyRelation,
-    emergencyPhone,
-    documents
+    firstName, lastName, email, phone, dateOfBirth, gender, address,
+    employeeId, joiningDate, department, designation, employmentType, workLocation,
+    aadharNumber, panNumber, bankAccount, ifscCode,
+    emergencyName, emergencyRelation, emergencyPhone
   } = req.body;
 
+  // Validate required fields
   if (!firstName || !lastName || !email || !phone || !dateOfBirth || !gender || !address) {
-    return res.status(400).json({ message: "Please fill in all required personal information fields" });
+    return res.status(400).json({ 
+      success: false, 
+      message: "Please fill in all required personal information fields" 
+    });
   }
 
   if (!employeeId) {
-    return res.status(400).json({ message: "Employee ID is required" });
+    return res.status(400).json({ success: false, message: "Employee ID is required" });
   }
 
   if (!joiningDate || !department || !designation || !employmentType || !workLocation) {
-    return res.status(400).json({ message: "Please fill in all official information fields" });
+    return res.status(400).json({ 
+      success: false, 
+      message: "Please fill in all official information fields" 
+    });
   }
 
   if (!aadharNumber || !panNumber || !bankAccount || !ifscCode) {
-    return res.status(400).json({ message: "Please fill in all banking information fields" });
+    return res.status(400).json({ 
+      success: false, 
+      message: "Please fill in all banking information fields" 
+    });
   }
 
   if (!emergencyName || !emergencyRelation || !emergencyPhone) {
-    return res.status(400).json({ message: "Please fill in all emergency contact fields" });
+    return res.status(400).json({ 
+      success: false, 
+      message: "Please fill in all emergency contact fields" 
+    });
   }
 
-  let avatarUrl = null;
-  if (avatar) {
-    avatarUrl = `/avatars/${employeeId}_${Date.now()}.jpg`;
-    logger.info(`Avatar uploaded for employee ${employeeId}: ${avatarUrl}`);
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
   }
 
+  // Handle file uploads
   let uploadedDocuments = [];
   if (req.files && req.files.length > 0) {
     uploadedDocuments = req.files.map(file => ({
@@ -946,12 +1114,14 @@ app.post("/api/onboarding/submit", upload.array('documents'), asyncHandler(async
     }));
   }
 
+  // Create or update user
   let user;
   if (employeeId && employeeId.startsWith('new_employee_')) {
+    const hashedPassword = await bcrypt.hash('tempPassword123', 12);
     user = new User({
       name: `${firstName} ${lastName}`,
-      email,
-      password: 'tempPassword123',
+      email: email.toLowerCase(),
+      password: hashedPassword,
       role: 'employee',
       orgId: 'org_001'
     });
@@ -961,17 +1131,18 @@ app.post("/api/onboarding/submit", upload.array('documents'), asyncHandler(async
       employeeId,
       {
         name: `${firstName} ${lastName}`,
-        email,
+        email: email.toLowerCase(),
         role: 'employee'
       },
       { new: true }
     );
   }
 
+  // Create onboarding submission
   const onboardingSubmission = await OnboardingSubmission.create({
     employeeId: user._id.toString(),
     employeeName: `${firstName} ${lastName}`,
-    email,
+    email: email.toLowerCase(),
     phone,
     personalInfo: {
       firstName,
@@ -1005,10 +1176,15 @@ app.post("/api/onboarding/submit", upload.array('documents'), asyncHandler(async
     status: 'pending'
   });
 
+  logger.info('Onboarding submitted', { employeeId: user._id, email });
+
   res.status(201).json({
+    success: true,
     message: "Onboarding form submitted successfully",
-    userId: user._id,
-    onboardingData: onboardingSubmission
+    data: {
+      userId: user._id,
+      onboardingData: onboardingSubmission
+    }
   });
 }));
 
@@ -1017,14 +1193,18 @@ app.post("/api/onboarding/generate-link", asyncHandler(async (req, res) => {
   const { employeeEmail, employeeName, department, organizationName, organizationId, createdBy } = req.body;
   
   if (!employeeEmail || !employeeName) {
-    return res.status(400).json({ message: "Employee email and name are required" });
+    return res.status(400).json({ success: false, message: "Employee email and name are required" });
+  }
+
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
   }
 
   const token = crypto.randomBytes(32).toString('hex');
   
   const onboardingLink = await OnboardingLink.create({
     token,
-    employeeEmail,
+    employeeEmail: employeeEmail.toLowerCase(),
     employeeName,
     department: department || 'General',
     organizationName: organizationName || 'Default Organization',
@@ -1036,38 +1216,60 @@ app.post("/api/onboarding/generate-link", asyncHandler(async (req, res) => {
   
   const shareableLink = `${req.protocol}://${req.get('host')}/onboarding/${token}`;
   
+  logger.info('Onboarding link generated', { email: employeeEmail, createdBy });
+  
   res.status(201).json({
+    success: true,
     message: "Onboarding link generated successfully",
-    link: shareableLink,
-    token,
-    expiresAt: onboardingLink.expiresAt
+    data: {
+      link: shareableLink,
+      token,
+      expiresAt: onboardingLink.expiresAt
+    }
   });
 }));
 
 // Validate onboarding link
+{}
 app.get("/api/onboarding/validate/:token", asyncHandler(async (req, res) => {
   const { token } = req.params;
+  
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
+  }
   
   const onboardingLink = await OnboardingLink.findOne({ token });
   
   if (!onboardingLink) {
-    return res.status(400).json({ message: "Invalid or expired link" });
+    return res.status(400).json({ 
+      success: false, 
+      message: "Invalid or expired link" 
+    });
   }
 
   if (onboardingLink.isUsed) {
-    return res.status(400).json({ message: "Link already used" });
+    return res.status(400).json({ 
+      success: false, 
+      message: "Link already used" 
+    });
   }
 
   if (onboardingLink.expiresAt && new Date(onboardingLink.expiresAt) < new Date()) {
-    return res.status(400).json({ message: "Link expired" });
+    return res.status(400).json({ 
+      success: false, 
+      message: "Link expired" 
+    });
   }
 
   res.json({
-    valid: true,
-    employeeEmail: onboardingLink.employeeEmail,
-    employeeName: onboardingLink.employeeName,
-    department: onboardingLink.department,
-    organizationName: onboardingLink.organizationName
+    success: true,
+    data: {
+      valid: true,
+      employeeEmail: onboardingLink.employeeEmail,
+      employeeName: onboardingLink.employeeName,
+      department: onboardingLink.department,
+      organizationName: onboardingLink.organizationName
+    }
   });
 }));
 
@@ -1076,15 +1278,22 @@ app.post("/api/documents/generate", asyncHandler(async (req, res) => {
   const { employeeId, documentType, organizationId, createdBy, documentData } = req.body;
   
   if (!employeeId || !documentType || !organizationId) {
-    return res.status(400).json({ message: "Employee ID, document type, and organization ID are required" });
+    return res.status(400).json({ 
+      success: false, 
+      message: "Employee ID, document type, and organization ID are required" 
+    });
   }
 
   if (!mongoose.Types.ObjectId.isValid(employeeId)) {
-    return res.status(400).json({ message: "Invalid employee ID" });
+    return res.status(400).json({ success: false, message: "Invalid employee ID" });
   }
 
-  const employee = await Employee.findById(employeeId).populate('userId');
-  const employeeName = employee ? employee.userId?.name : 'Unknown';
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
+  }
+
+  const employee = await Employee.findById(employeeId).populate('userId').lean();
+  const employeeName = employee?.userId?.name || 'Unknown';
   const organizationName = organizationId;
 
   const documentId = `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -1104,9 +1313,12 @@ app.post("/api/documents/generate", asyncHandler(async (req, res) => {
     fileName: `${documentType.replace(/\s+/g, '_')}_${employeeId}_${Date.now()}.pdf`
   });
 
+  logger.info('Document generated', { documentId, employeeId, type: documentType });
+
   res.status(201).json({
+    success: true,
     message: "Document generated successfully",
-    document
+    data: document
   });
 }));
 
@@ -1115,47 +1327,208 @@ app.get("/api/documents/employee/:employeeId", asyncHandler(async (req, res) => 
   const { employeeId } = req.params;
   
   if (!mongoose.Types.ObjectId.isValid(employeeId)) {
-    return res.status(400).json({ message: "Invalid employee ID" });
+    return res.status(400).json({ success: false, message: "Invalid employee ID" });
+  }
+
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
   }
   
   const employeeDocuments = await GeneratedDocument.find({ employeeId })
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .lean();
 
-  res.json(employeeDocuments);
+  res.json({
+    success: true,
+    data: employeeDocuments
+  });
 }));
 
 // Get documents for organization
 app.get("/api/documents/organization/:organizationId", asyncHandler(async (req, res) => {
   const { organizationId } = req.params;
+
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
+  }
   
   const organizationDocuments = await GeneratedDocument.find({ organizationId })
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .lean();
 
-  res.json(organizationDocuments);
+  res.json({
+    success: true,
+    data: organizationDocuments
+  });
 }));
 
 // Get document by ID
-app.get("/api/documents/:documentId", asyncHandler(async (req, res) => {
+app.get("/api/documents/detail/:documentId", asyncHandler(async (req, res) => {
   const { documentId } = req.params;
+
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
+  }
   
-  const document = await GeneratedDocument.findOne({ id: documentId });
+  const document = await GeneratedDocument.findOne({ id: documentId }).lean();
 
   if (!document) {
-    return res.status(404).json({ message: "Document not found" });
+    return res.status(404).json({ success: false, message: "Document not found" });
   }
 
-  res.json(document);
+  res.json({
+    success: true,
+    data: document
+  });
 }));
 
 // Delete document
 app.delete("/api/documents/:documentId", asyncHandler(async (req, res) => {
   const { documentId } = req.params;
+
+  if (!isDBConnected()) {
+    return res.status(503).json({ success: false, message: "Database temporarily unavailable" });
+  }
   
   const deletedDocument = await GeneratedDocument.findOneAndDelete({ id: documentId });
 
   if (!deletedDocument) {
-    return res.status(404).json({ message: "Document not found" });
+    return res.status(404).json({ success: false, message: "Document not found" });
   }
 
-  res.json({ message: "Document deleted successfully" });
+  logger.info('Document deleted', { documentId });
+
+  res.json({ 
+    success: true, 
+    message: "Document deleted successfully" 
+  });
 }));
+
+// ============================================================================
+// ERROR HANDLERS (MUST BE LAST)
+// ============================================================================
+
+// 404 handler
+app.use(notFoundHandler);
+
+// Global error handler
+app.use(errorHandler);
+
+// ============================================================================
+// GRACEFUL SHUTDOWN
+// ============================================================================
+
+const gracefulShutdown = async (signal) => {
+  logger.info(`${signal} received. Starting graceful shutdown...`);
+  console.log(`\n${signal} received. Starting graceful shutdown...`);
+  
+  try {
+    // Stop accepting new connections
+    server.close(() => {
+      logger.info('HTTP server closed');
+      console.log('HTTP server closed');
+    });
+
+    // Close all Socket.IO connections
+    io.close(() => {
+      logger.info('Socket.IO closed');
+      console.log('Socket.IO closed');
+    });
+
+    // Close database connection
+    await closeDB();
+
+    logger.info('Graceful shutdown complete');
+    console.log('Graceful shutdown complete');
+    
+    process.exit(0);
+  } catch (error) {
+    logger.error('Error during shutdown', { error: error.message });
+    console.error('Error during shutdown:', error.message);
+    process.exit(1);
+  }
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// ============================================================================
+// UNCAUGHT EXCEPTION HANDLER
+// ============================================================================
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception', { 
+    message: error.message, 
+    stack: error.stack 
+  });
+  console.error('\n❌ Uncaught Exception:', error.message);
+  console.error(error.stack);
+  
+  // Give time for logs to flush before exiting
+  setTimeout(() => process.exit(1), 1000);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection', { 
+    reason: String(reason),
+    promise: String(promise)
+  });
+  console.error('\n⚠️  Unhandled Rejection:', reason);
+  
+  // Don't exit on unhandled rejection, but log it
+  // In production, you might want to exit depending on the error
+});
+
+// ============================================================================
+// SERVER STARTUP
+// ============================================================================
+
+const startServer = async () => {
+  try {
+    logger.info('🚀 Starting WorkPlus Backend Server...');
+    console.log('\n🚀 Starting WorkPlus Backend Server...');
+    logger.info(`Environment: ${process.env.NODE_ENV}`);
+    console.log(`Environment: ${process.env.NODE_ENV}`);
+
+    // Connect to database
+    logger.info('Connecting to MongoDB...');
+    console.log('Connecting to MongoDB...');
+    
+    const dbConnected = await connectDB();
+    
+    if (!dbConnected) {
+      logger.warn('⚠️  Database connection failed. Server starting in degraded mode.');
+      console.log('⚠️  Database connection failed. Server starting in degraded mode.');
+      console.log('   Some features may not work until database is available.');
+    } else {
+      logger.info('✅ Database connected successfully');
+      console.log('✅ Database connected successfully');
+    }
+
+    // Start server
+    const PORT = process.env.PORT || 5000;
+    
+    server.listen(PORT, () => {
+      logger.info(`✅ Server running on port ${PORT}`);
+      console.log(`\n✅ Server running on port ${PORT}`);
+      console.log(`📊 Health check: http://localhost:${PORT}/health`);
+      console.log(`📊 Full health:  http://localhost:${PORT}/api/health/full`);
+      console.log(`🔗 API base:     http://localhost:${PORT}/api`);
+      console.log(`\n🌐 Allowed CORS origins:`);
+      allowedOrigins.forEach(origin => console.log(`   - ${origin}`));
+      console.log('\n✅ Server ready!\n');
+    });
+
+  } catch (error) {
+    logger.error('Failed to start server', { error: error.message });
+    console.error('\n❌ Failed to start server:', error.message);
+    console.error(error.stack);
+    process.exit(1);
+  }
+};
+
+// Start the server
+startServer();
+
+// Export for testing
+export { app, server, io };

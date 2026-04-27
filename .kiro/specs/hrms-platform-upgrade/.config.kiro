@@ -1,0 +1,14 @@
+{
+  "specName": "hrms-platform-upgrade",
+  "specType": "feature",
+  "workflowType": "requirements-first",
+  "status": "active",
+  "createdAt": "2026-04-24T00:00:00Z",
+  "phase": "requirements",
+  "description": "Full-Stack HRMS Platform Stabilization & Security Hardening",
+  "phases": {
+    "requirements": "complete",
+    "design": "complete",
+    "tasks": "ready"
+  }
+}

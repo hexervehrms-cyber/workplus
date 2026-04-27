@@ -2,7 +2,9 @@
 import { useAuth } from '../context/AuthContext';
 
 // API base URL - should be configured in environment
-const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000') + '/api';
+// Remove /api suffix if present in VITE_API_URL
+const baseUrl = import.meta.env.VITE_API_URL || 'https://workplus-backend-sg3a.onrender.com';
+const API_BASE_URL = baseUrl.endsWith('/api') ? baseUrl : `${baseUrl}/api`;
 
 // API response interface
 export interface ApiResponse<T> {
@@ -85,11 +87,26 @@ export class ApiClient {
         );
       }
 
+      // Ensure response has success field
+      if (data.success === undefined) {
+        data.success = true;
+      }
+
       return data;
     } catch (error: any) {
       if (error instanceof ApiError) {
         throw error;
       }
+      
+      // Handle network errors
+      if (error instanceof TypeError) {
+        throw new ApiError(
+          'Network error - unable to reach server',
+          0,
+          error
+        );
+      }
+      
       throw new ApiError(
         error.message || 'Network error',
         500,
@@ -156,17 +173,25 @@ export class AuthService {
         // Store token and user data
         apiClient.setToken(response.data.token);
         
-        // Update auth context (this would be handled by the component)
+        // Return user data in expected format
         return {
           success: true,
-          user: response.data.user,
+          user: {
+            id: response.data.user.id,
+            name: response.data.user.name,
+            email: response.data.user.email,
+            role: response.data.user.role,
+            avatar: response.data.user.avatar,
+            organization: response.data.user.organization
+          },
           token: response.data.token
         };
       }
 
       throw new ApiError(response.message || 'Login failed');
     } catch (error: any) {
-      throw new ApiError('Login failed', 500, error);
+      console.error('Login error:', error);
+      throw error;
     }
   }
 
@@ -181,14 +206,22 @@ export class AuthService {
         
         return {
           success: true,
-          user: response.data.user,
+          user: {
+            id: response.data.user.id,
+            name: response.data.user.name,
+            email: response.data.user.email,
+            role: response.data.user.role,
+            avatar: response.data.user.avatar,
+            organization: response.data.user.organization
+          },
           token: response.data.token
         };
       }
 
       throw new ApiError(response.message || 'Registration failed');
     } catch (error: any) {
-      throw new ApiError('Registration failed', 500, error);
+      console.error('Registration error:', error);
+      throw error;
     }
   }
 
@@ -198,23 +231,34 @@ export class AuthService {
       const response = await apiClient.get<any>('/auth/me');
       
       if (response.success && response.data) {
-        return response.data;
+        return {
+          id: response.data.id,
+          name: response.data.name,
+          email: response.data.email,
+          role: response.data.role,
+          avatar: response.data.avatar,
+          organization: response.data.organization
+        };
       }
 
       return null;
     } catch (error: any) {
-      throw new ApiError('Failed to get current user', 500, error);
+      console.error('Get current user error:', error);
+      return null;
     }
   }
 
   // Logout
   static async logout() {
     try {
-      await apiClient.post('/auth/logout');
+      await apiClient.post('/auth/logout', {});
       apiClient.clearToken();
       return { success: true };
     } catch (error: any) {
-      throw new ApiError('Logout failed', 500, error);
+      console.error('Logout error:', error);
+      // Clear token even if logout fails
+      apiClient.clearToken();
+      return { success: true };
     }
   }
 
@@ -232,7 +276,8 @@ export class AuthService {
 
       throw new ApiError(response.message || 'Failed to create admin');
     } catch (error: any) {
-      throw new ApiError(error.message || 'Failed to create admin', 500, error);
+      console.error('Create admin error:', error);
+      throw error;
     }
   }
 }
@@ -250,7 +295,8 @@ export class UserService {
 
       throw new ApiError('User not found');
     } catch (error: any) {
-      throw new ApiError('Failed to get user', 500, error);
+      console.error('Get user error:', error);
+      throw error;
     }
   }
 
@@ -265,7 +311,8 @@ export class UserService {
 
       throw new ApiError('Failed to get users');
     } catch (error: any) {
-      throw new ApiError('Failed to get users', 500, error);
+      console.error('Get all users error:', error);
+      throw error;
     }
   }
 
@@ -280,7 +327,8 @@ export class UserService {
 
       throw new ApiError('Failed to update user');
     } catch (error: any) {
-      throw new ApiError('Failed to update user', 500, error);
+      console.error('Update user error:', error);
+      throw error;
     }
   }
 
@@ -295,7 +343,8 @@ export class UserService {
 
       throw new ApiError('Failed to delete user');
     } catch (error: any) {
-      throw new ApiError('Failed to delete user', 500, error);
+      console.error('Delete user error:', error);
+      throw error;
     }
   }
 }
@@ -313,7 +362,8 @@ export class ExpenseService {
 
       throw new ApiError('Failed to get expenses');
     } catch (error: any) {
-      throw new ApiError('Failed to get expenses', 500, error);
+      console.error('Get all expenses error:', error);
+      throw error;
     }
   }
 
@@ -328,7 +378,8 @@ export class ExpenseService {
 
       throw new ApiError('Failed to get user expenses');
     } catch (error: any) {
-      throw new ApiError('Failed to get user expenses', 500, error);
+      console.error('Get user expenses error:', error);
+      throw error;
     }
   }
 
@@ -341,9 +392,10 @@ export class ExpenseService {
         return response.data;
       }
 
-      throw new ApiError('Failed to create expense');
+      throw new ApiError(response.message || 'Failed to create expense');
     } catch (error: any) {
-      throw new ApiError('Failed to create expense', 500, error);
+      console.error('Create expense error:', error);
+      throw error;
     }
   }
 
@@ -358,7 +410,8 @@ export class ExpenseService {
 
       throw new ApiError('Failed to update expense');
     } catch (error: any) {
-      throw new ApiError('Failed to update expense', 500, error);
+      console.error('Update expense error:', error);
+      throw error;
     }
   }
 
@@ -373,18 +426,15 @@ export class ExpenseService {
 
       throw new ApiError('Failed to delete expense');
     } catch (error: any) {
-      throw new ApiError('Failed to delete expense', 500, error);
+      console.error('Delete expense error:', error);
+      throw error;
     }
   }
 
   // Approve expense
   static async approveExpense(expenseId: string) {
     try {
-      const response = await apiClient.patch<any>(`/expenses/${expenseId}/approve`, {
-        status: 'approved',
-        approvedAt: new Date().toISOString(),
-        approvedBy: 'Admin User'
-      });
+      const response = await apiClient.patch<any>(`/expenses/${expenseId}/approve`, {});
       
       if (response.success && response.data) {
         return response.data;
@@ -392,7 +442,8 @@ export class ExpenseService {
 
       throw new ApiError('Failed to approve expense');
     } catch (error: any) {
-      throw new ApiError('Failed to approve expense', 500, error);
+      console.error('Approve expense error:', error);
+      throw error;
     }
   }
 
@@ -400,9 +451,6 @@ export class ExpenseService {
   static async rejectExpense(expenseId: string, rejectionReason: string) {
     try {
       const response = await apiClient.patch<any>(`/expenses/${expenseId}/reject`, {
-        status: 'rejected',
-        rejectedAt: new Date().toISOString(),
-        rejectedBy: 'Admin User',
         rejectionReason
       });
       
@@ -412,7 +460,8 @@ export class ExpenseService {
 
       throw new ApiError('Failed to reject expense');
     } catch (error: any) {
-      throw new ApiError('Failed to reject expense', 500, error);
+      console.error('Reject expense error:', error);
+      throw error;
     }
   }
 
@@ -420,9 +469,7 @@ export class ExpenseService {
   static async bulkApproveExpenses(expenseIds: string[]) {
     try {
       const response = await apiClient.post<any[]>('/expenses/bulk-approve', {
-        expenseIds,
-        approvedAt: new Date().toISOString(),
-        approvedBy: 'Admin User'
+        expenseIds
       });
       
       if (response.success && response.data) {
@@ -431,7 +478,8 @@ export class ExpenseService {
 
       throw new ApiError('Failed to bulk approve expenses');
     } catch (error: any) {
-      throw new ApiError('Failed to bulk approve expenses', 500, error);
+      console.error('Bulk approve expenses error:', error);
+      throw error;
     }
   }
 
@@ -440,8 +488,6 @@ export class ExpenseService {
     try {
       const response = await apiClient.post<any[]>('/expenses/bulk-reject', {
         expenseIds,
-        rejectedAt: new Date().toISOString(),
-        rejectedBy: 'Admin User',
         rejectionReason
       });
       
@@ -451,7 +497,8 @@ export class ExpenseService {
 
       throw new ApiError('Failed to bulk reject expenses');
     } catch (error: any) {
-      throw new ApiError('Failed to bulk reject expenses', 500, error);
+      console.error('Bulk reject expenses error:', error);
+      throw error;
     }
   }
 }
@@ -469,7 +516,8 @@ export class LeaveRequestService {
 
       throw new ApiError('Failed to get leave requests');
     } catch (error: any) {
-      throw new ApiError('Failed to get leave requests', 500, error);
+      console.error('Get all leave requests error:', error);
+      throw error;
     }
   }
 
@@ -484,7 +532,8 @@ export class LeaveRequestService {
 
       throw new ApiError('Failed to get user leave requests');
     } catch (error: any) {
-      throw new ApiError('Failed to get user leave requests', 500, error);
+      console.error('Get user leave requests error:', error);
+      throw error;
     }
   }
 
@@ -497,20 +546,17 @@ export class LeaveRequestService {
         return response.data;
       }
 
-      throw new ApiError('Failed to create leave request');
+      throw new ApiError(response.message || 'Failed to create leave request');
     } catch (error: any) {
-      throw new ApiError('Failed to create leave request', 500, error);
+      console.error('Create leave request error:', error);
+      throw error;
     }
   }
 
   // Approve leave request
   static async approveLeaveRequest(requestId: string) {
     try {
-      const response = await apiClient.patch<any>(`/leave-requests/${requestId}/approve`, {
-        status: 'approved',
-        approvedAt: new Date().toISOString(),
-        approvedBy: 'Admin User'
-      });
+      const response = await apiClient.patch<any>(`/leave-requests/${requestId}/approve`, {});
       
       if (response.success && response.data) {
         return response.data;
@@ -518,7 +564,8 @@ export class LeaveRequestService {
 
       throw new ApiError('Failed to approve leave request');
     } catch (error: any) {
-      throw new ApiError('Failed to approve leave request', 500, error);
+      console.error('Approve leave request error:', error);
+      throw error;
     }
   }
 
@@ -526,9 +573,6 @@ export class LeaveRequestService {
   static async rejectLeaveRequest(requestId: string, rejectionReason: string) {
     try {
       const response = await apiClient.patch<any>(`/leave-requests/${requestId}/reject`, {
-        status: 'rejected',
-        rejectedAt: new Date().toISOString(),
-        rejectedBy: 'Admin User',
         rejectionReason
       });
       
@@ -538,7 +582,8 @@ export class LeaveRequestService {
 
       throw new ApiError('Failed to reject leave request');
     } catch (error: any) {
-      throw new ApiError('Failed to reject leave request', 500, error);
+      console.error('Reject leave request error:', error);
+      throw error;
     }
   }
 
@@ -546,9 +591,7 @@ export class LeaveRequestService {
   static async bulkApproveLeaveRequests(requestIds: string[]) {
     try {
       const response = await apiClient.post<any[]>('/leave-requests/bulk-approve', {
-        requestIds,
-        approvedAt: new Date().toISOString(),
-        approvedBy: 'Admin User'
+        requestIds
       });
       
       if (response.success && response.data) {
@@ -557,7 +600,8 @@ export class LeaveRequestService {
 
       throw new ApiError('Failed to bulk approve leave requests');
     } catch (error: any) {
-      throw new ApiError('Failed to bulk approve leave requests', 500, error);
+      console.error('Bulk approve leave requests error:', error);
+      throw error;
     }
   }
 
@@ -566,8 +610,6 @@ export class LeaveRequestService {
     try {
       const response = await apiClient.post<any[]>('/leave-requests/bulk-reject', {
         requestIds,
-        rejectedAt: new Date().toISOString(),
-        rejectedBy: 'Admin User',
         rejectionReason
       });
       
@@ -577,7 +619,8 @@ export class LeaveRequestService {
 
       throw new ApiError('Failed to bulk reject leave requests');
     } catch (error: any) {
-      throw new ApiError('Failed to bulk reject leave requests', 500, error);
+      console.error('Bulk reject leave requests error:', error);
+      throw error;
     }
   }
 }
@@ -587,7 +630,7 @@ export class DocumentService {
   // Get documents by user ID
   static async getDocumentsByUserId(userId: string) {
     try {
-      const response = await apiClient.get<any[]>(`/documents/user/${userId}`);
+      const response = await apiClient.get<any[]>(`/documents/${userId}`);
       
       if (response.success && response.data) {
         return response.data;
@@ -595,7 +638,8 @@ export class DocumentService {
 
       throw new ApiError('Failed to get documents');
     } catch (error: any) {
-      throw new ApiError('Failed to get documents', 500, error);
+      console.error('Get documents error:', error);
+      throw error;
     }
   }
 
@@ -606,25 +650,27 @@ export class DocumentService {
       formData.append('userId', documentData.userId);
       formData.append('name', documentData.name);
       formData.append('type', documentData.type);
-      formData.append('file', documentData.file);
+      formData.append('document', documentData.file);
 
+      const token = apiClient.getToken();
       const response = await fetch(`${API_BASE_URL}/documents/upload`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${apiClient.getToken()}`
+          ...(token && { Authorization: `Bearer ${token}` })
         },
         body: formData
       });
 
       const data = await response.json();
 
-      if (data.success) {
-        return data.data;
+      if (response.ok && data.success) {
+        return data.data || data;
       }
 
-      throw new ApiError('Failed to upload document');
+      throw new ApiError(data.message || 'Failed to upload document');
     } catch (error: any) {
-      throw new ApiError('Failed to upload document', 500, error);
+      console.error('Upload document error:', error);
+      throw error;
     }
   }
 }
@@ -642,7 +688,8 @@ export class HolidayService {
 
       throw new ApiError('Failed to get holidays');
     } catch (error: any) {
-      throw new ApiError('Failed to get holidays', 500, error);
+      console.error('Get all holidays error:', error);
+      throw error;
     }
   }
 
@@ -657,7 +704,8 @@ export class HolidayService {
 
       throw new ApiError('Failed to get organization holidays');
     } catch (error: any) {
-      throw new ApiError('Failed to get organization holidays', 500, error);
+      console.error('Get organization holidays error:', error);
+      throw error;
     }
   }
 
@@ -670,9 +718,10 @@ export class HolidayService {
         return response.data;
       }
 
-      throw new ApiError('Failed to create holiday');
+      throw new ApiError(response.message || 'Failed to create holiday');
     } catch (error: any) {
-      throw new ApiError('Failed to create holiday', 500, error);
+      console.error('Create holiday error:', error);
+      throw error;
     }
   }
 }
@@ -688,7 +737,8 @@ export class EmployeeService {
       }
       throw new ApiError('Failed to get employees');
     } catch (error: any) {
-      throw new ApiError('Failed to get employees', 500, error);
+      console.error('Get all employees error:', error);
+      throw error;
     }
   }
 
@@ -701,7 +751,8 @@ export class EmployeeService {
       }
       throw new ApiError('Employee not found');
     } catch (error: any) {
-      throw new ApiError('Failed to get employee', 500, error);
+      console.error('Get employee error:', error);
+      throw error;
     }
   }
 
@@ -714,7 +765,8 @@ export class EmployeeService {
       }
       throw new ApiError('Employee not found');
     } catch (error: any) {
-      throw new ApiError('Failed to get employee', 500, error);
+      console.error('Get employee by user ID error:', error);
+      throw error;
     }
   }
 
@@ -727,7 +779,8 @@ export class EmployeeService {
       }
       throw new ApiError(response.message || 'Failed to create employee');
     } catch (error: any) {
-      throw new ApiError(error.message || 'Failed to create employee', 500, error);
+      console.error('Create employee error:', error);
+      throw error;
     }
   }
 
@@ -740,7 +793,8 @@ export class EmployeeService {
       }
       throw new ApiError('Failed to update employee');
     } catch (error: any) {
-      throw new ApiError('Failed to update employee', 500, error);
+      console.error('Update employee error:', error);
+      throw error;
     }
   }
 
@@ -753,7 +807,8 @@ export class EmployeeService {
       }
       throw new ApiError('Failed to delete employee');
     } catch (error: any) {
-      throw new ApiError('Failed to delete employee', 500, error);
+      console.error('Delete employee error:', error);
+      throw error;
     }
   }
 }
@@ -769,7 +824,8 @@ export class PayrollService {
       }
       throw new ApiError('Failed to get payslips');
     } catch (error: any) {
-      throw new ApiError('Failed to get payslips', 500, error);
+      console.error('Get all payslips error:', error);
+      throw error;
     }
   }
 
@@ -782,7 +838,8 @@ export class PayrollService {
       }
       throw new ApiError('Failed to get employee payslips');
     } catch (error: any) {
-      throw new ApiError('Failed to get employee payslips', 500, error);
+      console.error('Get employee payslips error:', error);
+      throw error;
     }
   }
 
@@ -795,7 +852,8 @@ export class PayrollService {
       }
       throw new ApiError('Failed to get payslips');
     } catch (error: any) {
-      throw new ApiError('Failed to get payslips', 500, error);
+      console.error('Get my payslips error:', error);
+      throw error;
     }
   }
 
@@ -808,7 +866,8 @@ export class PayrollService {
       }
       throw new ApiError(response.message || 'Failed to create payslip');
     } catch (error: any) {
-      throw new ApiError(error.message || 'Failed to create payslip', 500, error);
+      console.error('Create payslip error:', error);
+      throw error;
     }
   }
 
@@ -821,7 +880,8 @@ export class PayrollService {
       }
       throw new ApiError('Failed to update payslip');
     } catch (error: any) {
-      throw new ApiError('Failed to update payslip', 500, error);
+      console.error('Mark payslip as paid error:', error);
+      throw error;
     }
   }
 
@@ -834,7 +894,8 @@ export class PayrollService {
       }
       throw new ApiError('Failed to delete payslip');
     } catch (error: any) {
-      throw new ApiError('Failed to delete payslip', 500, error);
+      console.error('Delete payslip error:', error);
+      throw error;
     }
   }
 }
@@ -850,7 +911,8 @@ export class AdvanceLoanService {
       }
       throw new ApiError('Failed to get advances/loans');
     } catch (error: any) {
-      throw new ApiError('Failed to get advances/loans', 500, error);
+      console.error('Get all advances/loans error:', error);
+      throw error;
     }
   }
 
@@ -863,7 +925,8 @@ export class AdvanceLoanService {
       }
       throw new ApiError('Failed to get employee advances/loans');
     } catch (error: any) {
-      throw new ApiError('Failed to get employee advances/loans', 500, error);
+      console.error('Get employee advances/loans error:', error);
+      throw error;
     }
   }
 
@@ -876,7 +939,8 @@ export class AdvanceLoanService {
       }
       throw new ApiError('Failed to get my advances/loans');
     } catch (error: any) {
-      throw new ApiError('Failed to get my advances/loans', 500, error);
+      console.error('Get my advances/loans error:', error);
+      throw error;
     }
   }
 
@@ -889,7 +953,8 @@ export class AdvanceLoanService {
       }
       throw new ApiError(response.message || 'Failed to create request');
     } catch (error: any) {
-      throw new ApiError(error.message || 'Failed to create request', 500, error);
+      console.error('Create advance/loan error:', error);
+      throw error;
     }
   }
 
@@ -902,7 +967,8 @@ export class AdvanceLoanService {
       }
       throw new ApiError('Failed to approve request');
     } catch (error: any) {
-      throw new ApiError('Failed to approve request', 500, error);
+      console.error('Approve advance/loan error:', error);
+      throw error;
     }
   }
 
@@ -915,7 +981,8 @@ export class AdvanceLoanService {
       }
       throw new ApiError('Failed to reject request');
     } catch (error: any) {
-      throw new ApiError('Failed to reject request', 500, error);
+      console.error('Reject advance/loan error:', error);
+      throw error;
     }
   }
 
@@ -928,7 +995,8 @@ export class AdvanceLoanService {
       }
       throw new ApiError('Failed to record installment');
     } catch (error: any) {
-      throw new ApiError('Failed to record installment', 500, error);
+      console.error('Pay installment error:', error);
+      throw error;
     }
   }
 
@@ -941,7 +1009,8 @@ export class AdvanceLoanService {
       }
       throw new ApiError('Failed to delete request');
     } catch (error: any) {
-      throw new ApiError('Failed to delete request', 500, error);
+      console.error('Delete advance/loan error:', error);
+      throw error;
     }
   }
 }

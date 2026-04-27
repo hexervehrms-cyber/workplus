@@ -85,22 +85,121 @@ const server = createServer(app);
 // Initialize Socket.IO
 const io = new Server(server, {
   cors: {
-    origin: process.env.CORS_ORIGIN || "http://localhost:5173",
+    origin: function(origin, callback) {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    credentials: true
+    credentials: true,
+    optionsSuccessStatus: 200
   }
 });
 
 // CORS Middleware - MUST be before other middleware
+// Dynamic CORS whitelist for production
+const allowedOrigins = [
+  "https://workplus-murex.vercel.app",
+  "https://workplus-seven.vercel.app",
+  "https://workplus.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://localhost:3001",
+  process.env.CORS_ORIGIN
+].filter(Boolean);
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || "http://localhost:5173",
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`CORS blocked origin: ${origin}`);
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  optionsSuccessStatus: 200
+}));
+
+// Preflight requests
+app.options("*", cors({
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  optionsSuccessStatus: 200
 }));
 
 // Middleware
 app.use(express.json());
+
+// Health check routes - MUST be before other routes
+app.get("/", (req, res) => {
+  res.json({
+    success: true,
+    message: "WorkPlus backend running",
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || "production"
+  });
+});
+
+app.get("/health", async (req, res) => {
+  try {
+    // Check MongoDB connection
+    const mongoStatus = require("mongoose").connection.readyState;
+    const isConnected = mongoStatus === 1;
+    
+    res.json({
+      success: true,
+      status: "healthy",
+      database: isConnected ? "connected" : "disconnected",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+  } catch (error) {
+    res.status(503).json({
+      success: false,
+      status: "unhealthy",
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+app.get("/api/health", async (req, res) => {
+  try {
+    const mongoStatus = require("mongoose").connection.readyState;
+    const isConnected = mongoStatus === 1;
+    
+    res.json({
+      success: true,
+      status: "healthy",
+      database: isConnected ? "connected" : "disconnected",
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(503).json({
+      success: false,
+      status: "unhealthy",
+      error: error.message
+    });
+  }
+});
 
 // Serve static files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -3667,10 +3766,33 @@ app.get("/api/dashboard/expense-trends", verifyToken, async (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log('Socket.IO server initialized');
-  console.log('Multi-tenant SaaS architecture enabled');
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log('✅ Socket.IO server initialized');
+  console.log('✅ Multi-tenant SaaS architecture enabled');
+  console.log(`✅ Environment: ${process.env.NODE_ENV || "production"}`);
+  console.log(`✅ CORS Origins: ${allowedOrigins.join(", ")}`);
   
   // Seed super admin on server start
   await seedSuperAdmin();
+});
+
+// Handle server errors
+server.on('error', (error) => {
+  console.error('❌ Server error:', error);
+  if (error.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use`);
+  }
+  process.exit(1);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
 });

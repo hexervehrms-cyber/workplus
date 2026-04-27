@@ -1554,26 +1554,8 @@ const startServer = async () => {
     logger.info(`Environment: ${process.env.NODE_ENV}`);
     console.log(`Environment: ${process.env.NODE_ENV}`);
 
-    // Connect to database
-    logger.info('Connecting to MongoDB...');
-    console.log('Connecting to MongoDB...');
-    
-    const dbConnected = await connectDB();
-    
-    if (!dbConnected) {
-      logger.warn('⚠️  Database connection failed. Server starting in degraded mode.');
-      console.log('⚠️  Database connection failed. Server starting in degraded mode.');
-      console.log('   Some features may not work until database is available.');
-    } else {
-      logger.info('✅ Database connected successfully');
-      console.log('✅ Database connected successfully');
-      
-      // Seed super admin after successful DB connection
-      console.log('\n🔐 Checking Super Admin account...');
-      await seedSuperAdmin();
-    }
-
-    // Start server - bind to 0.0.0.0 for Render compatibility
+    // Start server FIRST - bind to 0.0.0.0 for Render compatibility
+    // This ensures Render sees an open port immediately
     const PORT = process.env.PORT || 5000;
     
     server.listen(PORT, '0.0.0.0', () => {
@@ -1584,7 +1566,36 @@ const startServer = async () => {
       console.log(`🔗 API base:     http://localhost:${PORT}/api`);
       console.log(`\n🌐 Allowed CORS origins:`);
       allowedOrigins.forEach(origin => console.log(`   - ${origin}`));
-      console.log('\n✅ Server ready!\n');
+      console.log('\n✅ Server ready and accepting connections!\n');
+    });
+
+    // Connect to database in background (non-blocking)
+    logger.info('Connecting to MongoDB in background...');
+    console.log('Connecting to MongoDB in background...');
+    
+    // Use setImmediate to ensure server starts first
+    setImmediate(async () => {
+      try {
+        const dbConnected = await connectDB();
+        
+        if (!dbConnected) {
+          logger.warn('⚠️  Database connection failed. Running in degraded mode.');
+          console.log('⚠️  Database connection failed. Running in degraded mode.');
+          console.log('   Some features may not work until database is available.');
+          console.log('   Server will continue to retry connection in background.');
+        } else {
+          logger.info('✅ Database connected successfully');
+          console.log('✅ Database connected successfully');
+          
+          // Seed super admin after successful DB connection
+          console.log('\n🔐 Checking Super Admin account...');
+          await seedSuperAdmin();
+        }
+      } catch (dbError) {
+        logger.error('Database connection error', { error: dbError.message });
+        console.error('⚠️  Database connection error:', dbError.message);
+        console.log('   Server continues running. DB will retry automatically.');
+      }
     });
 
   } catch (error) {

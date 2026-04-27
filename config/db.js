@@ -106,6 +106,21 @@ const connectDB = async (retryAttempt = 0) => {
       throw new Error('MONGODB_URI environment variable is not set');
     }
 
+    // Parse and log connection details (without exposing password)
+    const uriInfo = parseMongoURI(process.env.MONGODB_URI);
+    
+    if (retryAttempt === 0) {
+      logger.info('MongoDB Connection Details:', {
+        cluster: uriInfo.host,
+        database: uriInfo.database,
+        username: uriInfo.username,
+        protocol: uriInfo.isSRV ? 'mongodb+srv (DNS SRV)' : 'mongodb (Direct)'
+      });
+      console.log(`📊 Cluster: ${uriInfo.host}`);
+      console.log(`📊 Database: ${uriInfo.database}`);
+      console.log(`📊 Username: ${uriInfo.username}`);
+    }
+
     // Setup event handlers before connecting
     if (retryAttempt === 0) {
       setupConnectionHandlers();
@@ -123,6 +138,9 @@ const connectDB = async (retryAttempt = 0) => {
       database: mongoose.connection.name
     });
     
+    console.log(`✅ Connected to: ${mongoose.connection.host}`);
+    console.log(`✅ Database: ${mongoose.connection.name}`);
+    
     return true;
   } catch (err) {
     logger.error(`❌ DB Connection Error (Attempt ${retryAttempt + 1}/${MAX_RETRIES}):`, {
@@ -130,6 +148,21 @@ const connectDB = async (retryAttempt = 0) => {
       name: err.name,
       code: err.code
     });
+    
+    // Provide helpful error messages
+    if (err.message.includes('bad auth')) {
+      logger.error('Authentication failed - check username/password');
+      console.error('💡 Check: Database user credentials in MongoDB Atlas');
+    } else if (err.message.includes('IP') || err.message.includes('whitelist')) {
+      logger.error('IP whitelist issue - add 0.0.0.0/0 in Network Access');
+      console.error('💡 Fix: MongoDB Atlas → Network Access → Add IP Address → ALLOW ACCESS FROM ANYWHERE');
+    } else if (err.message.includes('ENOTFOUND')) {
+      logger.error('Cluster not found - verify cluster name');
+      console.error('💡 Check: Cluster exists in MongoDB Atlas and name is correct');
+    } else if (err.message.includes('SSL') || err.message.includes('TLS')) {
+      logger.error('SSL/TLS error - possible cluster configuration issue');
+      console.error('💡 Check: MongoDB Atlas cluster is properly configured');
+    }
     
     if (retryAttempt < MAX_RETRIES) {
       // Calculate exponential backoff delay
@@ -148,8 +181,36 @@ const connectDB = async (retryAttempt = 0) => {
     } else {
       logger.error('❌ Max retries reached. Database connection failed.');
       logger.warn('⚠️  Server will start in degraded mode. Some features may not work.');
+      console.error('');
+      console.error('🔍 Run audit script for detailed diagnostics:');
+      console.error('   node scripts/audit-mongodb-connection.js');
+      console.error('');
       return false;
     }
+  }
+};
+
+/**
+ * Parse MongoDB URI to extract connection details
+ */
+const parseMongoURI = (uri) => {
+  try {
+    const cleanUri = uri.replace('mongodb+srv://', 'https://').replace('mongodb://', 'http://');
+    const url = new URL(cleanUri);
+    
+    return {
+      username: url.username,
+      host: url.hostname,
+      database: url.pathname.substring(1).split('?')[0] || 'test',
+      isSRV: uri.startsWith('mongodb+srv://')
+    };
+  } catch (error) {
+    return {
+      username: 'unknown',
+      host: 'unknown',
+      database: 'unknown',
+      isSRV: false
+    };
   }
 };
 

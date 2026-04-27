@@ -35,8 +35,14 @@ import jwt from "jsonwebtoken";
 // Load environment variables
 dotenv.config();
 
-// Connect to database
-connectDB();
+// Connect to database with proper error handling
+let dbConnected = false;
+connectDB().then(() => {
+  dbConnected = true;
+}).catch((error) => {
+  console.error('❌ Failed to connect to database:', error.message);
+  // Don't exit immediately - allow server to start for health checks
+});
 
 // Seed Super Admin if not exists
 async function seedSuperAdmin() {
@@ -133,8 +139,8 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Preflight requests - use regex instead of wildcard
-app.options(/.*/, cors(corsOptions));
+// Preflight requests - Express 5 compatible
+app.options('*', cors(corsOptions));
 
 // Middleware
 app.use(express.json());
@@ -2771,6 +2777,7 @@ const verifyToken = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretkey');
     req.userId = decoded.userId;
     req.userRole = decoded.role;
+    req.userOrgId = decoded.tenantId || 'system';
     next();
   } catch (error) {
     return res.status(401).json({ success: false, message: "Invalid token" });
@@ -3361,32 +3368,6 @@ app.delete("/api/advances-loans/:id", verifyToken, async (req, res) => {
 });
 
 // Biometric Attendance Sync API endpoint
-app.post("/api/biometric/sync", async (req, res) => {
-  try {
-    const { tenantId } = req.query;
-    
-    // Check tenant subscription
-    const subscription = await Subscription.findOne({ tenantId, status: 'active' });
-    if (!subscription || !subscription.features.biometric) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Biometric feature not enabled for this tenant' 
-      });
-    }
-    
-    res.json({
-      success: true,
-      data: {
-        deviceConnected: true,
-        lastSync: new Date().toISOString()
-      }
-    });
-  } catch (error) {
-    console.error('Biometric status error:', error);
-    res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-});
-
 app.get('/api/biometric/logs', async (req, res) => {
   try {
     const { tenantId, startDate, endDate } = req.query;
@@ -3767,12 +3748,13 @@ app.get("/api/dashboard/expense-trends", verifyToken, async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, async () => {
+server.listen(PORT, '0.0.0.0', async () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log('✅ Socket.IO server initialized');
   console.log('✅ Multi-tenant SaaS architecture enabled');
   console.log(`✅ Environment: ${process.env.NODE_ENV || "production"}`);
   console.log(`✅ CORS Origins: ${allowedOrigins.join(", ")}`);
+  console.log(`✅ Database Status: ${dbConnected ? 'Connected' : 'Connecting...'}`);
   
   // Seed super admin on server start
   await seedSuperAdmin();
@@ -3783,8 +3765,11 @@ server.on('error', (error) => {
   console.error('❌ Server error:', error);
   if (error.code === 'EADDRINUSE') {
     console.error(`❌ Port ${PORT} is already in use`);
+    process.exit(1);
+  } else if (error.code === 'EACCES') {
+    console.error(`❌ Permission denied to bind to port ${PORT}`);
+    process.exit(1);
   }
-  process.exit(1);
 });
 
 // Handle uncaught exceptions
@@ -3797,4 +3782,21 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
   process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('📋 SIGTERM received, shutting down gracefully...');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('📋 SIGINT received, shutting down gracefully...');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
 });

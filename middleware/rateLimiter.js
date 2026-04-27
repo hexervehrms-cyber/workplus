@@ -19,10 +19,6 @@ const loginLimiter = rateLimit({
     // Skip rate limiting for test requests
     return process.env.NODE_ENV === 'test';
   },
-  keyGenerator: (req, res) => {
-    // Use IP address as key
-    return req.ip || req.connection.remoteAddress;
-  },
   handler: (req, res) => {
     res.status(429).json({
       success: false,
@@ -46,10 +42,6 @@ const registerLimiter = rateLimit({
     // Skip rate limiting for test requests
     return process.env.NODE_ENV === 'test';
   },
-  keyGenerator: (req, res) => {
-    // Use IP address as key
-    return req.ip || req.connection.remoteAddress;
-  },
   handler: (req, res) => {
     res.status(429).json({
       success: false,
@@ -72,9 +64,6 @@ const refreshTokenLimiter = rateLimit({
   skip: (req, res) => {
     return process.env.NODE_ENV === 'test';
   },
-  keyGenerator: (req, res) => {
-    return req.ip || req.connection.remoteAddress;
-  },
   handler: (req, res) => {
     res.status(429).json({
       success: false,
@@ -96,9 +85,6 @@ const passwordResetLimiter = rateLimit({
   legacyHeaders: false,
   skip: (req, res) => {
     return process.env.NODE_ENV === 'test';
-  },
-  keyGenerator: (req, res) => {
-    return req.ip || req.connection.remoteAddress;
   },
   handler: (req, res) => {
     res.status(429).json({

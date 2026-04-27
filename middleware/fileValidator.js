@@ -87,4 +87,4 @@ const fileValidator = (req, res, next) => {
   }
 };
 
-module.exports = fileValidator;
+export default fileValidator;

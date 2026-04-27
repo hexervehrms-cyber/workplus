@@ -1,6 +1,6 @@
 /**
  * Winston Logger Configuration
- * Centralized logging for the application
+ * Provides structured logging for production
  */
 
 import winston from 'winston';
@@ -16,7 +16,7 @@ const levels = {
   warn: 1,
   info: 2,
   http: 3,
-  debug: 4
+  debug: 4,
 };
 
 // Define colors for console output
@@ -25,69 +25,45 @@ const colors = {
   warn: 'yellow',
   info: 'green',
   http: 'magenta',
-  debug: 'white'
+  debug: 'white',
 };
 
 winston.addColors(colors);
 
-// Define format for logs
+// Define format
 const format = winston.format.combine(
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss:ms' }),
   winston.format.colorize({ all: true }),
   winston.format.printf(
-    (info) => `${info.timestamp} ${info.level}: ${info.message}`
-  )
+    (info) => `${info.timestamp} ${info.level}: ${info.message}`,
+  ),
 );
 
-// Define transports (where logs are stored)
+// Define transports
 const transports = [
-  // Console transport - for development
+  // Console transport
   new winston.transports.Console(),
   
-  // Error log file - only errors
+  // Error log file
   new winston.transports.File({
     filename: path.join(__dirname, '../logs/error.log'),
     level: 'error',
-    format: winston.format.combine(
-      winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss:ms' }),
-      winston.format.json()
-    )
+    format: winston.format.uncolorize(),
   }),
   
-  // Combined log file - all logs
+  // Combined log file
   new winston.transports.File({
-    filename: path.join(__dirname, '../logs/combined.log'),
-    format: winston.format.combine(
-      winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss:ms' }),
-      winston.format.json()
-    )
-  })
+    filename: path.join(__dirname, '../logs/all.log'),
+    format: winston.format.uncolorize(),
+  }),
 ];
 
-// Create logger instance
+// Create logger
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'debug',
   levels,
   format,
   transports,
-  exceptionHandlers: [
-    new winston.transports.File({
-      filename: path.join(__dirname, '../logs/exceptions.log'),
-      format: winston.format.combine(
-        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss:ms' }),
-        winston.format.json()
-      )
-    })
-  ],
-  rejectionHandlers: [
-    new winston.transports.File({
-      filename: path.join(__dirname, '../logs/rejections.log'),
-      format: winston.format.combine(
-        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss:ms' }),
-        winston.format.json()
-      )
-    })
-  ]
 });
 
 export default logger;

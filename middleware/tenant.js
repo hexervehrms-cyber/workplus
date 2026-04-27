@@ -1,6 +1,9 @@
 import jwt from 'jsonwebtoken';
 
-// Tenant middleware to extract tenant information from JWT
+/**
+ * Tenant middleware to extract tenant information from JWT
+ * Validates token and attaches tenant context to request
+ */
 export const tenantMiddleware = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
@@ -12,8 +15,16 @@ export const tenantMiddleware = async (req, res, next) => {
       });
     }
 
-    // Decode JWT token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // Decode JWT token with error handling
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretkey');
+    } catch (jwtError) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid or expired token' 
+      });
+    }
     
     // Attach tenant information to request
     req.tenantId = decoded.tenantId;
@@ -25,14 +36,17 @@ export const tenantMiddleware = async (req, res, next) => {
     next();
   } catch (error) {
     console.error('Tenant middleware error:', error);
-    return res.status(401).json({ 
+    return res.status(500).json({ 
       success: false, 
-      message: 'Invalid token' 
+      message: 'Internal server error' 
     });
   }
 };
 
-// Subscription validation middleware
+/**
+ * Subscription validation middleware
+ * Checks if tenant has active subscription
+ */
 export const subscriptionMiddleware = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
@@ -44,8 +58,16 @@ export const subscriptionMiddleware = async (req, res, next) => {
       });
     }
 
-    // Decode JWT token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // Decode JWT token with error handling
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretkey');
+    } catch (jwtError) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid or expired token' 
+      });
+    }
     
     // Get tenant information
     const tenantId = decoded.tenantId;
@@ -67,9 +89,9 @@ export const subscriptionMiddleware = async (req, res, next) => {
     next();
   } catch (error) {
     console.error('Subscription middleware error:', error);
-    return res.status(401).json({ 
+    return res.status(500).json({ 
       success: false, 
-      message: 'Invalid token' 
+      message: 'Internal server error' 
     });
   }
 };

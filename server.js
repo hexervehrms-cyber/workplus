@@ -250,6 +250,38 @@ app.options('*', cors(corsOptions));
 // Request ID middleware
 app.use(requestIdMiddleware);
 
+// Request timeout middleware - prevent hanging requests
+app.use((req, res, next) => {
+  // Set timeout for request (30 seconds)
+  req.setTimeout(30000, () => {
+    logger.warn('Request timeout', { 
+      url: req.url, 
+      method: req.method,
+      ip: getClientIP(req),
+      requestId: req.id
+    });
+    
+    if (!res.headersSent) {
+      res.status(408).json({
+        success: false,
+        message: 'Request timeout - operation took too long',
+        code: 'REQUEST_TIMEOUT'
+      });
+    }
+  });
+  
+  // Set timeout for response (30 seconds)
+  res.setTimeout(30000, () => {
+    logger.warn('Response timeout', { 
+      url: req.url, 
+      method: req.method,
+      requestId: req.id
+    });
+  });
+  
+  next();
+});
+
 // Body parsing with size limits
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));

@@ -1,9 +1,7 @@
-import express from "express";
+﻿import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import bcrypt from "bcrypt";
-import crypto from "crypto";
-import mongoose from "mongoose";
 import connectDB from "./config/db.js";
 import User from "./models/User.js";
 import Employee from "./models/Employee.js";
@@ -49,7 +47,7 @@ async function seedSuperAdmin() {
     const existingSuperAdmin = await User.findOne({ role: 'super_admin' });
     
     if (existingSuperAdmin) {
-      console.log('✅ Super admin already exists:', existingSuperAdmin.email);
+      console.log('âœ… Super admin already exists:', existingSuperAdmin.email);
       return;
     }
 
@@ -66,12 +64,12 @@ async function seedSuperAdmin() {
       orgId: 'system'
     });
 
-    console.log('🎉 Super admin created successfully!');
+    console.log('ðŸŽ‰ Super admin created successfully!');
     console.log('   Email:', superAdminEmail);
     console.log('   Password:', superAdminPassword);
     console.log('   Role: super_admin');
   } catch (error) {
-    console.error('❌ Error seeding super admin:', error.message);
+    console.error('âŒ Error seeding super admin:', error.message);
   }
 }
 
@@ -152,7 +150,7 @@ app.get("/", (req, res) => {
 app.get("/health", async (req, res) => {
   try {
     // Check MongoDB connection
-    const mongoStatus = mongoose.connection.readyState;
+    const mongoStatus = require("mongoose").connection.readyState;
     const isConnected = mongoStatus === 1;
     
     res.json({
@@ -174,7 +172,7 @@ app.get("/health", async (req, res) => {
 
 app.get("/api/health", async (req, res) => {
   try {
-    const mongoStatus = mongoose.connection.readyState;
+    const mongoStatus = require("mongoose").connection.readyState;
     const isConnected = mongoStatus === 1;
     
     res.json({
@@ -771,17 +769,6 @@ app.post("/api/onboarding/submit", upload.array('documents'), async (req, res) =
       console.log(`Avatar uploaded for employee ${employeeId}: ${avatarUrl}`);
     }
 
-    // Process uploaded documents from multer
-    let uploadedDocuments = [];
-    if (req.files && req.files.length > 0) {
-      uploadedDocuments = req.files.map(file => ({
-        fileName: file.originalname,
-        filePath: file.path,
-        size: `${(file.size / 1024).toFixed(1)} KB`,
-        uploadedAt: new Date()
-      }));
-    }
-
     // Find or create user
     let user;
     if (employeeId && employeeId.startsWith('new_employee_')) {
@@ -867,7 +854,7 @@ app.post("/api/onboarding/generate-link", async (req, res) => {
     }
 
     // Generate unique token
-    const token = crypto.randomBytes(32).toString('hex');
+    const token = require('crypto').randomBytes(32).toString('hex');
     
     // Create onboarding link in MongoDB
     const onboardingLink = await OnboardingLink.create({
@@ -2690,11 +2677,11 @@ app.get("/api/currencies", async (req, res) => {
   try {
     const currencies = [
       { code: 'USD', name: 'US Dollar', symbol: '$', exchangeRate: 1 },
-      { code: 'EUR', name: 'Euro', symbol: 'â¬', exchangeRate: 0.85 },
-      { code: 'GBP', name: 'British Pound', symbol: 'Â£', exchangeRate: 0.73 },
-      { code: 'JPY', name: 'Japanese Yen', symbol: 'Â¥', exchangeRate: 110.5 },
-      { code: 'CNY', name: 'Chinese Yuan', symbol: 'Â¥', exchangeRate: 6.45 },
-      { code: 'INR', name: 'Indian Rupee', symbol: 'â¨', exchangeRate: 74.5 },
+      { code: 'EUR', name: 'Euro', symbol: 'Ã¢Â¬', exchangeRate: 0.85 },
+      { code: 'GBP', name: 'British Pound', symbol: 'Ã‚Â£', exchangeRate: 0.73 },
+      { code: 'JPY', name: 'Japanese Yen', symbol: 'Ã‚Â¥', exchangeRate: 110.5 },
+      { code: 'CNY', name: 'Chinese Yuan', symbol: 'Ã‚Â¥', exchangeRate: 6.45 },
+      { code: 'INR', name: 'Indian Rupee', symbol: 'Ã¢Â¨', exchangeRate: 74.5 },
       { code: 'CAD', name: 'Canadian Dollar', symbol: 'C$', exchangeRate: 1.25 },
       { code: 'AUD', name: 'Australian Dollar', symbol: 'A$', exchangeRate: 1.35 },
       { code: 'CHF', name: 'Swiss Franc', symbol: 'Fr', exchangeRate: 0.92 },
@@ -2703,25 +2690,25 @@ app.get("/api/currencies", async (req, res) => {
       { code: 'SEK', name: 'Swedish Krona', symbol: 'kr', exchangeRate: 8.6 },
       { code: 'NOK', name: 'Norwegian Krone', symbol: 'kr', exchangeRate: 8.5 },
       { code: 'DKK', name: 'Danish Krone', symbol: 'kr', exchangeRate: 6.3 },
-      { code: 'PLN', name: 'Polish Zloty', symbol: 'zÅ', exchangeRate: 3.9 },
-      { code: 'CZK', name: 'Czech Koruna', symbol: 'KÄ', exchangeRate: 21.5 },
+      { code: 'PLN', name: 'Polish Zloty', symbol: 'zÃ…', exchangeRate: 3.9 },
+      { code: 'CZK', name: 'Czech Koruna', symbol: 'KÃ„', exchangeRate: 21.5 },
       { code: 'HUF', name: 'Hungarian Forint', symbol: 'Ft', exchangeRate: 310 },
-      { code: 'RUB', name: 'Russian Ruble', symbol: 'â½', exchangeRate: 73 },
+      { code: 'RUB', name: 'Russian Ruble', symbol: 'Ã¢Â½', exchangeRate: 73 },
       { code: 'BRL', name: 'Brazilian Real', symbol: 'R$', exchangeRate: 5.2 },
       { code: 'MXN', name: 'Mexican Peso', symbol: '$', exchangeRate: 20 },
       { code: 'ZAR', name: 'South African Rand', symbol: 'R', exchangeRate: 15 },
-      { code: 'KRW', name: 'South Korean Won', symbol: 'â©', exchangeRate: 1180 },
+      { code: 'KRW', name: 'South Korean Won', symbol: 'Ã¢Â©', exchangeRate: 1180 },
       { code: 'IDR', name: 'Indonesian Rupiah', symbol: 'Rp', exchangeRate: 14300 },
-      { code: 'THB', name: 'Thai Baht', symbol: 'à¸¿', exchangeRate: 33 },
+      { code: 'THB', name: 'Thai Baht', symbol: 'Ã Â¸Â¿', exchangeRate: 33 },
       { code: 'MYR', name: 'Malaysian Ringgit', symbol: 'RM', exchangeRate: 4.2 },
-      { code: 'PHP', name: 'Philippine Peso', symbol: 'â±', exchangeRate: 50 },
-      { code: 'VND', name: 'Vietnamese Dong', symbol: 'â«', exchangeRate: 23000 },
-      { code: 'SAR', name: 'Saudi Riyal', symbol: 'ï·¼', exchangeRate: 3.75 },
-      { code: 'AED', name: 'UAE Dirham', symbol: 'Ø¯.Ø¥', exchangeRate: 3.67 },
-      { code: 'EGP', name: 'Egyptian Pound', symbol: 'EÂ£', exchangeRate: 15.7 },
-      { code: 'NGN', name: 'Nigerian Naira', symbol: 'â¦', exchangeRate: 410 },
+      { code: 'PHP', name: 'Philippine Peso', symbol: 'Ã¢Â±', exchangeRate: 50 },
+      { code: 'VND', name: 'Vietnamese Dong', symbol: 'Ã¢Â«', exchangeRate: 23000 },
+      { code: 'SAR', name: 'Saudi Riyal', symbol: 'Ã¯Â·Â¼', exchangeRate: 3.75 },
+      { code: 'AED', name: 'UAE Dirham', symbol: 'Ã˜Â¯.Ã˜Â¥', exchangeRate: 3.67 },
+      { code: 'EGP', name: 'Egyptian Pound', symbol: 'EÃ‚Â£', exchangeRate: 15.7 },
+      { code: 'NGN', name: 'Nigerian Naira', symbol: 'Ã¢Â¦', exchangeRate: 410 },
       { code: 'KES', name: 'Kenyan Shilling', symbol: 'KSh', exchangeRate: 110 },
-      { code: 'GHS', name: 'Ghanaian Cedi', symbol: 'GHâµ', exchangeRate: 6.1 },
+      { code: 'GHS', name: 'Ghanaian Cedi', symbol: 'GHÃ¢Âµ', exchangeRate: 6.1 },
       { code: 'TZS', name: 'Tanzanian Shilling', symbol: 'TSh', exchangeRate: 2320 },
       { code: 'UGX', name: 'Ugandan Shilling', symbol: 'USh', exchangeRate: 3600 },
       { code: 'RWF', name: 'Rwandan Franc', symbol: 'RWF', exchangeRate: 1000 },
@@ -2733,18 +2720,18 @@ app.get("/api/currencies", async (req, res) => {
       { code: 'XAF', name: 'CFA Franc BEAC', symbol: 'FCFA', exchangeRate: 550 },
       { code: 'XOF', name: 'CFA Franc BCEAO', symbol: 'CFA', exchangeRate: 550 },
       { code: 'XPF', name: 'CFP Franc', symbol: 'Fr', exchangeRate: 100 },
-      { code: 'SCR', name: 'Seychellois Rupee', symbol: 'â¨', exchangeRate: 13.5 },
-      { code: 'MUR', name: 'Mauritian Rupee', symbol: 'â¨', exchangeRate: 43 },
-      { code: 'LKR', name: 'Sri Lankan Rupee', symbol: 'â¨', exchangeRate: 200 },
-      { code: 'PKR', name: 'Pakistani Rupee', symbol: 'â¨', exchangeRate: 160 },
-      { code: 'BDT', name: 'Bangladeshi Taka', symbol: 'à§³', exchangeRate: 85 },
-      { code: 'NPR', name: 'Nepalese Rupee', symbol: 'â¨', exchangeRate: 120 },
+      { code: 'SCR', name: 'Seychellois Rupee', symbol: 'Ã¢Â¨', exchangeRate: 13.5 },
+      { code: 'MUR', name: 'Mauritian Rupee', symbol: 'Ã¢Â¨', exchangeRate: 43 },
+      { code: 'LKR', name: 'Sri Lankan Rupee', symbol: 'Ã¢Â¨', exchangeRate: 200 },
+      { code: 'PKR', name: 'Pakistani Rupee', symbol: 'Ã¢Â¨', exchangeRate: 160 },
+      { code: 'BDT', name: 'Bangladeshi Taka', symbol: 'Ã Â§Â³', exchangeRate: 85 },
+      { code: 'NPR', name: 'Nepalese Rupee', symbol: 'Ã¢Â¨', exchangeRate: 120 },
       { code: 'MMK', name: 'Myanmar Kyat', symbol: 'K', exchangeRate: 1650 },
-      { code: 'LAK', name: 'Lao Kip', symbol: 'â­', exchangeRate: 10000 },
-      { code: 'KHR', name: 'Cambodian Riel', symbol: 'áÛ', exchangeRate: 4100 },
+      { code: 'LAK', name: 'Lao Kip', symbol: 'Ã¢Â­', exchangeRate: 10000 },
+      { code: 'KHR', name: 'Cambodian Riel', symbol: 'Ã¡Ã›', exchangeRate: 4100 },
       { code: 'VUV', name: 'Vanuatu Vatu', symbol: 'VT', exchangeRate: 100 },
       { code: 'WST', name: 'Samoan Tala', symbol: 'SAT', exchangeRate: 2.5 },
-      { code: 'TOP', name: 'Tongan PaÊ»anga', symbol: 'T$', exchangeRate: 2.3 },
+      { code: 'TOP', name: 'Tongan PaÃŠÂ»anga', symbol: 'T$', exchangeRate: 2.3 },
       { code: 'FJD', name: 'Fijian Dollar', symbol: 'F$', exchangeRate: 2.1 },
       { code: 'PGK', name: 'Papua New Guinea Kina', symbol: 'K', exchangeRate: 3.5 },
       { code: 'NZD', name: 'New Zealand Dollar', symbol: 'NZ$', exchangeRate: 1.45 }
@@ -3768,11 +3755,11 @@ app.get("/api/dashboard/expense-trends", verifyToken, async (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, async () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log('✅ Socket.IO server initialized');
-  console.log('✅ Multi-tenant SaaS architecture enabled');
-  console.log(`✅ Environment: ${process.env.NODE_ENV || "production"}`);
-  console.log(`✅ CORS Origins: ${allowedOrigins.join(", ")}`);
+  console.log(`âœ… Server running on port ${PORT}`);
+  console.log('âœ… Socket.IO server initialized');
+  console.log('âœ… Multi-tenant SaaS architecture enabled');
+  console.log(`âœ… Environment: ${process.env.NODE_ENV || "production"}`);
+  console.log(`âœ… CORS Origins: ${allowedOrigins.join(", ")}`);
   
   // Seed super admin on server start
   await seedSuperAdmin();
@@ -3780,21 +3767,22 @@ server.listen(PORT, async () => {
 
 // Handle server errors
 server.on('error', (error) => {
-  console.error('❌ Server error:', error);
+  console.error('âŒ Server error:', error);
   if (error.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${PORT} is already in use`);
+    console.error(`âŒ Port ${PORT} is already in use`);
   }
   process.exit(1);
 });
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
+  console.error('âŒ Uncaught Exception:', error);
   process.exit(1);
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  console.error('âŒ Unhandled Rejection at:', promise, 'reason:', reason);
   process.exit(1);
 });
+

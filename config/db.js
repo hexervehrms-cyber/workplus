@@ -9,12 +9,10 @@ import logger from '../utils/logger.js';
 // Connection state tracking
 let isConnected = false;
 let retryCount = 0;
-let reconnectTimer = null;
 
 const MAX_RETRIES = 10;
 const INITIAL_RETRY_DELAY = 1000; // 1 second
 const MAX_RETRY_DELAY = 30000; // 30 seconds
-const HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
 
 // Production-ready mongoose configuration
 mongoose.set('bufferCommands', false); // Disable buffering - fail fast when DB unavailable
@@ -31,7 +29,7 @@ const getConnectionOptions = () => {
     
     // Connection pooling
     maxPoolSize: 10, // Maximum connections in pool
-    minPoolSize: 2, // Minimum connections to maintain
+    minPoolSize: 1, // Minimum connections to maintain
     
     // Write concerns
     retryWrites: true,
@@ -39,11 +37,6 @@ const getConnectionOptions = () => {
     
     // Heartbeat
     heartbeatFrequencyMS: 10000, // Check server every 10 seconds
-    
-    // Auto-reconnect
-    autoReconnect: true,
-    reconnectTries: MAX_RETRIES,
-    reconnectInterval: 5000,
   };
 
   return baseOptions;
@@ -68,17 +61,8 @@ const setupConnectionHandlers = () => {
   // Connection disconnected
   mongoose.connection.on('disconnected', () => {
     isConnected = false;
-    logger.warn('⚠️  MongoDB disconnected - attempting auto-reconnect...');
-    
-    // Clear any existing reconnect timer
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-    }
-    
-    // Schedule reconnection attempt
-    reconnectTimer = setTimeout(() => {
-      attemptReconnect();
-    }, 5000);
+    logger.warn('⚠️  MongoDB disconnected');
+    logger.info('Mongoose will automatically attempt to reconnect...');
   });
 
   // Connection error
@@ -113,44 +97,6 @@ const setupConnectionHandlers = () => {
 };
 
 /**
- * Attempt to reconnect to database
- */
-const attemptReconnect = async () => {
-  if (isConnected) {
-    return true;
-  }
-
-  retryCount++;
-  
-  if (retryCount > MAX_RETRIES) {
-    logger.error(`❌ Max reconnection attempts (${MAX_RETRIES}) reached`);
-    return false;
-  }
-
-  // Calculate exponential backoff delay
-  const delay = Math.min(
-    INITIAL_RETRY_DELAY * Math.pow(2, retryCount - 1),
-    MAX_RETRY_DELAY
-  );
-
-  logger.info(`🔄 Reconnection attempt ${retryCount}/${MAX_RETRIES} in ${delay}ms...`);
-
-  try {
-    await mongoose.connect(process.env.MONGODB_URI, getConnectionOptions());
-    return true;
-  } catch (error) {
-    logger.error(`Reconnection attempt ${retryCount} failed:`, error.message);
-    
-    // Schedule next attempt
-    reconnectTimer = setTimeout(() => {
-      attemptReconnect();
-    }, delay);
-    
-    return false;
-  }
-};
-
-/**
  * Connect to MongoDB with retry logic
  */
 const connectDB = async (retryAttempt = 0) => {
@@ -161,7 +107,9 @@ const connectDB = async (retryAttempt = 0) => {
     }
 
     // Setup event handlers before connecting
-    setupConnectionHandlers();
+    if (retryAttempt === 0) {
+      setupConnectionHandlers();
+    }
 
     // Connect to MongoDB
     await mongoose.connect(process.env.MONGODB_URI, getConnectionOptions());
@@ -248,10 +196,6 @@ export const getDBConnection = () => {
  */
 export const closeDB = async () => {
   try {
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-    }
-    
     await mongoose.connection.close();
     logger.info('Database connection closed gracefully');
   } catch (error) {

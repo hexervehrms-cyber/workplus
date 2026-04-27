@@ -1480,6 +1480,70 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // ============================================================================
+// SUPER ADMIN SEEDING
+// ============================================================================
+
+/**
+ * Ensure Super Admin exists in database
+ * Creates if missing, updates if exists
+ */
+const seedSuperAdmin = async () => {
+  try {
+    if (!isDBConnected()) {
+      logger.warn('Cannot seed super admin - database not connected');
+      return false;
+    }
+
+    const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@workpluspro.com';
+    const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || 'Jadu@123';
+    const superAdminName = process.env.SUPER_ADMIN_NAME || 'Super Admin';
+
+    // Check if super admin exists
+    let superAdmin = await User.findOne({ email: superAdminEmail.toLowerCase() });
+
+    if (superAdmin) {
+      // Update existing super admin if needed
+      if (superAdmin.role !== 'super_admin') {
+        superAdmin.role = 'super_admin';
+        superAdmin.name = superAdminName;
+        await superAdmin.save();
+        logger.info('✅ Super Admin role updated', { email: superAdminEmail });
+        console.log('✅ Super Admin role updated');
+      } else {
+        logger.info('✅ Super Admin already exists', { email: superAdminEmail });
+        console.log('✅ Super Admin already exists');
+      }
+    } else {
+      // Create new super admin
+      const hashedPassword = await bcrypt.hash(superAdminPassword, 12);
+      
+      superAdmin = await User.create({
+        name: superAdminName,
+        email: superAdminEmail.toLowerCase(),
+        password: hashedPassword,
+        role: 'super_admin',
+        organization: 'WorkPlus Inc.',
+        isActive: true
+      });
+
+      logger.info('✅ Super Admin created successfully', { 
+        id: superAdmin._id, 
+        email: superAdminEmail 
+      });
+      console.log('✅ Super Admin created successfully');
+      console.log(`   Email: ${superAdminEmail}`);
+      console.log(`   Password: ${superAdminPassword}`);
+    }
+
+    return true;
+  } catch (error) {
+    logger.error('Failed to seed super admin', { error: error.message });
+    console.error('❌ Failed to seed super admin:', error.message);
+    return false;
+  }
+};
+
+// ============================================================================
 // SERVER STARTUP
 // ============================================================================
 
@@ -1503,12 +1567,16 @@ const startServer = async () => {
     } else {
       logger.info('✅ Database connected successfully');
       console.log('✅ Database connected successfully');
+      
+      // Seed super admin after successful DB connection
+      console.log('\n🔐 Checking Super Admin account...');
+      await seedSuperAdmin();
     }
 
-    // Start server
+    // Start server - bind to 0.0.0.0 for Render compatibility
     const PORT = process.env.PORT || 5000;
     
-    server.listen(PORT, () => {
+    server.listen(PORT, '0.0.0.0', () => {
       logger.info(`✅ Server running on port ${PORT}`);
       console.log(`\n✅ Server running on port ${PORT}`);
       console.log(`📊 Health check: http://localhost:${PORT}/health`);

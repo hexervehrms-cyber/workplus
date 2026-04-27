@@ -1,6 +1,12 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { AuthService } from '../utils/api';
-import { socketService } from '../utils/socket';
+/**
+ * Authentication Context - Production Ready
+ * Features: Session persistence, auto logout, role-based routing
+ */
+
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { AuthService, TokenManager, ApiError } from '../utils/api';
+import { socketService, ConnectionState } from '../utils/socket';
+import { toast } from 'sonner';
 
 export type UserRole = 'super_admin' | 'admin' | 'hr' | 'manager' | 'accountant' | 'employee';
 
@@ -17,122 +23,228 @@ interface User {
 interface AuthContextType {
   user: User | null;
   setUser: (user: User | null) => void;
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   switchRole: (role: UserRole) => void;
   loading: boolean;
   socketConnected: boolean;
+  isAuthenticated: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Session check interval (5 minutes)
+const SESSION_CHECK_INTERVAL = 5 * 60 * 1000;
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
 
-  // Check for existing token on mount
+  // Initialize auth state from storage
   useEffect(() => {
-    const token = localStorage.getItem('authToken');
-    const userStr = localStorage.getItem('user');
-    
-    if (token && userStr) {
+    const initializeAuth = async () => {
       try {
-        const userData = JSON.parse(userStr);
-        setUser(userData);
-      } catch (error) {
-        console.error('Failed to parse user data:', error);
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('user');
-      }
-    } else if (token) {
-      // Fallback: fetch user from API if token exists but no user data
-      AuthService.getCurrentUser()
-        .then(userData => {
-          if (userData) {
-            setUser(userData);
-            localStorage.setItem('user', JSON.stringify(userData));
+        const token = TokenManager.get();
+        const storedUser = TokenManager.getUser();
+
+        if (token && storedUser) {
+          // Check if token is expired
+          try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            const exp = payload.exp * 1000;
+            
+            if (Date.now() >= exp) {
+              // Token expired, clear and redirect to login
+              console.log('Token expired, clearing session');
+              TokenManager.clear();
+              setLoading(false);
+              return;
+            }
+
+            // Token valid, restore user
+            setUser(storedUser);
+
+            // Verify with backend
+            try {
+              const currentUser = await AuthService.getCurrentUser();
+              if (currentUser) {
+                setUser(currentUser);
+                TokenManager.setUser(currentUser);
+              }
+            } catch (error) {
+              // Backend verification failed, but token might still be valid
+              console.warn('Could not verify session with backend:', error);
+            }
+          } catch (error) {
+            console.error('Error parsing token:', error);
+            TokenManager.clear();
           }
-        })
-        .catch(() => {
-          localStorage.removeItem('authToken');
-        });
-    }
+        }
+      } catch (error) {
+        console.error('Auth initialization error:', error);
+      } finally {
+        setLoading(false);
+        setIsInitialized(true);
+      }
+    };
+
+    initializeAuth();
   }, []);
 
   // Socket.IO connection management
   useEffect(() => {
-    if (user) {
-      socketService.connect(user.id, user.role)
-        .then(() => {
-          setSocketConnected(true);
-        })
-        .catch((error) => {
-          console.error('Failed to connect to Socket.IO server:', error);
-        });
+    if (!user || !isInitialized) return;
 
-      return () => {
-        socketService.disconnect();
+    const connectSocket = async () => {
+      try {
+        await socketService.connect(user.id, user.role, user.tenantId);
+        setSocketConnected(true);
+      } catch (error) {
+        console.error('Failed to connect to Socket.IO:', error);
         setSocketConnected(false);
-      };
-    }
+      }
+    };
+
+    connectSocket();
+
+    // Set up connection state listener
+    socketService.setStateChangeCallback((state: ConnectionState) => {
+      setSocketConnected(state === 'connected');
+      
+      if (state === 'reconnecting') {
+        toast.info('Reconnecting to real-time server...');
+      } else if (state === 'disconnected') {
+        toast.error('Lost connection to real-time server');
+      } else if (state === 'connected' && socketConnected === false) {
+        toast.success('Reconnected to real-time server');
+      }
+    });
+
+    return () => {
+      socketService.disconnect();
+      setSocketConnected(false);
+    };
+  }, [user?.id, isInitialized]);
+
+  // Session check interval
+  useEffect(() => {
+    if (!user) return;
+
+    const checkSession = () => {
+      const token = TokenManager.get();
+      if (!token) {
+        // No token, logout
+        handleLogout();
+        return;
+      }
+
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        const exp = payload.exp * 1000;
+        
+        // If token expires in less than 5 minutes, warn user
+        const timeUntilExpiry = exp - Date.now();
+        if (timeUntilExpiry < 5 * 60 * 1000 && timeUntilExpiry > 0) {
+          toast.warning('Your session will expire soon. Please save your work.');
+        }
+        
+        if (Date.now() >= exp) {
+          toast.error('Your session has expired. Please log in again.');
+          handleLogout();
+        }
+      } catch (error) {
+        console.error('Session check error:', error);
+        handleLogout();
+      }
+    };
+
+    const interval = setInterval(checkSession, SESSION_CHECK_INTERVAL);
+    return () => clearInterval(interval);
   }, [user]);
 
-  const login = async (email: string, password: string): Promise<boolean> => {
+  // Login function
+  const login = useCallback(async (email: string, password: string) => {
     setLoading(true);
+
     try {
       const result = await AuthService.login(email, password);
+      
       if (result.success && result.user) {
         setUser(result.user);
-        // Store user in localStorage for persistence
-        localStorage.setItem('user', JSON.stringify(result.user));
-        return true;
+        toast.success(`Welcome back, ${result.user.name}!`);
+        return { success: true };
       }
-      return false;
-    } catch (error) {
+
+      return { success: false, error: 'Login failed' };
+    } catch (error: any) {
       console.error('Login error:', error);
-      return false;
+      
+      let errorMessage = 'Login failed. Please try again.';
+      
+      if (error instanceof ApiError) {
+        errorMessage = error.getUserMessage();
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      toast.error(errorMessage);
+      return { success: false, error: errorMessage };
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const logout = async (): Promise<void> => {
+  // Logout function
+  const handleLogout = useCallback(async () => {
     setLoading(true);
+
     try {
       await AuthService.logout();
-      setUser(null);
-      socketService.disconnect();
-      setSocketConnected(false);
-      // Clear all auth data
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('user');
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
+      setUser(null);
+      socketService.disconnect();
+      setSocketConnected(false);
+      TokenManager.clear();
       setLoading(false);
+      toast.info('You have been logged out.');
     }
-  };
-const switchRole = (role: UserRole): void => {
+  }, []);
+
+  // Switch role (for demo/testing)
+  const switchRole = useCallback((role: UserRole) => {
     if (user) {
       const updatedUser = { ...user, role };
       setUser(updatedUser);
-      localStorage.setItem('user', JSON.stringify(updatedUser));
+      TokenManager.setUser(updatedUser);
+
       // Reconnect socket with new role
       socketService.disconnect();
-      socketService.connect(user.id, role)
-        .then(() => {
-          setSocketConnected(true);
-        })
+      socketService.connect(user.id, role, user.tenantId)
+        .then(() => setSocketConnected(true))
         .catch((error) => {
-          console.error('Failed to reconnect to Socket.IO server:', error);
+          console.error('Failed to reconnect socket:', error);
+          setSocketConnected(false);
         });
     }
+  }, [user]);
+
+  const value: AuthContextType = {
+    user,
+    setUser,
+    login,
+    logout: handleLogout,
+    switchRole,
+    loading,
+    socketConnected,
+    isAuthenticated: !!user
   };
 
-  
   return (
-    <AuthContext.Provider value={{ user, setUser, login, logout, switchRole, loading, socketConnected }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
@@ -144,4 +256,33 @@ export function useAuth() {
     throw new Error('useAuth must be used within AuthProvider');
   }
   return context;
+}
+
+// Hook for role-based access
+export function useHasRole(roles: UserRole | UserRole[]): boolean {
+  const { user } = useAuth();
+  if (!user) return false;
+  
+  const roleArray = Array.isArray(roles) ? roles : [roles];
+  return roleArray.includes(user.role);
+}
+
+// Hook for getting redirect path based on role
+export function useRoleRedirect(): string {
+  const { user } = useAuth();
+  
+  if (!user) return '/login';
+  
+  switch (user.role) {
+    case 'super_admin':
+      return '/super-admin';
+    case 'admin':
+      return '/admin';
+    case 'employee':
+    case 'hr':
+    case 'manager':
+    case 'accountant':
+    default:
+      return '/employee';
+  }
 }

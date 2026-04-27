@@ -1,20 +1,35 @@
+/**
+ * Protected Route Component - Production Ready
+ * Features: Role-based access, loading states, redirect handling
+ */
+
 import { Navigate, useLocation } from 'react-router';
-import { useAuth } from '../context/AuthContext';
+import { useAuth, useRoleRedirect } from '../context/AuthContext';
+import { Loader2 } from 'lucide-react';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
-  requiredRole?: string[];
+  requiredRole?: string | string[];
+  fallbackPath?: string;
 }
 
-export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) {
-  const { user, loading } = useAuth();
+export function ProtectedRoute({ 
+  children, 
+  requiredRole, 
+  fallbackPath 
+}: ProtectedRouteProps) {
+  const { user, loading: authLoading } = useAuth();
   const location = useLocation();
+  const roleRedirect = useRoleRedirect();
 
-  // Show loading spinner while checking authentication
-  if (loading) {
+  // Show loading while checking authentication
+  if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto" />
+          <p className="mt-4 text-muted-foreground">Verifying session...</p>
+        </div>
       </div>
     );
   }
@@ -25,25 +40,37 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
   }
 
   // Check role-based access if required
-  if (requiredRole && requiredRole.length > 0) {
-    const hasRequiredRole = requiredRole.includes(user.role);
+  if (requiredRole) {
+    const roleArray = Array.isArray(requiredRole) ? requiredRole : [requiredRole];
+    const hasRequiredRole = roleArray.includes(user.role);
+    
     if (!hasRequiredRole) {
       // Redirect to appropriate dashboard based on user role
-      switch (user.role) {
-        case 'super_admin':
-          return <Navigate to="/super-admin" replace />;
-        case 'admin':
-          return <Navigate to="/admin" replace />;
-        case 'employee':
-        case 'hr':
-        case 'manager':
-        case 'accountant':
-          return <Navigate to="/employee" replace />;
-        default:
-          return <Navigate to="/employee" replace />;
-      }
+      const targetPath = fallbackPath || roleRedirect;
+      return <Navigate to={targetPath} replace />;
     }
   }
 
   return <>{children}</>;
+}
+
+// Hook for checking if user has specific role
+export function useCheckRole(roles: string | string[]): boolean {
+  const { user } = useAuth();
+  if (!user) return false;
+  
+  const roleArray = Array.isArray(roles) ? roles : [roles];
+  return roleArray.includes(user.role);
+}
+
+// Hook for getting redirect path
+export function useRedirectOnRole(roles: string | string[]): string {
+  const { user } = useAuth();
+  if (!user) return '/login';
+  
+  const roleArray = Array.isArray(roles) ? roles : [roles];
+  if (roleArray.includes(user.role)) {
+    return useRoleRedirect();
+  }
+  return '/login';
 }

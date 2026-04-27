@@ -683,10 +683,11 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
       }
     );
 
-    // Update last login
-    user.lastLogin = new Date();
-    user.loginAttempts = 0;
-    await user.save();
+    // Update last login (use findByIdAndUpdate to avoid password field issues)
+    await User.findByIdAndUpdate(user._id, {
+      lastLogin: new Date(),
+      loginAttempts: 0
+    });
 
     logger.info('User logged in successfully', { 
       userId: user._id, 
@@ -715,7 +716,18 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
     logger.error('Database error during login', { 
       error: dbError.message,
       stack: dbError.stack,
-      ip: clientIP 
+      name: dbError.name,
+      code: dbError.code,
+      ip: clientIP,
+      email: email
+    });
+    
+    // Log full error for debugging
+    console.error('❌ Login error details:', {
+      message: dbError.message,
+      name: dbError.name,
+      code: dbError.code,
+      stack: dbError.stack
     });
     
     if (dbError.name === 'MongooseError' || dbError.name === 'MongoError' || dbError.name === 'MongoServerError') {

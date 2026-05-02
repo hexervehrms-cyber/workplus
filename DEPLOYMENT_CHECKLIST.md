@@ -1,233 +1,174 @@
-# Render Deployment Checklist - 502 Crash Fixes
+# WorkPlus Deployment Checklist
 
-## Pre-Deployment Verification
+## Pre-Deployment
 
-### Code Quality
-- [x] Syntax validation: `node --check server.js` ✅
-- [x] No require() statements in ES module
-- [x] All imports at top of file
-- [x] No duplicate routes
-- [x] No undefined variables
-- [x] Proper error handling
-- [x] Graceful shutdown support
+- [ ] All code committed to GitHub
+- [ ] No `.env` files committed (check `.gitignore`)
+- [ ] All tests passing locally
+- [ ] Frontend builds successfully: `npm run build`
+- [ ] Backend starts successfully: `npm start`
+- [ ] MongoDB Atlas cluster created and accessible
+- [ ] All required API keys and secrets prepared
 
-### Runtime Blockers Fixed
-- [x] Express 5 wildcard route syntax (Line 137)
-- [x] Async database connection handling (Lines 38-45)
-- [x] Render-compatible port binding (Line 3751)
-- [x] Duplicate biometric endpoint removed (Line 3360)
-- [x] Missing req.userOrgId in middleware (Line 2776)
-- [x] Incomplete error handling (Lines 3760+)
+## Backend Deployment (Render)
 
-### Environment Configuration
-- [x] MONGODB_URI set in .env
-- [x] PORT variable configured
-- [x] JWT_SECRET configured
-- [x] NODE_ENV set to production
-- [x] CORS_ORIGIN configured
+### Setup
+- [ ] Render account created
+- [ ] GitHub repository connected to Render
+- [ ] MongoDB Atlas connection string obtained
+- [ ] JWT_SECRET generated (min 32 characters)
 
-### API Compatibility
-- [x] Authentication endpoints unchanged
-- [x] Employee management unchanged
-- [x] Payroll management unchanged
-- [x] Leave requests unchanged
-- [x] Attendance tracking unchanged
-- [x] Document management unchanged
-- [x] Onboarding unchanged
-- [x] Dashboard statistics unchanged
-- [x] Biometric sync unchanged
-- [x] Advance/Loan management unchanged
+### Environment Variables Set
+- [ ] `NODE_ENV=production`
+- [ ] `PORT=5000`
+- [ ] `MONGODB_URI=<your-mongodb-uri>`
+- [ ] `JWT_SECRET=<your-secret>`
+- [ ] `CORS_ORIGIN=https://workplus-murex.vercel.app`
+- [ ] `SUPER_ADMIN_EMAIL=superadmin@company.com`
+- [ ] `SUPER_ADMIN_PASSWORD=<secure-password>`
+- [ ] `SUPER_ADMIN_NAME=Super Admin`
+- [ ] SMTP variables (if using email)
+- [ ] Twilio variables (if using SMS)
+- [ ] Firebase variables (if using push notifications)
 
----
+### Deployment
+- [ ] Build command set: `npm install`
+- [ ] Start command set: `npm start`
+- [ ] Deployment triggered
+- [ ] Deployment successful (check logs)
+- [ ] Backend URL obtained: `https://workplus-backend-sg3a.onrender.com`
+- [ ] Backend health check passed (can access `/api/auth/me` with token)
 
-## Deployment Steps
+## Frontend Deployment (Vercel)
 
-### Step 1: Commit Changes
-```bash
-git add server.js
-git commit -m "Fix Render 502 startup crashes - Express 5 compatibility, async DB handling, port binding, duplicate routes, middleware, error handling"
-git push origin main
-```
+### Setup
+- [ ] Vercel account created
+- [ ] GitHub repository connected to Vercel
+- [ ] Project imported
 
-### Step 2: Verify Render Configuration
-- [ ] Render project connected to GitHub
-- [ ] Auto-deploy enabled
-- [ ] Build command: `npm install`
-- [ ] Start command: `npm start`
-- [ ] Environment variables set:
-  - [ ] MONGODB_URI
-  - [ ] JWT_SECRET
-  - [ ] NODE_ENV=production
-  - [ ] CORS_ORIGIN
+### Build Configuration
+- [ ] Framework: Vite
+- [ ] Build Command: `cd frontend && npm install && npm run build`
+- [ ] Output Directory: `frontend/dist`
+- [ ] Install Command: `npm install`
 
-### Step 3: Monitor Deployment
-- [ ] Check Render dashboard
-- [ ] Watch build logs
-- [ ] Verify startup logs show:
-  ```
-  ✅ Server running on port [PORT]
-  ✅ Socket.IO server initialized
-  ✅ Database Status: Connected
-  ```
+### Environment Variables Set
+- [ ] `VITE_API_URL=https://workplus-backend-sg3a.onrender.com`
+- [ ] `VITE_SOCKET_URL=https://workplus-backend-sg3a.onrender.com`
+- [ ] `VITE_APP_NAME=WorkPlus Pro`
+- [ ] `VITE_APP_VERSION=1.0.0`
+- [ ] `VITE_APP_ENV=production`
+- [ ] `VITE_ENABLE_DEBUG=false`
+- [ ] `VITE_ENABLE_ANALYTICS=true`
 
-### Step 4: Test Endpoints
-- [ ] Health check: `GET /health`
-- [ ] API health: `GET /api/health`
-- [ ] Login: `POST /api/auth/login`
-- [ ] Get users: `GET /api/users`
-- [ ] Socket.IO connection
+### Deployment
+- [ ] Deployment triggered
+- [ ] Deployment successful (check logs)
+- [ ] Frontend URL obtained: `https://workplus-murex.vercel.app`
+- [ ] Frontend loads without errors
 
-### Step 5: Monitor Production
-- [ ] Check error logs
-- [ ] Monitor response times
-- [ ] Verify database connectivity
-- [ ] Test real-time features (Socket.IO)
+## Post-Deployment Testing
 
----
+### Backend Tests
+- [ ] Backend is accessible from frontend
+- [ ] Database connection working
+- [ ] Super admin user can be created
+- [ ] Login endpoint working
+- [ ] JWT tokens being generated correctly
+- [ ] CORS headers correct
+- [ ] API endpoints responding
 
-## Troubleshooting
+### Frontend Tests
+- [ ] Frontend loads without errors
+- [ ] Can navigate to login page
+- [ ] Can login with super admin credentials
+- [ ] Dashboard loads with data
+- [ ] Can create new employee
+- [ ] Can edit employee information
+- [ ] Can save and retrieve data
+- [ ] Profile page shows saved data after refresh
+- [ ] All forms working correctly
 
-### Issue: 502 Bad Gateway
-**Check:**
-1. Render logs for startup errors
-2. MongoDB connection string
-3. Port binding (should be 0.0.0.0)
-4. Environment variables
+### Integration Tests
+- [ ] Frontend → Backend communication working
+- [ ] Data persists after page refresh
+- [ ] WebSocket connection working (if applicable)
+- [ ] File uploads working
+- [ ] Email notifications working (if configured)
+- [ ] SMS notifications working (if configured)
 
-### Issue: Database Connection Failed
-**Check:**
-1. MONGODB_URI is correct
-2. MongoDB cluster allows Render IP
-3. Database credentials are valid
-4. Network connectivity
+## Security Verification
 
-### Issue: CORS Errors
-**Check:**
-1. CORS_ORIGIN matches frontend URL
-2. Preflight requests are allowed
-3. Headers are properly configured
+- [ ] HTTPS enabled on both frontend and backend
+- [ ] CORS properly configured
+- [ ] JWT_SECRET is strong (32+ characters)
+- [ ] No sensitive data in logs
+- [ ] Environment variables not exposed
+- [ ] Database credentials secure
+- [ ] API keys not visible in frontend code
+- [ ] Rate limiting enabled
+- [ ] Input validation working
 
-### Issue: Socket.IO Not Working
-**Check:**
-1. Socket.IO server initialized
-2. CORS configured for Socket.IO
-3. Client connecting to correct URL
-4. Tenant rooms properly joined
+## Performance Checks
 
----
-
-## Rollback Plan
-
-If deployment fails:
-
-### Option 1: Revert Commit
-```bash
-git revert HEAD
-git push origin main
-# Render will auto-deploy previous version
-```
-
-### Option 2: Manual Rollback
-1. Go to Render dashboard
-2. Select previous deployment
-3. Click "Redeploy"
-
-### Option 3: Check Logs
-1. Render dashboard → Logs
-2. Look for error messages
-3. Fix specific issue
-4. Redeploy
-
----
-
-## Performance Metrics
-
-### Expected Startup Time
-- Cold start: 30-60 seconds
-- Warm start: 5-10 seconds
-- Database connection: 2-5 seconds
-
-### Expected Response Times
-- Health check: <100ms
-- Authentication: 100-500ms
-- Database queries: 50-200ms
-- Socket.IO events: <50ms
-
----
-
-## Security Checklist
-
-- [x] JWT_SECRET is strong
-- [x] MongoDB credentials are secure
-- [x] CORS origins are whitelisted
-- [x] No sensitive data in logs
-- [x] Error messages don't expose internals
-- [x] Rate limiting configured
-- [x] Input validation in place
-
----
-
-## Post-Deployment Verification
-
-### Immediate (First 5 minutes)
-- [ ] Server is running
-- [ ] No 502 errors
-- [ ] Health endpoints respond
-- [ ] Database is connected
-
-### Short-term (First hour)
-- [ ] Authentication works
-- [ ] APIs respond correctly
-- [ ] Socket.IO events work
-- [ ] No error spikes
-
-### Long-term (First 24 hours)
-- [ ] Consistent uptime
-- [ ] Normal response times
+- [ ] Frontend loads in < 3 seconds
+- [ ] API responses < 500ms
+- [ ] Database queries optimized
+- [ ] No console errors
 - [ ] No memory leaks
-- [ ] Database queries efficient
-
----
+- [ ] Images optimized
+- [ ] CSS/JS minified
 
 ## Monitoring Setup
 
-### Render Alerts
-- [ ] Set up email alerts for crashes
-- [ ] Monitor CPU usage
-- [ ] Monitor memory usage
-- [ ] Monitor response times
-
-### Application Monitoring
-- [ ] Set up error tracking (Sentry)
-- [ ] Set up performance monitoring
-- [ ] Set up uptime monitoring
-- [ ] Set up log aggregation
-
----
+- [ ] Render logs accessible
+- [ ] Vercel logs accessible
+- [ ] Error tracking configured (if using Sentry, etc.)
+- [ ] Performance monitoring enabled
+- [ ] Uptime monitoring configured
 
 ## Documentation
 
-- [x] RENDER_502_CRASH_AUDIT_FIXED.md - Detailed audit
-- [x] STARTUP_CRASH_FIXES_SUMMARY.md - Quick reference
-- [x] DEPLOYMENT_CHECKLIST.md - This file
-- [x] ES_MODULES_MIGRATION_GUIDE.md - ES modules info
-- [x] FIXES_APPLIED_ES_MODULES.md - Previous fixes
+- [ ] Deployment guide updated
+- [ ] Environment variables documented
+- [ ] API endpoints documented
+- [ ] Known issues documented
+- [ ] Troubleshooting guide created
+
+## Final Checks
+
+- [ ] All team members notified of deployment
+- [ ] Backup of production database created
+- [ ] Rollback plan documented
+- [ ] Support contact information available
+- [ ] Deployment date/time logged
+
+## Post-Deployment
+
+- [ ] Monitor logs for errors (first 24 hours)
+- [ ] Test all critical user flows
+- [ ] Verify data integrity
+- [ ] Check performance metrics
+- [ ] Gather user feedback
+- [ ] Document any issues found
+- [ ] Plan for next deployment
 
 ---
 
-## Sign-off
+**Deployment Date**: _______________
+**Deployed By**: _______________
+**Status**: ☐ Successful ☐ Partial ☐ Failed
 
-- **Code Review:** ✅ Passed
-- **Syntax Check:** ✅ Passed
-- **API Compatibility:** ✅ Verified
-- **Environment Setup:** ✅ Configured
-- **Deployment Ready:** ✅ YES
+**Notes**:
+```
+_________________________________________________________________
+_________________________________________________________________
+_________________________________________________________________
+```
 
----
-
-**Deployment Date:** April 27, 2026
-**Status:** ✅ Ready for Production
-**Node Version:** v24.14.1
-**Express Version:** 5.2.1
-**MongoDB:** Connected
-**All APIs:** Unchanged
+**Rollback Plan** (if needed):
+```
+_________________________________________________________________
+_________________________________________________________________
+_________________________________________________________________
+```

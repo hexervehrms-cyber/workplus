@@ -1,8 +1,90 @@
-node_modules
-dist
-build
+# ============================================
+# DEPENDENCIES
+# ============================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ============================================
+# ENVIRONMENT VARIABLES - CRITICAL: NEVER COMMIT
+# ============================================
 .env
 .env.local
-coverage
-.vscode
+.env.*.local
+.env.production
+backend/.env
+backend/.env.local
+backend/.env.production
+frontend/.env
+frontend/.env.local
+
+# ============================================
+# BUILD OUTPUT
+# ============================================
+dist/
+build/
+*.tsbuildinfo
+frontend/dist/
+backend/dist/
+
+# ============================================
+# IDE & EDITOR
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# ============================================
+# OS FILES
+# ============================================
+.DS_Store
+Thumbs.db
+.env.local.php
+.cache/
+
+# ============================================
+# LOGS
+# ============================================
+logs/
+*.log
+backend/logs/
+
+# ============================================
+# UPLOADS & TEMPORARY FILES
+# ============================================
+uploads/
+temp/
+tmp/
+*.tmp
+
+# ============================================
+# DATABASE
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================
+# TESTING
+# ============================================
+coverage/
+.nyc_output/
+.mocha_output/
+
+# ============================================
+# MISC
+# ============================================
+.env.example.local
 .vercel
+.vercel/
+render.yaml.local
+*.pem
+*.key
+*.crt

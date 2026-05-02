@@ -1,0 +1,17 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "env": {
+    "VITE_API_URL": "https://workplus-backend-sg3a.onrender.com",
+    "VITE_SOCKET_URL": "https://workplus-backend-sg3a.onrender.com",
+    "VITE_APP_ENV": "production",
+    "VITE_ENABLE_DEBUG": "false"
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

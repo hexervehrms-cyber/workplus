@@ -1,0 +1,154 @@
+================================================================================
+EMPLOYEE DELETION FIX - ISSUE RESOLVED
+================================================================================
+Date: May 2, 2026
+Issue: Deleted employees still showing after page refresh
+Status: FIXED ✓
+
+================================================================================
+ROOT CAUSE
+================================================================================
+
+The issue was in the backend GET /api/employees endpoint:
+
+1. When an employee is deleted, the backend performs a SOFT DELETE
+   - Sets employee status to 'terminated' instead of removing from database
+   - This is good for audit trails and data retention
+
+2. The GET endpoint was returning ALL employees (including terminated ones)
+   - For admin/HR users, if no status filter was provided, it returned all statuses
+   - Frontend was displaying all returned employees, including terminated ones
+
+3. After page refresh:
+   - Frontend fetched employees from backend without status filter
+   - Backend returned all employees (including terminated)
+   - Deleted employees appeared again in the UI
+
+================================================================================
+SOLUTION IMPLEMENTED
+================================================================================
+
+Modified: backend/routes/employees.js (lines 35-50)
+
+Changed the query logic to:
+- For regular employees: Show only 'active' employees (unchanged)
+- For admin/HR/Manager: 
+  - If status filter is provided: Use that filter
+  - If NO status filter: Exclude terminated employees by default
+  - Query: { status: { $ne: 'terminated' } }
+
+This ensures:
+✓ Deleted employees don't appear in the list by default
+✓ Admins can still view terminated employees if they explicitly filter by status
+✓ Audit trail is preserved (soft delete keeps data in database)
+✓ Page refresh shows correct employee list
+
+================================================================================
+CODE CHANGE
+================================================================================
+
+BEFORE:
+```javascript
+} else {
+  // Admin/HR/Manager can see all employees in their org
+  if (status) {
+    query.status = status;
+  }
+}
+```
+
+AFTER:
+```javascript
+} else {
+  // Admin/HR/Manager can see all employees in their org
+  // By default, exclude terminated employees unless explicitly requested
+  if (status) {
+    query.status = status;
+  } else {
+    // Default: show only active employees, exclude terminated
+    query.status = { $ne: 'terminated' };
+  }
+}
+```
+
+================================================================================
+REAL-TIME UPDATES
+================================================================================
+
+The frontend already has proper real-time deletion handling:
+
+1. When delete button is clicked:
+   - Employee removed from UI immediately
+   - Backend soft-deletes the employee
+   - Socket.IO event emitted: 'employee:update' with action 'deleted'
+
+2. Real-time listener in Employees component:
+   - Listens for 'employee:update' events
+   - Calls handleEmployeeDeleted() when deletion event received
+   - Removes employee from state: setEmployees(prev => prev.filter(...))
+
+3. On page refresh:
+   - Frontend fetches employees from backend
+   - Backend now excludes terminated employees by default
+   - Only active employees are displayed
+
+================================================================================
+TESTING CHECKLIST
+================================================================================
+
+After restarting backend:
+
+[ ] Delete an employee
+[ ] Verify employee is removed from UI immediately
+[ ] Refresh the page
+[ ] Verify deleted employee does NOT appear in the list
+[ ] Create a new employee
+[ ] Verify new employee appears in the list
+[ ] Edit an employee
+[ ] Verify changes are reflected in the list
+[ ] Open employees page on two browsers
+[ ] Delete employee in one browser
+[ ] Verify it's removed in the other browser (real-time update)
+
+================================================================================
+ADMIN FEATURES PRESERVED
+================================================================================
+
+Admins can still view terminated employees by:
+1. Using the status filter dropdown
+2. Selecting "Terminated" status
+3. Backend will return only terminated employees
+
+This allows admins to:
+- View employee termination history
+- Re-activate terminated employees if needed
+- Maintain audit trail of all employees
+
+================================================================================
+VERIFICATION
+================================================================================
+
+✓ Syntax check passed (node -c backend/routes/employees.js)
+✓ Real-time listeners already in place
+✓ Frontend deletion handler already implemented
+✓ Backend soft-delete logic preserved
+✓ Audit trail maintained
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Restart backend server to apply changes
+2. Test employee deletion:
+   - Delete an employee
+   - Refresh page
+   - Verify employee is gone
+3. Test real-time updates:
+   - Open two browser windows
+   - Delete employee in one
+   - Verify it disappears in the other
+4. Test admin filter:
+   - Use status filter to view terminated employees
+   - Verify terminated employees appear when filtered
+
+================================================================================

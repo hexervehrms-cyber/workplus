@@ -1,0 +1,279 @@
+import { io, Socket } from 'socket.io-client';
+import { TokenManager } from './api';
+
+class RealTimeSocket {
+  private socket: Socket | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectDelay = 1000;
+
+  constructor() {
+    this.connect();
+  }
+
+  private connect() {
+    const user = TokenManager.getUser();
+    const token = localStorage.getItem('token');
+
+    if (!user?.id) {
+      console.warn('No user data found for socket connection');
+      return;
+    }
+
+    if (!token) {
+      console.warn('No JWT token found for socket connection');
+      return;
+    }
+
+    // Connect to the server with JWT token
+    this.socket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000', {
+      transports: ['websocket', 'polling'],
+      auth: {
+        token: token
+      }
+    });
+
+    // Handle connection
+    this.socket.on('connect', () => {
+      console.log('✅ Socket connected:', this.socket?.id);
+      this.reconnectAttempts = 0;
+      
+      // Authenticate with user details
+      this.socket?.emit('authenticate', {
+        userId: user.id,
+        role: user.role,
+        tenantId: user.tenantId || user.orgId || 'system'
+      });
+    });
+
+    // Handle authentication response
+    this.socket.on('authenticated', (data) => {
+      console.log('✅ Socket authenticated:', data);
+    });
+
+    this.socket.on('auth_error', (error) => {
+      console.error('❌ Socket authentication failed:', error);
+    });
+
+    // Handle disconnection
+    this.socket.on('disconnect', (reason) => {
+      console.warn('⚠️ Socket disconnected:', reason);
+      
+      if (reason === 'io server disconnect') {
+        // Server disconnected, try to reconnect
+        this.handleReconnect();
+      }
+    });
+
+    // Handle connection errors
+    this.socket.on('connect_error', (error) => {
+      console.error('❌ Socket connection error:', error);
+      this.handleReconnect();
+    });
+
+    // Set up dashboard update listeners
+    this.setupDashboardListeners();
+  }
+
+  private handleReconnect() {
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.reconnectAttempts++;
+      console.log(`🔄 Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+      
+      setTimeout(() => {
+        this.socket?.connect();
+      }, this.reconnectDelay * this.reconnectAttempts);
+    } else {
+      console.error('❌ Max reconnection attempts reached');
+    }
+  }
+
+  private setupDashboardListeners() {
+    if (!this.socket) return;
+
+    // Dashboard data updates
+    this.socket.on('dashboard_update', (data) => {
+      console.log('📊 Dashboard update received:', data);
+      this.notifyDashboardUpdate(data);
+    });
+
+    // Activity feed updates
+    this.socket.on('activity_update', (activity) => {
+      console.log('📝 Activity update received:', activity);
+      this.notifyActivityUpdate(activity);
+    });
+
+    // Employee updates
+    this.socket.on('employee_created', (employee) => {
+      console.log('👤 Employee created:', employee);
+      this.notifyEmployeeUpdate('created', employee);
+    });
+
+    this.socket.on('employee_updated', (employee) => {
+      console.log('👤 Employee updated:', employee);
+      this.notifyEmployeeUpdate('updated', employee);
+    });
+
+    // Leave request updates
+    this.socket.on('leave_created', (leave) => {
+      console.log('📅 Leave request created:', leave);
+      this.notifyLeaveUpdate('created', leave);
+    });
+
+    this.socket.on('leave_updated', (leave) => {
+      console.log('📅 Leave request updated:', leave);
+      this.notifyLeaveUpdate('updated', leave);
+    });
+
+    // Attendance updates
+    this.socket.on('attendance:create', (attendance) => {
+      console.log('⏰ Attendance recorded:', attendance);
+      this.notifyAttendanceUpdate(attendance);
+    });
+
+    // System notifications
+    this.socket.on('notification', (notification) => {
+      console.log('🔔 Notification received:', notification);
+      this.notifySystemNotification(notification);
+    });
+  }
+
+  // Dashboard update callbacks
+  private dashboardUpdateCallbacks: ((data: any) => void)[] = [];
+  private activityUpdateCallbacks: ((activity: any) => void)[] = [];
+  private employeeUpdateCallbacks: ((type: string, employee: any) => void)[] = [];
+  private leaveUpdateCallbacks: ((type: string, leave: any) => void)[] = [];
+  private attendanceUpdateCallbacks: ((attendance: any) => void)[] = [];
+  private notificationCallbacks: ((notification: any) => void)[] = [];
+
+  // Public methods to subscribe to updates
+  onDashboardUpdate(callback: (data: any) => void) {
+    this.dashboardUpdateCallbacks.push(callback);
+    return () => {
+      const index = this.dashboardUpdateCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.dashboardUpdateCallbacks.splice(index, 1);
+      }
+    };
+  }
+
+  onActivityUpdate(callback: (activity: any) => void) {
+    this.activityUpdateCallbacks.push(callback);
+    return () => {
+      const index = this.activityUpdateCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.activityUpdateCallbacks.splice(index, 1);
+      }
+    };
+  }
+
+  onEmployeeUpdate(callback: (type: string, employee: any) => void) {
+    this.employeeUpdateCallbacks.push(callback);
+    return () => {
+      const index = this.employeeUpdateCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.employeeUpdateCallbacks.splice(index, 1);
+      }
+    };
+  }
+
+  onLeaveUpdate(callback: (type: string, leave: any) => void) {
+    this.leaveUpdateCallbacks.push(callback);
+    return () => {
+      const index = this.leaveUpdateCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.leaveUpdateCallbacks.splice(index, 1);
+      }
+    };
+  }
+
+  onAttendanceUpdate(callback: (attendance: any) => void) {
+    this.attendanceUpdateCallbacks.push(callback);
+    return () => {
+      const index = this.attendanceUpdateCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.attendanceUpdateCallbacks.splice(index, 1);
+      }
+    };
+  }
+
+  onNotification(callback: (notification: any) => void) {
+    this.notificationCallbacks.push(callback);
+    return () => {
+      const index = this.notificationCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.notificationCallbacks.splice(index, 1);
+      }
+    };
+  }
+
+  // Notification methods
+  private notifyDashboardUpdate(data: any) {
+    this.dashboardUpdateCallbacks.forEach(callback => callback(data));
+  }
+
+  private notifyActivityUpdate(activity: any) {
+    this.activityUpdateCallbacks.forEach(callback => callback(activity));
+  }
+
+  private notifyEmployeeUpdate(type: string, employee: any) {
+    this.employeeUpdateCallbacks.forEach(callback => callback(type, employee));
+  }
+
+  private notifyLeaveUpdate(type: string, leave: any) {
+    this.leaveUpdateCallbacks.forEach(callback => callback(type, leave));
+  }
+
+  private notifyAttendanceUpdate(attendance: any) {
+    this.attendanceUpdateCallbacks.forEach(callback => callback(attendance));
+  }
+
+  private notifySystemNotification(notification: any) {
+    this.notificationCallbacks.forEach(callback => callback(notification));
+  }
+
+  // Emit events to server
+  emitDashboardRefresh(dashboardType: string) {
+    this.socket?.emit('dashboard_refresh_request', { dashboardType });
+  }
+
+  emitActivityLogRequest(filters: any) {
+    this.socket?.emit('activity_log_request', filters);
+  }
+
+  // Connection status
+  isConnected(): boolean {
+    return this.socket?.connected || false;
+  }
+
+  // Disconnect
+  disconnect() {
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
+    }
+  }
+
+  // Get socket instance for custom events
+  getSocket(): Socket | null {
+    return this.socket;
+  }
+
+  // Add .on() and .off() methods for compatibility
+  on(event: string, callback: (...args: any[]) => void) {
+    if (this.socket) {
+      this.socket.on(event, callback);
+    }
+  }
+
+  off(event: string, callback: (...args: any[]) => void) {
+    if (this.socket) {
+      this.socket.off(event, callback);
+    }
+  }
+}
+
+// Create singleton instance
+const realTimeSocket = new RealTimeSocket();
+
+export default realTimeSocket;

@@ -1,0 +1,155 @@
+{
+  "name": "WorkPlus Pro",
+  "short_name": "WorkPlus",
+  "description": "Enterprise HRMS & Workforce Management Platform",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#007bff",
+  "background_color": "#ffffff",
+  "lang": "en-US",
+  "categories": [
+    "business",
+    "productivity",
+    "utilities"
+  ],
+  "icons": [
+    {
+      "src": "/icons/icon-72x72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-96x96.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-128x128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-144x144.png",
+      "sizes": "144x144",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-152x152.png",
+      "sizes": "152x152",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-384x384.png",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Mark Attendance",
+      "short_name": "Attendance",
+      "description": "Quick attendance marking",
+      "url": "/attendance?action=checkin",
+      "icons": [
+        {
+          "src": "/icons/attendance-shortcut.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Apply Leave",
+      "short_name": "Leave",
+      "description": "Apply for leave",
+      "url": "/leaves/apply",
+      "icons": [
+        {
+          "src": "/icons/leave-shortcut.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Submit Expense",
+      "short_name": "Expense",
+      "description": "Submit expense claim",
+      "url": "/expenses/submit",
+      "icons": [
+        {
+          "src": "/icons/expense-shortcut.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "View Payslip",
+      "short_name": "Payslip",
+      "description": "View latest payslip",
+      "url": "/payroll",
+      "icons": [
+        {
+          "src": "/icons/payslip-shortcut.png",
+          "sizes": "96x96"
+        }
+      ]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/dashboard-mobile.png",
+      "sizes": "375x812",
+      "type": "image/png",
+      "platform": "narrow",
+      "label": "Dashboard on mobile"
+    },
+    {
+      "src": "/screenshots/attendance-mobile.png",
+      "sizes": "375x812",
+      "type": "image/png",
+      "platform": "narrow",
+      "label": "Attendance tracking"
+    },
+    {
+      "src": "/screenshots/dashboard-desktop.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "platform": "wide",
+      "label": "Dashboard on desktop"
+    }
+  ],
+  "related_applications": [
+    {
+      "platform": "play",
+      "url": "https://play.google.com/store/apps/details?id=com.workpluspro.app",
+      "id": "com.workpluspro.app"
+    },
+    {
+      "platform": "itunes",
+      "url": "https://apps.apple.com/app/workplus-pro/id123456789"
+    }
+  ],
+  "prefer_related_applications": false,
+  "edge_side_panel": {
+    "preferred_width": 400
+  }
+}

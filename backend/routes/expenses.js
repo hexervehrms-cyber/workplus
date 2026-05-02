@@ -46,6 +46,44 @@ const receiptUpload = multer({
 });
 
 /**
+ * POST /api/expenses/upload-receipt
+ * Upload expense receipt
+ * IMPORTANT: This route must come BEFORE /:expenseId routes to avoid route conflicts
+ */
+router.post(
+  "/upload-receipt",
+  authenticate,
+  receiptUpload.single('receipt'),
+  asyncHandler(async (req, res) => {
+    try {
+      if (!req.file) {
+        return sendError(res, "No receipt file provided", 400, "VALIDATION_ERROR");
+      }
+
+      const receiptPath = `/uploads/receipts/${req.file.filename}`;
+
+      logger.info("Receipt uploaded", {
+        userId: req.user.userId,
+        filename: req.file.filename,
+        size: req.file.size
+      });
+
+      return sendSuccess(res, {
+        filePath: receiptPath,
+        filename: req.file.filename,
+        size: req.file.size
+      }, "Receipt uploaded successfully", 201);
+    } catch (error) {
+      logger.error("Upload receipt error", {
+        error: error.message,
+        userId: req.user.userId
+      });
+      return sendError(res, "Failed to upload receipt", 500, "UPLOAD_ERROR");
+    }
+  })
+);
+
+/**
  * GET /api/expenses/receipt/:filename
  * Download expense receipt
  * IMPORTANT: This route must come BEFORE /user/:userId to avoid route conflicts
@@ -289,18 +327,25 @@ router.put(
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
       }
 
-      // Check authorization - admin/super_admin/hr can edit any expense, others can only edit their own
-      if (req.user.role !== "admin" && req.user.role !== "super_admin" && req.user.role !== "hr") {
-        if (expense.userId.toString() !== req.user.userId) {
-          return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
-        }
+      // Check authorization - only owner or admin can edit
+      const isOwner = expense.userId.toString() === req.user.userId.toString();
+      const isAdmin = ["admin", "super_admin", "hr"].includes(req.user.role);
+      
+      if (!isOwner && !isAdmin) {
+        console.log("Update authorization denied:", {
+          expenseUserId: expense.userId.toString(),
+          reqUserId: req.user.userId.toString(),
+          userRole: req.user.role,
+          isOwner,
+          isAdmin
+        });
+        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
       // Update fields
       if (title) expense.title = title;
       if (amount !== undefined && amount !== null && amount !== '') {
         const numAmount = Number(amount);
-        console.log(`Updating amount from ${expense.amount} to ${numAmount} (received: ${amount}, type: ${typeof amount})`);
         expense.amount = numAmount;
       }
       if (category) expense.category = category;
@@ -318,11 +363,8 @@ router.put(
       logger.info("Expense updated", {
         expenseId,
         userId: req.user.userId,
-        updatedAmount: expense.amount,
-        updatedAmountType: typeof expense.amount,
         updatedTitle: expense.title,
-        requestAmount: amount,
-        allFields: { title, amount, category, description, receipt, date }
+        updatedAmount: expense.amount
       });
 
       return sendSuccess(res, expense, "Expense updated successfully");
@@ -440,8 +482,18 @@ router.delete(
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
       }
 
-      // Check authorization - only creator or admin can delete
-      if (req.user.role !== "admin" && req.user.role !== "super_admin" && req.user.role !== "hr" && expense.userId.toString() !== req.user.userId) {
+      // Check authorization - only owner or admin can delete
+      const isOwner = expense.userId.toString() === req.user.userId.toString();
+      const isAdmin = ["admin", "super_admin", "hr"].includes(req.user.role);
+      
+      if (!isOwner && !isAdmin) {
+        console.log("Delete authorization denied:", {
+          expenseUserId: expense.userId.toString(),
+          reqUserId: req.user.userId.toString(),
+          userRole: req.user.role,
+          isOwner,
+          isAdmin
+        });
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
@@ -461,43 +513,6 @@ router.delete(
         userId: req.user.userId
       });
       return sendError(res, "Failed to delete expense", 500, "DELETE_ERROR");
-    }
-  })
-);
-
-/**
- * POST /api/expenses/upload-receipt
- * Upload expense receipt
- */
-router.post(
-  "/upload-receipt",
-  authenticate,
-  receiptUpload.single('receipt'),
-  asyncHandler(async (req, res) => {
-    try {
-      if (!req.file) {
-        return sendError(res, "No receipt file provided", 400, "VALIDATION_ERROR");
-      }
-
-      const receiptPath = `/uploads/receipts/${req.file.filename}`;
-
-      logger.info("Receipt uploaded", {
-        userId: req.user.userId,
-        filename: req.file.filename,
-        size: req.file.size
-      });
-
-      return sendSuccess(res, {
-        filePath: receiptPath,
-        filename: req.file.filename,
-        size: req.file.size
-      }, "Receipt uploaded successfully", 201);
-    } catch (error) {
-      logger.error("Upload receipt error", {
-        error: error.message,
-        userId: req.user.userId
-      });
-      return sendError(res, "Failed to upload receipt", 500, "UPLOAD_ERROR");
     }
   })
 );

@@ -31,15 +31,29 @@ export default function AttendanceCalendar() {
     loadEmployees();
   }, [currentDate]);
 
+  // Debug logging
+  useEffect(() => {
+    console.log('Attendance Calendar - Current data:', {
+      attendance: attendance.length,
+      employees: employees.length,
+      selectedEmployee,
+      currentMonth: currentDate.toISOString().split('T')[0]
+    });
+  }, [attendance, employees, selectedEmployee, currentDate]);
+
   const loadAttendanceData = async () => {
     try {
       setLoading(true);
       const year = currentDate.getFullYear();
       const month = currentDate.getMonth() + 1;
       
-      const response = await apiClient.get(`/attendance?year=${year}&month=${month}`);
-      if (response.data?.success) {
-        setAttendance(response.data.data || []);
+      // Calculate start and end dates for the month
+      const startDate = new Date(year, month - 1, 1).toISOString();
+      const endDate = new Date(year, month, 0).toISOString();
+      
+      const response = await apiClient.get(`/attendance?startDate=${startDate}&endDate=${endDate}&limit=100`);
+      if (response?.success) {
+        setAttendance(response.data || []);
       }
     } catch (error) {
       console.error('Error loading attendance:', error);
@@ -52,8 +66,8 @@ export default function AttendanceCalendar() {
   const loadEmployees = async () => {
     try {
       const response = await apiClient.get('/employees');
-      if (response.data?.success) {
-        setEmployees(response.data.data || []);
+      if (response?.success) {
+        setEmployees(response.data || []);
       }
     } catch (error) {
       console.error('Error loading employees:', error);
@@ -65,7 +79,9 @@ export default function AttendanceCalendar() {
   };
 
   const getFirstDayOfMonth = (date: Date) => {
-    return new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+    let firstDay = new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+    // Convert Sunday (0) to 6, so Monday becomes 0
+    return firstDay === 0 ? 6 : firstDay - 1;
   };
 
   const previousMonth = () => {
@@ -77,15 +93,19 @@ export default function AttendanceCalendar() {
   };
 
   const getAttendanceForDate = (day: number) => {
-    const dateStr = new Date(currentDate.getFullYear(), currentDate.getMonth(), day)
-      .toISOString()
-      .split('T')[0];
+    const targetDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+    const dateStr = targetDate.toISOString().split('T')[0];
     
-    if (selectedEmployee === 'all') {
-      return attendance.filter(a => a.date === dateStr);
-    } else {
-      return attendance.filter(a => a.date === dateStr && a.employeeName === selectedEmployee);
+    let filteredAttendance = attendance.filter(a => {
+      const recordDate = new Date(a.date).toISOString().split('T')[0];
+      return recordDate === dateStr;
+    });
+    
+    if (selectedEmployee !== 'all') {
+      filteredAttendance = filteredAttendance.filter(a => a.employeeName === selectedEmployee);
     }
+    
+    return filteredAttendance;
   };
 
   const getStatusColor = (status: string) => {
@@ -130,8 +150,8 @@ export default function AttendanceCalendar() {
             <SelectContent>
               <SelectItem value="all">All Employees</SelectItem>
               {employees.map((emp) => (
-                <SelectItem key={emp._id} value={emp.userId?.name || emp.name}>
-                  {emp.userId?.name || emp.name}
+                <SelectItem key={emp._id} value={emp.userId?.name || emp.name || 'Unknown'}>
+                  {emp.userId?.name || emp.name || 'Unknown'}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -155,7 +175,7 @@ export default function AttendanceCalendar() {
 
       <Card className="p-6 rounded-xl">
         <div className="grid grid-cols-7 gap-2">
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => (
             <div key={day} className="text-center font-semibold text-sm p-2">
               {day}
             </div>
@@ -228,15 +248,20 @@ export default function AttendanceCalendar() {
                     </td>
                   </tr>
                 ) : (
-                  attendance.map((record) => (
+                  attendance
+                    .filter(record => {
+                      if (selectedEmployee === 'all') return true;
+                      return record.employeeName === selectedEmployee;
+                    })
+                    .map((record) => (
                     <tr key={record._id} className="border-b hover:bg-accent/50">
                       <td className="p-4">
                         <p className="font-medium">{record.employeeName}</p>
                       </td>
-                      <td className="p-4">{record.date}</td>
-                      <td className="p-4">{record.checkIn}</td>
-                      <td className="p-4">{record.checkOut}</td>
-                      <td className="p-4">{record.hoursWorked.toFixed(1)}h</td>
+                      <td className="p-4">{new Date(record.date).toLocaleDateString()}</td>
+                      <td className="p-4">{record.checkIn ? new Date(record.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                      <td className="p-4">{record.checkOut ? new Date(record.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                      <td className="p-4">{record.hoursWorked ? record.hoursWorked.toFixed(1) : '0.0'}h</td>
                       <td className="p-4">
                         <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(record.status)}`}>
                           {record.status.charAt(0).toUpperCase() + record.status.slice(1)}

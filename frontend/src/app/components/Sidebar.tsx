@@ -25,7 +25,9 @@ import {
   Award,
   ShieldCheck,
   FolderOpen,
-  ChevronDown
+  ChevronDown,
+  Phone,
+  Zap
 } from 'lucide-react';
 
 interface NavItem {
@@ -52,20 +54,36 @@ const navigationItems: NavItem[] = [
   // Admin
   { icon: LayoutDashboard, label: 'Dashboard', path: '/admin', roles: ['admin'] },
   { icon: Users, label: 'Employees', path: '/admin/employees', roles: ['admin'] },
+  { icon: Users, label: 'Admin Management', path: '/admin/admin-management', roles: ['admin'] },
   { icon: FolderOpen, label: 'Company Docs', path: '/admin/company-docs', roles: ['admin'] },
   { icon: Building2, label: 'Departments', path: '/admin/departments', roles: ['admin'] },
+  { icon: ShieldCheck, label: 'Roles', path: '/admin/roles', roles: ['admin'] },
   { 
     icon: Calendar, 
     label: 'Leave Management', 
-    path: '/admin/leave-management', 
+    path: '/admin/leaves', 
     roles: ['admin'],
     children: [
-      { icon: CalendarDays, label: 'Holiday Calendar', path: '/admin/holiday-calendar', roles: ['admin'] }
+      { icon: CalendarDays, label: 'Holiday Calendar', path: '/admin/holiday-calendar', roles: ['admin'] },
+      { icon: FileText, label: 'Leave Requests', path: '/admin/leaves', roles: ['admin'] },
+      { icon: Zap, label: 'Leave Allocation', path: '/admin/leave-allocation', roles: ['admin'] }
     ]
   },
   { icon: Clock, label: 'Attendance', path: '/admin/attendance', roles: ['admin'] },
+  { icon: Calendar, label: 'Attendance History', path: '/admin/attendance-history', roles: ['admin'] },
+  { 
+    icon: Zap, 
+    label: 'Sales', 
+    path: '/admin/sales', 
+    roles: ['admin'],
+    children: [
+      { icon: BarChart3, label: 'Dashboard', path: '/admin/sales', roles: ['admin'] },
+      { icon: Target, label: 'Leads', path: '/admin/sales/leads', roles: ['admin'] },
+      { icon: TrendingUp, label: 'Deals', path: '/admin/sales/deals', roles: ['admin'] },
+      { icon: Phone, label: 'Calls', path: '/admin/sales/calls', roles: ['admin'] }
+    ]
+  },
   { icon: Receipt, label: 'Expenses', path: '/admin/expenses', roles: ['admin'] },
-  { icon: DollarSign, label: 'Expense Management', path: '/admin/expense-management', roles: ['admin'] },
   { icon: DollarSign, label: 'Payroll', path: '/admin/payroll', roles: ['admin'] },
   { icon: Megaphone, label: 'Announcements', path: '/admin/announcements', roles: ['admin'] },
   { icon: MessageSquare, label: 'Team Chat', path: '/admin/chat', roles: ['admin'] },
@@ -74,14 +92,12 @@ const navigationItems: NavItem[] = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/employee', roles: ['employee', 'hr', 'manager', 'accountant'] },
   { icon: UserCircle, label: 'My Profile', path: '/employee/profile', roles: ['employee', 'hr', 'manager', 'accountant'] },
   { icon: FolderOpen, label: 'Company Docs', path: '/employee/company-docs', roles: ['employee', 'hr', 'manager', 'accountant'] },
+  { icon: CalendarDays, label: 'Calendar', path: '/employee/calendar', roles: ['employee', 'hr', 'manager', 'accountant'] },
   { 
     icon: Calendar, 
     label: 'Leave', 
     path: '/employee/leave', 
-    roles: ['employee', 'hr', 'manager', 'accountant'],
-    children: [
-      { icon: CalendarDays, label: 'Holiday Calendar', path: '/employee/holiday-calendar', roles: ['employee', 'hr', 'manager', 'accountant'] }
-    ]
+    roles: ['employee', 'hr', 'manager', 'accountant']
   },
   { icon: Clock, label: 'Attendance', path: '/employee/attendance', roles: ['employee', 'hr', 'manager', 'accountant'] },
   { icon: TrendingUp, label: 'Performance', path: '/employee/performance', roles: ['employee', 'hr', 'manager', 'accountant'] },
@@ -214,18 +230,21 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="p-4 border-t border-border space-y-1">
-        <Link
-          to="/settings"
-          onClick={(e) => {
-            e.preventDefault();
-            // For now, navigate to employee dashboard as placeholder
-            navigate('/employee');
+        <button
+          onClick={() => {
+            if (user?.role === 'admin') {
+              navigate('/admin/settings');
+            } else if (user?.role === 'super_admin') {
+              navigate('/super-admin');
+            } else {
+              navigate('/employee/settings');
+            }
           }}
-          className="flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-all"
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-all"
         >
           <Settings className="w-5 h-5" />
           <span className="font-medium">Settings</span>
-        </Link>
+        </button>
       </div>
     </aside>
   );

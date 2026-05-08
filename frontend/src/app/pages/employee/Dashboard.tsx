@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { KPICard } from '../../components/KPICard';
 import EmployeeDocuments from '../../components/EmployeeDocuments';
-import EmployeeHolidayCalendar from '../../components/EmployeeHolidayCalendar';
-import LeaveCalendar from '../../components/LeaveCalendar';
+import InteractiveCalendar from '../../components/InteractiveCalendar';
+import ChatWidget from '../../components/ChatWidget';
 import { useCurrency } from '../../context/CurrencyContext';
 import { useAuth } from '../../context/AuthContext';
 import { ExpenseService, LeaveRequestService } from '../../utils/api';
@@ -16,23 +16,24 @@ import {
   Bell,
   Award,
   Target,
-  Coffee,
-  Users,
   LogOut,
-  FileText
+  FileText,
+  AlertCircle
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Progress } from '../../components/ui/progress';
 import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
-
-interface TimeRecord {
-  id: number;
-  type: 'check-in' | 'check-out' | 'break' | 'meeting';
-  timestamp: string;
-  duration?: string;
-}
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../../components/ui/table';
+import { toast } from 'sonner';
 
 interface DashboardData {
   employee: any;
@@ -46,21 +47,14 @@ export default function EmployeeDashboard() {
   const { formatCurrency } = useCurrency();
   const { user } = useAuth();
   const [isCheckedIn, setIsCheckedIn] = useState(false);
-  const [selectedTab, setSelectedTab] = useState('overview');
-  const [currentBreak, setCurrentBreak] = useState<string | null>(null);
-  const [currentMeeting, setCurrentMeeting] = useState<string | null>(null);
-  const [timeRecords, setTimeRecords] = useState<TimeRecord[]>([]);
-  const [recentActivities, setRecentActivities] = useState<any[]>([]);
-  const [upcomingEvents, setUpcomingEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [employeeId, setEmployeeId] = useState<string | null>(null);
 
-  // State for real data
   const [kpiMetrics, setKpiMetrics] = useState({
     leaveBalance: "0 days",
-    hoursThisWeek: "0h", 
-    currentSalary: 0,
+    hoursThisWeek: "0h",
     performance: "0%"
   });
   
@@ -69,8 +63,16 @@ export default function EmployeeDashboard() {
     checkInTime: null,
     checkOutTime: null,
     hoursWorked: 0,
-    status: 'absent'
+    status: 'absent',
+    isOnBreak: false,
+    isInMeeting: false,
+    currentBreakDuration: 0,
+    breakType: 'regular'
   });
+  
+  // Add action lock states to prevent UI conflicts
+  const [actionInProgress, setActionInProgress] = useState(false);
+  const [lastActionTime, setLastActionTime] = useState(0);  // Initialize to 0 so page load is never blocked
   
   const [performanceMetrics, setPerformanceMetrics] = useState({
     taskCompletion: 0,
@@ -80,15 +82,96 @@ export default function EmployeeDashboard() {
     totalHours: 0
   });
 
-  // Fetch dashboard data on component mount
-  const fetchDashboardData = useCallback(async () => {
+  const [holidays, setHolidays] = useState<any[]>([]);
+  const [recentActivities, setRecentActivities] = useState<any[]>([]);
+  const [upcomingEvents, setUpcomingEvents] = useState<any[]>([]);
+  const [disableRefresh, setDisableRefresh] = useState(false);
+  const [attendanceHistory, setAttendanceHistory] = useState<any[]>([]);
+  const [breakHistory, setBreakHistory] = useState<any[]>([]);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+
+  // Helper function to fetch employee ID
+  const ensureEmployeeId = async (): Promise<string | null> => {
+    if (employeeId) return employeeId;
+    
+    if (!user?.id) return null;
+    
+    try {
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const response = await fetch(`/api/employees/user/${user.id}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.data?._id) {
+          setEmployeeId(result.data._id);
+          return result.data._id;
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching employee data:', err);
+    }
+    
+    return null;
+  };
+
+  // Fetch dashboard data
+  const fetchDashboardData = useCallback(async (forceRefresh = false) => {
     if (!user) return;
     
     try {
       setLoading(true);
       setError(null);
       
-      const token = localStorage.getItem('token');
+      console.log('📊 [EMPLOYEE-DASHBOARD] fetchDashboardData called with forceRefresh:', forceRefresh);
+      
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const orgId = user?.orgId || user?.tenantId || 'system';
+      
+      // Fetch employee data
+      let employeeData = null;
+      try {
+        const employeeResponse = await fetch(`/api/employees/user/${user.id}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (employeeResponse.ok) {
+          const employeeResult = await employeeResponse.json();
+          if (employeeResult.data) {
+            employeeData = employeeResult.data;
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch employee data:', err);
+      }
+      
+      // Fetch today's attendance data
+      const attendanceResponse = await fetch('/api/attendance/today', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      let attendanceData = null;
+      if (attendanceResponse.ok) {
+        const attendanceResult = await attendanceResponse.json();
+        console.log('Attendance API response:', attendanceResult);
+        if (attendanceResult.success && attendanceResult.data) {
+          attendanceData = attendanceResult.data;
+        }
+      } else {
+        console.warn('Attendance API error:', attendanceResponse.status);
+      }
+      
+      // Fetch dashboard data
       const response = await fetch('/api/dashboard/employee', {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -96,170 +179,370 @@ export default function EmployeeDashboard() {
         }
       });
       
-      if (!response.ok) {
-        throw new Error('Failed to fetch dashboard data');
+      let data = {};
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success && result.data) {
+          data = result.data;
+        }
       }
       
-      const result = await response.json();
+      // Merge all data
+      if (attendanceData) {
+        data = { ...data, attendance: { today: attendanceData.attendance } };
+      }
+      if (employeeData) {
+        data = { ...data, employee: employeeData };
+      }
       
-      if (result.success && result.data) {
-        const data = result.data;
-        setDashboardData(data);
+      setDashboardData(data);
+      
+      // Fetch holidays
+      try {
+        const holidayResponse = await fetch('/api/holidays', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (holidayResponse.ok) {
+          const holidayData = await holidayResponse.json();
+          if (holidayData.success && Array.isArray(holidayData.data)) {
+            setHolidays(holidayData.data);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch holidays:', err);
+      }
+      
+      // Update today's attendance
+      if (attendanceData?.attendance) {
+        const attendance = attendanceData.attendance;
+        const checkInTime = attendance.checkIn 
+          ? new Date(attendance.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+          : null;
+        const checkOutTime = attendance.checkOut 
+          ? new Date(attendance.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+          : null;
         
-        // Calculate leave balance (total leaves - used leaves)
-        // Assuming 20 days annual leave, calculate remaining
-        const totalAnnualLeave = 20;
-        const usedLeave = data.leaves?.approvedThisMonth || 0;
-        const leaveBalance = Math.max(0, totalAnnualLeave - usedLeave);
+        const isCurrentlyCheckedIn = !!attendance.checkIn && !attendance.checkOut;
         
-        // Calculate hours this week (from attendance records)
-        const hoursThisWeek = data.attendance?.today?.hoursWorked || 0;
+        // Calculate isOnBreak from actual breaks array (most reliable source)
+        let calculatedIsOnBreak = false;
+        let calculatedBreakType = 'regular';
+        let calculatedBreakDuration = 0;
         
-        // Get current salary from latest payslip
-        const currentSalary = data.payroll?.latest?.netSalary || data.payroll?.latest?.baseSalary || 0;
+        if (attendance.breaks && attendance.breaks.length > 0) {
+          const lastBreak = attendance.breaks[attendance.breaks.length - 1];
+          if (lastBreak.startTime && !lastBreak.endTime) {
+            calculatedIsOnBreak = true;
+            calculatedBreakType = lastBreak.breakType || 'regular';
+            const breakStart = new Date(lastBreak.startTime);
+            const now = new Date();
+            calculatedBreakDuration = Math.round((now - breakStart.getTime()) / (1000 * 60));
+          }
+        }
         
-        // Calculate performance score based on attendance
-        const attendancePercentage = data.attendance?.isPresent ? 100 : 0;
-        
-        // Update KPI metrics with real data
-        setKpiMetrics({
-          leaveBalance: `${leaveBalance} days`,
-          hoursThisWeek: `${hoursThisWeek}h`, 
-          currentSalary: currentSalary,
-          performance: `${attendancePercentage}%`
+        console.log('📊 [EMPLOYEE-DASHBOARD] Attendance data received:', {
+          checkIn: attendance.checkIn,
+          checkOut: attendance.checkOut,
+          isCurrentlyCheckedIn,
+          status: attendance.status,
+          breaksCount: attendance.breaks?.length || 0,
+          lastBreak: attendance.breaks?.[attendance.breaks.length - 1],
+          calculatedIsOnBreak,
+          liveStatusIsOnBreak: attendanceData.liveStatus?.isOnBreak,
+          calculatedBreakType,
+          calculatedBreakDuration
         });
         
-        // Update today's attendance
-        if (data.attendance?.today) {
-          const checkInTime = data.attendance.today.checkIn 
-            ? new Date(data.attendance.today.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-            : null;
-          const checkOutTime = data.attendance.today.checkOut 
-            ? new Date(data.attendance.today.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-            : null;
+        // On page load (not during an action), always trust the API data
+        const isPageLoad = !actionInProgress && !disableRefresh && (Date.now() - lastActionTime) >= 3000;
+        
+        console.log('📊 [EMPLOYEE-DASHBOARD] Update decision:', {
+          isPageLoad,
+          actionInProgress,
+          disableRefresh,
+          timeSinceLastAction: Date.now() - lastActionTime
+        });
+        
+        setTodayAttendance(prev => {
+          const timeSinceLastAction = Date.now() - lastActionTime;
           
-          setTodayAttendance({
-            isCheckedIn: !!data.attendance.today.checkIn && !data.attendance.today.checkOut,
+          // SIMPLIFIED LOGIC: Always trust the API data for break status
+          // The API calculates break status from the database, which is the source of truth
+          
+          // Only preserve state if action is currently in progress (not just recent)
+          if (actionInProgress) {
+            console.log('📊 [EMPLOYEE-DASHBOARD] Action in progress - preserving current state');
+            return prev;
+          }
+          
+          // Otherwise, always update with fresh API data
+          console.log('📊 [EMPLOYEE-DASHBOARD] Updating with fresh API data');
+          console.log('📊 [EMPLOYEE-DASHBOARD] Calculated break status:', {
+            isOnBreak: calculatedIsOnBreak,
+            breakType: calculatedBreakType,
+            breakDuration: calculatedBreakDuration
+          });
+          
+          const newState = {
+            isCheckedIn: isCurrentlyCheckedIn,
             checkInTime: checkInTime,
             checkOutTime: checkOutTime,
-            hoursWorked: data.attendance.today.hoursWorked || 0,
-            status: data.attendance.today.status || 'absent'
-          });
-          setIsCheckedIn(!!data.attendance.today.checkIn && !data.attendance.today.checkOut);
-        }
-        
-        // Update performance metrics
-        setPerformanceMetrics({
-          taskCompletion: 85, // Can be updated from task data if available
-          attendance: data.attendance?.isPresent ? 100 : 0,
-          qualityScore: 90, // Can be updated from performance review data
-          presentDays: 1, // Can be calculated from attendance records
-          totalHours: hoursThisWeek
+            hoursWorked: attendance.hoursWorked || 0,
+            status: attendance.status || 'absent',
+            isOnBreak: calculatedIsOnBreak,  // Always use calculated value from API
+            isInMeeting: attendanceData.liveStatus?.isInMeeting || false,
+            currentBreakDuration: calculatedBreakDuration,
+            breakType: calculatedBreakType
+          };
+          
+          console.log('📊 [EMPLOYEE-DASHBOARD] New state:', newState);
+          return newState;
         });
+        setIsCheckedIn(isCurrentlyCheckedIn);
         
-        // Update recent activities
-        const activities: any[] = [];
-        if (data.attendance?.today?.checkIn) {
-          activities.push({
-            action: 'Checked In',
-            description: `Started work at ${checkInTime}`,
-            time: 'Today',
-            icon: 'clock'
-          });
-        }
-        if (data.leaves?.recent && data.leaves.recent.length > 0) {
-          data.leaves.recent.slice(0, 2).forEach((leave: any) => {
-            activities.push({
-              action: leave.status === 'approved' ? 'Leave Approved' : 'Leave Requested',
-              description: `${leave.leaveType || 'Leave'} leave`,
-              time: new Date(leave.createdAt).toLocaleDateString(),
-              icon: 'calendar'
-            });
-          });
-        }
-        if (data.expenses?.recent && data.expenses.recent.length > 0) {
-          data.expenses.recent.slice(0, 1).forEach((expense: any) => {
-            activities.push({
-              action: 'Expense Submitted',
-              description: `${expense.category} - ${formatCurrency(expense.amount)}`,
-              time: new Date(expense.createdAt).toLocaleDateString(),
-              icon: 'dollar-sign'
-            });
-          });
-        }
-        setRecentActivities(activities);
-        
-        // Update upcoming events
-        const events: any[] = [];
-        if (data.leaves?.recent) {
-          data.leaves.recent
-            .filter((leave: any) => leave.status === 'approved')
-            .slice(0, 3)
-            .forEach((leave: any) => {
-              events.push({
-                type: 'Leave',
-                name: `${leave.leaveType || 'Leave'} leave`,
-                date: new Date(leave.startDate).toLocaleDateString(),
-                icon: Calendar,
-                color: 'text-primary'
-              });
-            });
-        }
-        setUpcomingEvents(events);
+        console.log('📊 [EMPLOYEE-DASHBOARD] State updated - isCheckedIn:', isCurrentlyCheckedIn, 'isOnBreak:', calculatedIsOnBreak);
+      } else {
+        console.warn('📊 [EMPLOYEE-DASHBOARD] No attendance data received');
+        setIsCheckedIn(false);
+        setTodayAttendance(prev => {
+          // Preserve break/meeting state if we're in the middle of an action
+          const shouldPreserveState = disableRefresh;
+          
+          if (shouldPreserveState) {
+            return {
+              ...prev,
+              isCheckedIn: false,
+              status: 'absent'
+            };
+          }
+          
+          return {
+            isCheckedIn: false,
+            checkInTime: null,
+            checkOutTime: null,
+            hoursWorked: 0,
+            status: 'absent',
+            isOnBreak: false,
+            isInMeeting: false,
+            currentBreakDuration: 0,
+            breakType: 'regular'
+          };
+        });
       }
+      
+      // Update KPI metrics
+      setKpiMetrics({
+        leaveBalance: "12 days",
+        hoursThisWeek: `${attendanceData?.liveStatus?.currentHours || 0}h`,
+        performance: "85%"
+      });
+      
+      // Update performance metrics
+      setPerformanceMetrics({
+        taskCompletion: 85,
+        attendance: attendanceData?.attendance?.status === 'present' ? 100 : 0,
+        qualityScore: 90,
+        presentDays: 1,
+        totalHours: attendanceData?.liveStatus?.currentHours || 0
+      });
+      
+      // Update recent activities
+      const activities: any[] = [];
+      if (attendanceData?.attendance?.checkIn) {
+        const checkInTime = new Date(attendanceData.attendance.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        activities.push({
+          action: 'Checked In',
+          description: `Started work at ${checkInTime}`,
+          time: 'Today',
+          icon: 'clock'
+        });
+      }
+      setRecentActivities(activities);
+      
+      // Update upcoming events
+      const events: any[] = [];
+      setUpcomingEvents(events);
     } catch (err) {
       console.error('Failed to fetch dashboard data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load dashboard');
     } finally {
       setLoading(false);
     }
-  }, [user, formatCurrency]);
+  }, [user]);
 
-  // Fetch data on mount
+  // Fetch data on mount with force refresh
   useEffect(() => {
-    fetchDashboardData();
+    console.log('📊 [EMPLOYEE-DASHBOARD] Component mounted - fetching with forceRefresh=true');
+    fetchDashboardData(true);  // Force refresh on page load
   }, [fetchDashboardData]);
 
-  // Set up real-time Socket.IO listeners
+  // Fetch employee ID on mount
   useEffect(() => {
-    const socket = realTimeSocket;
-    if (!socket) return;
+    ensureEmployeeId();
+  }, [user?.id]);
 
+  // Socket.IO listeners for real-time updates
+  useEffect(() => {
+    if (!user?.orgId) return;
+
+    console.log('📡 [EMPLOYEE-DASHBOARD] Setting up Socket.IO listeners');
+
+    // Listen for break started events
+    const handleBreakStarted = (data: any) => {
+      console.log('📡 [EMPLOYEE-DASHBOARD] break:started event received:', data);
+      
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId) {
+        console.log('📡 [EMPLOYEE-DASHBOARD] Break started for current employee, updating state');
+        setTodayAttendance(prev => ({
+          ...prev,
+          isOnBreak: true,
+          breakType: data.breakType || 'regular',
+          currentBreakDuration: 0
+        }));
+      }
+    };
+
+    // Listen for break ended events
+    const handleBreakEnded = (data: any) => {
+      console.log('📡 [EMPLOYEE-DASHBOARD] break:ended event received:', data);
+      
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId) {
+        console.log('📡 [EMPLOYEE-DASHBOARD] Break ended for current employee, updating state');
+        setTodayAttendance(prev => ({
+          ...prev,
+          isOnBreak: false,
+          currentBreakDuration: 0,
+          breakType: 'regular'
+        }));
+      }
+    };
+
+    // Listen for attendance updates
     const handleAttendanceUpdate = (data: any) => {
-      console.log('Attendance updated:', data);
-      fetchDashboardData();
+      console.log('📡 [EMPLOYEE-DASHBOARD] attendance:update event received:', data);
+      
+      // Refresh dashboard data to get latest state
+      if (!actionInProgress && !disableRefresh) {
+        console.log('📡 [EMPLOYEE-DASHBOARD] Refreshing dashboard data after attendance update');
+        fetchDashboardData();
+      }
     };
 
-    const handleLeaveUpdate = (data: any) => {
-      console.log('Leave updated:', data);
-      fetchDashboardData();
-    };
-
-    const handleDashboardUpdate = (data: any) => {
-      console.log('Dashboard updated:', data);
-      fetchDashboardData();
-    };
-
-    socket.on('attendance:update', handleAttendanceUpdate);
-    socket.on('leave:update', handleLeaveUpdate);
-    socket.on('dashboard:update', handleDashboardUpdate);
+    realTimeSocket.onBreakStarted(handleBreakStarted);
+    realTimeSocket.onBreakEnded(handleBreakEnded);
+    realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
 
     return () => {
-      socket.off('attendance:update', handleAttendanceUpdate);
-      socket.off('leave:update', handleLeaveUpdate);
-      socket.off('dashboard:update', handleDashboardUpdate);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Cleaning up Socket.IO listeners');
+      // Note: realTimeSocket doesn't expose removeListener methods
+      // The listeners will be cleaned up when the component unmounts
     };
-  }, [fetchDashboardData]);
+  }, [user?.orgId, employeeId, actionInProgress, disableRefresh, fetchDashboardData]);
+
+  // Fetch attendance history
+  const fetchAttendanceHistory = useCallback(async () => {
+    try {
+      setAttendanceLoading(true);
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      
+      // Fetch last 30 days of attendance
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
+      const response = await fetch(`/api/attendance?limit=30&startDate=${thirtyDaysAgo.toISOString()}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success && Array.isArray(result.data)) {
+          setAttendanceHistory(result.data);
+          
+          // Extract break history from attendance records
+          const breaks: any[] = [];
+          result.data.forEach((record: any) => {
+            if (record.breaks && Array.isArray(record.breaks)) {
+              record.breaks.forEach((breakItem: any) => {
+                breaks.push({
+                  date: record.date,
+                  breakType: breakItem.breakType || 'regular',
+                  startTime: breakItem.startTime,
+                  endTime: breakItem.endTime,
+                  duration: breakItem.endTime && breakItem.startTime 
+                    ? ((new Date(breakItem.endTime).getTime() - new Date(breakItem.startTime).getTime()) / (1000 * 60)).toFixed(0)
+                    : 'In Progress'
+                });
+              });
+            }
+          });
+          setBreakHistory(breaks);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch attendance history:', err);
+    } finally {
+      setAttendanceLoading(false);
+    }
+  }, []);
+
+  // Fetch attendance history on mount
+  useEffect(() => {
+    fetchAttendanceHistory();
+  }, [fetchAttendanceHistory]);
+
+  // Periodic refresh of attendance data every 10 seconds when checked in
+  useEffect(() => {
+    if (!isCheckedIn || disableRefresh || actionInProgress) return;
+    
+    // Don't refresh if an action was performed recently (within 5 seconds)
+    const timeSinceLastAction = Date.now() - lastActionTime;
+    if (timeSinceLastAction < 5000) return;
+    
+    const interval = setInterval(() => {
+      // Double check before refreshing
+      if (!actionInProgress && (Date.now() - lastActionTime) >= 5000) {
+        console.log('Periodic refresh - fetching attendance data');
+        fetchDashboardData();
+      }
+    }, 10000); // Refresh every 10 seconds
+    
+    return () => clearInterval(interval);
+  }, [isCheckedIn, disableRefresh, fetchDashboardData, actionInProgress, lastActionTime]);
 
   // Handle check-in
   const handleCheckIn = async () => {
+    // Prevent multiple simultaneous actions
+    if (actionInProgress) {
+      toast.error('Please wait, another action is in progress...');
+      return;
+    }
+
     try {
-      if (!dashboardData?.employee) {
-        setError('Employee data not loaded');
+      setActionInProgress(true);
+      setLastActionTime(Date.now());
+      
+      const currentEmployeeId = await ensureEmployeeId();
+
+      if (!currentEmployeeId) {
+        setError('Employee ID not found. Unable to check in.');
+        toast.error('Unable to check in. Please try refreshing the page.');
+        setActionInProgress(false);  // Clear flag before returning
         return;
       }
 
-      const token = localStorage.getItem('token');
+      // Disable refresh during action
+      setDisableRefresh(true);
+
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       const response = await fetch('/api/attendance/check-in', {
         method: 'POST',
         headers: {
@@ -267,8 +550,9 @@ export default function EmployeeDashboard() {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          userId: user?.userId || user?.id,
-          employeeId: dashboardData.employee.id,
+          userId: user?.id,
+          employeeId: currentEmployeeId,
+          employeeName: user?.name || 'Employee',
           orgId: user?.orgId || user?.tenantId || 'system',
           location: 'Office',
           notes: 'Check-in from dashboard'
@@ -276,35 +560,77 @@ export default function EmployeeDashboard() {
       });
 
       if (!response.ok) {
-        throw new Error('Check-in failed');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Check-in failed');
       }
 
       const result = await response.json();
       if (result.success) {
+        // Immediately update state
+        const now = new Date();
+        const checkInTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        
+        console.log('Check-in successful:', { checkInTime });
+        
         setIsCheckedIn(true);
-        const newRecord: TimeRecord = {
-          id: timeRecords.length + 1,
-          type: 'check-in',
-          timestamp: new Date().toLocaleString()
-        };
-        setTimeRecords([...timeRecords, newRecord]);
-        await fetchDashboardData();
+        setTodayAttendance({
+          isCheckedIn: true,
+          checkInTime: checkInTime,
+          checkOutTime: null,
+          hoursWorked: 0,
+          status: 'present',
+          isOnBreak: false,
+          isInMeeting: false,
+          currentBreakDuration: 0,
+          breakType: 'regular'
+        });
+        
+        toast.success('Checked in successfully!');
+        
+        // Re-enable refresh after delay
+        setTimeout(() => {
+          setDisableRefresh(false);
+        }, 1000);
       }
     } catch (err) {
       console.error('Check-in error:', err);
       setError(err instanceof Error ? err.message : 'Check-in failed');
+      toast.error(err instanceof Error ? err.message : 'Check-in failed');
+      // Re-enable refresh on error
+      setDisableRefresh(false);
+    } finally {
+      // Always clear action lock
+      setTimeout(() => {
+        setActionInProgress(false);
+      }, 1000);
     }
   };
 
   // Handle check-out
   const handleCheckOut = async () => {
+    // Prevent multiple simultaneous actions
+    if (actionInProgress) {
+      toast.error('Please wait, another action is in progress...');
+      return;
+    }
+
     try {
-      if (!dashboardData?.employee) {
-        setError('Employee data not loaded');
+      setActionInProgress(true);
+      setLastActionTime(Date.now());
+      
+      const currentEmployeeId = await ensureEmployeeId();
+
+      if (!currentEmployeeId) {
+        setError('Employee ID not found. Unable to check out.');
+        toast.error('Unable to check out. Please try refreshing the page.');
+        setActionInProgress(false);  // Clear flag before returning
         return;
       }
 
-      const token = localStorage.getItem('token');
+      // Disable refresh during action
+      setDisableRefresh(true);
+
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       const response = await fetch('/api/attendance/check-out', {
         method: 'POST',
         headers: {
@@ -312,8 +638,9 @@ export default function EmployeeDashboard() {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          userId: user?.userId || user?.id,
-          employeeId: dashboardData.employee.id,
+          userId: user?.id,
+          employeeId: currentEmployeeId,
+          employeeName: user?.name || 'Employee',
           orgId: user?.orgId || user?.tenantId || 'system',
           location: 'Office',
           notes: 'Check-out from dashboard'
@@ -321,135 +648,397 @@ export default function EmployeeDashboard() {
       });
 
       if (!response.ok) {
-        throw new Error('Check-out failed');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Check-out failed');
       }
 
       const result = await response.json();
+      console.log('Check-out response:', result);
       if (result.success) {
+        // Immediately update state
+        const now = new Date();
+        const checkOutTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const hoursWorked = result.data?.hoursWorked || 0;
+        
+        console.log('Check-out successful:', { checkOutTime, hoursWorked, isCheckedIn: false });
+        
         setIsCheckedIn(false);
-        setCurrentBreak(null);
-        setCurrentMeeting(null);
-        const newRecord: TimeRecord = {
-          id: timeRecords.length + 1,
-          type: 'check-out',
-          timestamp: new Date().toLocaleString()
-        };
-        setTimeRecords([...timeRecords, newRecord]);
-        await fetchDashboardData();
+        setTodayAttendance(prev => {
+          console.log('Setting todayAttendance to:', {
+            isCheckedIn: false,
+            checkInTime: prev.checkInTime,
+            checkOutTime: checkOutTime,
+            hoursWorked: hoursWorked,
+            status: 'checked_out',
+            isOnBreak: false,
+            isInMeeting: false,
+            currentBreakDuration: 0,
+            breakType: 'regular'
+          });
+          return {
+            isCheckedIn: false,
+            checkInTime: prev.checkInTime,
+            checkOutTime: checkOutTime,
+            hoursWorked: hoursWorked,
+            status: 'checked_out',
+            isOnBreak: false,
+            isInMeeting: false,
+            currentBreakDuration: 0,
+            breakType: 'regular'
+          };
+        });
+        
+        toast.success('Checked out successfully!');
+        
+        // Re-enable refresh after delay
+        setTimeout(() => {
+          setDisableRefresh(false);
+        }, 2000);
       }
     } catch (err) {
       console.error('Check-out error:', err);
       setError(err instanceof Error ? err.message : 'Check-out failed');
+      toast.error(err instanceof Error ? err.message : 'Check-out failed');
+      // Re-enable refresh on error
+      setDisableRefresh(false);
+    } finally {
+      // Always clear action lock
+      setTimeout(() => {
+        setActionInProgress(false);
+      }, 1000);
     }
   };
 
-  // Handle break start/end
-  const handleBreak = async () => {
+  // Handle break start
+  const handleBreakStart = async (breakType = 'regular') => {
+    // Prevent multiple simultaneous actions
+    if (actionInProgress) {
+      toast.error('Please wait, another action is in progress...');
+      return;
+    }
+
     try {
-      if (!dashboardData?.employee) {
-        setError('Employee data not loaded');
+      setActionInProgress(true);
+      setLastActionTime(Date.now());
+      
+      // Check if in meeting - show toast to end meeting first
+      if (todayAttendance.isInMeeting) {
+        toast.error('You are in a meeting. Please end it first to start a break.');
+        setActionInProgress(false);  // Clear flag before returning
         return;
       }
 
-      const token = localStorage.getItem('token');
-      const endpoint = currentBreak ? '/api/attendance/break-end' : '/api/attendance/break-start';
-      
-      const response = await fetch(endpoint, {
+      // Check if already on a different type of break
+      if (todayAttendance.isOnBreak && todayAttendance.breakType !== breakType) {
+        const currentBreakLabel = todayAttendance.breakType === 'lunch' ? 'Lunch Break' : 'Break';
+        const newBreakLabel = breakType === 'lunch' ? 'Lunch Break' : 'Break';
+        toast.error(`You are already on ${currentBreakLabel}. Please end it first to start ${newBreakLabel}.`);
+        setActionInProgress(false);  // Clear flag before returning
+        return;
+      }
+
+      const currentEmployeeId = await ensureEmployeeId();
+
+      if (!currentEmployeeId) {
+        setError('Employee ID not found. Unable to start break.');
+        toast.error('Unable to start break. Please try refreshing the page.');
+        setActionInProgress(false);  // Clear flag before returning
+        return;
+      }
+
+      // Disable refresh completely during action
+      setDisableRefresh(true);
+
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const response = await fetch('/api/attendance/break-start', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          userId: user?.userId || user?.id,
-          employeeId: dashboardData.employee.id,
+          employeeId: currentEmployeeId,
           orgId: user?.orgId || user?.tenantId || 'system',
-          breakType: 'regular',
-          notes: currentBreak ? 'Break ended' : 'Break started'
+          employeeName: user?.name || 'Employee',
+          breakType: breakType,
+          notes: `${breakType === 'lunch' ? 'Lunch Break' : 'Break'} started from dashboard`
         })
       });
 
       if (!response.ok) {
-        throw new Error('Break action failed');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Break start failed');
       }
 
       const result = await response.json();
       if (result.success) {
-        if (currentBreak) {
-          setCurrentBreak(null);
-          const newRecord: TimeRecord = {
-            id: timeRecords.length + 1,
-            type: 'break',
-            timestamp: new Date().toLocaleString(),
-            duration: result.data?.breakDuration ? `${result.data.breakDuration} min` : '15 min'
-          };
-          setTimeRecords([...timeRecords, newRecord]);
-        } else {
-          setCurrentBreak('Break started');
-        }
-        await fetchDashboardData();
+        // Immediately update state - this will persist until manually changed
+        setTodayAttendance(prev => ({
+          ...prev,
+          isOnBreak: true,
+          breakType: breakType
+        }));
+        
+        const breakLabel = breakType === 'lunch' ? 'Lunch Break' : 'Break';
+        toast.success(`${breakLabel} started!`);
+        
+        // Immediately fetch fresh data to ensure state is in sync with database
+        console.log('☕ [BREAK-START] Fetching fresh data after break start');
+        setTimeout(async () => {
+          await fetchDashboardData();
+          setDisableRefresh(false);
+        }, 500);  // Small delay to ensure database is updated
       }
     } catch (err) {
-      console.error('Break action error:', err);
-      setError(err instanceof Error ? err.message : 'Break action failed');
+      console.error('Break start error:', err);
+      toast.error(err instanceof Error ? err.message : 'Break start failed');
+      // Re-enable refresh on error
+      setDisableRefresh(false);
+    } finally {
+      // Always clear action lock
+      setTimeout(() => {
+        setActionInProgress(false);
+      }, 1000);
     }
   };
 
-  // Handle meeting start/end
-  const handleMeeting = async () => {
+  // Handle break end
+  const handleBreakEnd = async () => {
+    // Prevent multiple simultaneous actions
+    if (actionInProgress) {
+      toast.error('Please wait, another action is in progress...');
+      return;
+    }
+
     try {
-      if (!dashboardData?.employee) {
-        setError('Employee data not loaded');
+      setActionInProgress(true);
+      setLastActionTime(Date.now());
+      
+      const currentEmployeeId = await ensureEmployeeId();
+
+      if (!currentEmployeeId) {
+        setError('Employee ID not found. Unable to end break.');
+        toast.error('Unable to end break. Please try refreshing the page.');
+        setActionInProgress(false);  // Clear flag before returning
         return;
       }
 
-      const token = localStorage.getItem('token');
-      const response = await fetch('/api/attendance/meeting-mode', {
+      // Disable refresh completely during action
+      setDisableRefresh(true);
+
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const response = await fetch('/api/attendance/break-end', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          userId: user?.userId || user?.id,
-          employeeId: dashboardData.employee.id,
+          employeeId: currentEmployeeId,
           orgId: user?.orgId || user?.tenantId || 'system',
-          isActive: !currentMeeting,
+          employeeName: user?.name || 'Employee',
+          notes: 'Break ended from dashboard'
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Break end failed');
+      }
+
+      const result = await response.json();
+      if (result.success) {
+        // Immediately update state - this will persist until manually changed
+        setTodayAttendance(prev => ({
+          ...prev,
+          isOnBreak: false,
+          currentBreakDuration: 0,
+          breakType: 'regular' // Reset break type
+        }));
+        
+        toast.success('Break ended!');
+        
+        // Immediately fetch fresh data to ensure state is in sync with database
+        console.log('☕ [BREAK-END] Fetching fresh data after break end');
+        setTimeout(async () => {
+          await fetchDashboardData();
+          setDisableRefresh(false);
+        }, 500);  // Small delay to ensure database is updated
+      } else {
+        // Re-enable refresh if failed
+        setDisableRefresh(false);
+      }
+    } catch (err) {
+      console.error('Break end error:', err);
+      toast.error(err instanceof Error ? err.message : 'Break end failed');
+      // Re-enable refresh if error
+      setDisableRefresh(false);
+    } finally {
+      // Always clear action lock
+      setTimeout(() => {
+        setActionInProgress(false);
+      }, 1000);
+    }
+  };
+
+  // Handle meeting start
+  const handleMeetingStart = async () => {
+    // Prevent multiple simultaneous actions
+    if (actionInProgress) {
+      toast.error('Please wait, another action is in progress...');
+      return;
+    }
+
+    try {
+      setActionInProgress(true);
+      setLastActionTime(Date.now());
+      
+      // Check if on break - show toast to end break first
+      if (todayAttendance.isOnBreak) {
+        toast.error(`You are on a ${todayAttendance.breakType === 'lunch' ? 'lunch break' : 'break'}. Please end it first to start a meeting.`);
+        return;
+      }
+
+      const currentEmployeeId = await ensureEmployeeId();
+
+      if (!currentEmployeeId) {
+        setError('Employee ID not found. Unable to start meeting.');
+        toast.error('Unable to start meeting. Please try refreshing the page.');
+        setActionInProgress(false);  // Clear flag before returning
+        return;
+      }
+
+      // Disable refresh completely during action
+      setDisableRefresh(true);
+
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const response = await fetch('/api/attendance/meeting-start', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          employeeId: currentEmployeeId,
+          orgId: user?.orgId || user?.tenantId || 'system',
           meetingTitle: 'Meeting',
           meetingType: 'internal',
-          notes: currentMeeting ? 'Meeting ended' : 'Meeting started'
+          notes: 'Meeting started from dashboard'
         })
       });
 
       if (!response.ok) {
-        throw new Error('Meeting action failed');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Meeting start failed');
       }
 
       const result = await response.json();
       if (result.success) {
-        if (currentMeeting) {
-          setCurrentMeeting(null);
-          const newRecord: TimeRecord = {
-            id: timeRecords.length + 1,
-            type: 'meeting',
-            timestamp: new Date().toLocaleString(),
-            duration: '1 hour'
-          };
-          setTimeRecords([...timeRecords, newRecord]);
-        } else {
-          setCurrentMeeting('Meeting started');
-        }
-        await fetchDashboardData();
+        // Immediately update state - this will persist until manually changed
+        setTodayAttendance(prev => ({
+          ...prev,
+          isInMeeting: true
+        }));
+        
+        toast.success('Meeting started!');
+        
+        // Wait longer before re-enabling refresh to ensure stability
+        setTimeout(() => {
+          setDisableRefresh(false);
+          // Don't fetch immediately, let the next periodic refresh handle it
+        }, 2000);
       }
     } catch (err) {
-      console.error('Meeting action error:', err);
-      setError(err instanceof Error ? err.message : 'Meeting action failed');
+      console.error('Meeting start error:', err);
+      toast.error(err instanceof Error ? err.message : 'Meeting start failed');
+      // Re-enable refresh on error
+      setDisableRefresh(false);
+    } finally {
+      // Always clear action lock
+      setTimeout(() => {
+        setActionInProgress(false);
+      }, 1000);
+    }
+  };
+
+  // Handle meeting end
+  const handleMeetingEnd = async () => {
+    // Prevent multiple simultaneous actions
+    if (actionInProgress) {
+      toast.error('Please wait, another action is in progress...');
+      return;
+    }
+
+    try {
+      setActionInProgress(true);
+      setLastActionTime(Date.now());
+      
+      const currentEmployeeId = await ensureEmployeeId();
+
+      if (!currentEmployeeId) {
+        setError('Employee ID not found. Unable to end meeting.');
+        toast.error('Unable to end meeting. Please try refreshing the page.');
+        setActionInProgress(false);  // Clear flag before returning
+        return;
+      }
+
+      // Disable refresh completely during action
+      setDisableRefresh(true);
+
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const response = await fetch('/api/attendance/meeting-end', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          employeeId: currentEmployeeId,
+          orgId: user?.orgId || user?.tenantId || 'system',
+          notes: 'Meeting ended from dashboard'
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Meeting end failed');
+      }
+
+      const result = await response.json();
+      if (result.success) {
+        // Immediately update state - this will persist until manually changed
+        setTodayAttendance(prev => ({
+          ...prev,
+          isInMeeting: false
+        }));
+        
+        toast.success('Meeting ended!');
+        
+        // Wait longer before re-enabling refresh to ensure stability
+        setTimeout(() => {
+          setDisableRefresh(false);
+          // Don't fetch immediately, let the next periodic refresh handle it
+        }, 2000);
+      } else {
+        // Re-enable refresh if failed
+        setDisableRefresh(false);
+      }
+    } catch (err) {
+      console.error('Meeting end error:', err);
+      toast.error(err instanceof Error ? err.message : 'Meeting end failed');
+      // Re-enable refresh if error
+      setDisableRefresh(false);
+    } finally {
+      // Always clear action lock
+      setTimeout(() => {
+        setActionInProgress(false);
+      }, 1000);
     }
   };
 
   return (
     <div className="p-8 space-y-8">
-      {/* Welcome Header with Time Tracking */}
+      {/* Welcome Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground mb-2">
@@ -458,115 +1047,51 @@ export default function EmployeeDashboard() {
           <p className="text-muted-foreground">Here's what's happening with your work today</p>
         </div>
         <div className="flex gap-3">
+          {/* Break Button */}
+          <Button 
+            variant={todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? "destructive" : "outline"} 
+            className="rounded-xl"
+            onClick={todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? handleBreakEnd : () => handleBreakStart('regular')}
+            disabled={!todayAttendance.isCheckedIn || todayAttendance.isInMeeting || (todayAttendance.isOnBreak && todayAttendance.breakType !== 'regular') || actionInProgress}
+          >
+            {actionInProgress ? 'Loading...' : (todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? 'End Break' : 'Break')}
+          </Button>
+
+          {/* Meeting Button */}
+          <Button 
+            variant={todayAttendance.isInMeeting ? "destructive" : "outline"} 
+            className="rounded-xl"
+            onClick={todayAttendance.isInMeeting ? handleMeetingEnd : handleMeetingStart}
+            disabled={!todayAttendance.isCheckedIn || todayAttendance.isOnBreak || actionInProgress}
+          >
+            {actionInProgress ? 'Loading...' : (todayAttendance.isInMeeting ? 'End Meeting' : 'Meeting')}
+          </Button>
+
+          {/* Check In/Out Button */}
           {!isCheckedIn ? (
-            <Button className="rounded-xl bg-green-600 hover:bg-green-700" onClick={handleCheckIn}>
+            <Button 
+              className="rounded-xl bg-green-600 hover:bg-green-700" 
+              onClick={handleCheckIn}
+              disabled={actionInProgress}
+            >
               <Clock className="w-4 h-4 mr-2" />
-              Check In
+              {actionInProgress ? 'Loading...' : 'Check In'}
             </Button>
           ) : (
-            <Button className="rounded-xl bg-red-600 hover:bg-red-700" onClick={handleCheckOut}>
+            <Button 
+              className="rounded-xl bg-red-600 hover:bg-red-700" 
+              onClick={handleCheckOut}
+              disabled={actionInProgress}
+            >
               <LogOut className="w-4 h-4 mr-2" />
-              Check Out
+              {actionInProgress ? 'Loading...' : 'Check Out'}
             </Button>
           )}
-          <Button 
-            className={`rounded-xl ${currentBreak ? 'bg-gray-600 hover:bg-gray-700' : 'bg-blue-600 hover:bg-gray-600'}`}
-            onClick={handleBreak}
-            disabled={!isCheckedIn}
-          >
-            <Coffee className="w-4 h-4 mr-2" />
-            {currentBreak ? 'End Break' : 'Break'}
-          </Button>
-          <Button 
-            className={`rounded-xl ${currentMeeting ? 'bg-purple-600 hover:bg-purple-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}
-            onClick={handleMeeting}
-            disabled={!isCheckedIn}
-          >
-            <Users className="w-4 h-4 mr-2" />
-            {currentMeeting ? 'End Meeting' : 'Meeting'}
-          </Button>
         </div>
       </div>
 
-      {/* Current Status */}
-      {(currentBreak || currentMeeting) && (
-        <Card className="p-4 rounded-xl bg-gray-50 border-gray-200">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gray-200 rounded-full flex items-center justify-center">
-              {currentBreak ? <Coffee className="w-5 h-5 text-gray-700" /> : <Users className="w-5 h-5 text-gray-700" />}
-            </div>
-            <div>
-              <p className="font-semibold text-gray-800">
-                {currentBreak ? currentBreak : currentMeeting}
-              </p>
-              <p className="text-sm text-gray-600">
-                {currentBreak ? 'Take a short break to refresh' : 'Meeting in progress'}
-              </p>
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {/* Time Tracking Records */}
-      <Card className="p-6 rounded-xl">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-lg">Today's Time Tracking</h3>
-          <Badge variant="outline" className="text-xs">
-            {timeRecords.filter(r => r.type !== 'check-in' && r.type !== 'check-out').length} Activities
-          </Badge>
-        </div>
-        <div className="space-y-3">
-          {timeRecords.slice(-6).reverse().map((record) => (
-            <div key={record.id} className="flex items-center justify-between p-3 bg-accent/50 rounded-lg">
-              <div className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                  record.type === 'check-in' ? 'bg-green-100' :
-                  record.type === 'check-out' ? 'bg-red-100' :
-                  record.type === 'break' ? 'bg-gray-100' :
-                  'bg-purple-100'
-                }`}>
-                  {record.type === 'check-in' && <Clock className="w-4 h-4 text-green-600" />}
-                  {record.type === 'check-out' && <LogOut className="w-4 h-4 text-red-600" />}
-                  {record.type === 'break' && <Coffee className="w-4 h-4 text-gray-600" />}
-                  {record.type === 'meeting' && <Users className="w-4 h-4 text-purple-600" />}
-                </div>
-                <div>
-                  <p className="font-medium capitalize">{record.type.replace('-', ' ')}</p>
-                  <p className="text-sm text-muted-foreground">{record.timestamp}</p>
-                </div>
-              </div>
-              <div className="text-right">
-                {record.duration && (
-                  <Badge variant="secondary" className="text-xs">
-                    {record.duration}
-                  </Badge>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* Profile Completion */}
-      <Card className="p-6 rounded-2xl bg-gradient-to-r from-primary/10 to-secondary/10 border-primary/20">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="font-semibold text-lg">Complete Your Profile</h3>
-            <p className="text-sm text-muted-foreground">Add missing information to unlock all features</p>
-          </div>
-          <Button variant="outline" className="rounded-xl">Complete Now</Button>
-        </div>
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Profile Completion</span>
-            <span className="font-medium">75%</span>
-          </div>
-          <Progress value={75} className="h-2" />
-        </div>
-      </Card>
-
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <KPICard
           title="Leave Balance"
           value={kpiMetrics.leaveBalance}
@@ -580,12 +1105,6 @@ export default function EmployeeDashboard() {
           color="secondary"
         />
         <KPICard
-          title="Current Salary"
-          value={formatCurrency(kpiMetrics.currentSalary)}
-          icon={DollarSign}
-          color="accent"
-        />
-        <KPICard
           title="Performance"
           value={kpiMetrics.performance}
           change={5.2}
@@ -594,8 +1113,78 @@ export default function EmployeeDashboard() {
         />
       </div>
 
-      {/* Leave Calendar */}
-      <LeaveCalendar />
+      {/* Calendar and Holidays Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Interactive Calendar */}
+        <div className="lg:col-span-2">
+          <InteractiveCalendar />
+        </div>
+        
+        {/* Holidays List */}
+        <Card className="rounded-2xl overflow-hidden flex flex-col">
+          <div className="p-6 border-b border-border flex-shrink-0">
+            <div>
+              <h3 className="font-semibold text-lg">Holidays</h3>
+              <p className="text-sm text-muted-foreground">
+                {holidays.length > 0 
+                  ? `${holidays.filter(h => new Date(h.date) >= new Date()).length} upcoming, ${holidays.length} total`
+                  : 'Company holidays'
+                }
+              </p>
+            </div>
+          </div>
+          <div className="p-6 space-y-3 flex-1 min-h-0">
+            {holidays && holidays.length > 0 ? (
+              <div className="space-y-3 h-full">
+                {holidays
+                  .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                  .map((holiday) => {
+                    const holidayDate = new Date(holiday.date);
+                    const today = new Date();
+                    const isUpcoming = holidayDate >= today;
+                    
+                    return (
+                      <div 
+                        key={holiday._id || holiday.id} 
+                        className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d ${
+                          isUpcoming 
+                            ? 'bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300' 
+                            : 'bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="font-medium text-sm">{holiday.name}</p>
+                              {isUpcoming && (
+                                <span className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded-full">
+                                  Upcoming
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {holidayDate.toLocaleDateString('en-US', { 
+                                weekday: 'long', 
+                                month: 'long', 
+                                day: 'numeric', 
+                                year: 'numeric' 
+                              })}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            ) : (
+              <div className="text-center py-8 flex flex-col items-center justify-center h-full">
+                <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
+                <p className="text-muted-foreground">No holidays added yet</p>
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
 
       {/* Main Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -604,7 +1193,7 @@ export default function EmployeeDashboard() {
           {/* Attendance Card */}
           <Card className="p-6 rounded-2xl">
             <h3 className="font-semibold text-lg mb-4">Today's Attendance</h3>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4 mb-4">
               <div className="p-4 rounded-xl bg-secondary/10 border border-secondary/20">
                 <Clock className="w-8 h-8 text-secondary mb-2" />
                 <p className="text-sm text-muted-foreground">Check-in Time</p>
@@ -616,43 +1205,56 @@ export default function EmployeeDashboard() {
                 <Target className="w-8 h-8 text-primary mb-2" />
                 <p className="text-sm text-muted-foreground">Hours Today</p>
                 <p className="text-2xl font-bold text-foreground">
-                  {todayAttendance.hoursWorked}h
+                  {todayAttendance.hoursWorked.toFixed(1)}h
                 </p>
               </div>
             </div>
-            <div className="mt-4 p-4 rounded-xl bg-accent/10 border border-accent/20">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm text-muted-foreground">Status</span>
-                <Badge className={`${todayAttendance.status === 'present' ? 'bg-secondary' : 'bg-muted'} text-secondary-foreground`}>
-                  {todayAttendance.status === 'present' ? 'Working' : 'Not checked in'}
-                </Badge>
+
+            {/* Check In Button */}
+            <div className="mb-4">
+              <Button 
+                size="lg"
+                className={`w-full font-semibold ${todayAttendance.isCheckedIn ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}`}
+                onClick={todayAttendance.isCheckedIn ? handleCheckOut : handleCheckIn}
+              >
+                {todayAttendance.isCheckedIn ? 'Check Out' : 'Check In'}
+              </Button>
+            </div>
+
+            {/* Break and Meeting Buttons - Always visible */}
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2">
+                {/* Break Button */}
+                <Button 
+                  variant={todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? "destructive" : "outline"} 
+                  size="sm"
+                  onClick={todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? handleBreakEnd : () => handleBreakStart('regular')}
+                  disabled={!todayAttendance.isCheckedIn || todayAttendance.isInMeeting || (todayAttendance.isOnBreak && todayAttendance.breakType !== 'regular') || actionInProgress}
+                  className="rounded-lg"
+                >
+                  {actionInProgress ? 'Loading...' : (todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? 'End Break' : 'Break')}
+                </Button>
+
+                {/* Meeting Button */}
+                <Button 
+                  variant={todayAttendance.isInMeeting ? "destructive" : "outline"} 
+                  size="sm"
+                  onClick={todayAttendance.isInMeeting ? handleMeetingEnd : handleMeetingStart}
+                  disabled={!todayAttendance.isCheckedIn || todayAttendance.isOnBreak || actionInProgress}
+                  className="rounded-lg"
+                >
+                  {actionInProgress ? 'Loading...' : (todayAttendance.isInMeeting ? 'End Meeting' : 'Meeting')}
+                </Button>
               </div>
-              <div className="flex gap-2">
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="flex-1"
-                  disabled={!todayAttendance.isCheckedIn}
-                >
-                  Take Break
-                </Button>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="flex-1"
-                  disabled={!todayAttendance.isCheckedIn}
-                >
-                  In Meeting
-                </Button>
-                <Button 
-                  variant={todayAttendance.isCheckedIn ? "destructive" : "default"} 
-                  size="sm" 
-                  className="flex-1"
-                  onClick={todayAttendance.isCheckedIn ? handleCheckOut : handleCheckIn}
-                >
-                  {todayAttendance.isCheckedIn ? 'Check Out' : 'Check In'}
-                </Button>
-              </div>
+              
+              {/* Break Info */}
+              {todayAttendance.isOnBreak && (
+                <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
+                  <p className="text-sm text-blue-900">
+                    <strong>{todayAttendance.breakType === 'lunch' ? 'Lunch Break' : 'Break'}</strong> - {todayAttendance.currentBreakDuration} minutes
+                  </p>
+                </div>
+              )}
             </div>
           </Card>
 
@@ -681,97 +1283,196 @@ export default function EmployeeDashboard() {
                 </div>
                 <Progress value={performanceMetrics.qualityScore} className="h-2 [&>div]:bg-accent" />
               </div>
-              <div className="pt-2 border-t border-border">
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">Present Days:</span>
-                    <span className="font-medium ml-2">{performanceMetrics.presentDays}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Total Hours:</span>
-                    <span className="font-medium ml-2">{performanceMetrics.totalHours}h</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Recent Activity */}
-          <Card className="p-6 rounded-2xl">
-            <h3 className="font-semibold text-lg mb-4">Recent Activity</h3>
-            <div className="space-y-4">
-              {recentActivities.map((activity, index) => (
-                <div key={index} className="flex gap-4 p-4 rounded-xl bg-accent/50">
-                  <div className="w-2 h-2 rounded-full bg-primary mt-2" />
-                  <div className="flex-1">
-                    <p className="font-medium">{activity.action}</p>
-                    <p className="text-sm text-muted-foreground">{activity.description}</p>
-                    <p className="text-xs text-muted-foreground mt-1">{activity.time}</p>
-                  </div>
-                </div>
-              ))}
             </div>
           </Card>
         </div>
 
         {/* Right Column - Events & Notifications */}
         <div className="space-y-6">
-          {/* Upcoming Events */}
-          <Card className="p-6 rounded-2xl">
-            <h3 className="font-semibold text-lg mb-4">Upcoming Events</h3>
-            <div className="space-y-4">
-              {upcomingEvents.map((event, index) => {
-                const Icon = event.icon;
-                return (
-                  <div key={index} className="flex items-start gap-3 p-4 rounded-xl bg-accent/50">
-                    <div className={`w-10 h-10 rounded-xl bg-background flex items-center justify-center ${event.color}`}>
-                      <Icon className="w-5 h-5" />
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium text-sm">{event.type}</p>
-                      <p className="text-sm text-foreground">{event.name}</p>
-                      <p className="text-xs text-muted-foreground mt-1">{event.date}</p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-
-          {/* Employee Documents */}
-          <EmployeeDocuments />
-
-          {/* Holiday Calendar */}
-          <EmployeeHolidayCalendar organizationId="ORG-001" />
-
-          {/* Quick Actions */}
-          <Card className="p-6 rounded-2xl">
-            <h3 className="font-semibold text-lg mb-4">Quick Actions</h3>
-            <div className="space-y-2">
-              <Button variant="outline" className="w-full justify-start rounded-xl">
-                <Calendar className="w-4 h-4 mr-2" />
-                Apply Leave
-              </Button>
-              <Button variant="outline" className="w-full justify-start rounded-xl">
-                <DollarSign className="w-4 h-4 mr-2" />
-                Submit Expense
-              </Button>
-              <Button variant="outline" className="w-full justify-start rounded-xl">
-                <TrendingUp className="w-4 h-4 mr-2" />
-                View Performance
-              </Button>
-              <Button 
-                variant="outline" 
-                className="w-full justify-start rounded-xl bg-primary/10 hover:bg-primary/20 border-primary/30"
-                onClick={() => window.location.href = '/employee/onboarding'}
-              >
-                <FileText className="w-4 h-4 mr-2" />
-                Onboarding Form
-              </Button>
-            </div>
-          </Card>
         </div>
       </div>
+
+      {/* Attendance History Section */}
+      <div className="mt-8 space-y-6">
+        {/* Attendance History Table */}
+        <Card className="p-6 rounded-2xl">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                <Calendar className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-lg">Attendance History</h3>
+                <p className="text-sm text-muted-foreground">Last 30 days</p>
+              </div>
+            </div>
+            <Badge variant="outline" className="text-xs">
+              {attendanceHistory.length} Records
+            </Badge>
+          </div>
+
+          {attendanceLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+            </div>
+          ) : attendanceHistory.length === 0 ? (
+            <div className="text-center py-8">
+              <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+              <p className="text-muted-foreground">No attendance records found</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Check In</TableHead>
+                    <TableHead>Check Out</TableHead>
+                    <TableHead>Hours Worked</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Breaks</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {attendanceHistory.slice(0, 10).map((record: any, index: number) => (
+                    <TableRow key={index}>
+                      <TableCell className="font-medium">
+                        {new Date(record.date).toLocaleDateString('en-US', { 
+                          weekday: 'short', 
+                          month: 'short', 
+                          day: 'numeric' 
+                        })}
+                      </TableCell>
+                      <TableCell>
+                        {record.checkIn 
+                          ? new Date(record.checkIn).toLocaleTimeString('en-US', { 
+                              hour: '2-digit', 
+                              minute: '2-digit' 
+                            })
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {record.checkOut 
+                          ? new Date(record.checkOut).toLocaleTimeString('en-US', { 
+                              hour: '2-digit', 
+                              minute: '2-digit' 
+                            })
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs">
+                          {record.hoursWorked?.toFixed(2) || 0}h
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge 
+                          variant={record.status === 'present' ? 'default' : 'secondary'}
+                          className="text-xs capitalize"
+                        >
+                          {record.status || 'absent'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {record.breaks && record.breaks.length > 0 
+                          ? `${record.breaks.length} break(s)`
+                          : '-'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </Card>
+
+        {/* Break History Table */}
+        <Card className="p-6 rounded-2xl">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
+                <Clock className="w-5 h-5 text-accent" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-lg">Break History</h3>
+                <p className="text-sm text-muted-foreground">Last 30 days</p>
+              </div>
+            </div>
+            <Badge variant="outline" className="text-xs">
+              {breakHistory.length} Breaks
+            </Badge>
+          </div>
+
+          {attendanceLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+            </div>
+          ) : breakHistory.length === 0 ? (
+            <div className="text-center py-8">
+              <Clock className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+              <p className="text-muted-foreground">No break records found</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Break Type</TableHead>
+                    <TableHead>Start Time</TableHead>
+                    <TableHead>End Time</TableHead>
+                    <TableHead>Duration</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {breakHistory.slice(0, 10).map((breakRecord: any, index: number) => (
+                    <TableRow key={index}>
+                      <TableCell className="font-medium">
+                        {new Date(breakRecord.date).toLocaleDateString('en-US', { 
+                          weekday: 'short', 
+                          month: 'short', 
+                          day: 'numeric' 
+                        })}
+                      </TableCell>
+                      <TableCell>
+                        <Badge 
+                          variant={breakRecord.breakType === 'lunch' ? 'default' : 'secondary'}
+                          className="text-xs capitalize"
+                        >
+                          {breakRecord.breakType}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {breakRecord.startTime 
+                          ? new Date(breakRecord.startTime).toLocaleTimeString('en-US', { 
+                              hour: '2-digit', 
+                              minute: '2-digit' 
+                            })
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {breakRecord.endTime 
+                          ? new Date(breakRecord.endTime).toLocaleTimeString('en-US', { 
+                              hour: '2-digit', 
+                              minute: '2-digit' 
+                            })
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs">
+                          {breakRecord.duration} min
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* Chat Widget */}
+      <ChatWidget />
     </div>
   );
 }

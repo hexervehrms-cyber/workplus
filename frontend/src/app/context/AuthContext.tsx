@@ -20,6 +20,8 @@ interface User {
   organization?: string;
   tenantId?: string;
   orgId?: string;
+  employeeId?: string;
+  employeeCode?: string;
 }
 
 interface AuthContextType {
@@ -48,51 +50,58 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const initializeAuth = async () => {
       try {
-        const token = TokenManager.get();
-        const storedUser = TokenManager.getUser();
+        try {
+          const token = TokenManager.get();
+          const storedUser = TokenManager.getUser();
 
-        if (token && storedUser) {
-          // Check if token is expired
-          try {
-            const payload = JSON.parse(atob(token.split('.')[1]));
-            const exp = payload.exp * 1000;
-            
-            if (Date.now() >= exp) {
-              // Token expired, clear and redirect to login
-              console.log('Token expired, clearing session');
-              TokenManager.clear();
-              setLoading(false);
-              return;
-            }
-
-            // Token valid, restore user
-            setUser(storedUser);
-
-            // Verify with backend
+          if (token && storedUser) {
+            // Check if token is expired
             try {
-              const currentUser = await AuthService.getCurrentUser();
-              if (currentUser) {
-                setUser(currentUser);
-                TokenManager.setUser(currentUser);
-              }
-            } catch (error) {
-              // Backend verification failed - check if it's an auth error
-              if (error instanceof ApiError && (error.code === 'TOKEN_EXPIRED' || error.code === 'INVALID_TOKEN')) {
-                console.log('Token invalid on backend verification, clearing session');
+              const payload = JSON.parse(atob(token.split('.')[1]));
+              const exp = payload.exp * 1000;
+              
+              if (Date.now() >= exp) {
+                // Token expired, clear and redirect to login
+                console.log('Token expired, clearing session');
                 TokenManager.clear();
-                setUser(null);
+                setLoading(false);
+                setIsInitialized(true);
                 return;
               }
-              // Other errors (network, server) - keep session but warn
-              console.warn('Could not verify session with backend:', error);
+
+              // Token valid, restore user
+              setUser(storedUser);
+
+              // Verify with backend
+              try {
+                const currentUser = await AuthService.getCurrentUser();
+                if (currentUser) {
+                  setUser(currentUser);
+                  TokenManager.setUser(currentUser);
+                }
+              } catch (error) {
+                // Backend verification failed - check if it's an auth error
+                if (error instanceof ApiError && (error.code === 'TOKEN_EXPIRED' || error.code === 'INVALID_TOKEN')) {
+                  console.log('Token invalid on backend verification, clearing session');
+                  TokenManager.clear();
+                  setUser(null);
+                  setLoading(false);
+                  setIsInitialized(true);
+                  return;
+                }
+                // Other errors (network, server) - keep session but warn
+                console.warn('Could not verify session with backend:', error);
+              }
+            } catch (error) {
+              console.error('Error parsing token:', error);
+              TokenManager.clear();
             }
-          } catch (error) {
-            console.error('Error parsing token:', error);
-            TokenManager.clear();
           }
+        } catch (error) {
+          console.error('Auth initialization error:', error);
         }
       } catch (error) {
-        console.error('Auth initialization error:', error);
+        console.error('Unexpected error in auth initialization:', error);
       } finally {
         setLoading(false);
         setIsInitialized(true);

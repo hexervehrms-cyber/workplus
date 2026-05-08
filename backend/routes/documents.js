@@ -4,13 +4,127 @@
  */
 
 import express from "express";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, authorize } from "../middleware/auth.js";
 import Document from "../models/Document.js";
+import GeneratedDocument from "../models/GeneratedDocument.js";
+import IssuedDocument from "../models/IssuedDocument.js";
+import DocumentAcknowledgment from "../models/DocumentAcknowledgment.js";
 import { sendSuccess, sendError, sendPaginated } from "../utils/apiResponse.js";
 import logger from "../utils/logger.js";
 
+// Setup __dirname for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const router = express.Router();
+
+// Configure multer for document uploads
+const documentStorage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = path.join(__dirname, '..', 'uploads', 'documents');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, `document-${req.user.userId}-${uniqueSuffix}${path.extname(file.originalname)}`);
+  }
+});
+
+const documentUpload = multer({
+  storage: documentStorage,
+  limits: {
+    fileSize: 50 * 1024 * 1024 // 50MB limit for documents
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'text/plain'
+    ];
+    
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PDF, Word, Excel, images, and text files are allowed.'));
+    }
+  }
+});
+
+/**
+ * POST /api/documents/upload
+ * Upload a document
+ */
+router.post(
+  "/upload",
+  authenticate,
+  documentUpload.single('document'),
+  asyncHandler(async (req, res) => {
+    try {
+      if (!req.file) {
+        return sendError(res, "No document file provided", 400, "VALIDATION_ERROR");
+      }
+
+      const { name, type } = req.body;
+
+      if (!name) {
+        return sendError(res, "Document name is required", 400, "VALIDATION_ERROR");
+      }
+
+      const documentPath = `/uploads/documents/${req.file.filename}`;
+
+      // Create document record in database
+      const document = await Document.create({
+        userId: req.user.userId,
+        orgId: req.user.orgId,
+        name,
+        type: type || 'general',
+        fileName: req.file.originalname,
+        filePath: documentPath,
+        size: `${(req.file.size / 1024).toFixed(2)} KB`,
+        status: 'uploaded',
+        uploadedAt: new Date()
+      });
+
+      logger.info("Document uploaded", {
+        userId: req.user.userId,
+        documentId: document._id,
+        filename: req.file.filename,
+        size: req.file.size
+      });
+
+      return sendSuccess(res, {
+        _id: document._id,
+        name: document.name,
+        type: document.type,
+        fileName: document.fileName,
+        filePath: document.filePath,
+        size: document.size,
+        status: document.status,
+        uploadedAt: document.uploadedAt
+      }, "Document uploaded successfully", 201);
+    } catch (error) {
+      logger.error("Upload document error", {
+        error: error.message,
+        userId: req.user.userId
+      });
+      return sendError(res, "Failed to upload document", 500, "UPLOAD_ERROR");
+    }
+  })
+);
 
 /**
  * GET /api/documents/employee/:employeeId
@@ -135,4 +249,434 @@ router.delete(
   })
 );
 
+/**
+ * POST /api/documents/digital-generate
+ * Generate a digital document
+ */
+router.post(
+  "/digital-generate",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const {
+        title,
+        description,
+        content,
+        category,
+        organizationId,
+        createdBy,
+        assignTo,
+        targetUsers,
+        requiresAcknowledgment
+      } = req.body;
+
+      // Validate required fields
+      if (!title || !content) {
+        return sendError(res, "Title and content are required", 400, "VALIDATION_ERROR");
+      }
+
+      if (!organizationId) {
+        return sendError(res, "Organization ID is required", 400, "VALIDATION_ERROR");
+      }
+
+      // Create new generated document
+      const documentData = {
+        id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        documentType: category || "General",
+        organizationId,
+        content,
+        status: "generated",
+        title,
+        description,
+        category,
+        assignTo,
+        targetUsers: assignTo === "specific" ? targetUsers : [],
+        requiresAcknowledgment
+      };
+
+      // Only add createdBy if it's a valid ObjectId, otherwise skip it
+      if (createdBy && typeof createdBy === 'string' && createdBy.length === 24) {
+        documentData.createdBy = createdBy;
+      } else if (req.user?._id) {
+        documentData.createdBy = req.user._id;
+      }
+
+      const generatedDocument = new GeneratedDocument(documentData);
+      await generatedDocument.save();
+
+      logger.info("Digital document generated", {
+        documentId: generatedDocument._id,
+        organizationId,
+        createdBy: createdBy || req.user?._id,
+        title
+      });
+
+      return sendSuccess(
+        res,
+        { document: generatedDocument },
+        "Digital document generated successfully"
+      );
+    } catch (error) {
+      logger.error("Generate digital document error", {
+        error: error.message,
+        stack: error.stack,
+        body: req.body
+      });
+      return sendError(res, error.message || "Failed to generate document", 500, "GENERATION_ERROR");
+    }
+  })
+);
+
+/**
+ * GET /api/documents/organization/:organizationId
+ * Get all documents for an organization
+ */
+router.get(
+  "/organization/:organizationId",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const { organizationId } = req.params;
+
+      const documents = await GeneratedDocument.find({ organizationId })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      logger.info("Organization documents fetched", {
+        organizationId,
+        count: documents.length
+      });
+
+      return sendSuccess(res, documents, "Documents fetched successfully");
+    } catch (error) {
+      logger.error("Get organization documents error", {
+        error: error.message,
+        organizationId: req.params.organizationId
+      });
+      return sendError(res, "Failed to fetch documents", 500, "DOCUMENTS_ERROR");
+    }
+  })
+);
+
+/**
+ * GET /api/documents/generated/:documentId
+ * Get a specific generated document
+ */
+router.get(
+  "/generated/:documentId",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const { documentId } = req.params;
+
+      const document = await GeneratedDocument.findOne({ id: documentId }).lean();
+
+      if (!document) {
+        return sendError(res, "Document not found", 404, "NOT_FOUND");
+      }
+
+      logger.info("Generated document fetched", { documentId });
+
+      return sendSuccess(res, document, "Document fetched successfully");
+    } catch (error) {
+      logger.error("Get generated document error", {
+        error: error.message,
+        documentId: req.params.documentId
+      });
+      return sendError(res, "Failed to fetch document", 500, "DOCUMENT_ERROR");
+    }
+  })
+);
+
+/**
+ * PUT /api/documents/generated/:documentId
+ * Update a generated document
+ */
+router.put(
+  "/generated/:documentId",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const { documentId } = req.params;
+      const { title, description, content, category, status } = req.body;
+
+      const document = await GeneratedDocument.findOneAndUpdate(
+        { id: documentId },
+        {
+          title,
+          description,
+          content,
+          category,
+          status,
+          updatedAt: new Date()
+        },
+        { new: true }
+      );
+
+      if (!document) {
+        return sendError(res, "Document not found", 404, "NOT_FOUND");
+      }
+
+      logger.info("Generated document updated", { documentId });
+
+      return sendSuccess(res, document, "Document updated successfully");
+    } catch (error) {
+      logger.error("Update generated document error", {
+        error: error.message,
+        documentId: req.params.documentId
+      });
+      return sendError(res, "Failed to update document", 500, "UPDATE_ERROR");
+    }
+  })
+);
+
+/**
+ * DELETE /api/documents/generated/:documentId
+ * Delete a generated document
+ */
+router.delete(
+  "/generated/:documentId",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const { documentId } = req.params;
+
+      const document = await GeneratedDocument.findOneAndDelete({ id: documentId });
+
+      if (!document) {
+        return sendError(res, "Document not found", 404, "NOT_FOUND");
+      }
+
+      logger.info("Generated document deleted", { documentId });
+
+      return sendSuccess(res, null, "Document deleted successfully");
+    } catch (error) {
+      logger.error("Delete generated document error", {
+        error: error.message,
+        documentId: req.params.documentId
+      });
+      return sendError(res, "Failed to delete document", 500, "DELETE_ERROR");
+    }
+  })
+);
+
+/**
+ * GET /api/documents/issued/:employeeId
+ * Get documents issued to a specific employee
+ */
+router.get(
+  "/issued/:employeeId",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const { employeeId } = req.params;
+
+      const documents = await IssuedDocument.find({ targetEmployeeId: employeeId })
+        .sort({ createdAt: -1 })
+        .populate('issuedBy', 'name email')
+        .lean();
+
+      logger.info("Employee issued documents fetched", {
+        employeeId,
+        count: documents.length
+      });
+
+      return sendSuccess(res, documents, "Issued documents fetched successfully");
+    } catch (error) {
+      logger.error("Get employee issued documents error", {
+        error: error.message,
+        employeeId: req.params.employeeId
+      });
+      return sendError(res, "Failed to fetch issued documents", 500, "DOCUMENTS_ERROR");
+    }
+  })
+);
+
+/**
+ * POST /api/documents/issue
+ * Issue a document to an employee
+ */
+router.post(
+  "/issue",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const {
+        title,
+        description,
+        category,
+        targetEmployeeId,
+        acknowledgmentRequired,
+        notes
+      } = req.body;
+
+      // Validate required fields
+      if (!title || !category || !targetEmployeeId) {
+        return sendError(res, "Title, category, and target employee are required", 400, "VALIDATION_ERROR");
+      }
+
+      // Get organization ID from user context (you may need to adjust this based on your auth setup)
+      const organizationId = req.user.organizationId || 'ORG-001';
+
+      // Create issued document
+      const issuedDocumentData = {
+        id: `issued_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        title,
+        description,
+        category,
+        targetEmployeeId,
+        issuedBy: req.user._id,
+        issuedByName: req.user.name,
+        acknowledgmentRequired: acknowledgmentRequired || false,
+        notes,
+        organizationId,
+        status: "pending"
+      };
+
+      const issuedDocument = new IssuedDocument(issuedDocumentData);
+      await issuedDocument.save();
+
+      logger.info("Document issued to employee", {
+        documentId: issuedDocument.id,
+        targetEmployeeId,
+        issuedBy: req.user._id,
+        title
+      });
+
+      return sendSuccess(
+        res,
+        { document: issuedDocument },
+        "Document issued successfully"
+      );
+    } catch (error) {
+      logger.error("Issue document error", {
+        error: error.message,
+        stack: error.stack,
+        body: req.body
+      });
+      return sendError(res, error.message || "Failed to issue document", 500, "ISSUE_ERROR");
+    }
+  })
+);
+
 export default router;
+
+
+/**
+ * GET /api/documents/acknowledgments/employee/:employeeId
+ * Get all acknowledgments for an employee
+ */
+router.get(
+  "/acknowledgments/employee/:employeeId",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const { employeeId } = req.params;
+
+      // Check authorization - employees can only see their own acknowledgments
+      if (req.user.role === "employee" && req.user.userId !== employeeId) {
+        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      }
+
+      // Query acknowledgments from database
+      const acknowledgments = await DocumentAcknowledgment.find({ employeeId })
+        .sort({ acknowledgedAt: -1 })
+        .lean();
+
+      logger.info("Employee acknowledgments fetched", {
+        employeeId,
+        count: acknowledgments.length
+      });
+
+      return sendSuccess(res, acknowledgments, "Acknowledgments fetched successfully");
+    } catch (error) {
+      logger.error("Get employee acknowledgments error", {
+        error: error.message,
+        employeeId: req.params.employeeId
+      });
+      return sendError(res, "Failed to fetch acknowledgments", 500, "ACKNOWLEDGMENTS_ERROR");
+    }
+  })
+);
+
+/**
+ * POST /api/documents/acknowledgments
+ * Create a document acknowledgment
+ */
+router.post(
+  "/acknowledgments",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const {
+        documentId,
+        employeeId,
+        employeeName,
+        organizationId,
+        acknowledgedAt,
+        ipAddress,
+        accepted
+      } = req.body;
+
+      // Validate required fields
+      if (!documentId || !employeeId) {
+        return sendError(res, "Document ID and Employee ID are required", 400, "VALIDATION_ERROR");
+      }
+
+      // Check authorization - employees can only acknowledge for themselves
+      if (req.user.role === "employee" && req.user.userId !== employeeId) {
+        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      }
+
+      // Check if acknowledgment already exists
+      const existingAcknowledgment = await DocumentAcknowledgment.findOne({
+        documentId,
+        employeeId
+      });
+
+      if (existingAcknowledgment) {
+        logger.info("Document already acknowledged", {
+          documentId,
+          employeeId,
+          existingId: existingAcknowledgment._id
+        });
+        
+        return sendSuccess(
+          res, 
+          existingAcknowledgment, 
+          "Document already acknowledged"
+        );
+      }
+
+      // Create new acknowledgment
+      const acknowledgmentData = {
+        documentId,
+        employeeId,
+        employeeName,
+        organizationId,
+        acknowledgedAt: acknowledgedAt || new Date(),
+        ipAddress,
+        accepted,
+        status: accepted ? 'Completed' : 'Rejected'
+      };
+
+      const acknowledgment = await DocumentAcknowledgment.create(acknowledgmentData);
+
+      logger.info("Document acknowledgment created", {
+        documentId,
+        employeeId,
+        accepted,
+        acknowledgmentId: acknowledgment._id
+      });
+
+      return sendSuccess(res, acknowledgment, "Document acknowledged successfully");
+    } catch (error) {
+      logger.error("Create acknowledgment error", {
+        error: error.message,
+        stack: error.stack,
+        documentId: req.body.documentId
+      });
+      return sendError(res, "Failed to create acknowledgment", 500, "ACKNOWLEDGMENT_ERROR");
+    }
+  })
+);

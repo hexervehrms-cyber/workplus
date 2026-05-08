@@ -23,7 +23,9 @@ function Calendar({ className, selected, onSelect, mode = "single" }: CalendarPr
   const getDaysInMonth = (date: Date) => {
     const year = date.getFullYear();
     const month = date.getMonth();
-    const firstDay = new Date(year, month, 1).getDay();
+    let firstDay = new Date(year, month, 1).getDay();
+    // Convert Sunday (0) to 6, so Monday becomes 0
+    firstDay = firstDay === 0 ? 6 : firstDay - 1;
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     
     const days = [];
@@ -101,7 +103,7 @@ function Calendar({ className, selected, onSelect, mode = "single" }: CalendarPr
       {/* Calendar Grid */}
       <div className="grid grid-cols-7 gap-1">
         {/* Weekday headers */}
-        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => (
           <div key={day} className="text-center text-sm font-medium text-muted-foreground p-2">
             {day}
           </div>

@@ -40,6 +40,12 @@ interface OnboardingData {
   state: string;
   zipCode: string;
   
+  // Financial Information
+  aadharNumber: string;
+  panNumber: string;
+  bankAccount: string;
+  ifscCode: string;
+  
   // Professional Information
   employeeId: string;
   role: string;
@@ -90,6 +96,12 @@ export default function Onboarding() {
     state: '',
     zipCode: '',
     
+    // Financial Information
+    aadharNumber: '',
+    panNumber: '',
+    bankAccount: '',
+    ifscCode: '',
+    
     // Professional Information
     employeeId: '',
     role: '',
@@ -122,8 +134,15 @@ export default function Onboarding() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const totalSteps = 5;
+  const totalSteps = 4;
   const progress = (currentStep / totalSteps) * 100;
+
+  const stepCategories = [
+    'Personal Information',
+    'Education',
+    'Experience',
+    'Documents'
+  ];
 
   // Validate token and fetch employee data on component mount
   useEffect(() => {
@@ -137,19 +156,19 @@ export default function Onboarding() {
         const response = await fetch(`/api/onboarding/validate/${token}`);
         const data = await response.json();
 
-        if (response.ok && data.isValid) {
+        if (response.ok && data.success) {
           setLinkValid(true);
           // Use actual employee data from the validation response
-          setEmployeeData(data.employeeData);
+          setEmployeeData(data.data);
           
           // Pre-fill form with employee data
-          const nameParts = data.employeeData.employeeName.split(' ');
+          const nameParts = data.data.employeeName.split(' ');
           setFormData(prev => ({
             ...prev,
             firstName: nameParts[0] || '',
             lastName: nameParts.slice(1).join(' ') || '',
-            email: data.employeeData.employeeEmail,
-            department: data.employeeData.department
+            email: data.data.employeeEmail,
+            department: data.data.department
           }));
         } else {
           setLinkValid(false);
@@ -193,26 +212,19 @@ export default function Onboarding() {
         if (!formData.address) newErrors.address = 'Address is required';
         break;
         
-      case 2: // Professional Information
-        if (!formData.role) newErrors.role = 'Role is required';
-        if (!formData.department) newErrors.department = 'Department is required';
-        if (!formData.joiningDate) newErrors.joiningDate = 'Joining date is required';
-        if (!formData.employmentType) newErrors.employmentType = 'Employment type is required';
-        break;
-        
-      case 3: // Education
+      case 2: // Education
         if (!formData.highestQualification) newErrors.highestQualification = 'Highest qualification is required';
         if (!formData.university) newErrors.university = 'University is required';
         if (!formData.yearOfPassing) newErrors.yearOfPassing = 'Year of passing is required';
         break;
         
-      case 4: // Experience
+      case 3: // Experience
         if (!formData.previousCompany) newErrors.previousCompany = 'Previous company is required';
         if (!formData.previousRole) newErrors.previousRole = 'Previous role is required';
         if (!formData.experienceYears) newErrors.experienceYears = 'Years of experience is required';
         break;
         
-      case 5: // Documents
+      case 4: // Documents
         const requiredDocs = ['resume', 'idProof', 'educationCertificate'];
         requiredDocs.forEach(doc => {
           if (!formData[doc as keyof OnboardingData]) {
@@ -242,12 +254,45 @@ export default function Onboarding() {
     setIsSubmitting(true);
     
     try {
-      // Include organization information in the submission
+      // Convert File objects to file names/metadata for submission
       const submissionData = {
-        ...formData,
-        organizationName: employeeData?.organizationName,
-        organizationId: employeeData?.organizationId,
-        token: token
+        token: token,
+        personalInfo: {
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          phone: formData.phone,
+          dateOfBirth: formData.dateOfBirth,
+          gender: formData.gender,
+          address: formData.address
+        },
+        sensitiveInfo: {
+          aadharNumber: formData.aadharNumber,
+          panNumber: formData.panNumber,
+          bankAccount: formData.bankAccount,
+          ifscCode: formData.ifscCode
+        },
+        emergencyContact: {
+          name: '',
+          relation: '',
+          phone: ''
+        },
+        // Convert employment documents (resume, experience letter, etc.)
+        employmentDocuments: [
+          formData.resume && { id: 'resume', name: formData.resume.name, category: 'Resume' },
+          formData.experienceLetter && { id: 'experience_letter', name: formData.experienceLetter.name, category: 'Experience Letter' },
+          formData.offerLetter && { id: 'offer_letter', name: formData.offerLetter.name, category: 'Offer Letter' },
+          formData.appointmentLetter && { id: 'appointment_letter', name: formData.appointmentLetter.name, category: 'Appointment Letter' },
+          formData.relievingLetter && { id: 'relieving_letter', name: formData.relievingLetter.name, category: 'Relieving Letter' },
+          formData.addressProof && { id: 'address_proof', name: formData.addressProof.name, category: 'Address Proof' },
+          formData.idProof && { id: 'id_proof', name: formData.idProof.name, category: 'ID Proof' }
+        ].filter(Boolean),
+        // Convert educational documents
+        educationalDocuments: {
+          [formData.highestQualification || 'Qualification']: {
+            certificate: formData.educationCertificate ? { id: 'education_cert', name: formData.educationCertificate.name } : null
+          }
+        },
+        password: 'TempPassword123!' // Temporary password - should be set by user
       };
 
       // Submit to backend API
@@ -263,7 +308,8 @@ export default function Onboarding() {
         console.log('Form submitted successfully:', submissionData);
         setCurrentStep(6); // Success step
       } else {
-        console.error('Error submitting form');
+        const errorData = await response.json();
+        console.error('Error submitting form:', errorData);
         // Still show success for demo purposes
         setCurrentStep(6);
       }
@@ -434,88 +480,63 @@ export default function Onboarding() {
           />
         </div>
       </div>
-    </div>
-  );
 
-  const renderProfessionalInfo = () => (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3 mb-6">
-        <Briefcase className="w-6 h-6 text-primary" />
-        <h3 className="text-xl font-semibold">Professional Information</h3>
+      {/* Financial Information Section */}
+      <Separator className="my-6" />
+      <div className="space-y-4">
+        <h4 className="font-semibold text-lg flex items-center gap-2">
+          <Badge className="w-5 h-5" />
+          Financial Information
+        </h4>
+        <p className="text-sm text-muted-foreground">Please provide your financial details for salary processing</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
-          <Label>Employee ID</Label>
+          <Label>Aadhar Card Number</Label>
           <Input
-            value={formData.employeeId}
-            onChange={(e) => handleInputChange('employeeId', e.target.value)}
-            placeholder="EMP-XXXX"
+            value={formData.aadharNumber}
+            onChange={(e) => handleInputChange('aadharNumber', e.target.value)}
+            placeholder="Enter 12-digit Aadhar number"
             className="mt-2 rounded-xl"
-            disabled
+            maxLength="12"
           />
+          <p className="text-xs text-muted-foreground mt-1">12-digit unique identification number</p>
         </div>
 
         <div>
-          <Label>Role *</Label>
+          <Label>PAN Card Number</Label>
           <Input
-            value={formData.role}
-            onChange={(e) => handleInputChange('role', e.target.value)}
-            placeholder="Your role"
-            className={`mt-2 rounded-xl ${errors.role ? 'border-red-500' : ''}`}
-            disabled
+            value={formData.panNumber}
+            onChange={(e) => handleInputChange('panNumber', e.target.value)}
+            placeholder="Enter PAN number"
+            className="mt-2 rounded-xl"
+            maxLength="10"
           />
-          {errors.role && <p className="text-sm text-red-500 mt-1">{errors.role}</p>}
+          <p className="text-xs text-muted-foreground mt-1">10-character PAN</p>
         </div>
 
         <div>
-          <Label>Department *</Label>
+          <Label>Bank Account Number</Label>
           <Input
-            value={formData.department}
-            onChange={(e) => handleInputChange('department', e.target.value)}
-            placeholder="Department"
-            className={`mt-2 rounded-xl ${errors.department ? 'border-red-500' : ''}`}
-            disabled
-          />
-          {errors.department && <p className="text-sm text-red-500 mt-1">{errors.department}</p>}
-        </div>
-
-        <div>
-          <Label>Joining Date *</Label>
-          <Input
-            type="date"
-            value={formData.joiningDate}
-            onChange={(e) => handleInputChange('joiningDate', e.target.value)}
-            className={`mt-2 rounded-xl ${errors.joiningDate ? 'border-red-500' : ''}`}
-            disabled
-          />
-          {errors.joiningDate && <p className="text-sm text-red-500 mt-1">{errors.joiningDate}</p>}
-        </div>
-
-        <div>
-          <Label>Employment Type *</Label>
-          <select
-            value={formData.employmentType}
-            onChange={(e) => handleInputChange('employmentType', e.target.value)}
-            className={`w-full mt-2 px-3 py-2 border rounded-xl bg-background ${errors.employmentType ? 'border-red-500' : ''}`}
-          >
-            <option value="">Select type</option>
-            <option value="full-time">Full-time</option>
-            <option value="part-time">Part-time</option>
-            <option value="contract">Contract</option>
-            <option value="intern">Intern</option>
-          </select>
-          {errors.employmentType && <p className="text-sm text-red-500 mt-1">{errors.employmentType}</p>}
-        </div>
-
-        <div>
-          <Label>Work Location</Label>
-          <Input
-            value={formData.workLocation}
-            onChange={(e) => handleInputChange('workLocation', e.target.value)}
-            placeholder="Office location"
+            value={formData.bankAccount}
+            onChange={(e) => handleInputChange('bankAccount', e.target.value)}
+            placeholder="Enter bank account number"
             className="mt-2 rounded-xl"
           />
+          <p className="text-xs text-muted-foreground mt-1">Your bank account number for salary transfer</p>
+        </div>
+
+        <div>
+          <Label>IFSC Code</Label>
+          <Input
+            value={formData.ifscCode}
+            onChange={(e) => handleInputChange('ifscCode', e.target.value)}
+            placeholder="Enter IFSC code"
+            className="mt-2 rounded-xl"
+            maxLength="11"
+          />
+          <p className="text-xs text-muted-foreground mt-1">11-character IFSC code of your bank branch</p>
         </div>
       </div>
     </div>
@@ -832,11 +853,10 @@ export default function Onboarding() {
   const renderStep = () => {
     switch (currentStep) {
       case 1: return renderPersonalInfo();
-      case 2: return renderProfessionalInfo();
-      case 3: return renderEducation();
-      case 4: return renderExperience();
-      case 5: return renderDocuments();
-      case 6: return renderSuccess();
+      case 2: return renderEducation();
+      case 3: return renderExperience();
+      case 4: return renderDocuments();
+      case 5: return renderSuccess();
       default: return renderPersonalInfo();
     }
   };
@@ -886,7 +906,7 @@ export default function Onboarding() {
           </div>
           <h1 className="text-3xl font-bold mb-2">Employee Onboarding</h1>
           <p className="text-muted-foreground">
-            Welcome {employeeData?.employeeName}! Complete your profile to join {employeeData?.organizationName || 'our team'}
+            Welcome {employeeData?.employeeName}! Complete your profile to join Hexerve!
           </p>
           {employeeData && (
             <div className="mt-4 space-y-2">
@@ -910,14 +930,36 @@ export default function Onboarding() {
           )}
         </div>
 
-        {/* Progress Bar */}
-        {currentStep <= 5 && (
+        {/* Progress Bar with Categories */}
+        {currentStep <= totalSteps && (
           <div className="mb-8">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm text-muted-foreground">Step {currentStep} of {totalSteps}</span>
-              <span className="text-sm text-muted-foreground">{Math.round(progress)}% Complete</span>
+            {/* Step indicator */}
+            <div className="flex justify-between items-center mb-4">
+              <span className="text-sm font-medium text-muted-foreground">Step {currentStep} of {totalSteps}</span>
+              <span className="text-sm font-medium text-muted-foreground">{Math.round(progress)}% Complete</span>
             </div>
-            <Progress value={progress} className="h-2" />
+            
+            {/* Progress bar */}
+            <Progress value={progress} className="h-2 mb-6" />
+            
+            {/* Category labels */}
+            <div className="grid grid-cols-4 gap-2">
+              {stepCategories.map((category, index) => (
+                <button
+                  key={index}
+                  onClick={() => setCurrentStep(index + 1)}
+                  className={`text-center p-3 rounded-lg transition-all cursor-pointer hover:shadow-md ${
+                    currentStep === index + 1
+                      ? 'bg-primary text-white font-semibold'
+                      : currentStep > index + 1
+                      ? 'bg-green-100 text-green-800 font-medium hover:bg-green-200'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  <div className="text-xs">{category}</div>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -926,7 +968,7 @@ export default function Onboarding() {
           {renderStep()}
 
           {/* Navigation Buttons */}
-          {currentStep <= 5 && (
+          {currentStep <= totalSteps && (
             <div className="flex justify-between items-center mt-8">
               <Button
                 variant="outline"
@@ -959,7 +1001,7 @@ export default function Onboarding() {
 
         {/* Footer */}
         <div className="text-center mt-8 text-sm text-muted-foreground">
-          <p>Need help? Contact HR at hr@company.com</p>
+          <p>Need help? Contact HR at hr@hexerve.com</p>
         </div>
       </div>
     </div>

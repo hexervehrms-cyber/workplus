@@ -32,6 +32,25 @@ const onboardingSubmissionSchema = new mongoose.Schema(
       relation: { type: String },
       phone: { type: String }
     },
+    educationalDocuments: {
+      type: Map,
+      of: {
+        certificate: {
+          id: { type: String },
+          name: { type: String }
+        },
+        marksheet: {
+          id: { type: String },
+          name: { type: String }
+        }
+      },
+      default: {}
+    },
+    employmentDocuments: [{
+      id: { type: String },
+      name: { type: String },
+      category: { type: String }
+    }],
     documents: [{
       name: { type: String },
       type: { type: String },

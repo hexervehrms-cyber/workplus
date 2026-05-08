@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Activity Logs</title>
+</head>
+<body>
+    <h1>Activity Logs Test</h1>
+    <div id="result"></div>
+    
+    <script>
+        async function testActivityLogs() {
+            try {
+                const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OWU0OTIyMzgwNjUzZDVlNzIwMmIwMzUiLCJvcmdJZCI6IndvcmtwbHVzX3N5c3RlbSIsInJvbGUiOiJzdXBlcl9hZG1pbiIsImlhdCI6MTc3Nzk2NDUwMiwiZXhwIjoxNzc4MDUwOTAyfQ.6uO2QuerJjcyk20175T72FMjUgaH1jFjlull0c-qb90';
+                
+                const response = await fetch('http://localhost:5000/api/attendance/activity-logs/today', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                console.log('Activity logs data:', data);
+                
+                document.getElementById('result').innerHTML = `
+                    <h2>Response:</h2>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+                
+                if (data.success && data.data.length > 0) {
+                    document.getElementById('result').innerHTML += `
+                        <h2>Activity Logs (${data.data.length}):</h2>
+                        <ul>
+                            ${data.data.map(log => `
+                                <li>
+                                    <strong>${log.employeeName}</strong> - 
+                                    ${log.action} at 
+                                    ${new Date(log.timestamp).toLocaleString()}
+                                </li>
+                            `).join('')}
+                        </ul>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('result').innerHTML = `<p>Error: ${error.message}</p>`;
+            }
+        }
+        
+        testActivityLogs();
+    </script>
+</body>
+</html>

@@ -148,7 +148,9 @@ const LeaveCalendar: React.FC = () => {
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
     const daysInMonth = lastDay.getDate();
-    const startingDayOfWeek = firstDay.getDay();
+    let startingDayOfWeek = firstDay.getDay();
+    // Convert Sunday (0) to 6, so Monday becomes 0
+    startingDayOfWeek = startingDayOfWeek === 0 ? 6 : startingDayOfWeek - 1;
     
     const days = [];
     
@@ -354,7 +356,7 @@ const LeaveCalendar: React.FC = () => {
 
         {/* Day Names */}
         <div className="grid grid-cols-7 gap-2">
-          {dayNames.map(day => (
+          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => (
             <div key={day} className="text-center text-sm font-medium text-muted-foreground p-2">
               {day}
             </div>

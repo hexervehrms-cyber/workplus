@@ -3,6 +3,7 @@ import { WelcomeBanner } from '../../components/WelcomeBanner';
 import { FeatureShowcase } from '../../components/FeatureShowcase';
 import OnboardingLinkGenerator from '../../components/OnboardingLinkGenerator';
 import DocumentGenerator from '../../components/DocumentGenerator';
+import ChatWidget from '../../components/ChatWidget';
 import { useCurrency } from '../../context/CurrencyContext';
 import { useRealTimeDashboard } from '../../hooks/useRealTimeDashboard';
 import { useState, useEffect, useCallback } from 'react';
@@ -447,6 +448,9 @@ export default function SuperAdminDashboard() {
           )}
         </div>
       </Card>
+
+      {/* Chat Widget */}
+      <ChatWidget />
     </div>
   );
 }

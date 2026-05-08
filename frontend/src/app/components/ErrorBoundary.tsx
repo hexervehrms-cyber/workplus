@@ -33,38 +33,11 @@ class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('Error caught by boundary:', error, errorInfo);
     
-    // Log to external service if needed
-    this.logErrorToService(error, errorInfo);
-    
     this.setState({
       error,
       errorInfo
     });
   }
-
-  logErrorToService = (error: Error, errorInfo: ErrorInfo) => {
-    // Send to logging service
-    try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-      
-      fetch(`${apiUrl}/api/log-error`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          error: error.toString(),
-          errorInfo: errorInfo.componentStack,
-          timestamp: new Date().toISOString(),
-          userAgent: navigator.userAgent,
-          url: window.location.href,
-          user: localStorage.getItem('user') ? JSON.parse(localStorage.getItem('user') || '{}').email : 'anonymous'
-        })
-      }).catch(e => {
-        console.error('Failed to log error to server:', e);
-      });
-    } catch (e) {
-      console.error('Failed to log error:', e);
-    }
-  };
 
   handleReset = () => {
     this.setState({
@@ -97,7 +70,7 @@ class ErrorBoundary extends Component<Props, State> {
             </h1>
             
             <p className="mt-2 text-sm text-center text-gray-600">
-              We're sorry for the inconvenience. The error has been logged and we'll look into it.
+              We're sorry for the inconvenience. Please try reloading the page.
             </p>
             
             {import.meta.env.DEV && this.state.error && (

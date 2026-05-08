@@ -15,6 +15,7 @@ import { paginationMiddleware, applyPagination } from '../middleware/pagination.
 import { authorize, requirePermission } from '../middleware/auth.js';
 import bcrypt from 'bcrypt';
 import logger from '../utils/logger.js';
+import EmailNotificationService from '../utils/emailNotificationService.js';
 
 const router = express.Router();
 
@@ -24,17 +25,42 @@ router.use(paginationMiddleware);
 /**
  * GET /api/employees
  * List all employees with pagination
- * Query params: page, limit, status, department
+ * Query params: page, limit, status, department, simple
  * RBAC: Admin/HR can see all employees in org, Employees can only see basic info
  */
 router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), asyncHandler(async (req, res) => {
   const { page, limit, skip } = req.pagination;
-  const { status, department, search } = req.query;
+  const { status, department, search, simple } = req.query;
   const userRole = req.user.role;
   const userOrgId = req.user.orgId;
 
+  console.log('GET /employees - Request:', {
+    userRole,
+    userOrgId,
+    page,
+    limit,
+    status,
+    department,
+    search,
+    simple
+  });
+
   // Build query based on role
-  let query = { orgId: userOrgId };
+  let query = {};
+  
+  // Handle different orgId formats - super admin can see all orgs
+  if (userRole === 'super_admin') {
+    // Super admin can see all organizations
+    query = {
+      $or: [
+        { orgId: userOrgId },
+        { orgId: 'system' },
+        { orgId: 'workplus_system' }
+      ]
+    };
+  } else {
+    query = { orgId: userOrgId };
+  }
   
   // Role-based filtering
   if (userRole === 'employee') {
@@ -43,8 +69,10 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
     query.status = 'active'; // Only active employees
   } else {
     // Admin/HR/Manager can see all employees in their org
-    // By default, exclude terminated employees unless explicitly requested
-    if (status) {
+    // For simple dropdown queries, show all active employees
+    if (simple === 'true') {
+      query.status = 'active'; // For dropdowns, only show active employees
+    } else if (status) {
       query.status = status;
     } else {
       // Default: show only active employees, exclude terminated
@@ -65,13 +93,17 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
     ];
   }
 
+  console.log('GET /employees - Query:', query);
+
   // Get total count for pagination
   const total = await Employee.countDocuments(query);
+
+  console.log('GET /employees - Total count:', total);
 
   // Build projection based on role
   let projection = {};
   if (userRole === 'employee') {
-    // Employees see limited fields
+    // Employees see limited fields - use inclusion only
     projection = {
       userId: 1,
       employeeCode: 1,
@@ -79,17 +111,13 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
       department: 1,
       joiningDate: 1,
       status: 1,
-      // Hide salary and personal information
-      baseSalary: 0,
-      hra: 0,
-      bonus: 0,
-      phone: 0,
-      address: 0
+      orgId: 1,
+      _id: 1
     };
   }
 
   // Get paginated results with .lean() for performance
-  let employeeQuery = Employee.find(query, projection)
+  let employeeQuery = Employee.find(query)
     .populate('userId', userRole === 'employee' ? 'name email avatar' : 'name email avatar role isActive')
     .sort({ createdAt: -1 })
     .skip(skip)
@@ -98,13 +126,16 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
 
   const employees = await employeeQuery;
 
+  console.log('GET /employees - Employees found:', employees.length);
+
   logger.info('Employees listed', { 
     total, 
     page, 
     limit, 
     userRole, 
     orgId: userOrgId,
-    userId: req.user.userId 
+    userId: req.user.userId,
+    employeesReturned: employees.length
   });
 
   res.paginate(employees, total);
@@ -123,7 +154,7 @@ router.get('/:id', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'
   // Build projection based on role
   let projection = {};
   if (userRole === 'employee') {
-    // Employees can only see basic info and only their own record
+    // Employees can only see basic info and only their own record - use inclusion only
     projection = {
       userId: 1,
       employeeCode: 1,
@@ -132,12 +163,7 @@ router.get('/:id', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'
       joiningDate: 1,
       status: 1,
       orgId: 1,
-      // Hide salary and personal information
-      baseSalary: 0,
-      hra: 0,
-      bonus: 0,
-      phone: 0,
-      address: 0
+      _id: 1
     };
   }
 
@@ -410,6 +436,89 @@ router.post('/', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (re
       orgId: orgId,
       onboardingStarted: !!onboardingResult
     });
+
+    // AUTO-GENERATE PAYROLL: Create initial payroll entry for the employee
+    try {
+      const currentDate = new Date();
+      const currentMonth = currentDate.getMonth() + 1;
+      const currentYear = currentDate.getFullYear();
+      
+      // Import Payslip model
+      const Payslip = require('../models/Payroll.js').default;
+      
+      // Check if payslip already exists for this month
+      const existingPayslip = await Payslip.findOne({
+        employeeId: employee._id,
+        month: currentMonth,
+        year: currentYear
+      }).lean();
+      
+      if (!existingPayslip) {
+        // Calculate salary components
+        const grossSalary = (baseSalary || 0) + (hra || 0) + (bonus || 0) + (incentives || 0) + (allowances || 0);
+        const totalDeductions = (providentFund || 0) + (tax || 0) + (insurance || 0) + (otherDeductions || 0);
+        const netPay = grossSalary - totalDeductions;
+        
+        // Create payslip
+        await Payslip.create({
+          employeeId: employee._id,
+          userId: user._id,
+          month: currentMonth,
+          year: currentYear,
+          grossSalary,
+          baseSalary: baseSalary || 0,
+          hra: hra || 0,
+          bonus: bonus || 0,
+          incentives: incentives || 0,
+          allowances: allowances || 0,
+          providentFund: providentFund || 0,
+          tax: tax || 0,
+          insurance: insurance || 0,
+          otherDeductions: otherDeductions || 0,
+          totalDeductions,
+          netPay,
+          status: 'draft',
+          orgId: orgId
+        });
+        
+        logger.info('Payroll entry created for new employee', {
+          employeeId: employee._id,
+          month: currentMonth,
+          year: currentYear,
+          netPay
+        });
+      }
+    } catch (payrollError) {
+      logger.warn('Failed to create payroll entry for new employee', {
+        error: payrollError.message,
+        employeeId: employee._id
+      });
+      // Don't fail employee creation if payroll creation fails
+    }
+
+    // SEND WELCOME EMAIL: Send welcome email with login credentials
+    try {
+      await EmailNotificationService.sendWelcomeEmail(
+        {
+          _id: employee._id,
+          name: user.name,
+          email: user.email
+        },
+        password // Send the original password (not hashed) to the employee
+      );
+      
+      logger.info('Welcome email sent to new employee', {
+        employeeId: employee._id,
+        email: user.email
+      });
+    } catch (emailError) {
+      // Log error but don't fail employee creation if email fails
+      logger.error('Failed to send welcome email to new employee', {
+        error: emailError.message,
+        employeeId: employee._id,
+        email: user.email
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -908,6 +1017,100 @@ router.get('/lifecycle/analytics', asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: analytics
+  });
+}));
+
+/**
+ * POST /api/employees/:id/reset-password
+ * Reset employee password (Admin/HR only)
+ * RBAC: Only admin and hr can reset passwords
+ */
+router.post('/:id/reset-password', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { newPassword } = req.body;
+  const userOrgId = req.user.orgId;
+
+  // Validate input
+  if (!newPassword || newPassword.trim().length < 6) {
+    return res.status(400).json({
+      success: false,
+      message: 'Password must be at least 6 characters long'
+    });
+  }
+
+  // Find employee
+  const employee = await Employee.findById(id);
+  if (!employee) {
+    return res.status(404).json({
+      success: false,
+      message: 'Employee not found'
+    });
+  }
+
+  // Verify employee belongs to same organization
+  if (employee.orgId.toString() !== userOrgId.toString()) {
+    return res.status(403).json({
+      success: false,
+      message: 'Unauthorized: Employee not in your organization'
+    });
+  }
+
+  // Find associated user
+  const user = await User.findById(employee.userId);
+  if (!user) {
+    return res.status(404).json({
+      success: false,
+      message: 'User account not found'
+    });
+  }
+
+  // Hash new password
+  const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+  // Update user password
+  user.password = hashedPassword;
+  await user.save();
+
+  logger.info('Employee password reset', {
+    employeeId: id,
+    userId: employee.userId,
+    resetBy: req.user.userId,
+    orgId: userOrgId
+  });
+
+  // SEND PASSWORD RESET EMAIL: Notify employee about password change
+  try {
+    await EmailNotificationService.sendPasswordResetEmail(
+      {
+        _id: employee._id,
+        name: user.name,
+        email: user.email
+      },
+      newPassword, // Send the new password (not hashed) to the employee
+      req.user.name || 'Administrator'
+    );
+    
+    logger.info('Password reset email sent to employee', {
+      employeeId: id,
+      email: user.email
+    });
+  } catch (emailError) {
+    // Log error but don't fail password reset if email fails
+    logger.error('Failed to send password reset email', {
+      error: emailError.message,
+      employeeId: id,
+      email: user.email
+    });
+  }
+
+  res.json({
+    success: true,
+    message: 'Password reset successfully',
+    data: {
+      employeeId: id,
+      employeeName: user.name,
+      email: user.email
+    }
   });
 }));
 

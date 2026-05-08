@@ -40,6 +40,7 @@ import Company from "./models/Company.js";
 import Subscription from "./models/Subscription.js";
 import Expense from "./models/Expense.js";
 import LeaveRequest from "./models/LeaveRequest.js";
+import LeaveTypeSettings from "./models/LeaveTypeSettings.js";
 import Attendance from "./models/Attendance.js";
 import Holiday from "./models/Holiday.js";
 import HolidayCalendar from "./models/HolidayCalendar.js";
@@ -50,6 +51,7 @@ import CompanyDocument from "./models/CompanyDocument.js";
 import DocumentAcknowledgment from "./models/DocumentAcknowledgment.js";
 import GeneratedDocument from "./models/GeneratedDocument.js";
 import Reminder from "./models/Reminder.js";
+import Session from "./models/Session.js";
 
 // Import middleware
 import { errorHandler, requestIdMiddleware, asyncHandler } from "./middleware/errorHandler.js";
@@ -60,8 +62,14 @@ import { loginLimiter, registerLimiter } from "./middleware/rateLimiter.js";
 // Import logger
 import logger from "./utils/logger.js";
 
+// Import KPI updater
+import { emitKPIUpdate, emitAttendanceKPIUpdate, emitLeaveKPIUpdate, emitExpenseKPIUpdate, emitEmployeeKPIUpdate } from "./utils/kpiUpdater.js";
+
 // Import seeders
 import seedSuperAdmin from "./seeders/superAdminSeeder.js";
+
+// Import socket handlers
+import { initializeChatHandlers } from "./utils/chatSocketHandlers.js";
 
 // Import routes
 import dashboardRoutes from "./routes/dashboard.js";
@@ -71,13 +79,32 @@ import documentsRoutes from "./routes/documents.js";
 import expensesRoutes from "./routes/expenses.js";
 import employeesRoutes from "./routes/employees.js";
 import attendanceRoutes from "./routes/attendance.js";
+import attendanceHistoryRoutes from "./routes/attendanceHistory.js";
 import leaveRoutes from "./routes/leave.js";
+import leaveAllocationRoutes from "./routes/leave-allocation.js";
+import leaveTypeSettingsRoutes from "./routes/leave-type-settings.js";
 import usersRoutes from "./routes/users.js";
 import holidaysRoutes from "./routes/holidays.js";
 import profileRoutes from "./routes/profile.js";
+import rolesRoutes from "./routes/roles.js";
+import chatRoutes from "./routes/chat.js";
+import onboardingRoutes from "./routes/onboarding.js";
+import salaryRoutes from "./routes/salary.js";
+import payrollRoutes from "./routes/payroll.js";
+
+// Import sales routes
+import callsRoutes from "./routes/sales/calls.js";
+import leadsRoutes from "./routes/sales/leads.js";
+import dealsRoutes from "./routes/sales/deals.js";
+import performanceRoutes from "./routes/sales/performance.js";
+import revenueRoutes from "./routes/sales/revenue.js";
+
+// Setup __dirname for ES modules (must be before dotenv.config)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Load environment variables
-dotenv.config({ path: './backend/.env' });
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 // ============================================================================
 // ENVIRONMENT VALIDATION
@@ -107,8 +134,6 @@ validateEnvironment();
 // ============================================================================
 
 const app = express();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Create HTTP server for Socket.IO
 const server = createServer(app);
@@ -141,6 +166,9 @@ const io = new Server(server, {
   pingTimeout: 60000,
 });
 
+// Make io globally accessible for routes
+global.io = io;
+
 // ============================================================================
 // MIDDLEWARE SETUP
 // ============================================================================
@@ -172,33 +200,44 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Add emitter functions to request object for real-time updates
 app.use((req, res, next) => {
+  // Attach Socket.IO instance to request
+  req.io = io;
+
   // Emit attendance updates to Socket.IO
   req.emitAttendanceUpdate = (attendance, orgId) => {
+    console.log('📊 [EMIT-ATTENDANCE] Emitting attendance update:', { orgId, attendanceId: attendance._id });
     if (io) {
-      io.to(`org_${orgId}`).emit('attendance:update', {
+      io.to(`tenant_${orgId}`).emit('attendance:update', {
         attendance,
         timestamp: new Date(),
         orgId
       });
+      
+      // Emit KPI update for attendance changes
+      console.log('📊 [EMIT-ATTENDANCE] Calling emitAttendanceKPIUpdate');
+      emitAttendanceKPIUpdate(io, orgId, { ...attendance, action: 'update' });
     }
   };
 
   // Emit leave updates to Socket.IO
   req.emitLeaveUpdate = (action, leaveRequest, orgId) => {
     if (io) {
-      io.to(`org_${orgId}`).emit('leave:update', {
+      io.to(`tenant_${orgId}`).emit('leave:update', {
         action,
         leaveRequest,
         timestamp: new Date(),
         orgId
       });
+      
+      // Emit KPI update for leave changes
+      emitLeaveKPIUpdate(io, orgId, { ...leaveRequest, action });
     }
   };
 
   // Emit dashboard updates to Socket.IO
   req.emitDashboardUpdate = (action, type, data, orgId) => {
     if (io) {
-      io.to(`org_${orgId}`).emit('dashboard:update', {
+      io.to(`tenant_${orgId}`).emit('dashboard:update', {
         action,
         type,
         data,
@@ -208,11 +247,38 @@ app.use((req, res, next) => {
     }
   };
 
+  // Emit expense updates to Socket.IO
+  req.emitExpenseUpdate = (action, expense, orgId) => {
+    if (io) {
+      io.to(`tenant_${orgId}`).emit('expense:update', {
+        action,
+        expense,
+        timestamp: new Date(),
+        orgId
+      });
+      
+      // Emit KPI update for expense changes
+      emitExpenseKPIUpdate(io, orgId, { ...expense, action });
+    }
+  };
+
   // Emit activity updates to Socket.IO
   req.emitActivityUpdate = (activity, orgId) => {
     if (io) {
-      io.to(`org_${orgId}`).emit('activity:update', {
+      io.to(`tenant_${orgId}`).emit('activity:update', {
         activity,
+        timestamp: new Date(),
+        orgId
+      });
+    }
+  };
+
+  // Emit holiday updates to Socket.IO
+  req.emitHolidayUpdate = (action, holiday, orgId) => {
+    if (io) {
+      io.to(`tenant_${orgId}`).emit('holiday:update', {
+        action,
+        holiday,
         timestamp: new Date(),
         orgId
       });
@@ -230,7 +296,7 @@ app.use((req, res, next) => {
         });
       } else {
         // Send to organization
-        io.to(`org_${orgId}`).emit('notification', {
+        io.to(`tenant_${orgId}`).emit('notification', {
           ...notification,
           timestamp: new Date()
         });
@@ -241,12 +307,15 @@ app.use((req, res, next) => {
   // Emit employee updates to Socket.IO
   req.emitEmployeeUpdate = (action, employee, orgId) => {
     if (io) {
-      io.to(`org_${orgId}`).emit('employee:update', {
+      io.to(`tenant_${orgId}`).emit('employee:update', {
         action,
         employee,
         timestamp: new Date(),
         orgId
       });
+      
+      // Emit KPI update for employee changes
+      emitEmployeeKPIUpdate(io, orgId, { ...employee, action });
     }
   };
 
@@ -359,6 +428,54 @@ app.get("/api/health/db", asyncHandler(async (req, res) => {
 }));
 
 // ============================================================================
+// OPTIMIZATION MIDDLEWARE
+// ============================================================================
+
+// Import optimization middleware
+import {
+  compressionMiddleware,
+  securityHeaders,
+  cacheControl,
+  etagMiddleware,
+  optimizeResponse,
+  requestTimeout,
+  queryOptimization
+} from "./middleware/optimization.js";
+
+// Import deduplication middleware
+import { deduplicationMiddleware, startCacheCleanup } from "./middleware/deduplication.js";
+
+// Import connection monitor
+import { connectionMonitor } from "./utils/connectionMonitor.js";
+
+// Apply optimization middleware
+app.use(compressionMiddleware);
+app.use(cacheControl);
+app.use(etagMiddleware);
+app.use(optimizeResponse);
+app.use(requestTimeout(30000)); // 30 second timeout
+app.use(queryOptimization);
+
+// Apply deduplication middleware for POST/PUT/DELETE
+app.use(deduplicationMiddleware);
+
+// Start cache cleanup
+startCacheCleanup(60000); // Clean every minute
+
+// Initialize connection monitoring
+connectionMonitor.initialize();
+
+// ============================================================================
+// HEALTH CHECK ROUTES
+// ============================================================================
+
+// Import health routes
+import healthRoutes from "./routes/health.js";
+
+// Health check endpoints (no authentication required)
+app.use("/health", healthRoutes);
+
+// ============================================================================
 // API ROUTES REGISTRATION
 // ============================================================================
 
@@ -369,6 +486,36 @@ import { authenticate } from "./middleware/auth.js";
 app.use("/api/dashboard", authenticate, dashboardRoutes);
 app.use("/api/dashboard", authenticate, dashboardSuperAdminRoutes);
 app.use("/api/dashboard", authenticate, dashboardEmployeeRoutes);
+
+// ============================================================================
+// PUBLIC CLEANUP ENDPOINTS (for testing/development)
+// ============================================================================
+
+// Cleanup endpoint to delete all leave requests
+app.delete("/api/leave-requests/cleanup/all", asyncHandler(async (req, res) => {
+  try {
+    const result = await LeaveRequest.deleteMany({});
+    logger.info('All leave requests deleted', { deletedCount: result.deletedCount });
+    res.json({
+      success: true,
+      message: `Deleted ${result.deletedCount} leave requests`,
+      data: {
+        deletedCount: result.deletedCount
+      }
+    });
+  } catch (error) {
+    logger.error('Error deleting leave requests', { error: error.message });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete leave requests',
+      error: error.message
+    });
+  }
+}));
+
+// ============================================================================
+// AUTHENTICATED ROUTES
+// ============================================================================
 
 // Profile routes (with authentication)
 app.use("/api/profile", authenticate, profileRoutes);
@@ -385,14 +532,45 @@ app.use("/api/expenses", authenticate, expensesRoutes);
 // Attendance routes (with authentication)
 app.use("/api/attendance", authenticate, attendanceRoutes);
 
+// Attendance History routes (with authentication)
+app.use("/api/attendance-history", authenticate, attendanceHistoryRoutes);
+
 // Leave routes (with authentication)
 app.use("/api/leave-requests", authenticate, leaveRoutes);
+
+// Leave allocation routes (with authentication)
+app.use("/api/leave-allocation", authenticate, leaveAllocationRoutes);
+
+// Leave type settings routes (with authentication)
+app.use("/api/leave-type-settings", authenticate, leaveTypeSettingsRoutes);
 
 // Holidays routes (with authentication)
 app.use("/api/holidays", authenticate, holidaysRoutes);
 
 // Users routes (with authentication)
 app.use("/api/users", authenticate, usersRoutes);
+
+// Roles routes (with authentication)
+app.use("/api/roles", authenticate, rolesRoutes);
+
+// Onboarding routes (mixed authentication - some public, some protected)
+app.use("/api/onboarding", onboardingRoutes);
+
+// Sales routes (with authentication)
+app.use("/api/sales/calls", authenticate, callsRoutes);
+app.use("/api/sales/leads", authenticate, leadsRoutes);
+app.use("/api/sales/deals", authenticate, dealsRoutes);
+app.use("/api/sales/performance", authenticate, performanceRoutes);
+app.use("/api/sales/revenue", authenticate, revenueRoutes);
+
+// Chat routes (with authentication)
+app.use("/api/chat", authenticate, chatRoutes);
+
+// Salary routes (with authentication)
+app.use("/api/salary", authenticate, salaryRoutes);
+
+// Payroll routes (with authentication)
+app.use("/api/payroll", authenticate, payrollRoutes);
 
 // ============================================================================
 // SOCKET.IO SETUP
@@ -430,9 +608,11 @@ io.on('connection', (socket) => {
     socket.email = decoded.email;
 
     // Handle user authentication with JWT
-    socket.on('authenticate', (data) => {
+    socket.on('authenticate', async (data) => {
       try {
         const { userId, role, tenantId } = data;
+        
+        console.log('🔐 Authenticate event received:', { userId, role, tenantId });
         
         if (!userId || !role) {
           logger.warn(`Invalid authentication data from ${socket.id}`);
@@ -445,13 +625,52 @@ io.on('connection', (socket) => {
         socket.role = role;
         socket.tenantId = tenantId || 'system';
 
+        // Create or update session record
+        try {
+          console.log('📝 Updating session for user:', userId);
+          
+          // Try to find existing session from login
+          let session = await Session.findOne({
+            userId,
+            orgId: tenantId || 'system',
+            isActive: true,
+            socketId: null // Session created during login without socketId
+          });
+          
+          if (session) {
+            // Update existing session with socketId
+            session.socketId = socket.id;
+            session.connectTime = new Date();
+            await session.save();
+            console.log('✅ Session updated with socketId:', session._id);
+            logger.info(`Session updated for user ${userId}`, { sessionId: session._id, socketId: socket.id });
+          } else {
+            // Create new session if not found (fallback)
+            session = await Session.create({
+              userId,
+              orgId: tenantId || 'system',
+              socketId: socket.id,
+              role,
+              isActive: true,
+              connectTime: new Date()
+            });
+            console.log('✅ New session created:', session._id);
+            logger.info(`New session created for user ${userId}`, { sessionId: session._id });
+          }
+          
+          socket.sessionId = session._id;
+        } catch (sessionError) {
+          console.error('❌ Session update error:', sessionError.message);
+          logger.warn(`Failed to update session: ${sessionError.message}`);
+        }
+
         // Join role-based rooms
         socket.join(`role_${role}`);
         
-        // Join tenant room
-        if (tenantId) {
-          socket.join(`tenant_${tenantId}`);
-        }
+        // Join tenant room - ALWAYS join with 'system' as fallback
+        const finalTenantId = tenantId || 'system';
+        socket.join(`tenant_${finalTenantId}`);
+        console.log(`📍 Socket joined room: tenant_${finalTenantId}`);
 
         // Join user-specific room
         socket.join(`user_${userId}`);
@@ -460,6 +679,9 @@ io.on('connection', (socket) => {
         if (role === 'admin' || role === 'super_admin') {
           socket.join('management');
           socket.join(`admin_${userId}`);
+          socket.join('role_admin');
+          socket.join(`role_admin_${finalTenantId}`);
+          console.log(`📍 Admin joined rooms: management, admin_${userId}, role_admin, role_admin_${finalTenantId}`);
         }
 
         // Join employee room
@@ -481,6 +703,29 @@ io.on('connection', (socket) => {
           role,
           tenantId: socket.tenantId
         });
+
+        // Emit dashboard update to all admins in the tenant
+        try {
+          const activeCount = await Session.countDocuments({
+            orgId: tenantId || 'system',
+            isActive: true
+          });
+          
+          io.to(`tenant_${tenantId || 'system'}`).emit('dashboard_update', {
+            type: 'active_users_updated',
+            data: {
+              activeUsers: activeCount,
+              userId,
+              role,
+              action: 'login'
+            }
+          });
+          
+          logger.info(`Dashboard update emitted for tenant ${tenantId}`, { activeUsers: activeCount });
+        } catch (dashboardError) {
+          logger.warn(`Failed to emit dashboard update: ${dashboardError.message}`);
+        }
+
       } catch (error) {
         logger.error(`Socket authenticate error: ${error.message}`);
         socket.emit('auth_error', { message: error.message });
@@ -594,28 +839,40 @@ io.on('connection', (socket) => {
       }
     });
 
-    // Attendance events
-    socket.on('attendance:create', (data) => {
+    // Holiday events
+    socket.on('holiday:created', (data) => {
       try {
         const tenantId = socket.tenantId || data?.tenantId;
         if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('attendance:create', data);
-          logger.info('Attendance created event broadcast', { tenantId });
+          io.to(`tenant_${tenantId}`).emit('holiday:created', data);
+          logger.info('Holiday created event broadcast', { tenantId });
         }
       } catch (error) {
-        logger.error(`Socket attendance:create error: ${error.message}`);
+        logger.error(`Socket holiday:created error: ${error.message}`);
       }
     });
 
-    socket.on('attendance:update', (data) => {
+    socket.on('holiday:updated', (data) => {
       try {
         const tenantId = socket.tenantId || data?.tenantId;
         if (tenantId) {
-          io.to(`tenant_${tenantId}`).emit('attendance:update', data);
-          logger.info('Attendance updated event broadcast', { tenantId });
+          io.to(`tenant_${tenantId}`).emit('holiday:updated', data);
+          logger.info('Holiday updated event broadcast', { tenantId });
         }
       } catch (error) {
-        logger.error(`Socket attendance:update error: ${error.message}`);
+        logger.error(`Socket holiday:updated error: ${error.message}`);
+      }
+    });
+
+    socket.on('holiday:deleted', (data) => {
+      try {
+        const tenantId = socket.tenantId || data?.tenantId;
+        if (tenantId) {
+          io.to(`tenant_${tenantId}`).emit('holiday:deleted', data);
+          logger.info('Holiday deleted event broadcast', { tenantId });
+        }
+      } catch (error) {
+        logger.error(`Socket holiday:deleted error: ${error.message}`);
       }
     });
 
@@ -686,13 +943,48 @@ io.on('connection', (socket) => {
     });
 
     // Disconnect
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       try {
         logger.info(`User disconnected: ${socket.id}`, {
           userId: socket.userId,
           role: socket.role,
           tenantId: socket.tenantId
         });
+
+        // Mark session as inactive
+        if (socket.sessionId) {
+          try {
+            await Session.findByIdAndUpdate(socket.sessionId, {
+              isActive: false
+            });
+            logger.info(`Session marked inactive: ${socket.sessionId}`);
+          } catch (sessionError) {
+            logger.warn(`Failed to update session: ${sessionError.message}`);
+          }
+        }
+
+        // Emit dashboard update to all admins in the tenant
+        try {
+          const tenantId = socket.tenantId || 'system';
+          const activeCount = await Session.countDocuments({
+            orgId: tenantId,
+            isActive: true
+          });
+          
+          io.to(`tenant_${tenantId}`).emit('dashboard_update', {
+            type: 'active_users_updated',
+            data: {
+              activeUsers: activeCount,
+              userId: socket.userId,
+              role: socket.role,
+              action: 'logout'
+            }
+          });
+          
+          logger.info(`Dashboard update emitted for tenant ${tenantId}`, { activeUsers: activeCount });
+        } catch (dashboardError) {
+          logger.warn(`Failed to emit dashboard update on disconnect: ${dashboardError.message}`);
+        }
       } catch (error) {
         logger.error(`Socket disconnect error: ${error.message}`);
       }
@@ -707,6 +999,9 @@ io.on('connection', (socket) => {
   }
 });
 
+// Initialize chat handlers
+initializeChatHandlers(io);
+
 // Socket.IO error handler
 io.on('error', (error) => {
   logger.error(`Socket.IO error: ${error.message}`);
@@ -715,6 +1010,9 @@ io.on('error', (error) => {
 // ============================================================================
 // AUTHENTICATION ROUTES
 // ============================================================================
+
+// Handle preflight for login
+app.options("/api/auth/login", cors(corsOptions));
 
 app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
   try {
@@ -932,38 +1230,6 @@ app.post("/api/auth/logout", asyncHandler(async (req, res) => {
 // DOCUMENT ROUTES
 // ============================================================================
 
-app.post("/api/documents/upload", upload.single('document'), fileValidator, asyncHandler(async (req, res) => {
-  const { userId, name, type } = req.body;
-  
-  if (!req.file) {
-    return res.status(400).json({ message: "No file uploaded" });
-  }
-
-  const document = new Document({
-    userId,
-    name,
-    type: type || 'general',
-    fileName: req.file.originalname,
-    filePath: req.file.path,
-    size: `${(req.file.size / 1024).toFixed(1)} KB`
-  });
-
-  await document.save();
-  res.status(201).json(document);
-}));
-
-app.get("/api/documents/:userId", asyncHandler(async (req, res) => {
-  const { userId } = req.params;
-  
-  // Validate ObjectId
-  if (!mongoose.Types.ObjectId.isValid(userId)) {
-    return res.status(400).json({ message: "Invalid user ID" });
-  }
-
-  const documents = await Document.find({ userId }).sort({ uploadedAt: -1 });
-  res.json(documents);
-}));
-
 // ============================================================================
 // ERROR HANDLER (MUST BE LAST)
 // ============================================================================
@@ -1170,279 +1436,18 @@ app.patch("/api/documents/:id/status", asyncHandler(async (req, res) => {
   res.json(document);
 }));
 
-// Onboarding form submission
-app.post("/api/onboarding/submit", upload.array('documents'), asyncHandler(async (req, res) => {
-  const {
-    firstName,
-    lastName,
-    email,
-    phone,
-    dateOfBirth,
-    gender,
-    address,
-    avatar,
-    employeeId,
-    joiningDate,
-    department,
-    designation,
-    employmentType,
-    workLocation,
-    aadharNumber,
-    panNumber,
-    bankAccount,
-    ifscCode,
-    emergencyName,
-    emergencyRelation,
-    emergencyPhone,
-    documents
-  } = req.body;
-
-  if (!firstName || !lastName || !email || !phone || !dateOfBirth || !gender || !address) {
-    return res.status(400).json({ message: "Please fill in all required personal information fields" });
-  }
-
-  if (!employeeId) {
-    return res.status(400).json({ message: "Employee ID is required" });
-  }
-
-  if (!joiningDate || !department || !designation || !employmentType || !workLocation) {
-    return res.status(400).json({ message: "Please fill in all official information fields" });
-  }
-
-  if (!aadharNumber || !panNumber || !bankAccount || !ifscCode) {
-    return res.status(400).json({ message: "Please fill in all banking information fields" });
-  }
-
-  if (!emergencyName || !emergencyRelation || !emergencyPhone) {
-    return res.status(400).json({ message: "Please fill in all emergency contact fields" });
-  }
-
-  let avatarUrl = null;
-  if (avatar) {
-    avatarUrl = `/avatars/${employeeId}_${Date.now()}.jpg`;
-    logger.info(`Avatar uploaded for employee ${employeeId}: ${avatarUrl}`);
-  }
-
-  let uploadedDocuments = [];
-  if (req.files && req.files.length > 0) {
-    uploadedDocuments = req.files.map(file => ({
-      fileName: file.originalname,
-      filePath: file.path,
-      size: `${(file.size / 1024).toFixed(1)} KB`,
-      uploadedAt: new Date()
-    }));
-  }
-
-  let user;
-  if (employeeId && employeeId.startsWith('new_employee_')) {
-    user = new User({
-      name: `${firstName} ${lastName}`,
-      email,
-      password: 'tempPassword123',
-      role: 'employee',
-      orgId: 'org_001'
-    });
-    await user.save();
-  } else {
-    user = await User.findByIdAndUpdate(
-      employeeId,
-      {
-        name: `${firstName} ${lastName}`,
-        email,
-        role: 'employee'
-      },
-      { new: true }
-    );
-  }
-
-  const onboardingSubmission = await OnboardingSubmission.create({
-    employeeId: user._id.toString(),
-    employeeName: `${firstName} ${lastName}`,
-    email,
-    phone,
-    personalInfo: {
-      firstName,
-      lastName,
-      dateOfBirth,
-      gender,
-      address: req.body.address
-    },
-    officialInfo: {
-      employeeId: user._id.toString(),
-      joiningDate,
-      department,
-      designation,
-      employmentType,
-      workLocation
-    },
-    sensitiveInfo: {
-      aadharNumber,
-      panNumber,
-      bankAccount,
-      ifscCode
-    },
-    emergencyContact: {
-      name: emergencyName,
-      relation: emergencyRelation,
-      phone: emergencyPhone
-    },
-    documents: uploadedDocuments,
-    submittedBy: user._id,
-    submittedAt: new Date(),
-    status: 'pending'
-  });
-
-  res.status(201).json({
-    message: "Onboarding form submitted successfully",
-    userId: user._id,
-    onboardingData: onboardingSubmission
-  });
-}));
-
-// Generate sharable onboarding link
-app.post("/api/onboarding/generate-link", asyncHandler(async (req, res) => {
-  const { employeeEmail, employeeName, department, organizationName, organizationId, createdBy } = req.body;
-  
-  if (!employeeEmail || !employeeName) {
-    return res.status(400).json({ message: "Employee email and name are required" });
-  }
-
-  const token = crypto.randomBytes(32).toString('hex');
-  
-  const onboardingLink = await OnboardingLink.create({
-    token,
-    employeeEmail,
-    employeeName,
-    department: department || 'General',
-    organizationName: organizationName || 'Default Organization',
-    organizationId: organizationId || 'ORG-DEFAULT',
-    createdBy,
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    isUsed: false
-  });
-  
-  const shareableLink = `${req.protocol}://${req.get('host')}/onboarding/${token}`;
-  
-  res.status(201).json({
-    message: "Onboarding link generated successfully",
-    link: shareableLink,
-    token,
-    expiresAt: onboardingLink.expiresAt
-  });
-}));
-
-// Validate onboarding link
-app.get("/api/onboarding/validate/:token", asyncHandler(async (req, res) => {
-  const { token } = req.params;
-  
-  const onboardingLink = await OnboardingLink.findOne({ token });
-  
-  if (!onboardingLink) {
-    return res.status(400).json({ message: "Invalid or expired link" });
-  }
-
-  if (onboardingLink.isUsed) {
-    return res.status(400).json({ message: "Link already used" });
-  }
-
-  if (onboardingLink.expiresAt && new Date(onboardingLink.expiresAt) < new Date()) {
-    return res.status(400).json({ message: "Link expired" });
-  }
-
-  res.json({
-    valid: true,
-    employeeEmail: onboardingLink.employeeEmail,
-    employeeName: onboardingLink.employeeName,
-    department: onboardingLink.department,
-    organizationName: onboardingLink.organizationName
-  });
-}));
 
 // Generate employee document
-app.post("/api/documents/generate", asyncHandler(async (req, res) => {
-  const { employeeId, documentType, organizationId, createdBy, documentData } = req.body;
-  
-  if (!employeeId || !documentType || !organizationId) {
-    return res.status(400).json({ message: "Employee ID, document type, and organization ID are required" });
-  }
-
-  if (!mongoose.Types.ObjectId.isValid(employeeId)) {
-    return res.status(400).json({ message: "Invalid employee ID" });
-  }
-
-  const employee = await Employee.findById(employeeId).populate('userId');
-  const employeeName = employee ? employee.userId?.name : 'Unknown';
-  const organizationName = organizationId;
-
-  const documentId = `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  const documentUrl = `/documents/${documentId}.pdf`;
-  
-  const document = await GeneratedDocument.create({
-    id: documentId,
-    documentType,
-    employeeId,
-    employeeName,
-    organizationId,
-    organizationName,
-    createdBy,
-    content: JSON.stringify(documentData),
-    status: 'generated',
-    fileUrl: documentUrl,
-    fileName: `${documentType.replace(/\s+/g, '_')}_${employeeId}_${Date.now()}.pdf`
-  });
-
-  res.status(201).json({
-    message: "Document generated successfully",
-    document
-  });
-}));
+// NOTE: This endpoint is now handled by the documents router at POST /api/documents/digital-generate
 
 // Get all documents for an employee
-app.get("/api/documents/employee/:employeeId", asyncHandler(async (req, res) => {
-  const { employeeId } = req.params;
-  
-  if (!mongoose.Types.ObjectId.isValid(employeeId)) {
-    return res.status(400).json({ message: "Invalid employee ID" });
-  }
-  
-  const employeeDocuments = await GeneratedDocument.find({ employeeId })
-    .sort({ createdAt: -1 });
-
-  res.json(employeeDocuments);
-}));
+// NOTE: This endpoint is now handled by the documents router at GET /api/documents/employee/:employeeId
 
 // Get documents for organization
-app.get("/api/documents/organization/:organizationId", asyncHandler(async (req, res) => {
-  const { organizationId } = req.params;
-  
-  const organizationDocuments = await GeneratedDocument.find({ organizationId })
-    .sort({ createdAt: -1 });
-
-  res.json(organizationDocuments);
-}));
+// NOTE: This endpoint is now handled by the documents router at GET /api/documents/organization/:organizationId
 
 // Get document by ID
-app.get("/api/documents/:documentId", asyncHandler(async (req, res) => {
-  const { documentId } = req.params;
-  
-  const document = await GeneratedDocument.findOne({ id: documentId });
-
-  if (!document) {
-    return res.status(404).json({ message: "Document not found" });
-  }
-
-  res.json(document);
-}));
+// NOTE: This endpoint is now handled by the documents router at GET /api/documents/generated/:documentId
 
 // Delete document
-app.delete("/api/documents/:documentId", asyncHandler(async (req, res) => {
-  const { documentId } = req.params;
-  
-  const deletedDocument = await GeneratedDocument.findOneAndDelete({ id: documentId });
-
-  if (!deletedDocument) {
-    return res.status(404).json({ message: "Document not found" });
-  }
-
-  res.json({ message: "Document deleted successfully" });
-}));
+// NOTE: This endpoint is now handled by the documents router at DELETE /api/documents/generated/:documentId

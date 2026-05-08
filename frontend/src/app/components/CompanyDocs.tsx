@@ -75,6 +75,8 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
   const [acknowledgments, setAcknowledgments] = useState<Record<string, any>>({});
   const [employeeId] = useState('EMP001'); // In real app, this would come from auth context
   const [employeeName] = useState('John Doe'); // In real app, this would come from auth context
+  const [editingDocument, setEditingDocument] = useState<CompanyDocument | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
 
   const categories = [
     'HR Policies',
@@ -88,6 +90,11 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
     'IT Policies',
     'Financial Documents',
     'Legal Documents',
+    'Warning Letter',
+    'CAP (Corrective Action Plan)',
+    'Suspension',
+    'Bench',
+    'Self Training Period',
     'Other'
   ];
 
@@ -99,11 +106,21 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
     try {
       setLoading(true);
       
-      // Fetch documents from API
-      const response = await apiClient.get<any[]>('/company-documents');
+      // Fetch documents from API - get generated documents from organization
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const orgId = organizationId || 'ORG-001';
       
-      if (response.data && Array.isArray(response.data)) {
-        setDocuments(response.data);
+      const response = await fetch(`/api/documents/organization/${orgId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        // Extract data from the API response format { success, message, data, timestamp }
+        const documentsList = result.data || [];
+        setDocuments(Array.isArray(documentsList) ? documentsList : []);
       } else {
         setDocuments([]);
       }
@@ -122,24 +139,36 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
 
   const loadAcknowledgments = async () => {
     try {
-      // In production, fetch from API
-      // const response = await fetch(`/api/document-acknowledgments/employee/${employeeId}`);
-      // const data = await response.json();
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      const currentEmployeeId = user.id || employeeId;
       
-      // For demo purposes, use mock data
-      const mockAcknowledgments = {
-        'doc_001': {
-          id: 'ack_001',
-          documentId: 'doc_001',
-          employeeId,
-          employeeName,
-          acknowledgedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-          status: 'Completed'
+      // Fetch acknowledgments from API
+      const response = await fetch(`/api/documents/acknowledgments/employee/${currentEmployeeId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
         }
-      };
-      setAcknowledgments(mockAcknowledgments);
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        const acks = result.data || [];
+        
+        // Convert array to object keyed by documentId for easy lookup
+        const acknowledgementsMap: Record<string, any> = {};
+        acks.forEach((ack: any) => {
+          acknowledgementsMap[ack.documentId] = ack;
+        });
+        
+        console.log('📄 [ACKNOWLEDGMENTS] Loaded:', acknowledgementsMap);
+        setAcknowledgments(acknowledgementsMap);
+      } else {
+        console.warn('📄 [ACKNOWLEDGMENTS] Failed to load, using empty state');
+        setAcknowledgments({});
+      }
     } catch (error) {
       console.error('Error loading acknowledgments:', error);
+      setAcknowledgments({});
     }
   };
 
@@ -150,58 +179,92 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
 
   const handleAcknowledgmentSubmit = async (documentId: string, accepted: boolean, ipAddress: string) => {
     try {
-      // In production, submit to API
-      const response = await fetch('/api/document-acknowledgments', {
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      const currentEmployeeId = user.id || employeeId;
+      const currentEmployeeName = user.name || employeeName;
+      
+      console.log('📄 [ACKNOWLEDGMENT] Submitting:', { documentId, employeeId: currentEmployeeId, accepted });
+      
+      // Submit to API
+      const response = await fetch('/api/documents/acknowledgments', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           documentId,
-          employeeId,
-          employeeName,
+          employeeId: currentEmployeeId,
+          employeeName: currentEmployeeName,
           organizationId: organizationId || 'ORG-001',
           acknowledgedAt: new Date().toISOString(),
-          ipAddress: ipAddress
+          ipAddress: ipAddress,
+          accepted: accepted
         }),
       });
 
-      const data = await response.json();
-
       if (response.ok) {
-        // Update acknowledgments state
+        const result = await response.json();
+        console.log('📄 [ACKNOWLEDGMENT] Success:', result);
+        
+        // Extract acknowledgment from response (result.data contains the acknowledgment)
+        const newAcknowledgment = result.data || {
+          id: `ack_${Date.now()}`,
+          documentId,
+          employeeId: currentEmployeeId,
+          employeeName: currentEmployeeName,
+          acknowledgedAt: new Date().toISOString(),
+          status: 'Completed',
+          accepted
+        };
+        
+        // Update acknowledgments state immediately
         setAcknowledgments(prev => ({
           ...prev,
-          [documentId]: data.acknowledgment
+          [documentId]: newAcknowledgment
         }));
         
-        // Reload documents to update download count
-        loadDocuments();
+        console.log('📄 [ACKNOWLEDGMENT] State updated successfully');
         
-        console.log('Acknowledgment submitted:', data);
+        toast.success('Document acknowledged successfully');
+        
+        // Close the document reader modal
+        setShowDocumentReader(false);
+        setSelectedDocument(null);
       } else {
-        console.error('Error submitting acknowledgment:', data.message);
+        const errorData = await response.json();
+        console.error('📄 [ACKNOWLEDGMENT] Error:', errorData);
+        toast.error(errorData.message || 'Failed to acknowledge document');
       }
     } catch (error) {
       console.error('Error submitting acknowledgment:', error);
-      // Still show success for demo purposes
-      setAcknowledgments(prev => ({
-        ...prev,
-        [documentId]: {
-          id: `ack_${Date.now()}`,
-          documentId,
-          employeeId,
-          employeeName,
-          acknowledgedAt: new Date().toISOString(),
-          status: 'Completed'
-        }
-      }));
+      toast.error('Error submitting acknowledgment');
     }
   };
 
-  const handleDocumentGenerated = (newDocument: CompanyDocument) => {
+  const handleDocumentGenerated = (newDocument: any) => {
+    // Transform the API response to match the CompanyDocument interface
+    const transformedDocument: CompanyDocument = {
+      id: newDocument.id || newDocument._id,
+      title: newDocument.title,
+      description: newDocument.description || '',
+      category: newDocument.category || 'Other',
+      content: newDocument.content,
+      organizationId: newDocument.organizationId,
+      createdBy: newDocument.createdBy || 'admin',
+      createdAt: newDocument.createdAt || new Date().toISOString(),
+      updatedAt: newDocument.updatedAt || new Date().toISOString(),
+      status: 'Published' as const, // Map from "generated" to "Published"
+      documentUrl: newDocument.fileUrl || '',
+      fileName: newDocument.fileName || newDocument.title,
+      fileSize: newDocument.fileSize || '0 KB',
+      downloadCount: 0,
+      isPublic: true
+    };
+    
     // Add the new document to the list
-    setDocuments(prev => [newDocument, ...prev]);
+    setDocuments(prev => [transformedDocument, ...prev]);
     
     // Switch to view tab to show the new document
     setActiveTab('view');
@@ -257,8 +320,25 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
       return;
     }
 
-    setDocuments(prev => prev.filter(doc => doc.id !== documentId));
-    alert('Document deleted successfully');
+    try {
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const response = await fetch(`/api/documents/generated/${documentId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        setDocuments(prev => prev.filter(doc => doc.id !== documentId));
+        toast.success('Document deleted successfully');
+      } else {
+        toast.error('Failed to delete document');
+      }
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      toast.error('Error deleting document');
+    }
   };
 
   const handleStatusChange = async (documentId: string, newStatus: string) => {
@@ -267,6 +347,49 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         ? { ...doc, status: newStatus as 'Published' | 'Draft' | 'Archived', updatedAt: new Date().toISOString() }
         : doc
     ));
+  };
+
+  const handleEditDocument = (document: CompanyDocument) => {
+    setEditingDocument(document);
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingDocument) return;
+
+    try {
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const response = await fetch(`/api/documents/generated/${editingDocument.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          title: editingDocument.title,
+          description: editingDocument.description,
+          content: editingDocument.content,
+          category: editingDocument.category,
+          status: editingDocument.status
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        const updatedDoc = result.data || editingDocument;
+        setDocuments(prev => prev.map(doc => 
+          doc.id === editingDocument.id ? updatedDoc : doc
+        ));
+        setShowEditModal(false);
+        setEditingDocument(null);
+        toast.success('Document updated successfully');
+      } else {
+        toast.error('Failed to update document');
+      }
+    } catch (error) {
+      console.error('Error updating document:', error);
+      toast.error('Error updating document');
+    }
   };
 
   const filteredDocuments = documents.filter(doc => {
@@ -287,6 +410,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
       case 'Legal Documents':
         return 'text-purple-600';
       case 'Training Materials':
+      case 'Self Training Period':
         return 'text-green-600';
       case 'IT Policies':
         return 'text-orange-600';
@@ -296,6 +420,11 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         return 'text-red-600';
       case 'Financial Documents':
         return 'text-yellow-600';
+      case 'Warning Letter':
+      case 'CAP (Corrective Action Plan)':
+      case 'Suspension':
+      case 'Bench':
+        return 'text-red-700';
       default:
         return 'text-gray-600';
     }
@@ -645,6 +774,14 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
                   
                   {(isAdmin || isSuperAdmin) && (
                     <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="rounded-xl"
+                        onClick={() => handleEditDocument(document)}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
                       <select
                         value={document.status}
                         onChange={(e) => handleStatusChange(document.id, e.target.value)}
@@ -677,13 +814,25 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {categories.map(category => {
             const count = documents.filter(doc => doc.category === category).length;
+            const isActive = filterCategory === category;
             return (
-              <div key={category} className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
+              <button
+                key={category}
+                onClick={() => setFilterCategory(isActive ? 'all' : category)}
+                className={`flex items-center justify-between p-2 rounded-lg transition-all cursor-pointer hover:shadow-md ${
+                  isActive 
+                    ? 'bg-primary text-primary-foreground shadow-md' 
+                    : 'bg-muted/50 hover:bg-muted'
+                }`}
+              >
                 <span className="text-xs font-medium">{category}</span>
-                <Badge variant="outline" className="text-xs">
+                <Badge 
+                  variant={isActive ? "secondary" : "outline"} 
+                  className="text-xs"
+                >
                   {count}
                 </Badge>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -697,7 +846,109 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         onClose={() => setShowDocumentReader(false)}
         onSubmit={handleAcknowledgmentSubmit}
         employeeId={employeeId}
+        isAlreadyAcknowledged={selectedDocument ? !!acknowledgments[selectedDocument.id] : false}
       />
+
+      {/* Edit Document Modal */}
+      {showEditModal && editingDocument && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 rounded-2xl">
+          <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 rounded-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="font-semibold text-lg">Edit Document</h3>
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingDocument(null);
+                }}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <Label>Document Title</Label>
+                <Input
+                  value={editingDocument.title}
+                  onChange={(e) => setEditingDocument({...editingDocument, title: e.target.value})}
+                  className="mt-2 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <Label>Description</Label>
+                <Textarea
+                  value={editingDocument.description}
+                  onChange={(e) => setEditingDocument({...editingDocument, description: e.target.value})}
+                  className="mt-2 rounded-xl"
+                  rows={3}
+                />
+              </div>
+
+              <div>
+                <Label>Category</Label>
+                <Select 
+                  value={editingDocument.category} 
+                  onValueChange={(value) => setEditingDocument({...editingDocument, category: value})}
+                >
+                  <SelectTrigger className="mt-2 rounded-xl">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map(cat => (
+                      <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>Content</Label>
+                <Textarea
+                  value={editingDocument.content || ''}
+                  onChange={(e) => setEditingDocument({...editingDocument, content: e.target.value})}
+                  className="mt-2 rounded-xl"
+                  rows={8}
+                />
+              </div>
+
+              <div>
+                <Label>Status</Label>
+                <Select 
+                  value={editingDocument.status} 
+                  onValueChange={(value) => setEditingDocument({...editingDocument, status: value as 'Published' | 'Draft' | 'Archived'})}
+                >
+                  <SelectTrigger className="mt-2 rounded-xl">
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Draft">Draft</SelectItem>
+                    <SelectItem value="Published">Published</SelectItem>
+                    <SelectItem value="Archived">Archived</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex gap-2 pt-4">
+                <Button onClick={handleSaveEdit} className="rounded-xl">
+                  Save Changes
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setEditingDocument(null);
+                  }}
+                  className="rounded-xl"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
     </>
   );
 };

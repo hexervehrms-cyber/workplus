@@ -15,11 +15,167 @@ import {
 } from './ui/dropdown-menu';
 import { Badge } from './ui/badge';
 import CurrencyChanger from './CurrencyChanger';
+import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
+
+interface Notification {
+  _id: string;
+  title: string;
+  message: string;
+  type: string;
+  priority: string;
+  isRead: boolean;
+  createdAt: string;
+  actionUrl?: string;
+  readAt?: string;
+}
 
 export function Navbar() {
   const { theme, toggleTheme } = useTheme();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [loading, setLoading] = useState(false);
+
+  // Fetch notifications
+  const fetchNotifications = async () => {
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      
+      const response = await fetch('/api/notifications?limit=10&status=all', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success && result.data) {
+          setNotifications(result.data.notifications || []);
+          setUnreadCount(result.data.unreadCount || 0);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch notifications:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Mark notification as read
+  const markAsRead = async (notificationId: string) => {
+    try {
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      
+      const response = await fetch(`/api/notifications/${notificationId}/read`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        // Update local state
+        setNotifications(prev => 
+          prev.map(n => n._id === notificationId ? { ...n, isRead: true, readAt: new Date().toISOString() } : n)
+        );
+        setUnreadCount(prev => Math.max(0, prev - 1));
+      }
+    } catch (error) {
+      console.error('Failed to mark notification as read:', error);
+    }
+  };
+
+  // Mark all as read
+  const markAllAsRead = async () => {
+    try {
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      
+      const response = await fetch('/api/notifications/mark-all-read', {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        setNotifications(prev => 
+          prev.map(n => ({ ...n, isRead: true, readAt: new Date().toISOString() }))
+        );
+        setUnreadCount(0);
+        toast.success('All notifications marked as read');
+      }
+    } catch (error) {
+      console.error('Failed to mark all as read:', error);
+      toast.error('Failed to mark all as read');
+    }
+  };
+
+  // Handle notification click
+  const handleNotificationClick = (notification: Notification) => {
+    // Mark as read
+    if (!notification.isRead) {
+      markAsRead(notification._id);
+    }
+
+    // Navigate to action URL if available
+    if (notification.actionUrl) {
+      navigate(notification.actionUrl);
+    } else {
+      // Default navigation based on type
+      switch (notification.type) {
+        case 'leave_request':
+        case 'leave_approved':
+        case 'leave_rejected':
+          navigate(user?.role === 'employee' ? '/employee/leave' : '/admin/leaves');
+          break;
+        case 'expense_submitted':
+        case 'expense_approved':
+        case 'expense_rejected':
+          navigate(user?.role === 'employee' ? '/employee/expenses' : '/admin/expenses');
+          break;
+        case 'payroll_generated':
+          navigate(user?.role === 'employee' ? '/employee/payroll' : '/admin/payroll');
+          break;
+        case 'attendance_reminder':
+          navigate('/employee/attendance');
+          break;
+        default:
+          break;
+      }
+    }
+  };
+
+  // Format time ago
+  const formatTimeAgo = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+
+    if (seconds < 60) return 'Just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)} minutes ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`;
+    if (seconds < 604800) return `${Math.floor(seconds / 86400)} days ago`;
+    return date.toLocaleDateString();
+  };
+
+  // Get notification icon color based on type
+  const getNotificationColor = (notification: Notification) => {
+    if (!notification.isRead) return 'bg-primary';
+    return 'bg-muted';
+  };
+
+  // Fetch notifications on mount and every 30 seconds
+  useEffect(() => {
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 30000); // Refresh every 30 seconds
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <header className="h-16 border-b border-border bg-card/50 backdrop-blur-xl sticky top-0 z-40">
@@ -59,36 +215,73 @@ export function Navbar() {
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="rounded-xl relative">
                 <Bell className="w-5 h-5" />
-                <span className="absolute top-1 right-1 w-2 h-2 bg-destructive rounded-full"></span>
+                {unreadCount > 0 && (
+                  <span className="absolute top-1 right-1 w-5 h-5 bg-destructive text-white text-xs rounded-full flex items-center justify-center">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-80">
-              <DropdownMenuLabel>Notifications</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <div className="p-4 space-y-3">
-                <div 
-                  className="flex gap-3 p-3 rounded-lg bg-accent/50 hover:bg-accent cursor-pointer transition-colors"
-                  onClick={() => navigate('/admin/leaves')}
-                >
-                  <div className="w-2 h-2 bg-primary rounded-full mt-2"></div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">New leave request</p>
-                    <p className="text-xs text-muted-foreground">Sarah Johnson submitted a leave request</p>
-                    <p className="text-xs text-muted-foreground mt-1">2 minutes ago</p>
-                  </div>
-                </div>
-                <div 
-                  className="flex gap-3 p-3 rounded-lg hover:bg-accent cursor-pointer transition-colors"
-                  onClick={() => navigate('/employee/expenses')}
-                >
-                  <div className="w-2 h-2 bg-muted rounded-full mt-2"></div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">Expense approved</p>
-                    <p className="text-xs text-muted-foreground">Your expense claim #1234 was approved</p>
-                    <p className="text-xs text-muted-foreground mt-1">1 hour ago</p>
-                  </div>
-                </div>
+            <DropdownMenuContent align="end" className="w-96">
+              <div className="flex items-center justify-between px-4 py-2">
+                <DropdownMenuLabel className="p-0">Notifications</DropdownMenuLabel>
+                {unreadCount > 0 && (
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="h-auto py-1 px-2 text-xs"
+                    onClick={markAllAsRead}
+                  >
+                    Mark all read
+                  </Button>
+                )}
               </div>
+              <DropdownMenuSeparator />
+              <div className="max-h-[400px] overflow-y-auto">
+                {loading ? (
+                  <div className="p-8 text-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+                  </div>
+                ) : notifications.length === 0 ? (
+                  <div className="p-8 text-center">
+                    <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-2" />
+                    <p className="text-sm text-muted-foreground">No notifications</p>
+                  </div>
+                ) : (
+                  <div className="p-2 space-y-1">
+                    {notifications.map((notification) => (
+                      <div
+                        key={notification._id}
+                        className={`flex gap-3 p-3 rounded-lg hover:bg-accent cursor-pointer transition-colors ${
+                          !notification.isRead ? 'bg-accent/50' : ''
+                        }`}
+                        onClick={() => handleNotificationClick(notification)}
+                      >
+                        <div className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${getNotificationColor(notification)}`}></div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{notification.title}</p>
+                          <p className="text-xs text-muted-foreground line-clamp-2">{notification.message}</p>
+                          <p className="text-xs text-muted-foreground mt-1">{formatTimeAgo(notification.createdAt)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {notifications.length > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <div className="p-2">
+                    <Button 
+                      variant="ghost" 
+                      className="w-full text-sm"
+                      onClick={() => navigate('/notifications')}
+                    >
+                      View all notifications
+                    </Button>
+                  </div>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
 

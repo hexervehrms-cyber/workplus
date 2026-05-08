@@ -1,188 +1,149 @@
 /**
- * Health Check Routes - Production Grade
- * Provides comprehensive system health monitoring
+ * Health Check & Monitoring Routes
+ * Used by load balancers and monitoring systems
  */
 
 import express from 'express';
 import mongoose from 'mongoose';
-import { asyncHandler } from '../middleware/errorHandler.js';
-import logger from '../utils/logger.js';
+import os from 'os';
+import { connectionMonitor } from '../utils/connectionMonitor.js';
 
 const router = express.Router();
 
 /**
  * GET /health
- * Basic health check endpoint
+ * Basic health check for load balancers
  */
-router.get('/', asyncHandler(async (req, res) => {
-  const startTime = Date.now();
-  
-  // Check database connection
-  let dbStatus = 'disconnected';
-  let dbLatency = null;
-  
-  try {
-    const dbStart = Date.now();
-    await mongoose.connection.db.admin().ping();
-    dbLatency = Date.now() - dbStart;
-    dbStatus = 'connected';
-  } catch (error) {
-    logger.error('Health check DB ping failed:', error.message);
-    dbStatus = 'error';
-  }
-
+router.get('/', (req, res) => {
   const health = {
-    status: dbStatus === 'connected' ? 'ok' : 'degraded',
+    status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    database: dbStatus,
-    dbLatency: dbLatency,
-    memory: {
-      used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-      total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
-      external: Math.round(process.memoryUsage().external / 1024 / 1024)
-    },
-    responseTime: Date.now() - startTime,
-    environment: process.env.NODE_ENV || 'development',
-    version: process.env.npm_package_version || '1.0.0'
+    environment: process.env.NODE_ENV || 'development'
   };
-
-  // Return appropriate status code
-  const statusCode = health.status === 'ok' ? 200 : 503;
   
-  res.status(statusCode).json({
-    success: health.status === 'ok',
-    data: health
-  });
-}));
+  res.status(200).json(health);
+});
 
 /**
- * GET /health/db
- * Database-specific health check
+ * GET /health/detailed
+ * Detailed health check with database and system info
  */
-router.get('/db', asyncHandler(async (req, res) => {
+router.get('/detailed', async (req, res) => {
   try {
-    const startTime = Date.now();
+    const dbConnected = mongoose.connection.readyState === 1;
     
-    // Test database operations
-    const pingResult = await mongoose.connection.db.admin().ping();
-    const dbStats = await mongoose.connection.db.stats();
-    
-    const dbHealth = {
-      status: 'connected',
-      latency: Date.now() - startTime,
-      collections: dbStats.collections,
-      dataSize: Math.round(dbStats.dataSize / 1024 / 1024), // MB
-      indexSize: Math.round(dbStats.indexSize / 1024 / 1024), // MB
-      connectionState: mongoose.connection.readyState,
-      connectionStates: {
-        0: 'disconnected',
-        1: 'connected',
-        2: 'connecting',
-        3: 'disconnecting'
+    const health = {
+      status: dbConnected ? 'healthy' : 'degraded',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      environment: process.env.NODE_ENV || 'development',
+      database: {
+        connected: dbConnected,
+        readyState: mongoose.connection.readyState,
+        host: mongoose.connection.host || 'unknown'
+      },
+      system: {
+        memory: {
+          total: os.totalmem(),
+          free: os.freemem(),
+          used: os.totalmem() - os.freemem(),
+          percentUsed: ((os.totalmem() - os.freemem()) / os.totalmem() * 100).toFixed(2) + '%'
+        },
+        cpu: {
+          cores: os.cpus().length,
+          loadAverage: os.loadavg()
+        }
+      },
+      node: {
+        version: process.version,
+        pid: process.pid
       }
     };
-
-    res.json({
-      success: true,
-      data: dbHealth
-    });
-  } catch (error) {
-    logger.error('Database health check failed:', error.message);
     
+    const statusCode = dbConnected ? 200 : 503;
+    res.status(statusCode).json(health);
+  } catch (error) {
     res.status(503).json({
-      success: false,
-      message: 'Database health check failed',
+      status: 'unhealthy',
       error: error.message,
-      data: {
-        status: 'error',
-        connectionState: mongoose.connection.readyState
-      }
+      timestamp: new Date().toISOString()
     });
   }
-}));
+});
 
 /**
- * GET /health/full
- * Comprehensive system health check
+ * GET /health/ready
+ * Readiness check - used by Kubernetes
  */
-router.get('/full', asyncHandler(async (req, res) => {
-  const startTime = Date.now();
-  const checks = {};
-  let overallStatus = 'ok';
-
-  // Database check
+router.get('/ready', async (req, res) => {
   try {
-    const dbStart = Date.now();
-    await mongoose.connection.db.admin().ping();
-    checks.database = {
-      status: 'ok',
-      latency: Date.now() - dbStart,
-      message: 'Database connection healthy'
-    };
-  } catch (error) {
-    checks.database = {
-      status: 'error',
-      message: error.message
-    };
-    overallStatus = 'degraded';
-  }
-
-  // Memory check
-  const memUsage = process.memoryUsage();
-  const memUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
-  const memTotalMB = Math.round(memUsage.heapTotal / 1024 / 1024);
-  const memUsagePercent = Math.round((memUsedMB / memTotalMB) * 100);
-
-  checks.memory = {
-    status: memUsagePercent > 90 ? 'warning' : 'ok',
-    used: memUsedMB,
-    total: memTotalMB,
-    percentage: memUsagePercent,
-    message: memUsagePercent > 90 ? 'High memory usage' : 'Memory usage normal'
-  };
-
-  if (checks.memory.status === 'warning' && overallStatus === 'ok') {
-    overallStatus = 'warning';
-  }
-
-  // Environment check
-  const requiredEnvVars = ['JWT_SECRET', 'MONGODB_URI'];
-  const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
-  
-  checks.environment = {
-    status: missingEnvVars.length > 0 ? 'error' : 'ok',
-    missing: missingEnvVars,
-    message: missingEnvVars.length > 0 
-      ? `Missing environment variables: ${missingEnvVars.join(', ')}`
-      : 'All required environment variables present'
-  };
-
-  if (checks.environment.status === 'error') {
-    overallStatus = 'error';
-  }
-
-  const healthReport = {
-    status: overallStatus,
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    responseTime: Date.now() - startTime,
-    checks,
-    system: {
-      nodeVersion: process.version,
-      platform: process.platform,
-      arch: process.arch,
-      pid: process.pid
+    // Check database connection
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        ready: false,
+        reason: 'Database not connected'
+      });
     }
-  };
+    
+    // Check memory usage
+    const memUsage = (os.totalmem() - os.freemem()) / os.totalmem();
+    if (memUsage > 0.9) {
+      return res.status(503).json({
+        ready: false,
+        reason: 'Memory usage too high'
+      });
+    }
+    
+    res.status(200).json({
+      ready: true,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(503).json({
+      ready: false,
+      error: error.message
+    });
+  }
+});
 
-  const statusCode = overallStatus === 'ok' ? 200 : 
-                    overallStatus === 'warning' ? 200 : 503;
-
-  res.status(statusCode).json({
-    success: overallStatus !== 'error',
-    data: healthReport
+/**
+ * GET /health/live
+ * Liveness check - used by Kubernetes
+ */
+router.get('/live', (req, res) => {
+  res.status(200).json({
+    alive: true,
+    timestamp: new Date().toISOString()
   });
-}));
+});
+
+/**
+ * GET /health/metrics
+ * Detailed metrics for monitoring systems
+ */
+router.get('/metrics', (req, res) => {
+  const connectionStatus = connectionMonitor.getStatus();
+  const metrics = connectionMonitor.getMetrics();
+  
+  res.status(200).json({
+    timestamp: new Date().toISOString(),
+    connection: connectionStatus,
+    metrics,
+    system: {
+      memory: {
+        total: os.totalmem(),
+        free: os.freemem(),
+        used: os.totalmem() - os.freemem(),
+        percentUsed: ((os.totalmem() - os.freemem()) / os.totalmem() * 100).toFixed(2)
+      },
+      cpu: {
+        cores: os.cpus().length,
+        loadAverage: os.loadavg()
+      },
+      uptime: process.uptime()
+    }
+  });
+});
 
 export default router;

@@ -24,7 +24,7 @@ const router = express.Router();
 // Configure multer for avatar uploads
 const avatarStorage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const uploadDir = 'uploads/avatars';
+    const uploadDir = 'backend/uploads/avatars';
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
@@ -159,11 +159,15 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
     profile = {},
     contact = {},
     preferences = {},
-    employeeDetails = {}
+    employeeDetails = {},
+    sensitiveInfo = {}
   } = req.body;
 
   // Build update object with individual field updates
   const updateData = {};
+  
+  console.log('📝 [PROFILE-UPDATE] Received request body:', req.body);
+  console.log('📝 [PROFILE-UPDATE] Profile object:', profile);
   
   if (profile.firstName) updateData['profile.firstName'] = profile.firstName.trim();
   if (profile.lastName) updateData['profile.lastName'] = profile.lastName.trim();
@@ -174,6 +178,17 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
   if (profile.language) updateData['profile.language'] = profile.language;
   if (profile.dateFormat) updateData['profile.dateFormat'] = profile.dateFormat;
   if (profile.timeFormat) updateData['profile.timeFormat'] = profile.timeFormat;
+  
+  // Also update the name field for backward compatibility
+  if (profile.firstName && profile.lastName) {
+    updateData.name = `${profile.firstName.trim()} ${profile.lastName.trim()}`;
+  } else if (profile.firstName) {
+    updateData.name = profile.firstName.trim();
+  } else if (profile.lastName) {
+    updateData.name = profile.lastName.trim();
+  }
+  
+  console.log('📝 [PROFILE-UPDATE] User update data:', updateData);
   
   if (contact.phone) updateData['contact.phone'] = contact.phone.trim();
   if (contact.mobile) updateData['contact.mobile'] = contact.mobile.trim();
@@ -221,8 +236,16 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
 
   // Update employee details if provided
   let updatedEmployee = null;
-  if (Object.keys(employeeDetails).length > 0) {
+  if (Object.keys(employeeDetails).length > 0 || profile.firstName || profile.lastName || contact.phone || contact.address) {
     const employeeUpdateData = {};
+    
+    // Update firstName and lastName from profile
+    if (profile.firstName) employeeUpdateData.firstName = profile.firstName.trim();
+    if (profile.lastName) employeeUpdateData.lastName = profile.lastName.trim();
+    
+    // Update phone and address from contact
+    if (contact.phone) employeeUpdateData.phone = contact.phone.trim();
+    if (contact.address) employeeUpdateData.address = contact.address.trim();
     
     if (employeeDetails.employeeId) employeeUpdateData.employeeCode = employeeDetails.employeeId.trim();
     if (employeeDetails.joiningDate) employeeUpdateData.joiningDate = new Date(employeeDetails.joiningDate);
@@ -238,11 +261,64 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
       if (employeeDetails.bankDetails.accountHolderName) employeeUpdateData['bankDetails.accountHolderName'] = employeeDetails.bankDetails.accountHolderName.trim();
     }
     
+    console.log('📝 [PROFILE-UPDATE] Employee update data:', employeeUpdateData);
+    console.log('📝 [PROFILE-UPDATE] Updating employee with userId:', userId, 'orgId:', userOrgId);
+    
     updatedEmployee = await Employee.findOneAndUpdate(
       { userId, orgId: userOrgId },
       employeeUpdateData,
       { new: true, runValidators: true }
     );
+    
+    console.log('✅ [PROFILE-UPDATE] Employee updated:', updatedEmployee);
+  }
+
+  // Update sensitive information with lock timestamps
+  if (Object.keys(sensitiveInfo).length > 0) {
+    const sensitiveUpdateData = {};
+    const now = Date.now();
+    const lockTimestamps = {};
+
+    if (sensitiveInfo.aadharNumber !== undefined && sensitiveInfo.aadharNumber !== null) {
+      sensitiveUpdateData.aadharNumber = sensitiveInfo.aadharNumber.trim();
+      lockTimestamps.aadharNumber = now;
+    }
+    if (sensitiveInfo.panNumber !== undefined && sensitiveInfo.panNumber !== null) {
+      sensitiveUpdateData.panNumber = sensitiveInfo.panNumber.trim();
+      lockTimestamps.panNumber = now;
+    }
+    if (sensitiveInfo.bankAccount !== undefined && sensitiveInfo.bankAccount !== null) {
+      sensitiveUpdateData.bankAccount = sensitiveInfo.bankAccount.trim();
+      lockTimestamps.bankAccount = now;
+    }
+    if (sensitiveInfo.ifscCode !== undefined && sensitiveInfo.ifscCode !== null) {
+      sensitiveUpdateData.ifscCode = sensitiveInfo.ifscCode.trim();
+      lockTimestamps.ifscCode = now;
+    }
+
+    // Update sensitive info locks with timestamps
+    if (Object.keys(lockTimestamps).length > 0) {
+      // Merge with existing locks
+      const existingEmployee = await Employee.findOne({ userId, orgId: userOrgId });
+      const existingLocks = existingEmployee?.sensitiveInfoLocks || {};
+      sensitiveUpdateData.sensitiveInfoLocks = {
+        ...existingLocks,
+        ...lockTimestamps
+      };
+    }
+
+    updatedEmployee = await Employee.findOneAndUpdate(
+      { userId, orgId: userOrgId },
+      sensitiveUpdateData,
+      { new: true, runValidators: true }
+    );
+
+    // Log sensitive information update
+    logger.info('Sensitive information updated', {
+      userId,
+      fields: Object.keys(sensitiveInfo),
+      timestamp: new Date()
+    });
   }
 
   // Calculate new completion percentage

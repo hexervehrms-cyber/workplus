@@ -14,7 +14,14 @@ router.get("/", asyncHandler(async (req, res) => {
   const orgId = req.user?.orgId || 'system';
   const { year, month, type, page = 1, limit = 50 } = req.query;
   
-  const filter = { organizationId: orgId };
+  // If orgId is 'system', also fetch holidays with organizationId 'ORG-001' or without orgId filter
+  const filter = { 
+    $or: [
+      { organizationId: orgId },
+      { organizationId: 'ORG-001' },
+      { organizationId: { $exists: false } }
+    ]
+  };
   
   // Filter by year
   if (year) {
@@ -70,7 +77,18 @@ router.get("/:id", asyncHandler(async (req, res) => {
     });
   }
   
-  const holiday = await Holiday.findOne({ _id: id, organizationId: orgId }).lean();
+  // Try to find the holiday with user's orgId
+  let holiday = await Holiday.findOne({ _id: id, organizationId: orgId }).lean();
+  
+  // If not found, try with ORG-001 (fallback)
+  if (!holiday) {
+    holiday = await Holiday.findOne({ _id: id, organizationId: 'ORG-001' }).lean();
+  }
+  
+  // If still not found, try without orgId filter (for system holidays)
+  if (!holiday) {
+    holiday = await Holiday.findOne({ _id: id }).lean();
+  }
   
   if (!holiday) {
     return res.status(404).json({
@@ -137,6 +155,9 @@ router.post("/", asyncHandler(async (req, res) => {
     createdBy: userId
   });
   
+  // Emit real-time update
+  req.emitHolidayUpdate('created', holiday, orgId);
+  
   res.status(201).json({
     success: true,
     message: "Holiday created successfully",
@@ -172,7 +193,18 @@ router.put("/:id", asyncHandler(async (req, res) => {
     isOptional
   } = req.body;
   
-  const holiday = await Holiday.findOne({ _id: id, organizationId: orgId });
+  // Try to find the holiday with user's orgId
+  let holiday = await Holiday.findOne({ _id: id, organizationId: orgId });
+  
+  // If not found, try with ORG-001 (fallback)
+  if (!holiday) {
+    holiday = await Holiday.findOne({ _id: id, organizationId: 'ORG-001' });
+  }
+  
+  // If still not found, try without orgId filter (for system holidays)
+  if (!holiday) {
+    holiday = await Holiday.findOne({ _id: id });
+  }
   
   if (!holiday) {
     return res.status(404).json({
@@ -218,7 +250,19 @@ router.delete("/:id", asyncHandler(async (req, res) => {
     });
   }
   
-  const holiday = await Holiday.findOneAndDelete({ _id: id, organizationId: orgId });
+  // Try to find and delete the holiday
+  // First try with the user's orgId
+  let holiday = await Holiday.findOneAndDelete({ _id: id, organizationId: orgId });
+  
+  // If not found, try with ORG-001 (fallback)
+  if (!holiday) {
+    holiday = await Holiday.findOneAndDelete({ _id: id, organizationId: 'ORG-001' });
+  }
+  
+  // If still not found, try without orgId filter (for system holidays)
+  if (!holiday) {
+    holiday = await Holiday.findOneAndDelete({ _id: id });
+  }
   
   if (!holiday) {
     return res.status(404).json({
@@ -226,6 +270,9 @@ router.delete("/:id", asyncHandler(async (req, res) => {
       message: "Holiday not found"
     });
   }
+  
+  // Emit real-time update
+  req.emitHolidayUpdate('deleted', holiday, orgId);
   
   res.json({
     success: true,

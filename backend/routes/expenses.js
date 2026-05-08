@@ -7,18 +7,26 @@ import express from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { fileURLToPath } from "url";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, authorize } from "../middleware/auth.js";
 import Expense from "../models/Expense.js";
+import Employee from "../models/Employee.js";
 import { sendSuccess, sendError, sendPaginated } from "../utils/apiResponse.js";
 import logger from "../utils/logger.js";
+import EmailNotificationService from "../utils/emailNotificationService.js";
+import User from "../models/User.js";
+
+// Setup __dirname for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
 // Configure multer for receipt uploads
 const receiptStorage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const uploadDir = 'uploads/receipts';
+    const uploadDir = path.join(__dirname, '..', 'uploads', 'receipts');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
@@ -100,7 +108,7 @@ router.get(
         return sendError(res, "Invalid filename", 400, "VALIDATION_ERROR");
       }
 
-      const filePath = path.join(process.cwd(), 'uploads', 'receipts', filename);
+      const filePath = path.join(__dirname, '..', 'uploads', 'receipts', filename);
       
       // Check if file exists
       if (!fs.existsSync(filePath)) {
@@ -155,16 +163,32 @@ router.get(
       const { page = 1, limit = 10, status } = req.query;
       const skip = (page - 1) * limit;
 
+      console.log("=== GET USER EXPENSES DEBUG ===");
+      console.log("Params userId:", userId, "Type:", typeof userId);
+      console.log("Req user userId:", req.user.userId, "Type:", typeof req.user.userId);
+      console.log("Comparison:", req.user.userId.toString(), "===", userId, "?", req.user.userId.toString() === userId);
+
       // Check authorization - employees can only see their own expenses
       if (req.user.role === "employee" && req.user.userId.toString() !== userId) {
+        console.log("❌ GET AUTHORIZATION DENIED - Employee trying to access other user's expenses");
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
-      // Build query - handle both string and ObjectId
-      const query = { userId: userId };
+      // Build query - convert userId string to ObjectId for proper MongoDB query
+      const mongoose = await import('mongoose');
+      let queryUserId = userId;
+      
+      // Try to convert to ObjectId if it looks like one
+      if (mongoose.Types.ObjectId.isValid(userId)) {
+        queryUserId = new mongoose.Types.ObjectId(userId);
+      }
+
+      const query = { userId: queryUserId };
       if (status) {
         query.status = status;
       }
+
+      console.log("Query:", query);
 
       logger.info("Fetching user expenses", {
         userId,
@@ -182,6 +206,8 @@ router.get(
         .limit(parseInt(limit))
         .lean();
 
+      console.log("✅ Expenses found:", expenses.length);
+
       logger.info("User expenses fetched", {
         userId,
         count: expenses.length,
@@ -197,6 +223,7 @@ router.get(
         "Expenses fetched successfully"
       );
     } catch (error) {
+      console.log("❌ GET ERROR:", error.message);
       logger.error("Get user expenses error", {
         error: error.message,
         userId: req.params.userId
@@ -233,6 +260,7 @@ router.get(
 
       // Get expenses with pagination
       const expenses = await Expense.find(query)
+        .populate('approvedBy', 'name email')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit))
@@ -298,6 +326,42 @@ router.post(
         employeeId: req.user.userId
       });
 
+      // Emit real-time updates to dashboards
+      if (req.emitDashboardUpdate) {
+        try {
+          req.emitDashboardUpdate('create', 'expense', expense, req.user.orgId);
+        } catch (e) {
+          logger.warn('Failed to emit dashboard update', { error: e.message });
+        }
+      }
+
+      // Send email notification to employee (confirmation)
+      try {
+        const user = await User.findById(req.user.userId).select('name email').lean();
+        const employee = await Employee.findOne({ userId: req.user.userId }).select('_id orgId').lean();
+        
+        if (user && user.email && employee) {
+          await EmailNotificationService.sendExpenseSubmitted(
+            { 
+              _id: employee._id,
+              name: user.name, 
+              email: user.email,
+              orgId: employee.orgId || req.user.orgId
+            },
+            expense
+          );
+          logger.info('Expense submitted email sent', { expenseId: expense._id, email: user.email });
+        } else {
+          logger.warn('Missing user or employee data for expense submission notification', { 
+            expenseId: expense._id, 
+            hasUser: !!user, 
+            hasEmployee: !!employee 
+          });
+        }
+      } catch (emailError) {
+        logger.error('Failed to send expense submitted email', { error: emailError.message });
+      }
+
       return sendSuccess(res, expense, "Expense created successfully", 201);
     } catch (error) {
       logger.error("Create expense error", {
@@ -321,44 +385,77 @@ router.put(
       const { expenseId } = req.params;
       const { title, amount, category, description, receipt, date } = req.body;
 
+      console.log("=== UPDATE EXPENSE DEBUG ===");
+      console.log("Params:", { expenseId });
+      console.log("User:", { 
+        userId: req.user.userId, 
+        userIdType: typeof req.user.userId,
+        role: req.user.role 
+      });
+      console.log("Body:", { title, amount, category, description, receipt, date });
+
       // Find expense
       const expense = await Expense.findById(expenseId);
       if (!expense) {
+        console.log("Expense not found:", expenseId);
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
       }
 
+      console.log("Expense found:", {
+        _id: expense._id,
+        userId: expense.userId,
+        userIdType: typeof expense.userId,
+        status: expense.status
+      });
+
       // Check authorization - only owner or admin can edit
-      const isOwner = expense.userId.toString() === req.user.userId.toString();
+      const expenseUserIdStr = expense.userId.toString();
+      const reqUserIdStr = req.user.userId.toString();
+      const isOwner = expenseUserIdStr === reqUserIdStr;
       const isAdmin = ["admin", "super_admin", "hr"].includes(req.user.role);
       
+      console.log("Authorization check:", {
+        expenseUserIdStr,
+        reqUserIdStr,
+        isOwner,
+        userRole: req.user.role,
+        isAdmin,
+        allowed: isOwner || isAdmin
+      });
+      
       if (!isOwner && !isAdmin) {
-        console.log("Update authorization denied:", {
-          expenseUserId: expense.userId.toString(),
-          reqUserId: req.user.userId.toString(),
-          userRole: req.user.role,
-          isOwner,
-          isAdmin
-        });
+        console.log("❌ UPDATE AUTHORIZATION DENIED");
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
+      console.log("✅ Authorization passed");
+
       // Update fields
-      if (title) expense.title = title;
+      if (title !== undefined && title !== null && title !== '') expense.title = title;
       if (amount !== undefined && amount !== null && amount !== '') {
         const numAmount = Number(amount);
         expense.amount = numAmount;
       }
-      if (category) expense.category = category;
-      if (description) expense.description = description;
-      if (receipt) expense.receipt = receipt;
-      if (date) expense.date = new Date(date);
+      if (category !== undefined && category !== null && category !== '') expense.category = category;
+      if (description !== undefined && description !== null && description !== '') expense.description = description;
+      if (receipt !== undefined && receipt !== null && receipt !== '') expense.receipt = receipt;
+      if (date !== undefined && date !== null && date !== '') expense.date = new Date(date);
 
       // Ensure amount is a number before saving
       if (expense.amount) {
         expense.amount = Number(expense.amount);
       }
 
+      console.log("Updated expense object:", {
+        title: expense.title,
+        amount: expense.amount,
+        category: expense.category,
+        date: expense.date
+      });
+
       await expense.save();
+
+      console.log("✅ Expense saved successfully");
 
       logger.info("Expense updated", {
         expenseId,
@@ -367,8 +464,19 @@ router.put(
         updatedAmount: expense.amount
       });
 
+      // Emit real-time updates to dashboards
+      if (req.emitDashboardUpdate) {
+        try {
+          req.emitDashboardUpdate('update', 'expense', expense, req.user.orgId);
+        } catch (e) {
+          logger.warn('Failed to emit dashboard update', { error: e.message });
+        }
+      }
+
       return sendSuccess(res, expense, "Expense updated successfully");
     } catch (error) {
+      console.log("❌ UPDATE ERROR:", error.message);
+      console.log("Stack:", error.stack);
       logger.error("Update expense error", {
         error: error.message,
         expenseId: req.params.expenseId,
@@ -408,6 +516,38 @@ router.put(
         expenseId,
         approvedBy: req.user.userId
       });
+
+      // Send email notification to employee
+      try {
+        const user = await User.findById(expense.userId).select('name email').lean();
+        const employee = await Employee.findOne({ userId: expense.userId }).select('_id orgId').lean();
+        const approver = await User.findById(req.user.userId).select('name').lean();
+        
+        if (user && user.email && employee) {
+          await EmailNotificationService.sendExpenseApproved(
+            { 
+              _id: employee._id,
+              name: user.name, 
+              email: user.email,
+              orgId: employee.orgId || req.user.orgId
+            },
+            expense,
+            { 
+              _id: req.user.userId,
+              name: approver?.name || 'Admin' 
+            }
+          );
+          logger.info('Expense approved email sent', { expenseId, email: user.email });
+        } else {
+          logger.warn('Missing user or employee data for expense notification', { 
+            expenseId, 
+            hasUser: !!user, 
+            hasEmployee: !!employee 
+          });
+        }
+      } catch (emailError) {
+        logger.error('Failed to send expense approved email', { error: emailError.message, expenseId });
+      }
 
       return sendSuccess(res, expense, "Expense approved successfully");
     } catch (error) {
@@ -482,31 +622,66 @@ router.delete(
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
       }
 
+      console.log("=== DELETE EXPENSE DEBUG ===");
+      console.log("Params:", { expenseId });
+      console.log("User:", { 
+        userId: req.user.userId, 
+        userIdType: typeof req.user.userId,
+        role: req.user.role 
+      });
+
+      console.log("Expense found:", {
+        _id: expense._id,
+        userId: expense.userId,
+        userIdType: typeof expense.userId,
+        status: expense.status
+      });
+
       // Check authorization - only owner or admin can delete
-      const isOwner = expense.userId.toString() === req.user.userId.toString();
+      const expenseUserIdStr = expense.userId.toString();
+      const reqUserIdStr = req.user.userId.toString();
+      const isOwner = expenseUserIdStr === reqUserIdStr;
       const isAdmin = ["admin", "super_admin", "hr"].includes(req.user.role);
       
+      console.log("Authorization check:", {
+        expenseUserIdStr,
+        reqUserIdStr,
+        isOwner,
+        userRole: req.user.role,
+        isAdmin,
+        allowed: isOwner || isAdmin
+      });
+      
       if (!isOwner && !isAdmin) {
-        console.log("Delete authorization denied:", {
-          expenseUserId: expense.userId.toString(),
-          reqUserId: req.user.userId.toString(),
-          userRole: req.user.role,
-          isOwner,
-          isAdmin
-        });
+        console.log("❌ DELETE AUTHORIZATION DENIED");
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
+      console.log("✅ Authorization passed");
+
       // Delete expense
       await Expense.findByIdAndDelete(expenseId);
+
+      console.log("✅ Expense deleted successfully");
 
       logger.info("Expense deleted", {
         expenseId,
         userId: req.user.userId
       });
 
+      // Emit real-time updates to dashboards
+      if (req.emitDashboardUpdate) {
+        try {
+          req.emitDashboardUpdate('delete', 'expense', { _id: expenseId }, req.user.orgId);
+        } catch (e) {
+          logger.warn('Failed to emit dashboard update', { error: e.message });
+        }
+      }
+
       return sendSuccess(res, { id: expenseId }, "Expense deleted successfully");
     } catch (error) {
+      console.log("❌ DELETE ERROR:", error.message);
+      console.log("Stack:", error.stack);
       logger.error("Delete expense error", {
         error: error.message,
         expenseId: req.params.expenseId,

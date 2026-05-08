@@ -30,7 +30,7 @@ interface FormData {
   employmentType: string;
   workLocation: string;
   
-  // Sensitive Information
+  // Confidential Information
   aadharNumber: string;
   panNumber: string;
   bankAccount: string;

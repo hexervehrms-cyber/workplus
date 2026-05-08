@@ -8,7 +8,21 @@ const leaveRequestSchema = new mongoose.Schema(
     type: { 
       type: String, 
       required: true,
-      enum: ["Sick Leave", "Vacation", "Personal", "Casual", "Maternity", "Paternity", "Other"],
+      enum: [
+        "Vacation", 
+        "Sick Leave", 
+        "Casual Leave", 
+        "Earned Leave",
+        "Medical Leave",
+        "Maternity Leave", 
+        "Paternity Leave", 
+        "Compensatory Off", 
+        "Personal", 
+        "Emergency",
+        "NCNS",
+        "Sandwich Leave",
+        "Other"
+      ],
       index: true
     },
     startDate: { type: Date, required: true, index: true },
@@ -25,7 +39,10 @@ const leaveRequestSchema = new mongoose.Schema(
     rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     rejectedDate: { type: Date },
     rejectionReason: { type: String },
-    orgId: { type: String, required: true, index: true }
+    orgId: { type: String, required: true, index: true },
+    isHourlyLeave: { type: Boolean, default: false },
+    startTime: { type: String }, // HH:MM format
+    endTime: { type: String } // HH:MM format
   },
   { 
     timestamps: true,

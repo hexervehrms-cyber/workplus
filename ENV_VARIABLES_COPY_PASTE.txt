@@ -1,0 +1,128 @@
+================================================================================
+ENVIRONMENT VARIABLES - COPY & PASTE
+================================================================================
+
+FRONTEND (Vercel) - Copy all these variables:
+================================================================================
+
+VITE_API_URL=https://workplus-backend-sg3a.onrender.com
+VITE_SOCKET_URL=https://workplus-backend-sg3a.onrender.com
+VITE_APP_NAME=WorkPlus Pro
+VITE_APP_VERSION=1.0.0
+VITE_APP_ENV=production
+VITE_ENABLE_DEBUG=false
+VITE_ENABLE_ANALYTICS=true
+
+================================================================================
+BACKEND (Render) - Copy all these variables:
+================================================================================
+
+NODE_ENV=production
+PORT=5000
+MONGODB_URI=mongodb+srv://atulcse08_db_user:Jadu%40123@workplus.tcf4qho.mongodb.net/workpluspro?retryWrites=true&w=majority
+JWT_SECRET=workplus-pro-production-jwt-secret-key-32-chars-minimum-2024
+JWT_EXPIRES_IN=24h
+CORS_ORIGIN=https://workplus-murex.vercel.app
+SMTP_HOST=smtp.office365.com
+SMTP_PORT=587
+SMTP_USER=hr@hexerve.com
+SMTP_PASS=Jadu@333
+FROM_EMAIL=hr@hexerve.com
+HR_EMAIL=hr@hexerve.com
+TEAMS_APP_ID=7b85498f-d7ec-4f0d-a60b-fa6baf6391d2
+TEAMS_APP_PASSWORD=5Wy8Q~ERfF~2WSBaoK2PmCnH1EaTMq67.d0NOaPB
+TEAMS_TENANT_ID=4d3f5d68-c721-43c9-8f42-a05555c64d4a
+TEAMS_BOT_ID=7b85498f-d7ec-4f0d-a60b-fa6baf6391d2
+TEAMS_BOT_PASSWORD=10f5016e-64d9-4211-b9d5-ab0a45ccd6fb
+TEAMS_WEBHOOK_URL=https://workplus-backend-sg3a.onrender.com/api/chat/teams/webhook
+TEAMS_INTEGRATION_ENABLED=true
+TEAMS_MESSAGE_SYNC_ENABLED=true
+TEAMS_PRESENCE_SYNC_ENABLED=true
+TEAMS_FILE_SHARING_ENABLED=true
+TEAMS_MESSAGE_RETENTION_DAYS=90
+TEAMS_API_RATE_LIMIT=100
+TEAMS_API_RATE_LIMIT_WINDOW=60000
+TEAMS_LOG_LEVEL=info
+TEAMS_LOG_MESSAGES=true
+VITE_API_URL=https://workplus-backend-sg3a.onrender.com
+VITE_SOCKET_URL=https://workplus-backend-sg3a.onrender.com
+VITE_APP_NAME=WorkPlus Pro
+VITE_APP_VERSION=1.0.0
+VITE_APP_ENV=production
+VITE_ENABLE_DEBUG=false
+VITE_ENABLE_ANALYTICS=true
+
+================================================================================
+HOW TO ADD ENVIRONMENT VARIABLES
+================================================================================
+
+VERCEL:
+1. Go to https://vercel.com/dashboard
+2. Click on your project
+3. Go to "Settings" → "Environment Variables"
+4. Click "Add New"
+5. Paste each variable one by one
+6. Click "Save"
+7. Redeploy project
+
+RENDER:
+1. Go to https://dashboard.render.com
+2. Click on your service
+3. Go to "Environment"
+4. Click "Add Environment Variable"
+5. Paste each variable one by one
+6. Click "Save"
+7. Service will auto-redeploy
+
+================================================================================
+IMPORTANT NOTES
+================================================================================
+
+1. MONGODB_URI - This is your database connection string
+   - Keep it secret
+   - Don't share with anyone
+   - Don't commit to GitHub
+
+2. JWT_SECRET - This is your authentication secret
+   - Keep it secret
+   - Change it in production
+   - Don't share with anyone
+
+3. SMTP_PASS - This is your email password
+   - Keep it secret
+   - Don't share with anyone
+   - Don't commit to GitHub
+
+4. TEAMS credentials - Keep all Teams credentials secret
+   - Don't share with anyone
+   - Don't commit to GitHub
+
+5. CORS_ORIGIN - Must match your frontend URL exactly
+   - Frontend: https://workplus-murex.vercel.app
+   - Backend CORS_ORIGIN: https://workplus-murex.vercel.app
+
+6. API URLs - Must match your backend URL exactly
+   - Backend: https://workplus-backend-sg3a.onrender.com
+   - Frontend VITE_API_URL: https://workplus-backend-sg3a.onrender.com
+   - Frontend VITE_SOCKET_URL: https://workplus-backend-sg3a.onrender.com
+
+================================================================================
+VERIFICATION
+================================================================================
+
+After adding all environment variables:
+
+Frontend (Vercel):
+1. Go to https://workplus-murex.vercel.app/
+2. Check if page loads
+3. Open DevTools Console (F12)
+4. Look for any errors
+5. Check Network tab for API calls
+
+Backend (Render):
+1. Check Render dashboard logs
+2. Look for any errors
+3. Verify database connection
+4. Verify SMTP connection
+
+================================================================================

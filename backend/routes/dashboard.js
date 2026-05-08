@@ -9,6 +9,7 @@ import User from "../models/User.js";
 import Payslip from "../models/Payroll.js";
 import Organization from "../models/Organization.js";
 import ActivityLog from "../models/ActivityLog.js";
+import Session from "../models/Session.js";
 
 // Import specialized dashboard routes
 import superAdminRoutes from "./dashboard-superadmin.js";
@@ -21,11 +22,64 @@ router.use(superAdminRoutes);
 router.use(employeeRoutes);
 
 /**
+ * Helper function to get date range based on filter type
+ */
+function getDateRange(filterType, customStartDate, customEndDate) {
+  const now = new Date();
+  let startDate, endDate;
+
+  switch (filterType) {
+    case 'day':
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+      break;
+    case 'week':
+      startDate = new Date(now);
+      startDate.setDate(now.getDate() - now.getDay());
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+      break;
+    case 'month':
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      break;
+    case 'quarter':
+      const quarter = Math.floor(now.getMonth() / 3);
+      startDate = new Date(now.getFullYear(), quarter * 3, 1);
+      endDate = new Date(now.getFullYear(), (quarter + 1) * 3, 1);
+      break;
+    case 'year':
+      startDate = new Date(now.getFullYear(), 0, 1);
+      endDate = new Date(now.getFullYear() + 1, 0, 1);
+      break;
+    case 'custom':
+      startDate = new Date(customStartDate);
+      endDate = new Date(customEndDate);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    default:
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  }
+
+  return { startDate, endDate };
+}
+
+/**
  * GET /api/dashboard/stats
- * Get dashboard statistics
+ * Get dashboard statistics with optional date filtering
  */
 router.get("/stats", asyncHandler(async (req, res) => {
+  // Disable caching for real-time data
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  
   const orgId = req.user?.orgId || 'system';
+  const { filterType = 'month', startDate, endDate } = req.query;
+  
+  // Get date range
+  const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(filterType, startDate, endDate);
   
   // Get total employees
   const totalEmployees = await Employee.countDocuments({ 
@@ -33,20 +87,13 @@ router.get("/stats", asyncHandler(async (req, res) => {
     status: 'active' 
   });
   
-  // Get current month expenses
-  const currentMonth = new Date();
-  currentMonth.setDate(1);
-  currentMonth.setHours(0, 0, 0, 0);
-  
-  const nextMonth = new Date(currentMonth);
-  nextMonth.setMonth(nextMonth.getMonth() + 1);
-  
-  const monthlyExpensesResult = await Expense.aggregate([
+  // Get expenses for the selected period
+  const expensesResult = await Expense.aggregate([
     {
       $match: {
         orgId,
-        createdAt: { $gte: currentMonth, $lt: nextMonth },
-        status: { $in: ['approved', 'paid'] }
+        date: { $gte: rangeStart, $lt: rangeEnd },
+        status: { $in: ['approved', 'rejected'] }
       }
     },
     {
@@ -57,37 +104,36 @@ router.get("/stats", asyncHandler(async (req, res) => {
     }
   ]);
   
-  const monthlyExpenses = monthlyExpensesResult[0]?.total || 0;
+  const thisMonthExpenses = expensesResult[0]?.total || 0;
   
-  // Get current month payroll cost
-  const payrollCostResult = await Payslip.aggregate([
+  // Get payroll for the selected period
+  const payrollResult = await Payslip.aggregate([
     {
       $match: {
         orgId,
-        month: currentMonth.getMonth() + 1,
-        year: currentMonth.getFullYear(),
-        status: { $in: ['generated', 'paid'] }
+        createdAt: { $gte: rangeStart, $lt: rangeEnd },
+        status: { $in: ['draft', 'pending', 'paid'] }
       }
     },
     {
       $group: {
         _id: null,
-        total: { $sum: "$netSalary" }
+        total: { $sum: "$netPay" }
       }
     }
   ]);
   
-  const payrollCost = payrollCostResult[0]?.total || 0;
+  const thisMonthPayroll = payrollResult[0]?.total || 0;
+  
+  // Total cost (Expenses + Payroll)
+  const totalCost = thisMonthExpenses + thisMonthPayroll;
   
   // Calculate average productivity (based on attendance)
-  const today = new Date();
-  const lastWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-  
   const attendanceStats = await Attendance.aggregate([
     {
       $match: {
         orgId,
-        date: { $gte: lastWeek, $lte: today },
+        date: { $gte: rangeStart, $lt: rangeEnd },
         status: 'present'
       }
     },
@@ -103,14 +149,51 @@ router.get("/stats", asyncHandler(async (req, res) => {
   const avgHours = attendanceStats[0]?.avgHours || 0;
   const avgProductivity = Math.min(100, Math.round((avgHours / 8) * 100));
   
+  // Get logged in employees (active sessions)
+  const loggedInEmployees = await Session.countDocuments({
+    orgId,
+    isActive: true,
+    role: 'employee'
+  });
+  
+  // Get employees on leave
+  const onLeaveCount = await LeaveRequest.aggregate([
+    {
+      $match: {
+        orgId,
+        status: 'approved',
+        startDate: { $lte: new Date() },
+        endDate: { $gte: new Date() }
+      }
+    },
+    {
+      $group: {
+        _id: '$employeeId',
+        count: { $sum: 1 }
+      }
+    },
+    {
+      $count: 'total'
+    }
+  ]);
+  
+  const onLeave = onLeaveCount[0]?.total || 0;
+  
+  const statsData = {
+    totalEmployees,
+    avgProductivity,
+    thisMonthExpenses,
+    thisMonthPayroll,
+    totalCost,
+    loggedInEmployees,
+    onLeave
+  };
+  
+  console.log('📊 [STATS] Response data:', statsData);
+  
   res.json({
     success: true,
-    data: {
-      totalEmployees,
-      avgProductivity,
-      monthlyExpenses,
-      payrollCost
-    }
+    data: statsData
   });
 }));
 
@@ -220,16 +303,35 @@ router.get("/recent-leave-requests", asyncHandler(async (req, res) => {
  * Get today's attendance summary
  */
 router.get("/todays-attendance", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const userOrgId = req.user?.orgId || 'system';
   
-  // Get today's date range
+  // Get today's date range - use same logic as on-break endpoint
   const today = new Date();
-  const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  
+  console.log('📅 [TODAYS-ATTENDANCE] Fetching for org:', userOrgId);
+  console.log('📅 [TODAYS-ATTENDANCE] Date range:', { today: today.toISOString(), tomorrow: tomorrow.toISOString() });
+  
+  // Handle different orgId formats - super admin can see all orgs
+  let orgQuery = {};
+  if (req.user.role === 'super_admin') {
+    // Super admin can see all organizations
+    orgQuery = {
+      $or: [
+        { orgId: userOrgId },
+        { orgId: 'system' },
+        { orgId: 'workplus_system' }
+      ]
+    };
+  } else {
+    orgQuery = { orgId: userOrgId };
+  }
   
   const todaysAttendance = await Attendance.find({
-    orgId,
-    date: { $gte: startOfDay, $lt: endOfDay }
+    ...orgQuery,
+    date: { $gte: today, $lt: tomorrow }
   })
   .populate('employeeId', 'userId designation department')
   .populate({
@@ -242,6 +344,15 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
   .sort({ checkIn: -1 })
   .lean();
   
+  console.log('📅 [TODAYS-ATTENDANCE] Records found:', todaysAttendance.length);
+  console.log('📅 [TODAYS-ATTENDANCE] Data:', todaysAttendance.map(a => ({
+    employeeName: a.employeeId?.userId?.name,
+    checkIn: a.checkIn,
+    checkOut: a.checkOut,
+    status: a.status,
+    date: a.date
+  })));
+  
   // Format the data for frontend
   const formattedAttendance = todaysAttendance.map(attendance => ({
     _id: attendance._id,
@@ -252,7 +363,9 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
     checkOut: attendance.checkOut,
     hoursWorked: attendance.hoursWorked || 0,
     status: attendance.status,
-    date: attendance.date
+    date: attendance.date,
+    breaks: attendance.breaks || [],
+    meetings: attendance.meetings || []
   }));
   
   res.json({
@@ -366,7 +479,18 @@ router.get("/recent-activities", asyncHandler(async (req, res) => {
  * Get quick statistics for widgets
  */
 router.get("/quick-stats", asyncHandler(async (req, res) => {
+  // Disable caching for real-time data
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  
   const orgId = req.user?.orgId || 'system';
+  const { filterType = 'month', startDate, endDate } = req.query;
+  
+  console.log('📊 [QUICK-STATS] Request received:', { orgId, filterType, userId: req.user?.id, role: req.user?.role });
+  
+  // Get date range
+  const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(filterType, startDate, endDate);
   
   const today = new Date();
   const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -377,7 +501,14 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
     presentToday,
     pendingLeaves,
     pendingExpenses,
-    activeUsers
+    activeUsers,
+    onLeaveToday,
+    onBreakToday,
+    topEmployee,
+    totalSales,
+    totalLoss,
+    totalBonus,
+    totalIncentive
   ] = await Promise.all([
     Employee.countDocuments({ orgId, status: 'active' }),
     Attendance.countDocuments({ 
@@ -387,25 +518,241 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
     }),
     LeaveRequest.countDocuments({ orgId, status: 'pending' }),
     Expense.countDocuments({ orgId, status: 'pending' }),
-    User.countDocuments({ 
-      orgId, 
-      isActive: true,
-      lastLogin: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
-    })
+    // Count active users (employees checked in today but not checked out)
+    (async () => {
+      const endOfDay = new Date(startOfDay);
+      endOfDay.setDate(endOfDay.getDate() + 1);
+      
+      const count = await Attendance.countDocuments({ 
+        orgId, 
+        date: { $gte: startOfDay, $lt: endOfDay },  // Only TODAY (not future dates)
+        checkIn: { $exists: true, $ne: null },
+        checkOut: { $exists: false }
+      });
+      console.log('📊 [ACTIVE-USERS-QUERY] Query params:', { orgId, startOfDay, endOfDay });
+      console.log('📊 [ACTIVE-USERS-QUERY] Count result:', count);
+      
+      // Debug: Get actual records
+      const records = await Attendance.find({ 
+        orgId, 
+        date: { $gte: startOfDay, $lt: endOfDay },
+        checkIn: { $exists: true, $ne: null },
+        checkOut: { $exists: false }
+      }).select('userId employeeName checkIn checkOut date orgId').lean();
+      console.log('📊 [ACTIVE-USERS-QUERY] Actual records:', JSON.stringify(records, null, 2));
+      
+      return count;
+    })(),
+    // Count employees on leave today
+    LeaveRequest.countDocuments({
+      orgId,
+      status: 'approved',
+      startDate: { $lte: today },
+      endDate: { $gte: startOfDay }
+    }),
+    // Count employees on break today
+    (async () => {
+      const endOfDay = new Date(startOfDay);
+      endOfDay.setDate(endOfDay.getDate() + 1);
+      
+      console.log('📊 [ON-BREAK-QUERY] Query params:', { 
+        orgId, 
+        startOfDay: startOfDay.toISOString(), 
+        endOfDay: endOfDay.toISOString() 
+      });
+      
+      const count = await Attendance.countDocuments({
+        orgId,
+        date: { $gte: startOfDay, $lt: endOfDay },  // Only TODAY
+        'breaks': {
+          $elemMatch: {
+            startTime: { $exists: true },
+            endTime: { $exists: false }
+          }
+        }
+      });
+      console.log('📊 [ON-BREAK-QUERY] Count result:', count);
+      
+      // Debug: Get actual records
+      const records = await Attendance.find({
+        orgId,
+        date: { $gte: startOfDay, $lt: endOfDay },
+        'breaks': {
+          $elemMatch: {
+            startTime: { $exists: true },
+            endTime: { $exists: false }
+          }
+        }
+      }).select('userId employeeName breaks checkIn date orgId').lean();
+      console.log('📊 [ON-BREAK-QUERY] Actual records:', JSON.stringify(records, null, 2));
+      console.log('📊 [ON-BREAK-QUERY] Number of records with active breaks:', records.length);
+      
+      // Additional debug: Check all attendance records for today
+      const allTodayRecords = await Attendance.find({
+        orgId,
+        date: { $gte: startOfDay, $lt: endOfDay }
+      }).select('userId employeeName breaks checkIn checkOut date orgId').lean();
+      console.log('📊 [ON-BREAK-QUERY] All attendance records for today:', JSON.stringify(allTodayRecords, null, 2));
+      
+      return count;
+    })(),
+    // Top employee by productivity
+    Attendance.aggregate([
+      {
+        $match: {
+          orgId,
+          date: { $gte: rangeStart, $lt: rangeEnd },
+          status: 'present'
+        }
+      },
+      {
+        $group: {
+          _id: '$employeeId',
+          totalHours: { $sum: '$hoursWorked' },
+          daysPresent: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { totalHours: -1 }
+      },
+      {
+        $limit: 1
+      },
+      {
+        $lookup: {
+          from: 'employees',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'employee'
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'employee.userId',
+          foreignField: '_id',
+          as: 'user'
+        }
+      }
+    ]),
+    // Total sales (from expenses with category 'Sales')
+    Expense.aggregate([
+      {
+        $match: {
+          orgId,
+          date: { $gte: rangeStart, $lt: rangeEnd },
+          category: 'Sales',
+          status: 'approved'
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$amount' }
+        }
+      }
+    ]),
+    // Total loss (rejected expenses)
+    Expense.aggregate([
+      {
+        $match: {
+          orgId,
+          date: { $gte: rangeStart, $lt: rangeEnd },
+          status: 'rejected'
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$amount' }
+        }
+      }
+    ]),
+    // Total bonus
+    Payslip.aggregate([
+      {
+        $match: {
+          orgId,
+          createdAt: { $gte: rangeStart, $lt: rangeEnd }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$bonus' }
+        }
+      }
+    ]),
+    // Total incentive
+    Payslip.aggregate([
+      {
+        $match: {
+          orgId,
+          createdAt: { $gte: rangeStart, $lt: rangeEnd }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$incentives' }
+        }
+      }
+    ])
   ]);
   
   const attendanceRate = totalEmployees > 0 ? Math.round((presentToday / totalEmployees) * 100) : 0;
+  const topEmployeeName = topEmployee[0]?.user?.[0]?.name || 'N/A';
+  
+  const responseData = {
+    totalEmployees,
+    presentToday,
+    attendanceRate,
+    pendingLeaves,
+    pendingExpenses,
+    activeUsers,
+    onLeave: onLeaveToday,
+    onBreak: onBreakToday,
+    topEmployee: topEmployeeName,
+    totalSales: totalSales[0]?.total || 0,
+    totalLoss: totalLoss[0]?.total || 0,
+    totalBonus: totalBonus[0]?.total || 0,
+    totalIncentive: totalIncentive[0]?.total || 0
+  };
+  
+  console.log('📊 [QUICK-STATS] Response data:', responseData);
+  console.log('📊 [QUICK-STATS] onBreak count:', onBreakToday, 'activeUsers count:', activeUsers);
+  console.log('📊 [QUICK-STATS] Response JSON:', JSON.stringify({ success: true, data: responseData }, null, 2));
   
   res.json({
     success: true,
-    data: {
-      totalEmployees,
-      presentToday,
-      attendanceRate,
-      pendingLeaves,
-      pendingExpenses,
-      activeUsers
-    }
+    data: responseData
+  });
+}));
+
+/**
+ * POST /api/dashboard/test-kpi-emit
+ * Test endpoint to manually trigger KPI update emission (for debugging)
+ */
+router.post("/test-kpi-emit", asyncHandler(async (req, res) => {
+  const orgId = req.user?.orgId || 'system';
+  
+  console.log('🧪 [TEST-KPI-EMIT] Manually triggering KPI update for orgId:', orgId);
+  
+  // Import emitKPIUpdate
+  const { emitKPIUpdate } = await import('../utils/kpiUpdater.js');
+  
+  // Trigger KPI update
+  const result = await emitKPIUpdate(req.io, orgId, 'manual_test', {
+    testTrigger: true,
+    timestamp: new Date()
+  });
+  
+  console.log('🧪 [TEST-KPI-EMIT] KPI update triggered, result:', result);
+  
+  res.json({
+    success: true,
+    message: 'KPI update emitted successfully',
+    data: result
   });
 }));
 

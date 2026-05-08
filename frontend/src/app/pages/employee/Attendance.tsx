@@ -1,9 +1,17 @@
 import { useState, useEffect } from 'react';
-import { Clock, LogIn, LogOut, Coffee, Users, Calendar, Loader } from 'lucide-react';
+import { Clock, LogIn, LogOut, Pause, MessageSquare, Moon, Calendar, Loader } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
-import { Progress } from '../../components/ui/progress';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../../components/ui/alert-dialog';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from 'sonner';
 
@@ -14,118 +22,142 @@ interface AttendanceRecord {
   checkOut?: string;
   hoursWorked?: number;
   status: string;
-  breaks: Array<{
-    startTime: string;
-    endTime?: string;
-    duration?: number;
-    breakType: string;
-  }>;
-}
-
-interface TodayAttendance {
-  attendance?: AttendanceRecord;
-  liveStatus: {
-    status: string;
-    currentHours: number;
-    isOnBreak: boolean;
-    currentBreakDuration: number;
-    totalBreakTime: number;
-    isInMeeting: boolean;
-    lastUpdated: string;
-  };
 }
 
 export default function Attendance() {
   const { user } = useAuth();
-  const [todayData, setTodayData] = useState<TodayAttendance | null>(null);
+  const [todayData, setTodayData] = useState<any>(null);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
+  const [filteredAttendance, setFilteredAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [currentHours, setCurrentHours] = useState(0);
-  const [status, setStatus] = useState<'working' | 'break' | 'meeting'>('working');
   const [checkedIn, setCheckedIn] = useState(false);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
+  const [showCheckOutConfirm, setShowCheckOutConfirm] = useState(false);
+  const [isOnBreak, setIsOnBreak] = useState(false);
+  const [breakType, setBreakType] = useState<'regular' | null>(null);
+  const [isInMeeting, setIsInMeeting] = useState(false);
+  const [activityLogs, setActivityLogs] = useState<Array<{
+    id: string;
+    action: string;
+    time: string;
+    status: string;
+  }>>([]);
+  const [filterStartDate, setFilterStartDate] = useState<string>('');
+  const [filterEndDate, setFilterEndDate] = useState<string>('');
+  const [filterLoading, setFilterLoading] = useState(false);
 
-  // Fetch employee record to get employeeId
+  // Load activity logs from localStorage on mount
+  useEffect(() => {
+    const today = new Date().toDateString();
+    const storedLogs = localStorage.getItem(`activityLogs_${today}`);
+    if (storedLogs) {
+      try {
+        setActivityLogs(JSON.parse(storedLogs));
+      } catch (e) {
+        console.warn('Failed to parse stored activity logs');
+      }
+    }
+    
+    // Also load checked-in state from localStorage
+    const storedCheckedIn = localStorage.getItem(`checkedIn_${today}`);
+    if (storedCheckedIn) {
+      try {
+        const state = JSON.parse(storedCheckedIn);
+        console.log('Loaded checked-in state from localStorage:', state);
+        setCheckedIn(state.checkedIn);
+        setCurrentHours(state.currentHours || 0);
+        setIsOnBreak(state.isOnBreak || false);
+        setBreakType(state.breakType || null);
+        setIsInMeeting(state.isInMeeting || false);
+      } catch (e) {
+        console.warn('Failed to parse stored checked-in state');
+      }
+    }
+  }, []);
+
+  // Fetch employee ID
   const fetchEmployeeId = async () => {
     try {
-      if (!user?.id) {
-        console.warn('No user ID available');
-        setLoading(false);
-        return;
-      }
-
+      if (!user?.id) return;
       const token = localStorage.getItem('authToken');
-      console.log('Fetching employee for userId:', user.id);
-      
-      const response = await fetch(`http://localhost:5000/api/employees/user/${user.id}`, {
+      const response = await fetch(`/api/employees/user/${user.id}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
       });
-
-      console.log('Employee fetch response:', response.status);
 
       if (response.ok) {
         const data = await response.json();
-        console.log('Employee data:', data);
-        if (data.data && data.data._id) {
-          console.log('Setting employeeId:', data.data._id);
+        if (data.data?._id) {
           setEmployeeId(data.data._id);
-        } else {
-          console.warn('No employee found for user');
-          setLoading(false);
+          return data.data._id;
         }
-      } else {
-        console.error('Failed to fetch employee:', response.status);
-        setLoading(false);
       }
+      setEmployeeId(user.id);
+      return user.id;
     } catch (error) {
       console.error('Error fetching employee:', error);
-      setLoading(false);
+      setEmployeeId(user.id);
+      return user.id;
     }
   };
 
-  // Fetch today's attendance
-  const fetchTodayAttendance = async () => {
-    if (!employeeId) {
-      console.warn('No employeeId available');
-      return;
-    }
-    
+  // Fetch today's attendance - ONLY on initial load
+  const fetchTodayAttendance = async (empId: string) => {
     try {
       const token = localStorage.getItem('authToken');
-      console.log('Fetching today attendance for employeeId:', employeeId);
-      
-      const response = await fetch('http://localhost:5000/api/attendance/today', {
+      const response = await fetch('/api/attendance/today', {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
       });
 
-      if (!response.ok) {
-        console.error('Failed to fetch attendance:', response.status);
-        throw new Error('Failed to fetch attendance');
-      }
+      if (!response.ok) throw new Error('Failed to fetch attendance');
 
       const data = await response.json();
-      console.log('Today attendance data:', data);
+      console.log('Fetched today attendance:', data.data);
+      
       setTodayData(data.data);
       
-      if (data.data.attendance?.checkIn && !data.data.attendance?.checkOut) {
-        setCheckedIn(true);
-        setCurrentHours(data.data.liveStatus.currentHours);
-        
-        // Determine current status
-        if (data.data.liveStatus.isInMeeting) {
-          setStatus('meeting');
-        } else if (data.data.liveStatus.isOnBreak) {
-          setStatus('break');
-        } else {
-          setStatus('working');
+      // Check if we have localStorage state - if yes, use it instead of server state
+      const today = new Date().toDateString();
+      const storedState = localStorage.getItem(`checkedIn_${today}`);
+      
+      if (storedState) {
+        // Use localStorage state (it's more up-to-date than server)
+        console.log('Using localStorage state instead of server state');
+        try {
+          const state = JSON.parse(storedState);
+          setCheckedIn(state.checkedIn);
+          setCurrentHours(state.currentHours || 0);
+          setIsOnBreak(state.isOnBreak || false);
+          setBreakType(state.breakType || null);
+          setIsInMeeting(state.isInMeeting || false);
+        } catch (e) {
+          console.warn('Failed to parse stored state, using server state');
+          // Fallback to server state
+          const liveStatus = data.data?.liveStatus?.status;
+          const isCheckedInNow = liveStatus === 'checked_in' || liveStatus === 'on_break' || liveStatus === 'in_meeting';
+          setCheckedIn(isCheckedInNow);
+          setCurrentHours(data.data?.liveStatus?.currentHours || 0);
+          setIsOnBreak(data.data?.liveStatus?.isOnBreak || false);
+          setBreakType(null);
+          setIsInMeeting(data.data?.liveStatus?.isInMeeting || false);
         }
+      } else {
+        // No localStorage state, use server state
+        console.log('No localStorage state, using server state');
+        const liveStatus = data.data?.liveStatus?.status;
+        const isCheckedInNow = liveStatus === 'checked_in' || liveStatus === 'on_break' || liveStatus === 'in_meeting';
+        setCheckedIn(isCheckedInNow);
+        setCurrentHours(data.data?.liveStatus?.currentHours || 0);
+        setIsOnBreak(data.data?.liveStatus?.isOnBreak || false);
+        setBreakType(null);
+        setIsInMeeting(data.data?.liveStatus?.isInMeeting || false);
       }
     } catch (error) {
       console.error('Error fetching attendance:', error);
@@ -139,23 +171,104 @@ export default function Attendance() {
   const fetchAttendanceHistory = async () => {
     try {
       const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:5000/api/attendance?limit=7', {
+      const response = await fetch('/api/attendance?limit=7', {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
       });
 
-      if (!response.ok) throw new Error('Failed to fetch history');
-
+      if (!response.ok) {
+        console.warn('Failed to fetch history:', response.status);
+        return;
+      }
       const data = await response.json();
+      console.log('Fetched attendance history:', data.data);
       setAttendanceHistory(data.data || []);
     } catch (error) {
       console.error('Error fetching history:', error);
     }
   };
 
-  // Check in
+  // Handle filter submission
+  const handleFilterSubmit = () => {
+    setFilterLoading(true);
+    
+    try {
+      let filtered = attendanceHistory;
+
+      if (filterStartDate) {
+        const startDate = new Date(filterStartDate);
+        startDate.setHours(0, 0, 0, 0);
+        filtered = filtered.filter(record => new Date(record.date) >= startDate);
+      }
+
+      if (filterEndDate) {
+        const endDate = new Date(filterEndDate);
+        endDate.setHours(23, 59, 59, 999);
+        filtered = filtered.filter(record => new Date(record.date) <= endDate);
+      }
+
+      setFilteredAttendance(filtered);
+      
+      if (filtered.length === 0 && (filterStartDate || filterEndDate)) {
+        toast.info('No records found for the selected date range');
+      }
+    } catch (error) {
+      console.error('Error filtering records:', error);
+      toast.error('Failed to filter records');
+    } finally {
+      setFilterLoading(false);
+    }
+  };
+
+  // Handle filter reset
+  const handleFilterReset = () => {
+    setFilterStartDate('');
+    setFilterEndDate('');
+    setFilteredAttendance(attendanceHistory);
+  };
+
+  // Initialize filtered attendance with all records on mount
+  useEffect(() => {
+    setFilteredAttendance(attendanceHistory);
+  }, [attendanceHistory]);
+
+  // Add activity log
+  const addActivityLog = (action: string, status: string) => {
+    const newLog = {
+      id: Date.now().toString(),
+      action,
+      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      status
+    };
+    setActivityLogs(prev => {
+      const updated = [newLog, ...prev];
+      // Save to localStorage
+      const today = new Date().toDateString();
+      localStorage.setItem(`activityLogs_${today}`, JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  // Get orgId
+  const getOrgId = () => {
+    let orgId = user?.orgId;
+    if (!orgId) {
+      const storedUser = localStorage.getItem('user');
+      if (storedUser) {
+        try {
+          const parsedUser = JSON.parse(storedUser);
+          orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
+        } catch (e) {
+          console.warn('Could not parse stored user');
+        }
+      }
+    }
+    return orgId || 'system';
+  };
+
+  // Check In
   const handleCheckIn = async () => {
     if (!employeeId) {
       toast.error('Employee ID not found');
@@ -165,7 +278,7 @@ export default function Attendance() {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:5000/api/attendance/check-in', {
+      const response = await fetch('/api/attendance/check-in', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -173,10 +286,11 @@ export default function Attendance() {
         },
         body: JSON.stringify({
           userId: user?.id,
-          employeeId: employeeId,
-          orgId: user?.orgId,
+          employeeId,
+          employeeName: user?.name || 'Employee',
+          orgId: getOrgId(),
           location: 'Office',
-          notes: 'Check-in from employee dashboard'
+          notes: 'Check-in from attendance page'
         })
       });
 
@@ -185,9 +299,39 @@ export default function Attendance() {
         throw new Error(error.message || 'Check-in failed');
       }
 
-      toast.success('Checked in successfully');
+      // Update state immediately - DO NOT fetch from server
       setCheckedIn(true);
-      await fetchTodayAttendance();
+      setCurrentHours(0);
+      setIsOnBreak(false);
+      setBreakType(null);
+      setIsInMeeting(false);
+      addActivityLog('Checked In', 'working');
+      
+      // Save checked-in state to localStorage
+      const today = new Date().toDateString();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        currentHours: 0,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: false
+      }));
+      
+      // Add today's check-in to attendance history immediately
+      const checkInRecord: AttendanceRecord = {
+        _id: Date.now().toString(),
+        date: new Date().toISOString(),
+        checkIn: new Date().toISOString(),
+        status: 'present'
+      };
+      setAttendanceHistory(prev => [checkInRecord, ...prev]);
+      
+      // Also refresh from server
+      setTimeout(() => {
+        fetchAttendanceHistory();
+      }, 500);
+      
+      toast.success('Checked in successfully');
     } catch (error) {
       console.error('Check-in error:', error);
       toast.error(error instanceof Error ? error.message : 'Check-in failed');
@@ -196,7 +340,7 @@ export default function Attendance() {
     }
   };
 
-  // Check out
+  // Check Out
   const handleCheckOut = async () => {
     if (!employeeId) {
       toast.error('Employee ID not found');
@@ -206,7 +350,7 @@ export default function Attendance() {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:5000/api/attendance/check-out', {
+      const response = await fetch('/api/attendance/check-out', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -214,10 +358,10 @@ export default function Attendance() {
         },
         body: JSON.stringify({
           userId: user?.id,
-          employeeId: employeeId,
-          orgId: user?.orgId,
+          employeeId,
+          orgId: getOrgId(),
           location: 'Office',
-          notes: 'Check-out from employee dashboard'
+          notes: 'Check-out from attendance page'
         })
       });
 
@@ -226,9 +370,35 @@ export default function Attendance() {
         throw new Error(error.message || 'Check-out failed');
       }
 
-      toast.success('Checked out successfully');
+      const result = await response.json();
+
+      // Update state immediately - DO NOT fetch from server
       setCheckedIn(false);
-      await fetchTodayAttendance();
+      setShowCheckOutConfirm(false);
+      setIsOnBreak(false);
+      setBreakType(null);
+      setIsInMeeting(false);
+      addActivityLog('Checked Out', 'completed');
+      
+      // Save checked-out state to localStorage
+      const today = new Date().toDateString();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: false,
+        currentHours: result.data?.hoursWorked || 0,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: false
+      }));
+      
+      // Update hours from response
+      if (result.data?.hoursWorked) {
+        setCurrentHours(result.data.hoursWorked);
+      }
+
+      // Refresh history only
+      fetchAttendanceHistory();
+      
+      toast.success('Checked out successfully');
     } catch (error) {
       console.error('Check-out error:', error);
       toast.error(error instanceof Error ? error.message : 'Check-out failed');
@@ -237,8 +407,8 @@ export default function Attendance() {
     }
   };
 
-  // Start break
-  const handleBreakStart = async () => {
+  // Break Start
+  const handleBreakStart = async (breakType = 'regular') => {
     if (!employeeId) {
       toast.error('Employee ID not found');
       return;
@@ -247,18 +417,17 @@ export default function Attendance() {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:5000/api/attendance/break/start', {
+      const response = await fetch('/api/attendance/break-start', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          userId: user?.id,
-          employeeId: employeeId,
-          orgId: user?.orgId,
-          breakType: 'regular',
-          notes: 'Break started from dashboard'
+          employeeId,
+          orgId: getOrgId(),
+          breakType,
+          notes: `Break started`
         })
       });
 
@@ -267,9 +436,23 @@ export default function Attendance() {
         throw new Error(error.message || 'Break start failed');
       }
 
-      toast.success('Break started');
-      setStatus('break');
-      await fetchTodayAttendance();
+      // Update state immediately
+      setIsOnBreak(true);
+      setBreakType(breakType);
+      const breakLabel = 'Break';
+      addActivityLog(`Started ${breakLabel}`, 'break');
+      
+      // Save state to localStorage
+      const today = new Date().toDateString();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        currentHours,
+        isOnBreak: true,
+        breakType,
+        isInMeeting: false
+      }));
+      
+      toast.success(`${breakLabel} started`);
     } catch (error) {
       console.error('Break start error:', error);
       toast.error(error instanceof Error ? error.message : 'Break start failed');
@@ -278,7 +461,7 @@ export default function Attendance() {
     }
   };
 
-  // End break
+  // Break End
   const handleBreakEnd = async () => {
     if (!employeeId) {
       toast.error('Employee ID not found');
@@ -288,17 +471,16 @@ export default function Attendance() {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:5000/api/attendance/break/end', {
+      const response = await fetch('/api/attendance/break-end', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          userId: user?.id,
-          employeeId: employeeId,
-          orgId: user?.orgId,
-          notes: 'Break ended from dashboard'
+          employeeId,
+          orgId: getOrgId(),
+          notes: 'Break ended'
         })
       });
 
@@ -307,9 +489,22 @@ export default function Attendance() {
         throw new Error(error.message || 'Break end failed');
       }
 
+      // Update state immediately
+      setIsOnBreak(false);
+      setBreakType(null);
+      addActivityLog('Ended Break', 'working');
+      
+      // Save state to localStorage
+      const today = new Date().toDateString();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        currentHours,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: false
+      }));
+      
       toast.success('Break ended');
-      setStatus('working');
-      await fetchTodayAttendance();
     } catch (error) {
       console.error('Break end error:', error);
       toast.error(error instanceof Error ? error.message : 'Break end failed');
@@ -318,8 +513,125 @@ export default function Attendance() {
     }
   };
 
-  // Toggle meeting mode
-  const handleMeetingToggle = async (isActive: boolean) => {
+  // Meeting Start
+  const handleMeetingStart = async () => {
+    console.log('Meeting start clicked - isOnBreak:', isOnBreak);
+    
+    if (!employeeId) {
+      toast.error('Employee ID not found');
+      return;
+    }
+
+    if (!checkedIn) {
+      toast.error('Please check in first before starting a meeting');
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      const token = localStorage.getItem('authToken');
+      
+      // If on break, automatically end it first
+      if (isOnBreak) {
+        console.log('On break, ending break first...');
+        try {
+          const breakEndResponse = await fetch('/api/attendance/break-end', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              employeeId,
+              orgId: getOrgId(),
+              notes: 'Break ended to start meeting'
+            })
+          });
+
+          if (breakEndResponse.ok) {
+            console.log('Break ended successfully');
+            setIsOnBreak(false);
+            // Update localStorage
+            const today = new Date().toDateString();
+            localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+              checkedIn: true,
+              currentHours,
+              isOnBreak: false,
+              breakType: null,
+              isInMeeting: false
+            }));
+            // Add small delay to ensure database is updated
+            await new Promise(resolve => setTimeout(resolve, 300));
+          } else {
+            const breakError = await breakEndResponse.json();
+            console.warn('Failed to end break:', breakError.message);
+            throw new Error(`Failed to end break: ${breakError.message}`);
+          }
+        } catch (breakError) {
+          console.error('Error ending break:', breakError);
+          throw new Error(`Cannot start meeting: ${breakError instanceof Error ? breakError.message : 'Failed to end break'}`);
+        }
+      }
+      
+      const meetingData = {
+        employeeId,
+        orgId: getOrgId(),
+        meetingTitle: 'Meeting',
+        meetingType: 'internal',
+        notes: 'Meeting started'
+      };
+      
+      console.log('Sending meeting-start request:', meetingData);
+      
+      const response = await fetch('/api/attendance/meeting-start', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(meetingData)
+      });
+
+      console.log('Meeting-start response status:', response.status);
+      
+      const responseData = await response.json();
+      console.log('Meeting-start response data:', responseData);
+      
+      if (!response.ok) {
+        const errorMsg = responseData.message || 'Meeting start failed';
+        console.error('Meeting start error from backend:', errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      // Update state immediately
+      setIsInMeeting(true);
+      setIsOnBreak(false);
+      setBreakType(null);
+      addActivityLog('Started Meeting', 'meeting');
+      
+      // Save state to localStorage
+      const today = new Date().toDateString();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        currentHours,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: true
+      }));
+      
+      toast.success('Meeting started');
+    } catch (error) {
+      console.error('Meeting start error:', error);
+      const errorMsg = error instanceof Error ? error.message : 'Meeting start failed';
+      console.error('Full error:', errorMsg);
+      toast.error(errorMsg);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Meeting End
+  const handleMeetingEnd = async () => {
     if (!employeeId) {
       toast.error('Employee ID not found');
       return;
@@ -328,81 +640,86 @@ export default function Attendance() {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:5000/api/attendance/meeting-mode', {
+      const response = await fetch('/api/attendance/meeting-end', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          employeeId: employeeId,
-          orgId: user?.orgId,
-          isActive,
-          meetingTitle: isActive ? 'Meeting' : undefined,
-          meetingType: 'internal'
+          employeeId,
+          orgId: getOrgId(),
+          notes: 'Meeting ended'
         })
       });
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.message || 'Meeting toggle failed');
+        throw new Error(error.message || 'Meeting end failed');
       }
 
-      toast.success(isActive ? 'Meeting mode activated' : 'Meeting mode deactivated');
-      setStatus(isActive ? 'meeting' : 'working');
-      await fetchTodayAttendance();
+      // Update state immediately
+      setIsInMeeting(false);
+      addActivityLog('Ended Meeting', 'working');
+      
+      // Save state to localStorage
+      const today = new Date().toDateString();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        currentHours,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: false
+      }));
+      
+      toast.success('Meeting ended');
     } catch (error) {
-      console.error('Meeting toggle error:', error);
-      toast.error(error instanceof Error ? error.message : 'Meeting toggle failed');
+      console.error('Meeting end error:', error);
+      toast.error(error instanceof Error ? error.message : 'Meeting end failed');
     } finally {
       setActionLoading(false);
     }
   };
 
-  // Update hours every second
+  // Update hours every second when checked in
   useEffect(() => {
+    if (!checkedIn || !todayData?.attendance?.checkIn) return;
+
     const interval = setInterval(() => {
-      if (checkedIn && todayData?.attendance?.checkIn) {
-        const checkInTime = new Date(todayData.attendance.checkIn);
-        const now = new Date();
-        const hours = (now.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
-        setCurrentHours(hours);
-      }
+      const checkInTime = new Date(todayData.attendance.checkIn);
+      const now = new Date();
+      const hours = (now.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
+      setCurrentHours(hours);
     }, 1000);
 
     return () => clearInterval(interval);
   }, [checkedIn, todayData]);
 
-  // Initial load - fetch employee ID first
+  // Refresh attendance history every 10 seconds when checked in
   useEffect(() => {
-    if (user?.id) {
-      console.log('User ID available, fetching employee...');
-      fetchEmployeeId();
-      
-      // Fallback timeout - if employee fetch takes too long, use userId as fallback
-      const timeout = setTimeout(() => {
-        console.warn('Employee fetch timeout, using userId as fallback');
-        if (!employeeId) {
-          setEmployeeId(user.id);
-        }
-      }, 5000);
-      
-      return () => clearTimeout(timeout);
-    }
-  }, [user?.id]);
+    if (!checkedIn) return;
 
-  // Fetch attendance data once we have employeeId
-  useEffect(() => {
-    if (employeeId) {
-      console.log('EmployeeId available, fetching attendance...');
-      fetchTodayAttendance();
+    const interval = setInterval(() => {
       fetchAttendanceHistory();
-    }
-  }, [employeeId]);
+    }, 10000); // Refresh every 10 seconds
+
+    return () => clearInterval(interval);
+  }, [checkedIn]);
+
+  // Initial load only
+  useEffect(() => {
+    const init = async () => {
+      const empId = await fetchEmployeeId();
+      if (empId) {
+        await fetchTodayAttendance(empId);
+        await fetchAttendanceHistory();
+      }
+    };
+    init();
+  }, [user?.id]);
 
   return (
     <div className="p-8 space-y-8">
-      {/* Page Header */}
       <div>
         <h1 className="text-3xl font-bold text-foreground mb-2">Attendance</h1>
         <p className="text-muted-foreground">Track your daily attendance and hours</p>
@@ -418,7 +735,6 @@ export default function Attendance() {
           {/* Check In/Out Card */}
           <Card className="p-8 rounded-2xl bg-gradient-to-br from-primary/10 to-secondary/10 border-primary/20">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              {/* Current Status */}
               <div className="lg:col-span-2">
                 <div className="flex items-center gap-3 mb-6">
                   <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center">
@@ -457,48 +773,19 @@ export default function Attendance() {
                   </div>
                 </div>
 
-                {/* Status Toggle */}
                 {checkedIn && (
                   <div className="space-y-3">
                     <p className="text-sm font-medium text-muted-foreground">Current Status</p>
                     <div className="flex gap-2">
-                      <Button
-                        variant={status === 'working' ? 'default' : 'outline'}
-                        className="flex-1 rounded-xl"
-                        onClick={() => {
-                          if (status === 'break') handleBreakEnd();
-                          else if (status === 'meeting') handleMeetingToggle(false);
-                          else setStatus('working');
-                        }}
-                        disabled={actionLoading}
-                      >
+                      <Button variant="default" className="flex-1 rounded-xl" disabled>
                         <LogIn className="w-4 h-4 mr-2" />
                         Working
-                      </Button>
-                      <Button
-                        variant={status === 'break' ? 'default' : 'outline'}
-                        className="flex-1 rounded-xl"
-                        onClick={() => status === 'break' ? handleBreakEnd() : handleBreakStart()}
-                        disabled={actionLoading}
-                      >
-                        <Coffee className="w-4 h-4 mr-2" />
-                        {status === 'break' ? 'End Break' : 'Break'}
-                      </Button>
-                      <Button
-                        variant={status === 'meeting' ? 'default' : 'outline'}
-                        className="flex-1 rounded-xl"
-                        onClick={() => handleMeetingToggle(status !== 'meeting')}
-                        disabled={actionLoading}
-                      >
-                        <Users className="w-4 h-4 mr-2" />
-                        {status === 'meeting' ? 'End Meeting' : 'Meeting'}
                       </Button>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* Check In/Out Button */}
               <div className="flex flex-col justify-between">
                 <div className="p-6 rounded-xl bg-background/50 border border-border text-center">
                   <div className="w-16 h-16 rounded-full bg-secondary/20 flex items-center justify-center mx-auto mb-4">
@@ -507,7 +794,7 @@ export default function Attendance() {
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground mb-1">Status</p>
-                  <p className="text-lg font-semibold capitalize">{checkedIn ? status : 'Not Checked In'}</p>
+                  <p className="text-lg font-semibold capitalize">{checkedIn ? 'Checked In' : 'Not Checked In'}</p>
                 </div>
                 {!checkedIn ? (
                   <Button
@@ -525,7 +812,7 @@ export default function Attendance() {
                     variant="destructive"
                     size="lg"
                     className="w-full rounded-xl"
-                    onClick={handleCheckOut}
+                    onClick={() => setShowCheckOutConfirm(true)}
                     disabled={actionLoading}
                   >
                     {actionLoading ? <Loader className="w-5 h-5 mr-2 animate-spin" /> : <LogOut className="w-5 h-5 mr-2" />}
@@ -536,11 +823,141 @@ export default function Attendance() {
             </div>
           </Card>
 
+          {/* Break and Meeting Actions */}
+          {checkedIn && (
+            <Card className="rounded-2xl overflow-hidden">
+              <div className="p-6 border-b border-border">
+                <h3 className="font-semibold text-lg">Actions</h3>
+                <p className="text-sm text-muted-foreground">Manage your break and meeting status</p>
+              </div>
+              <div className="p-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Button
+                    variant={breakType === 'regular' ? "destructive" : "outline"}
+                    size="lg"
+                    className="rounded-xl"
+                    onClick={breakType === 'regular' ? handleBreakEnd : () => handleBreakStart('regular')}
+                    disabled={actionLoading || isInMeeting}
+                  >
+                    <Pause className="w-5 h-5 mr-2" />
+                    {breakType === 'regular' ? 'End Break' : 'Start Break'}
+                  </Button>
+
+                  <Button
+                    variant={isInMeeting ? "destructive" : "outline"}
+                    size="lg"
+                    className="rounded-xl"
+                    onClick={isInMeeting ? handleMeetingEnd : handleMeetingStart}
+                    disabled={actionLoading || isOnBreak}
+                  >
+                    <MessageSquare className="w-5 h-5 mr-2" />
+                    {isInMeeting ? 'End Meeting' : 'Start Meeting'}
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* Activity Logs */}
+          <Card className="rounded-2xl overflow-hidden">
+            <div className="p-6 border-b border-border">
+              <h3 className="font-semibold text-lg">Live Activity Logs</h3>
+              <p className="text-sm text-muted-foreground">Today's attendance activities</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Time</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Action</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {activityLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="px-6 py-4 text-center text-muted-foreground">
+                        No activities yet
+                      </td>
+                    </tr>
+                  ) : (
+                    activityLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-accent/50 transition-colors">
+                        <td className="px-6 py-4 text-sm font-medium">{log.time}</td>
+                        <td className="px-6 py-4 text-sm">{log.action}</td>
+                        <td className="px-6 py-4">
+                          <Badge variant={
+                            log.status === 'working' ? 'default' :
+                            log.status === 'break' ? 'secondary' :
+                            log.status === 'meeting' ? 'outline' :
+                            'default'
+                          }>
+                            {log.status.charAt(0).toUpperCase() + log.status.slice(1)}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
           {/* Attendance History */}
           <Card className="rounded-2xl overflow-hidden">
             <div className="p-6 border-b border-border">
-              <h3 className="font-semibold text-lg">Attendance History</h3>
-              <p className="text-sm text-muted-foreground">Your recent attendance records</p>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-semibold text-lg">Attendance History</h3>
+                  <p className="text-sm text-muted-foreground">Your recent attendance records</p>
+                </div>
+              </div>
+              
+              {/* Date Filter */}
+              <div className="flex gap-4 items-end">
+                <div className="flex-1">
+                  <label className="text-sm font-medium text-muted-foreground mb-2 block">From Date</label>
+                  <input
+                    type="date"
+                    value={filterStartDate}
+                    onChange={(e) => setFilterStartDate(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="text-sm font-medium text-muted-foreground mb-2 block">To Date</label>
+                  <input
+                    type="date"
+                    value={filterEndDate}
+                    onChange={(e) => setFilterEndDate(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm"
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleFilterReset}
+                  className="rounded-lg"
+                  disabled={filterLoading}
+                >
+                  Clear
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleFilterSubmit}
+                  className="rounded-lg bg-primary text-primary-foreground hover:bg-primary/90"
+                  disabled={filterLoading}
+                >
+                  {filterLoading ? (
+                    <>
+                      <Loader className="w-4 h-4 mr-2 animate-spin" />
+                      Filtering...
+                    </>
+                  ) : (
+                    'Search'
+                  )}
+                </Button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -550,19 +967,18 @@ export default function Attendance() {
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Check-in</th>
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Check-out</th>
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Hours</th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Breaks</th>
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {attendanceHistory.length === 0 ? (
+                  {filteredAttendance.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-6 py-4 text-center text-muted-foreground">
-                        No attendance records found
+                      <td colSpan={5} className="px-6 py-4 text-center text-muted-foreground">
+                        {attendanceHistory.length === 0 ? 'No attendance records found' : 'No records match the selected date range'}
                       </td>
                     </tr>
                   ) : (
-                    attendanceHistory.map((record) => (
+                    filteredAttendance.map((record) => (
                       <tr key={record._id} className="hover:bg-accent/50 transition-colors">
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
@@ -581,11 +997,6 @@ export default function Attendance() {
                             ? `${Math.floor(record.hoursWorked)}h ${Math.round((record.hoursWorked % 1) * 60)}m`
                             : '-'}
                         </td>
-                        <td className="px-6 py-4 text-sm">
-                          {record.breaks && record.breaks.length > 0
-                            ? `${record.breaks.length} break(s)`
-                            : '-'}
-                        </td>
                         <td className="px-6 py-4">
                           <Badge variant={record.status === 'present' ? 'default' : 'secondary'}>
                             {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
@@ -600,6 +1011,37 @@ export default function Attendance() {
           </Card>
         </>
       )}
+
+      {/* Check Out Confirmation Dialog */}
+      <AlertDialog open={showCheckOutConfirm} onOpenChange={setShowCheckOutConfirm}>
+        <AlertDialogContent className="rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Check Out</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to check out? You have worked for {Math.floor(currentHours)}h {Math.round((currentHours % 1) * 60)}m today.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="bg-muted/50 p-4 rounded-lg mb-4">
+            <p className="text-sm text-muted-foreground mb-2">Check-in Time:</p>
+            <p className="font-semibold">
+              {todayData?.attendance?.checkIn 
+                ? new Date(todayData.attendance.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                : '-'}
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <AlertDialogCancel className="rounded-lg">Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleCheckOut}
+              disabled={actionLoading}
+              className="rounded-lg bg-destructive hover:bg-destructive/90"
+            >
+              {actionLoading ? <Loader className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Check Out
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

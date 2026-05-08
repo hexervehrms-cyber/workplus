@@ -1,839 +1,343 @@
-/**
- * Payroll Routes with Pagination and Race Condition Prevention
- * P0 CRITICAL FIXES Applied:
- * - Pagination for large datasets
- * - .lean() for read-only queries
- * - Optimistic locking for payroll processing
- * - Idempotency for payroll generation (CRITICAL - prevents duplicate payments)
- * - Transaction-safe payroll operations
- */
-
-import express from 'express';
-import mongoose from 'mongoose';
-import Payslip from '../models/Payroll.js';
-import Employee from '../models/Employee.js';
-import { asyncHandler } from '../middleware/errorHandler.js';
-import { paginationMiddleware } from '../middleware/pagination.js';
-import idempotencyMiddleware from '../middleware/idempotency.js';
-import logger from '../utils/logger.js';
+import express from "express";
+import { asyncHandler } from "../middleware/errorHandler.js";
+import { authenticate, authorize } from "../middleware/auth.js";
+import SalaryStructure from "../models/SalaryStructure.js";
+import SalaryRevision from "../models/SalaryRevision.js";
+import PayrollCycle from "../models/PayrollCycle.js";
+import PayrollRun from "../models/PayrollRun.js";
+import Employee from "../models/Employee.js";
+import { sendSuccess, sendError } from "../utils/apiResponse.js";
+import logger from "../utils/logger.js";
+import PayrollCycleEngine from "../utils/payrollCycleEngine.js";
+import PayrollCalculationEngine from "../utils/payrollCalculationEngine.js";
 
 const router = express.Router();
 
-// Apply pagination middleware
-router.use(paginationMiddleware);
-
 /**
- * GET /api/payroll
- * List payslips with pagination
+ * GET /api/payroll/employee/dashboard
+ * Get employee payroll dashboard data with KPI cards
  */
-router.get('/', asyncHandler(async (req, res) => {
-  const { page, limit, skip } = req.pagination;
-  const { employeeId, userId, month, year, status, orgId } = req.query;
-
-  // Build query
-  const query = {};
-  
-  if (orgId) {
-    query.orgId = orgId;
-  }
-  
-  if (employeeId) {
-    query.employeeId = employeeId;
-  }
-  
-  if (userId) {
-    query.userId = userId;
-  }
-  
-  if (month) {
-    query.month = month;
-  }
-  
-  if (year) {
-    query.year = parseInt(year);
-  }
-  
-  if (status) {
-    query.status = status;
-  }
-
-  // Get total count
-  const total = await Payslip.countDocuments(query);
-
-  // Get paginated results with .lean()
-  const payslips = await Payslip.find(query)
-    .populate('employeeId', 'employeeCode department designation')
-    .populate('userId', 'name email avatar')
-    .populate('paidBy', 'name email')
-    .sort({ year: -1, month: -1, createdAt: -1 })
-    .skip(skip)
-    .limit(limit)
-    .lean(); // P0 FIX: Use .lean() for read-only queries
-
-  logger.info('Payslips listed', { total, page, limit });
-
-  res.paginate(payslips, total);
-}));
-
-/**
- * GET /api/payroll/employee/:employeeId
- * Get payslips for specific employee
- */
-router.get('/employee/:employeeId', asyncHandler(async (req, res) => {
-  const { page, limit, skip } = req.pagination;
-  const { employeeId } = req.params;
-  const { year } = req.query;
-
-  const query = { employeeId };
-  
-  if (year) {
-    query.year = parseInt(year);
-  }
-
-  const total = await Payslip.countDocuments(query);
-
-  const payslips = await Payslip.find(query)
-    .populate('paidBy', 'name email')
-    .sort({ year: -1, month: -1 })
-    .skip(skip)
-    .limit(limit)
-    .lean(); // P0 FIX: Use .lean() for read-only queries
-
-  res.paginate(payslips, total);
-}));
-
-/**
- * GET /api/payroll/:id
- * Get single payslip
- */
-router.get('/:id', asyncHandler(async (req, res) => {
-  const payslip = await Payslip.findById(req.params.id)
-    .populate('employeeId', 'employeeCode department designation phone address')
-    .populate('userId', 'name email avatar organization')
-    .populate('paidBy', 'name email')
-    .lean(); // P0 FIX: Use .lean() for read-only queries
-
-  if (!payslip) {
-    return res.status(404).json({
-      success: false,
-      message: 'Payslip not found'
-    });
-  }
-
-  res.json({
-    success: true,
-    data: payslip
-  });
-}));
-
-/**
- * POST /api/payroll/generate
- * Generate payslip with smart automated payroll system
- */
-router.post('/generate', idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const { employeeId, month, year, orgId } = req.body;
-
-  // Validate required fields
-  if (!employeeId || !month || !year || !orgId) {
-    return res.status(400).json({
-      success: false,
-      message: 'employeeId, month, year, and orgId are required'
-    });
-  }
-
-  // Check if payslip already exists
-  const existingPayslip = await Payslip.findOne({
-    employeeId,
-    month,
-    year
-  }).lean();
-
-  if (existingPayslip) {
-    logger.warn('Duplicate payslip generation attempt prevented', {
-      employeeId,
-      month,
-      year,
-      existingPayslipId: existingPayslip._id
-    });
-    
-    return res.status(400).json({
-      success: false,
-      message: 'Payslip already exists for this employee and period',
-      code: 'DUPLICATE_PAYSLIP',
-      data: existingPayslip
-    });
-  }
-
-  // Use Automated Payroll System if available
-  if (global.automatedPayrollSystem) {
+router.get(
+  "/employee/dashboard",
+  authenticate,
+  asyncHandler(async (req, res) => {
     try {
-      const calculation = await global.automatedPayrollSystem.calculateEmployeePayroll(
-        employeeId,
-        month,
-        year
+      const userId = req.user.userId;
+      const orgId = req.user.orgId;
+
+      // Get employee details
+      const employee = await Employee.findOne({ userId, orgId });
+      if (!employee) {
+        return sendError(res, "Employee not found", 404, "NOT_FOUND");
+      }
+
+      // Get current salary structure
+      const currentSalaryStructure = await SalaryStructure.findOne({
+        employeeId: employee._id,
+        orgId,
+        status: "approved"
+      }).sort({ effectiveFrom: -1 });
+
+      if (!currentSalaryStructure) {
+        return sendError(res, "No approved salary structure found", 404, "NOT_FOUND");
+      }
+
+      // Get previous salary structure (if any)
+      const previousSalaryStructure = await SalaryStructure.findOne({
+        employeeId: employee._id,
+        orgId,
+        status: "approved",
+        _id: { $ne: currentSalaryStructure._id }
+      }).sort({ effectiveFrom: -1 });
+
+      // Get current payroll cycle
+      const currentCycle = PayrollCycleEngine.getCurrentPayrollCycle();
+
+      // Get salary revisions for history
+      const salaryRevisions = await SalaryRevision.find({
+        employeeId: employee._id,
+        status: "implemented"
+      })
+        .sort({ effectiveFrom: -1 })
+        .limit(12);
+
+      // Build salary history for chart
+      const salaryHistory = salaryRevisions.map((revision) => ({
+        month: new Date(revision.effectiveFrom).toLocaleDateString("en-US", {
+          month: "short",
+          year: "numeric"
+        }),
+        salary: revision.newBasic,
+        type: revision.revisionType
+      }));
+
+      // Add current salary to history if not already present
+      if (
+        salaryHistory.length === 0 ||
+        salaryHistory[0].salary !== currentSalaryStructure.earnings.basic
+      ) {
+        salaryHistory.unshift({
+          month: new Date().toLocaleDateString("en-US", {
+            month: "short",
+            year: "numeric"
+          }),
+          salary: currentSalaryStructure.earnings.basic,
+          type: "current"
+        });
+      }
+
+      // Calculate per-day salary
+      const perDaySalary = PayrollCalculationEngine.calculatePerDaySalary(
+        currentSalaryStructure.grossEarnings,
+        30,
+        "30-day"
       );
 
-      const payslip = await global.automatedPayrollSystem.generatePayslip(calculation, false);
+      // Build KPI data
+      const kpiData = {
+        currentAmount: currentSalaryStructure.earnings.basic,
+        previousAmount: previousSalaryStructure
+          ? previousSalaryStructure.earnings.basic
+          : 0,
+        effectiveFrom: currentSalaryStructure.effectiveFrom,
+        effectiveTo: currentSalaryStructure.effectiveTo,
+        perDayAmount: perDaySalary,
+        cycleStartDate: currentCycle.cycleStartDate,
+        cycleEndDate: currentCycle.cycleEndDate,
+        employeeType: employee.employmentType || "employee"
+      };
 
-      logger.info('Smart payslip generated', {
-        payslipId: payslip._id,
-        employeeId,
-        month,
-        year,
-        netSalary: calculation.netSalary
+      logger.info("Employee payroll dashboard data fetched", {
+        userId,
+        employeeId: employee._id
       });
 
-      return res.status(201).json({
-        success: true,
-        message: 'Payslip generated successfully with automated calculations',
-        data: {
-          payslip,
-          calculation: {
-            grossSalary: calculation.earnings.grossSalary,
-            totalDeductions: calculation.deductions.totalDeductions + calculation.taxes.totalTax,
-            netSalary: calculation.netSalary,
-            attendanceSummary: calculation.attendanceSummary,
-            leaveSummary: calculation.leaveSummary
-          }
-        }
-      });
-
-    } catch (payrollError) {
-      logger.warn('Smart payroll generation failed, falling back to basic', {
-        error: payrollError.message,
-        employeeId
-      });
-      
-      return res.status(400).json({
-        success: false,
-        message: payrollError.message
-      });
-    }
-  }
-
-  // Fallback to basic payroll generation
-  const employee = await Employee.findById(employeeId)
-    .populate('userId', 'name email')
-    .lean();
-
-  if (!employee) {
-    return res.status(404).json({
-      success: false,
-      message: 'Employee not found'
-    });
-  }
-
-  if (employee.status !== 'active') {
-    return res.status(400).json({
-      success: false,
-      message: 'Cannot generate payslip for inactive employee'
-    });
-  }
-
-  // Basic salary calculation
-  const baseSalary = employee.baseSalary || 0;
-  const hra = employee.hra || 0;
-  const bonus = employee.bonus || 0;
-  const incentives = employee.incentives || 0;
-  const allowances = employee.allowances || 0;
-  const grossSalary = baseSalary + hra + bonus + incentives + allowances;
-
-  const providentFund = employee.providentFund || 0;
-  const tax = employee.tax || 0;
-  const insurance = employee.insurance || 0;
-  const otherDeductions = employee.otherDeductions || 0;
-  const totalDeductions = providentFund + tax + insurance + otherDeductions;
-  const netPay = grossSalary - totalDeductions;
-
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const payslip = await Payslip.create([{
-      employeeId,
-      userId: employee.userId._id,
-      month,
-      year: parseInt(year),
-      grossSalary,
-      baseSalary,
-      hra,
-      bonus,
-      incentives,
-      allowances,
-      providentFund,
-      tax,
-      insurance,
-      otherDeductions,
-      totalDeductions,
-      netPay,
-      status: 'draft',
-      orgId
-    }], { session });
-
-    await session.commitTransaction();
-    
-    logger.info('Basic payslip generated', {
-      payslipId: payslip[0]._id,
-      employeeId,
-      month,
-      year,
-      netPay
-    });
-
-    const populatedPayslip = await Payslip.findById(payslip[0]._id)
-      .populate('employeeId', 'employeeCode department designation')
-      .populate('userId', 'name email')
-      .lean();
-
-    res.status(201).json({
-      success: true,
-      message: 'Payslip generated successfully',
-      data: { payslip: populatedPayslip }
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    logger.error('Payslip generation failed', { error: error.message, employeeId, month, year });
-    throw error;
-  } finally {
-    session.endSession();
-  }
-}));
-
-/**
- * POST /api/payroll/bulk-generate
- * Bulk generate payslips with automated payroll system
- */
-router.post('/bulk-generate', idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const { employeeIds, month, year, orgId, autoApprove = false } = req.body;
-
-  if (!month || !year || !orgId) {
-    return res.status(400).json({
-      success: false,
-      message: 'month, year, and orgId are required'
-    });
-  }
-
-  // Use Automated Payroll System if available
-  if (global.automatedPayrollSystem) {
-    try {
-      const result = await global.automatedPayrollSystem.processOrganizationPayroll(
-        orgId,
-        month,
-        year,
+      return sendSuccess(
+        res,
         {
-          employeeIds,
-          autoApprove,
-          generatePayslips: true,
-          sendNotifications: true
-        }
+          kpiData,
+          salaryHistory,
+          employeeType: employee.employmentType || "employee"
+        },
+        "Payroll dashboard data fetched successfully"
       );
+    } catch (error) {
+      logger.error("Get employee payroll dashboard error", {
+        error: error.message,
+        userId: req.user.userId
+      });
+      return sendError(res, "Failed to fetch payroll dashboard", 500, "FETCH_ERROR");
+    }
+  })
+);
 
-      logger.info('Smart bulk payroll processed', {
+/**
+ * GET /api/payroll/cycles
+ * Get all payroll cycles for a year
+ */
+router.get(
+  "/cycles",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    try {
+      const { year } = req.query;
+      const currentYear = year ? parseInt(year) : new Date().getFullYear();
+
+      const cycles = PayrollCycleEngine.getYearPayrollCycles(currentYear);
+
+      return sendSuccess(res, cycles, "Payroll cycles fetched successfully");
+    } catch (error) {
+      logger.error("Get payroll cycles error", {
+        error: error.message
+      });
+      return sendError(res, "Failed to fetch payroll cycles", 500, "FETCH_ERROR");
+    }
+  })
+);
+
+/**
+ * POST /api/payroll/cycle/create
+ * Create a new payroll cycle
+ */
+router.post(
+  "/cycle/create",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    try {
+      const { year, month } = req.body;
+      const orgId = req.user.orgId;
+
+      if (!year || !month) {
+        return sendError(res, "Year and month are required", 400, "VALIDATION_ERROR");
+      }
+
+      // Check if cycle already exists
+      const existingCycle = await PayrollCycle.findOne({
         orgId,
-        month,
         year,
-        totalEmployees: result.summary.totalEmployees,
-        successful: result.summary.successfulProcessing,
-        failed: result.summary.failedProcessing
+        month
       });
 
-      return res.status(201).json({
-        success: true,
-        message: `Payroll processed for ${result.summary.successfulProcessing} employees`,
-        data: {
-          summary: result.summary,
-          results: result.results,
-          errors: result.errors
-        }
+      if (existingCycle) {
+        return sendError(res, "Payroll cycle already exists", 400, "DUPLICATE_ERROR");
+      }
+
+      // Generate cycle dates
+      const cycleData = PayrollCycleEngine.generatePayrollCycle(year, month);
+
+      // Create new cycle
+      const payrollCycle = await PayrollCycle.create({
+        orgId,
+        cycleNumber: month,
+        year,
+        month,
+        cycleStartDate: cycleData.cycleStartDate,
+        cycleEndDate: cycleData.cycleEndDate,
+        salaryReleaseDate: cycleData.salaryReleaseDate,
+        salaryHoldUntil: cycleData.salaryHoldUntil,
+        status: "draft",
+        createdBy: req.user.userId
       });
 
-    } catch (payrollError) {
-      logger.warn('Smart bulk payroll failed, falling back to basic', {
-        error: payrollError.message,
+      logger.info("Payroll cycle created", {
+        cycleId: payrollCycle._id,
+        year,
+        month,
+        createdBy: req.user.userId
+      });
+
+      return sendSuccess(res, payrollCycle, "Payroll cycle created successfully", 201);
+    } catch (error) {
+      logger.error("Create payroll cycle error", {
+        error: error.message,
+        userId: req.user.userId
+      });
+      return sendError(res, "Failed to create payroll cycle", 500, "CREATE_ERROR");
+    }
+  })
+);
+
+/**
+ * POST /api/payroll/run/calculate
+ * Calculate payroll for an employee in a cycle
+ */
+router.post(
+  "/run/calculate",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    try {
+      const { employeeId, payrollCycleId } = req.body;
+      const orgId = req.user.orgId;
+
+      if (!employeeId || !payrollCycleId) {
+        return sendError(
+          res,
+          "Employee ID and Payroll Cycle ID are required",
+          400,
+          "VALIDATION_ERROR"
+        );
+      }
+
+      // Get payroll cycle
+      const payrollCycle = await PayrollCycle.findById(payrollCycleId);
+      if (!payrollCycle) {
+        return sendError(res, "Payroll cycle not found", 404, "NOT_FOUND");
+      }
+
+      // Get employee
+      const employee = await Employee.findById(employeeId);
+      if (!employee) {
+        return sendError(res, "Employee not found", 404, "NOT_FOUND");
+      }
+
+      // Get salary structure
+      const salaryStructure = await SalaryStructure.findOne({
+        employeeId,
+        orgId,
+        status: "approved"
+      }).sort({ effectiveFrom: -1 });
+
+      if (!salaryStructure) {
+        return sendError(res, "No approved salary structure found", 404, "NOT_FOUND");
+      }
+
+      // TODO: Get attendance data from Attendance collection
+      const attendanceData = {
+        totalWorkingDays: 22,
+        presentDays: 20,
+        absentDays: 0,
+        halfDays: 0,
+        unpaidLeaveDays: 0,
+        lateMarks: 0
+      };
+
+      // Calculate payroll
+      const payrollData = {
+        salaryStructure,
+        attendanceData,
+        employeeType: employee.employmentType,
+        cycleStartDate: payrollCycle.cycleStartDate,
+        cycleEndDate: payrollCycle.cycleEndDate,
+        salaryRevisions: []
+      };
+
+      const calculationResult = PayrollCalculationEngine.calculatePayroll(payrollData);
+
+      if (!calculationResult.success) {
+        return sendError(res, calculationResult.error, 500, "CALCULATION_ERROR");
+      }
+
+      // Create or update payroll run
+      let payrollRun = await PayrollRun.findOne({
+        payrollCycleId,
+        employeeId,
         orgId
       });
-      
-      return res.status(400).json({
-        success: false,
-        message: payrollError.message
+
+      if (!payrollRun) {
+        payrollRun = new PayrollRun({
+          payrollCycleId,
+          employeeId,
+          userId: employee.userId,
+          orgId,
+          employeeType: employee.employmentType,
+          salaryStructureId: salaryStructure._id,
+          cycleStartDate: payrollCycle.cycleStartDate,
+          cycleEndDate: payrollCycle.cycleEndDate,
+          attendanceData,
+          createdBy: req.user.userId
+        });
+      }
+
+      // Update with calculation results
+      payrollRun.earnings = calculationResult.earnings;
+      payrollRun.deductions = calculationResult.deductions;
+      payrollRun.grossEarnings = calculationResult.grossEarnings;
+      payrollRun.totalDeductions = calculationResult.totalDeductions;
+      payrollRun.netSalary = calculationResult.netSalary;
+      payrollRun.payableDaysCalculation = calculationResult.payableDaysData;
+      payrollRun.status = "calculated";
+
+      await payrollRun.save();
+
+      logger.info("Payroll calculated", {
+        payrollRunId: payrollRun._id,
+        employeeId,
+        netSalary: payrollRun.netSalary
       });
+
+      return sendSuccess(res, payrollRun, "Payroll calculated successfully");
+    } catch (error) {
+      logger.error("Calculate payroll error", {
+        error: error.message,
+        userId: req.user.userId
+      });
+      return sendError(res, "Failed to calculate payroll", 500, "CALCULATION_ERROR");
     }
-  }
-
-  // Fallback to basic bulk generation
-  if (!employeeIds || !Array.isArray(employeeIds) || employeeIds.length === 0) {
-    return res.status(400).json({
-      success: false,
-      message: 'employeeIds array is required for basic bulk generation'
-    });
-  }
-
-  // Check for existing payslips
-  const existingPayslips = await Payslip.find({
-    employeeId: { $in: employeeIds },
-    month,
-    year: parseInt(year)
-  }).lean();
-
-  const existingEmployeeIds = existingPayslips.map(p => p.employeeId.toString());
-  const newEmployeeIds = employeeIds.filter(id => !existingEmployeeIds.includes(id));
-
-  if (newEmployeeIds.length === 0) {
-    return res.status(400).json({
-      success: false,
-      message: 'All employees already have payslips for this period',
-      data: {
-        existing: existingPayslips.length,
-        skipped: employeeIds.length
-      }
-    });
-  }
-
-  const employees = await Employee.find({
-    _id: { $in: newEmployeeIds },
-    status: 'active'
-  }).populate('userId', 'name email').lean();
-
-  if (employees.length === 0) {
-    return res.status(404).json({
-      success: false,
-      message: 'No active employees found'
-    });
-  }
-
-  const payslipsToCreate = employees.map(employee => {
-    const baseSalary = employee.baseSalary || 0;
-    const hra = employee.hra || 0;
-    const bonus = employee.bonus || 0;
-    const incentives = employee.incentives || 0;
-    const allowances = employee.allowances || 0;
-    const grossSalary = baseSalary + hra + bonus + incentives + allowances;
-
-    const providentFund = employee.providentFund || 0;
-    const tax = employee.tax || 0;
-    const insurance = employee.insurance || 0;
-    const otherDeductions = employee.otherDeductions || 0;
-    const totalDeductions = providentFund + tax + insurance + otherDeductions;
-    const netPay = grossSalary - totalDeductions;
-
-    return {
-      employeeId: employee._id,
-      userId: employee.userId._id,
-      month,
-      year: parseInt(year),
-      grossSalary,
-      baseSalary,
-      hra,
-      bonus,
-      incentives,
-      allowances,
-      providentFund,
-      tax,
-      insurance,
-      otherDeductions,
-      totalDeductions,
-      netPay,
-      status: 'draft',
-      orgId
-    };
-  });
-
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const payslips = await Payslip.insertMany(payslipsToCreate, { session });
-    await session.commitTransaction();
-
-    logger.info('Basic bulk payslips generated', {
-      count: payslips.length,
-      month,
-      year,
-      skipped: existingPayslips.length
-    });
-
-    res.status(201).json({
-      success: true,
-      message: `${payslips.length} payslips generated successfully`,
-      data: {
-        generated: payslips.length,
-        skipped: existingPayslips.length,
-        total: employeeIds.length
-      }
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    logger.error('Basic bulk payslip generation failed', { error: error.message });
-    throw error;
-  } finally {
-    session.endSession();
-  }
-}));
-
-/**
- * PATCH /api/payroll/:id/mark-paid
- * Mark payslip as paid with optimistic locking
- * P0 CRITICAL: Prevents double payment
- */
-router.patch('/:id/mark-paid', idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const { paidBy } = req.body;
-
-  if (!paidBy) {
-    return res.status(400).json({
-      success: false,
-      message: 'paidBy is required'
-    });
-  }
-
-  // Get current payslip
-  const payslip = await Payslip.findById(id);
-
-  if (!payslip) {
-    return res.status(404).json({
-      success: false,
-      message: 'Payslip not found'
-    });
-  }
-
-  if (payslip.status === 'paid') {
-    logger.warn('Duplicate payment attempt prevented', {
-      payslipId: id,
-      paidBy
-    });
-    
-    return res.status(400).json({
-      success: false,
-      message: 'Payslip is already marked as paid',
-      code: 'ALREADY_PAID',
-      data: payslip
-    });
-  }
-
-  // P0 CRITICAL: Optimistic locking with version check
-  const updated = await Payslip.findOneAndUpdate(
-    {
-      _id: id,
-      __v: payslip.__v, // Version check
-      status: { $ne: 'paid' } // Double-check not already paid
-    },
-    {
-      $set: {
-        status: 'paid',
-        paidBy,
-        paidDate: new Date()
-      },
-      $inc: { __v: 1 }
-    },
-    { new: true }
-  ).populate('employeeId', 'employeeCode department')
-   .populate('userId', 'name email')
-   .populate('paidBy', 'name email');
-
-  if (!updated) {
-    return res.status(409).json({
-      success: false,
-      message: 'Payslip was modified by another user. Please refresh and try again.',
-      code: 'VERSION_CONFLICT'
-    });
-  }
-
-  logger.info('Payslip marked as paid', { payslipId: id, paidBy });
-
-  res.json({
-    success: true,
-    message: 'Payslip marked as paid successfully',
-    data: updated
-  });
-}));
-
-/**
- * PUT /api/payroll/:id
- * Update payslip (only draft status) with optimistic locking
- */
-router.put('/:id', asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const updateData = req.body;
-
-  // Remove fields that shouldn't be updated
-  delete updateData._id;
-  delete updateData.employeeId;
-  delete updateData.userId;
-  delete updateData.status;
-  delete updateData.paidBy;
-  delete updateData.paidDate;
-  delete updateData.createdAt;
-  delete updateData.updatedAt;
-
-  // Recalculate totals
-  const {
-    baseSalary = 0,
-    hra = 0,
-    bonus = 0,
-    incentives = 0,
-    allowances = 0,
-    providentFund = 0,
-    tax = 0,
-    insurance = 0,
-    otherDeductions = 0,
-    advanceDeductions = 0,
-    loanDeductions = 0
-  } = updateData;
-
-  updateData.grossSalary = baseSalary + hra + bonus + incentives + allowances;
-  updateData.totalDeductions = providentFund + tax + insurance + otherDeductions + advanceDeductions + loanDeductions;
-  updateData.netPay = updateData.grossSalary - updateData.totalDeductions;
-
-  // P0 FIX: Optimistic locking
-  const currentVersion = updateData.__v;
-  delete updateData.__v;
-
-  const query = { _id: id, status: 'draft' }; // Only update draft payslips
-  if (currentVersion !== undefined) {
-    query.__v = currentVersion;
-  }
-
-  const payslip = await Payslip.findOneAndUpdate(
-    query,
-    {
-      $set: updateData,
-      $inc: { __v: 1 }
-    },
-    { new: true, runValidators: true }
-  ).populate('employeeId', 'employeeCode department')
-   .populate('userId', 'name email');
-
-  if (!payslip) {
-    return res.status(409).json({
-      success: false,
-      message: 'Payslip was modified or is no longer in draft status. Please refresh and try again.',
-      code: 'VERSION_CONFLICT'
-    });
-  }
-
-  logger.info('Payslip updated', { payslipId: id });
-
-  res.json({
-    success: true,
-    message: 'Payslip updated successfully',
-    data: payslip
-  });
-}));
-
-/**
- * DELETE /api/payroll/:id
- * Delete payslip (only draft status)
- */
-router.delete('/:id', asyncHandler(async (req, res) => {
-  const { id } = req.params;
-
-  const payslip = await Payslip.findOneAndDelete({
-    _id: id,
-    status: 'draft' // Only delete draft payslips
-  });
-
-  if (!payslip) {
-    return res.status(404).json({
-      success: false,
-      message: 'Payslip not found or cannot be deleted'
-    });
-  }
-
-  logger.info('Payslip deleted', { payslipId: id });
-
-  res.json({
-    success: true,
-    message: 'Payslip deleted successfully'
-  });
-}));
-
-/**
- * GET /api/payroll/stats/summary
- * Get payroll statistics
- */
-router.get('/stats/summary', asyncHandler(async (req, res) => {
-  const { orgId, year, month } = req.query;
-
-  const query = {};
-  
-  if (orgId) {
-    query.orgId = orgId;
-  }
-  
-  if (year) {
-    query.year = parseInt(year);
-  }
-  
-  if (month) {
-    query.month = month;
-  }
-
-  const [total, draft, paid, pending, totalPayout, byStatus, byMonth] = await Promise.all([
-    Payslip.countDocuments(query),
-    Payslip.countDocuments({ ...query, status: 'draft' }),
-    Payslip.countDocuments({ ...query, status: 'paid' }),
-    Payslip.countDocuments({ ...query, status: 'pending' }),
-    Payslip.aggregate([
-      { $match: query },
-      { $group: { _id: null, total: { $sum: '$netPay' } } }
-    ]),
-    Payslip.aggregate([
-      { $match: query },
-      { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$netPay' } } }
-    ]),
-    Payslip.aggregate([
-      { $match: query },
-      { $group: { _id: { year: '$year', month: '$month' }, count: { $sum: 1 }, total: { $sum: '$netPay' } } },
-      { $sort: { '_id.year': -1, '_id.month': -1 } },
-      { $limit: 12 }
-    ])
-  ]);
-
-  res.json({
-    success: true,
-    data: {
-      total,
-      draft,
-      paid,
-      pending,
-      totalPayout: totalPayout[0]?.total || 0,
-      byStatus,
-      byMonth
-    }
-  });
-}));
-
-/**
- * POST /api/payroll/config
- * Set payroll configuration for organization
- */
-router.post('/config', asyncHandler(async (req, res) => {
-  const { orgId, config } = req.body;
-
-  if (!orgId || !config) {
-    return res.status(400).json({
-      success: false,
-      message: 'orgId and config are required'
-    });
-  }
-
-  if (!global.automatedPayrollSystem) {
-    return res.status(503).json({
-      success: false,
-      message: 'Automated payroll system not available'
-    });
-  }
-
-  const updatedConfig = global.automatedPayrollSystem.setOrganizationConfig(orgId, config);
-
-  logger.info('Payroll configuration updated', { orgId });
-
-  res.json({
-    success: true,
-    message: 'Payroll configuration updated successfully',
-    data: updatedConfig
-  });
-}));
-
-/**
- * GET /api/payroll/config/:orgId
- * Get payroll configuration for organization
- */
-router.get('/config/:orgId', asyncHandler(async (req, res) => {
-  const { orgId } = req.params;
-
-  if (!global.automatedPayrollSystem) {
-    return res.status(503).json({
-      success: false,
-      message: 'Automated payroll system not available'
-    });
-  }
-
-  const config = global.automatedPayrollSystem.getOrganizationConfig(orgId);
-
-  res.json({
-    success: true,
-    data: config
-  });
-}));
-
-/**
- * POST /api/payroll/calculate
- * Calculate payroll for employee without generating payslip
- */
-router.post('/calculate', asyncHandler(async (req, res) => {
-  const { employeeId, month, year } = req.body;
-
-  if (!employeeId || !month || !year) {
-    return res.status(400).json({
-      success: false,
-      message: 'employeeId, month, and year are required'
-    });
-  }
-
-  if (!global.automatedPayrollSystem) {
-    return res.status(503).json({
-      success: false,
-      message: 'Automated payroll system not available'
-    });
-  }
-
-  const calculation = await global.automatedPayrollSystem.calculateEmployeePayroll(
-    employeeId,
-    month,
-    year
-  );
-
-  res.json({
-    success: true,
-    message: 'Payroll calculated successfully',
-    data: calculation
-  });
-}));
-
-/**
- * GET /api/payroll/analytics/:orgId/:year
- * Get payroll analytics for organization
- */
-router.get('/analytics/:orgId/:year', asyncHandler(async (req, res) => {
-  const { orgId, year } = req.params;
-
-  if (!global.automatedPayrollSystem) {
-    return res.status(503).json({
-      success: false,
-      message: 'Automated payroll system not available'
-    });
-  }
-
-  const analytics = await global.automatedPayrollSystem.getPayrollAnalytics(
-    orgId,
-    parseInt(year)
-  );
-
-  res.json({
-    success: true,
-    data: analytics
-  });
-}));
-
-/**
- * GET /api/payroll/system/stats
- * Get payroll system statistics
- */
-router.get('/system/stats', asyncHandler(async (req, res) => {
-  if (!global.automatedPayrollSystem) {
-    return res.status(503).json({
-      success: false,
-      message: 'Automated payroll system not available'
-    });
-  }
-
-  const stats = global.automatedPayrollSystem.getSystemStats();
-
-  res.json({
-    success: true,
-    data: stats
-  });
-}));
+  })
+);
 
 export default router;

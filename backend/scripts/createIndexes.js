@@ -1,102 +1,89 @@
 /**
  * Database Index Creation Script
- * Run this to ensure all indexes are created in MongoDB
- * 
- * Usage: node scripts/createIndexes.js
+ * Run this once before production deployment
+ * Usage: node backend/scripts/createIndexes.js
  */
 
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import logger from '../utils/logger.js';
 
-dotenv.config();
+dotenv.config({ path: '.env.production' });
 
 // Import models
 import User from '../models/User.js';
 import Employee from '../models/Employee.js';
-import Document from '../models/Document.js';
-import Company from '../models/Company.js';
 import Attendance from '../models/Attendance.js';
-import LeaveRequest from '../models/LeaveRequest.js';
 import Expense from '../models/Expense.js';
-import Payroll from '../models/Payroll.js';
+import LeaveRequest from '../models/LeaveRequest.js';
+import Notification from '../models/Notification.js';
+import ActivityLog from '../models/ActivityLog.js';
 
 const createIndexes = async () => {
   try {
-    console.log('🔗 Connecting to MongoDB...');
-    
-    await mongoose.connect(process.env.MONGODB_URI, {
-      serverSelectionTimeoutMS: 30000
-    });
-    
+    console.log('🔄 Connecting to MongoDB...');
+    await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ Connected to MongoDB');
-    console.log('');
-    console.log('📊 Creating indexes...');
-    console.log('');
+
+    console.log('\n📊 Creating indexes...\n');
 
     // User indexes
     console.log('Creating User indexes...');
-    await User.ensureIndexes();
-    console.log('  ✅ User indexes created');
-    
+    await User.collection.createIndex({ email: 1 }, { unique: true });
+    await User.collection.createIndex({ orgId: 1, role: 1 });
+    await User.collection.createIndex({ createdAt: -1 });
+    await User.collection.createIndex({ lastLogin: -1 });
+    await User.collection.createIndex({ 'profile.firstName': 1, 'profile.lastName': 1 });
+    console.log('✅ User indexes created');
+
     // Employee indexes
     console.log('Creating Employee indexes...');
-    await Employee.ensureIndexes();
-    console.log('  ✅ Employee indexes created');
-    
-    // Document indexes
-    console.log('Creating Document indexes...');
-    await Document.ensureIndexes();
-    console.log('  ✅ Document indexes created');
-    
-    // Company indexes
-    console.log('Creating Company indexes...');
-    await Company.ensureIndexes();
-    console.log('  ✅ Company indexes created');
-    
+    await Employee.collection.createIndex({ userId: 1 }, { unique: true });
+    await Employee.collection.createIndex({ orgId: 1, status: 1 });
+    await Employee.collection.createIndex({ orgId: 1, department: 1 });
+    await Employee.collection.createIndex({ employeeCode: 1 }, { sparse: true });
+    await Employee.collection.createIndex({ createdAt: -1 });
+    console.log('✅ Employee indexes created');
+
     // Attendance indexes
     console.log('Creating Attendance indexes...');
-    await Attendance.ensureIndexes();
-    console.log('  ✅ Attendance indexes created');
-    
-    // LeaveRequest indexes
-    console.log('Creating LeaveRequest indexes...');
-    await LeaveRequest.ensureIndexes();
-    console.log('  ✅ LeaveRequest indexes created');
-    
+    await Attendance.collection.createIndex({ userId: 1, orgId: 1, date: 1 });
+    await Attendance.collection.createIndex({ employeeId: 1, date: 1 });
+    await Attendance.collection.createIndex({ orgId: 1, date: -1 });
+    await Attendance.collection.createIndex({ createdAt: -1 });
+    console.log('✅ Attendance indexes created');
+
     // Expense indexes
     console.log('Creating Expense indexes...');
-    await Expense.ensureIndexes();
-    console.log('  ✅ Expense indexes created');
-    
-    // Payroll indexes
-    console.log('Creating Payroll indexes...');
-    await Payroll.ensureIndexes();
-    console.log('  ✅ Payroll indexes created');
+    await Expense.collection.createIndex({ userId: 1, status: 1, createdAt: -1 });
+    await Expense.collection.createIndex({ orgId: 1, status: 1 });
+    await Expense.collection.createIndex({ createdAt: -1 });
+    console.log('✅ Expense indexes created');
 
-    console.log('');
-    console.log('✅ All indexes created successfully!');
-    
-    // List all indexes
-    console.log('');
-    console.log('📋 Index summary:');
-    
-    const collections = await mongoose.connection.db.listCollections().toArray();
-    
-    for (const collection of collections) {
-      const indexes = await mongoose.connection.db.collection(collection.name).indexes();
-      console.log(`\n  ${collection.name}:`);
-      indexes.forEach(idx => {
-        console.log(`    - ${idx.name}: ${JSON.stringify(idx.key)}`);
-      });
-    }
-    
-    await mongoose.connection.close();
-    console.log('\n👋 Done!');
+    // LeaveRequest indexes
+    console.log('Creating LeaveRequest indexes...');
+    await LeaveRequest.collection.createIndex({ employeeId: 1, status: 1, startDate: 1 });
+    await LeaveRequest.collection.createIndex({ orgId: 1, status: 1 });
+    await LeaveRequest.collection.createIndex({ createdAt: -1 });
+    console.log('✅ LeaveRequest indexes created');
+
+    // Notification indexes
+    console.log('Creating Notification indexes...');
+    await Notification.collection.createIndex({ userId: 1, isRead: 1, createdAt: -1 });
+    await Notification.collection.createIndex({ orgId: 1, createdAt: -1 });
+    console.log('✅ Notification indexes created');
+
+    // ActivityLog indexes
+    console.log('Creating ActivityLog indexes...');
+    await ActivityLog.collection.createIndex({ userId: 1, createdAt: -1 });
+    await ActivityLog.collection.createIndex({ orgId: 1, createdAt: -1 });
+    await ActivityLog.collection.createIndex({ action: 1, createdAt: -1 });
+    console.log('✅ ActivityLog indexes created');
+
+    console.log('\n✅ All indexes created successfully!');
     process.exit(0);
-    
   } catch (error) {
     console.error('❌ Error creating indexes:', error.message);
-    console.error(error.stack);
     process.exit(1);
   }
 };

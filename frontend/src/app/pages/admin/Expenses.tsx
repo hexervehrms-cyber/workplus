@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
-import { Receipt, Search, Filter, Download, Eye, CheckCircle, AlertCircle, Tag, Car, Utensils, Home, Briefcase, Plane, Heart, Book, ShoppingCart, Coffee, IndianRupee, Edit, Trash2, XCircle, Loader } from 'lucide-react';
+import { Receipt, Search, Filter, Download, Eye, CheckCircle, AlertCircle, Tag, Car, Utensils, Home, Briefcase, Plane, Heart, Book, ShoppingCart, Coffee, IndianRupee, Edit, Trash2, XCircle, Loader, Train, Fuel, Hotel, Phone, Wifi, Laptop, Printer, FileText, Users, Lightbulb, Wrench, GraduationCap, Stethoscope, Building2, Truck, Package, FileDown, FileUp } from 'lucide-react';
 import { useCurrency } from '../../context/CurrencyContext';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
@@ -20,18 +20,50 @@ interface Expense {
   date: string;
   status: string;
   title: string;
+  approvedBy?: {
+    _id: string;
+    name: string;
+  };
 }
 
 const expenseCategories = [
-  { name: 'Travel', icon: Car, color: 'bg-blue-100 text-blue-800' },
-  { name: 'Food', icon: Utensils, color: 'bg-orange-100 text-orange-800' },
-  { name: 'Office', icon: Briefcase, color: 'bg-purple-100 text-purple-800' },
-  { name: 'Home', icon: Home, color: 'bg-green-100 text-green-800' },
-  { name: 'Entertainment', icon: Coffee, color: 'bg-pink-100 text-pink-800' },
-  { name: 'Health', icon: Heart, color: 'bg-red-100 text-red-800' },
-  { name: 'Education', icon: Book, color: 'bg-indigo-100 text-indigo-800' },
-  { name: 'Shopping', icon: ShoppingCart, color: 'bg-yellow-100 text-yellow-800' },
-  { name: 'Other', icon: Tag, color: 'bg-gray-100 text-gray-800' }
+  // Travel & Conveyance (Section 10(14))
+  { name: 'Travel - Local Conveyance', icon: Car, color: 'bg-blue-100 text-blue-800' },
+  { name: 'Travel - Intercity/Interstate', icon: Train, color: 'bg-blue-200 text-blue-900' },
+  { name: 'Travel - Air Fare', icon: Plane, color: 'bg-sky-100 text-sky-800' },
+  { name: 'Travel - Fuel & Mileage', icon: Fuel, color: 'bg-orange-100 text-orange-800' },
+  { name: 'Travel - Hotel & Lodging', icon: Hotel, color: 'bg-purple-100 text-purple-800' },
+  
+  // Meals & Entertainment (Section 37)
+  { name: 'Meals - Business', icon: Utensils, color: 'bg-amber-100 text-amber-800' },
+  { name: 'Client Entertainment', icon: Coffee, color: 'bg-pink-100 text-pink-800' },
+  
+  // Office & Equipment (Section 32 - Depreciation)
+  { name: 'Office Supplies & Stationery', icon: FileText, color: 'bg-indigo-100 text-indigo-800' },
+  { name: 'Computer & IT Equipment', icon: Laptop, color: 'bg-violet-100 text-violet-800' },
+  { name: 'Office Equipment', icon: Printer, color: 'bg-slate-100 text-slate-800' },
+  { name: 'Furniture & Fixtures', icon: Building2, color: 'bg-stone-100 text-stone-800' },
+  
+  // Communication (Section 37)
+  { name: 'Telephone & Mobile', icon: Phone, color: 'bg-green-100 text-green-800' },
+  { name: 'Internet & Broadband', icon: Wifi, color: 'bg-teal-100 text-teal-800' },
+  
+  // Professional Development (Section 37)
+  { name: 'Training & Certification', icon: GraduationCap, color: 'bg-emerald-100 text-emerald-800' },
+  { name: 'Books & Subscriptions', icon: Book, color: 'bg-cyan-100 text-cyan-800' },
+  { name: 'Conference & Seminars', icon: Users, color: 'bg-blue-100 text-blue-900' },
+  
+  // Medical & Health (Section 17(2))
+  { name: 'Medical Expenses', icon: Stethoscope, color: 'bg-red-100 text-red-800' },
+  { name: 'Health Insurance Premium', icon: Heart, color: 'bg-rose-100 text-rose-800' },
+  
+  // Utilities & Maintenance (Section 37)
+  { name: 'Utilities - Electricity/Water', icon: Lightbulb, color: 'bg-yellow-100 text-yellow-800' },
+  { name: 'Repairs & Maintenance', icon: Wrench, color: 'bg-gray-100 text-gray-800' },
+  
+  // Miscellaneous
+  { name: 'Courier & Shipping', icon: Truck, color: 'bg-orange-200 text-orange-900' },
+  { name: 'Miscellaneous', icon: Tag, color: 'bg-gray-200 text-gray-700' }
 ];
 
 // Currency amount display component with INR icon
@@ -60,9 +92,13 @@ export default function ExpensesAdmin() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isActionDialogOpen, setIsActionDialogOpen] = useState(false);
   const [isNewExpenseDialogOpen, setIsNewExpenseDialogOpen] = useState(false);
+  const [isViewReceiptDialogOpen, setIsViewReceiptDialogOpen] = useState(false);
+  const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
   const [actionType, setActionType] = useState<'edit' | 'approve' | 'reject' | 'delete'>('edit');
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [selectedExpenses, setSelectedExpenses] = useState<Set<string>>(new Set());
+  const [selectAll, setSelectAll] = useState(false);
   const [editFormData, setEditFormData] = useState({
     title: '',
     category: '',
@@ -81,12 +117,13 @@ export default function ExpensesAdmin() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [totalExpenses, setTotalExpenses] = useState(0);
   const [page, setPage] = useState(1);
+  const [importingFile, setImportingFile] = useState(false);
 
   // Fetch expenses from API
   const fetchExpenses = useCallback(async () => {
     try {
       const token = localStorage.getItem('authToken');
-      const response = await fetch(`http://localhost:5000/api/expenses?page=${page}&limit=10`, {
+      const response = await fetch(`/api/expenses?page=${page}&limit=10`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -156,7 +193,8 @@ export default function ExpensesAdmin() {
     try {
       // Create a link element
       const link = document.createElement('a');
-      link.href = `http://localhost:5000${receiptPath}`;
+      const apiUrl = (import.meta as any).env.VITE_API_URL === '/api' ? '' : ((import.meta as any).env.VITE_API_URL || '');
+      link.href = `${apiUrl}${receiptPath}`;
       link.download = `${expenseTitle}-receipt${receiptPath.substring(receiptPath.lastIndexOf('.'))}`;
       link.target = '_blank';
       
@@ -208,6 +246,126 @@ export default function ExpensesAdmin() {
     setIsActionDialogOpen(true);
   };
 
+  const handleViewReceipt = (receiptUrl: string) => {
+    if (!receiptUrl) {
+      toast.error('No receipt available');
+      return;
+    }
+    
+    // Construct the full backend URL for the receipt
+    const apiUrl = (import.meta as any).env.VITE_API_URL || '';
+    
+    // Remove /api from the end if present to get the base backend URL
+    let baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
+    if (baseUrl.endsWith('/api')) {
+      baseUrl = baseUrl.slice(0, -4); // Remove '/api'
+    }
+    
+    // If receiptUrl is a relative path, prepend the backend URL
+    let fullUrl = receiptUrl;
+    if (receiptUrl.startsWith('/')) {
+      fullUrl = `${baseUrl}${receiptUrl}`;
+    }
+    
+    setViewingReceipt(fullUrl);
+    setIsViewReceiptDialogOpen(true);
+  };
+
+  // Handle checkbox toggle
+  const handleCheckboxChange = (expenseId: string) => {
+    const newSelected = new Set(selectedExpenses);
+    if (newSelected.has(expenseId)) {
+      newSelected.delete(expenseId);
+    } else {
+      newSelected.add(expenseId);
+    }
+    setSelectedExpenses(newSelected);
+    setSelectAll(false);
+  };
+
+  // Handle select all
+  const handleSelectAll = () => {
+    if (selectAll) {
+      setSelectedExpenses(new Set());
+      setSelectAll(false);
+    } else {
+      const allIds = new Set(filteredExpenses.map(e => e._id));
+      setSelectedExpenses(allIds);
+      setSelectAll(true);
+    }
+  };
+
+  // Handle bulk approve
+  const handleBulkApprove = async () => {
+    if (selectedExpenses.size === 0) {
+      toast.error('Please select expenses to approve');
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      const token = localStorage.getItem('authToken');
+      
+      for (const expenseId of selectedExpenses) {
+        await fetch(`/api/expenses/${expenseId}/approve`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+      }
+
+      toast.success(`${selectedExpenses.size} expense(s) approved`);
+      setSelectedExpenses(new Set());
+      setSelectAll(false);
+      await fetchExpenses();
+    } catch (error) {
+      console.error('Error approving expenses:', error);
+      toast.error('Failed to approve expenses');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Handle bulk reject
+  const handleBulkReject = async () => {
+    if (selectedExpenses.size === 0) {
+      toast.error('Please select expenses to reject');
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      const token = localStorage.getItem('authToken');
+      
+      for (const expenseId of selectedExpenses) {
+        await fetch(`/api/expenses/${expenseId}/reject`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            rejectionReason: rejectReason
+          })
+        });
+      }
+
+      toast.success(`${selectedExpenses.size} expense(s) rejected`);
+      setSelectedExpenses(new Set());
+      setSelectAll(false);
+      setRejectReason('');
+      setIsActionDialogOpen(false);
+      await fetchExpenses();
+    } catch (error) {
+      console.error('Error rejecting expenses:', error);
+      toast.error('Failed to reject expenses');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Process action
   const processAction = async () => {
     if (!selectedExpense) return;
@@ -227,7 +385,7 @@ export default function ExpensesAdmin() {
         };
         console.log('Sending update data:', updateData);
         
-        const response = await fetch(`http://localhost:5000/api/expenses/${selectedExpense._id}`, {
+        const response = await fetch(`/api/expenses/${selectedExpense._id}`, {
           method: 'PUT',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -245,7 +403,7 @@ export default function ExpensesAdmin() {
         await fetchExpenses();
       } else if (actionType === 'approve') {
         // Approve expense
-        const response = await fetch(`http://localhost:5000/api/expenses/${selectedExpense._id}/approve`, {
+        const response = await fetch(`/api/expenses/${selectedExpense._id}/approve`, {
           method: 'PUT',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -263,28 +421,36 @@ export default function ExpensesAdmin() {
         await fetchExpenses();
         console.log('Expenses list updated after approval');
       } else if (actionType === 'reject') {
-        // Reject expense
-        const response = await fetch(`http://localhost:5000/api/expenses/${selectedExpense._id}/reject`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            rejectionReason: rejectReason
-          })
-        });
+        // Reject expense (single or bulk)
+        if (selectedExpenses.size > 0) {
+          // Bulk reject
+          await handleBulkReject();
+          return;
+        } else if (selectedExpense) {
+          // Single reject
+          const response = await fetch(`/api/expenses/${selectedExpense._id}/reject`, {
+            method: 'PUT',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              rejectionReason: rejectReason
+            })
+          });
 
-        if (!response.ok) {
-          throw new Error('Failed to reject expense');
+          if (!response.ok) {
+            throw new Error('Failed to reject expense');
+          }
+
+          toast.success('Expense rejected');
+          setIsActionDialogOpen(false);
+          await fetchExpenses();
         }
-
-        toast.success('Expense rejected');
-        setIsActionDialogOpen(false);
         await fetchExpenses();
       } else if (actionType === 'delete') {
         // Delete expense
-        const response = await fetch(`http://localhost:5000/api/expenses/${selectedExpense._id}`, {
+        const response = await fetch(`/api/expenses/${selectedExpense._id}`, {
           method: 'DELETE',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -318,7 +484,7 @@ export default function ExpensesAdmin() {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:5000/api/expenses', {
+      const response = await fetch('/api/expenses', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -355,6 +521,326 @@ export default function ExpensesAdmin() {
     }
   };
 
+  // Export expenses to CSV or Excel
+  const handleExportExpenses = async (format: 'csv' | 'excel') => {
+    try {
+      if (expenses.length === 0) {
+        toast.error('No expenses to export');
+        return;
+      }
+
+      // Prepare data for export
+      const exportData = expenses.map(expense => ({
+        'Employee': expense.employeeName || '',
+        'Title': expense.title || '',
+        'Category': expense.category || '',
+        'Amount': expense.amount || 0,
+        'Date': new Date(expense.date).toLocaleDateString('en-IN'),
+        'Status': expense.status || '',
+        'Description': expense.description || ''
+      }));
+
+      if (format === 'csv') {
+        // Export as CSV
+        const headers = Object.keys(exportData[0]);
+        const csvContent = [
+          headers.join(','),
+          ...exportData.map(row =>
+            headers.map(header => {
+              const value = row[header as keyof typeof row];
+              const stringValue = String(value);
+              return stringValue.includes(',') ? `"${stringValue.replace(/"/g, '""')}"` : stringValue;
+            }).join(',')
+          )
+        ].join('\n');
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', `expenses-${new Date().toISOString().split('T')[0]}.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        toast.success('Expenses exported as CSV');
+      } else {
+        // Export as Excel
+        const headers = Object.keys(exportData[0]);
+        let excelContent = headers.join('\t') + '\n';
+        excelContent += exportData.map(row =>
+          headers.map(header => row[header as keyof typeof row]).join('\t')
+        ).join('\n');
+
+        const blob = new Blob([excelContent], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', `expenses-${new Date().toISOString().split('T')[0]}.xls`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        toast.success('Expenses exported as Excel');
+      }
+    } catch (error) {
+      console.error('Export error:', error);
+      toast.error('Failed to export expenses');
+    }
+  };
+
+  // Import expenses from CSV or Excel
+  const handleImportExpenses = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setImportingFile(true);
+      const text = await file.text();
+      
+      // Detect delimiter (comma or tab)
+      const firstLine = text.split('\n')[0];
+      const delimiter = firstLine.includes('\t') ? '\t' : ',';
+      
+      // Split by newline and filter empty lines
+      const lines = text.split('\n').filter(line => line.trim());
+      
+      if (lines.length < 2) {
+        toast.error('Invalid file format - file must have header and at least one data row');
+        return;
+      }
+
+      // Parse headers with proper CSV handling
+      const parseCSVLine = (line: string, delim: string) => {
+        const result = [];
+        let current = '';
+        let insideQuotes = false;
+        
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          const nextChar = line[i + 1];
+          
+          if (char === '"') {
+            if (insideQuotes && nextChar === '"') {
+              current += '"';
+              i++;
+            } else {
+              insideQuotes = !insideQuotes;
+            }
+          } else if (char === delim && !insideQuotes) {
+            result.push(current.trim().replace(/^"|"$/g, ''));
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        result.push(current.trim().replace(/^"|"$/g, ''));
+        return result;
+      };
+
+      const headers = parseCSVLine(lines[0], delimiter).map(h => h.toLowerCase());
+      
+      // Find column indices with flexible matching
+      const titleIndex = headers.findIndex(h => h.includes('title') || h.includes('expense') || h.includes('description'));
+      const categoryIndex = headers.findIndex(h => h.includes('category') || h.includes('type'));
+      const amountIndex = headers.findIndex(h => h.includes('amount') || h.includes('cost') || h.includes('price'));
+      const dateIndex = headers.findIndex(h => h.includes('date'));
+      const descriptionIndex = headers.findIndex(h => h.includes('description') || h.includes('notes') || h.includes('remarks'));
+
+      if (titleIndex === -1 || categoryIndex === -1 || amountIndex === -1) {
+        toast.error('CSV must contain Title/Expense, Category/Type, and Amount/Cost columns');
+        return;
+      }
+
+      // Parse data rows
+      const importedExpenses = [];
+      const failedRows = [];
+      
+      for (let i = 1; i < lines.length; i++) {
+        try {
+          const values = parseCSVLine(lines[i], delimiter);
+          
+          // Skip empty rows
+          if (values.every(v => !v)) continue;
+          
+          // Validate required fields exist
+          if (!values[titleIndex] || !values[categoryIndex] || !values[amountIndex]) {
+            failedRows.push({
+              row: i + 1,
+              reason: 'Missing required fields (Title, Category, or Amount)'
+            });
+            continue;
+          }
+
+          const title = values[titleIndex].trim();
+          const category = values[categoryIndex].trim();
+          const amountStr = values[amountIndex].trim();
+          const amount = parseFloat(amountStr.replace(/[^0-9.-]/g, '')) || 0;
+          
+          // Validate amount
+          if (amount <= 0) {
+            failedRows.push({
+              row: i + 1,
+              reason: `Invalid amount: ${amountStr}`
+            });
+            continue;
+          }
+
+          // Parse date
+          let dateStr = new Date().toISOString().split('T')[0];
+          if (dateIndex !== -1 && values[dateIndex]) {
+            try {
+              const parsedDate = new Date(values[dateIndex].trim());
+              if (!isNaN(parsedDate.getTime())) {
+                dateStr = parsedDate.toISOString().split('T')[0];
+              }
+            } catch (e) {
+              console.warn(`Could not parse date: ${values[dateIndex]}`);
+            }
+          }
+
+          const expense = {
+            title,
+            category,
+            amount,
+            date: dateStr,
+            description: descriptionIndex !== -1 ? values[descriptionIndex]?.trim() || '' : ''
+          };
+
+          importedExpenses.push(expense);
+        } catch (rowError) {
+          console.error(`Error parsing row ${i + 1}:`, rowError);
+          failedRows.push({
+            row: i + 1,
+            reason: 'Error parsing row data'
+          });
+        }
+      }
+
+      if (importedExpenses.length === 0) {
+        const errorMsg = failedRows.length > 0 
+          ? `No valid expenses found. Issues: ${failedRows.map(r => `Row ${r.row}: ${r.reason}`).join('; ')}`
+          : 'No valid expenses found in file';
+        toast.error(errorMsg);
+        return;
+      }
+
+      // Submit imported expenses
+      const token = localStorage.getItem('authToken');
+      let successCount = 0;
+      let failureCount = 0;
+      const submitErrors = [];
+
+      console.log(`Importing ${importedExpenses.length} expenses...`);
+
+      for (let idx = 0; idx < importedExpenses.length; idx++) {
+        const expense = importedExpenses[idx];
+        try {
+          const response = await fetch('/api/expenses', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(expense)
+          });
+
+          if (response.ok) {
+            successCount++;
+            console.log(`✓ Imported: ${expense.title}`);
+          } else {
+            const errorData = await response.json();
+            failureCount++;
+            submitErrors.push(`${expense.title}: ${errorData.message || 'Unknown error'}`);
+            console.error(`✗ Failed to import: ${expense.title}`, errorData);
+          }
+        } catch (error) {
+          failureCount++;
+          submitErrors.push(`${expense.title}: ${error instanceof Error ? error.message : 'Network error'}`);
+          console.error(`✗ Error importing: ${expense.title}`, error);
+        }
+      }
+
+      // Show detailed results
+      let message = `Imported ${successCount} expense${successCount !== 1 ? 's' : ''}`;
+      if (failureCount > 0) {
+        message += ` (${failureCount} failed)`;
+      }
+      if (failedRows.length > 0) {
+        message += ` (${failedRows.length} rows skipped)`;
+      }
+      
+      toast.success(message);
+      
+      // Show detailed error log if there were failures
+      if (submitErrors.length > 0 && submitErrors.length <= 5) {
+        console.log('Import errors:', submitErrors);
+      }
+
+      await fetchExpenses();
+    } catch (error) {
+      console.error('Import error:', error);
+      toast.error(`Failed to import expenses: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setImportingFile(false);
+      event.target.value = '';
+    }
+  };
+
+  // Download template for importing expenses
+  const handleDownloadTemplate = () => {
+    try {
+      // Create sample data with all required columns
+      const templateData = [
+        {
+          'Employee': 'John Doe',
+          'Title': 'Client Meeting Lunch',
+          'Category': 'Meals - Business',
+          'Amount': 500,
+          'Date': new Date().toLocaleDateString('en-IN'),
+          'Description': 'Lunch meeting with client ABC'
+        },
+        {
+          'Employee': 'Jane Smith',
+          'Title': 'Travel - Local Taxi',
+          'Category': 'Travel - Local Conveyance',
+          'Amount': 250,
+          'Date': new Date().toLocaleDateString('en-IN'),
+          'Description': 'Taxi to office meeting'
+        },
+        {
+          'Employee': 'Mike Johnson',
+          'Title': 'Office Supplies',
+          'Category': 'Office Supplies & Stationery',
+          'Amount': 1200,
+          'Date': new Date().toLocaleDateString('en-IN'),
+          'Description': 'Notebooks and pens for team'
+        }
+      ];
+
+      // Create Excel format (tab-separated)
+      const headers = Object.keys(templateData[0]);
+      let excelContent = headers.join('\t') + '\n';
+      excelContent += templateData.map(row =>
+        headers.map(header => row[header as keyof typeof row]).join('\t')
+      ).join('\n');
+
+      const blob = new Blob([excelContent], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', 'expenses-template.xls');
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast.success('Template downloaded successfully');
+    } catch (error) {
+      console.error('Template download error:', error);
+      toast.error('Failed to download template');
+    }
+  };
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center">
@@ -362,19 +848,81 @@ export default function ExpensesAdmin() {
           <h1 className="text-3xl font-bold">Expenses</h1>
           <p className="text-muted-foreground">Manage employee expense claims</p>
         </div>
-        <Button className="rounded-xl" onClick={() => {
-          setNewExpenseData({
-            category: '',
-            description: '',
-            amount: '',
-            date: new Date().toISOString().split('T')[0],
-            title: ''
-          });
-          setIsNewExpenseDialogOpen(true);
-        }}>
-          <Receipt className="w-4 h-4 mr-2" />
-          New Expense
-        </Button>
+        <div className="flex gap-2">
+          {/* Export Button */}
+          <div className="relative group">
+            <Button 
+              variant="outline" 
+              className="rounded-xl"
+              title="Export expenses"
+            >
+              <FileDown className="w-4 h-4 mr-2" />
+              Export
+            </Button>
+            <div className="absolute right-0 mt-2 w-32 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+              <button
+                onClick={() => handleExportExpenses('csv')}
+                className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm rounded-t-lg"
+              >
+                Export as CSV
+              </button>
+              <button
+                onClick={() => handleExportExpenses('excel')}
+                className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm rounded-b-lg border-t border-gray-200"
+              >
+                Export as Excel
+              </button>
+            </div>
+          </div>
+
+          {/* Import Button */}
+          <label className="cursor-pointer">
+            <Button 
+              variant="outline" 
+              className="rounded-xl"
+              asChild
+              title="Import expenses from CSV or Excel"
+            >
+              <span>
+                <FileUp className="w-4 h-4 mr-2" />
+                Import
+              </span>
+            </Button>
+            <input
+              type="file"
+              accept=".csv,.xls,.xlsx"
+              onChange={handleImportExpenses}
+              disabled={importingFile}
+              className="hidden"
+            />
+          </label>
+
+          {/* Download Template Button */}
+          <Button 
+            variant="outline" 
+            className="rounded-xl"
+            onClick={handleDownloadTemplate}
+            title="Download template for importing expenses"
+          >
+            <FileDown className="w-4 h-4 mr-2" />
+            Template
+          </Button>
+
+          {/* New Expense Button */}
+          <Button className="rounded-xl" onClick={() => {
+            setNewExpenseData({
+              category: '',
+              description: '',
+              amount: '',
+              date: new Date().toISOString().split('T')[0],
+              title: ''
+            });
+            setIsNewExpenseDialogOpen(true);
+          }}>
+            <Receipt className="w-4 h-4 mr-2" />
+            New Expense
+          </Button>
+        </div>
       </div>
 
       {/* Category Filter */}
@@ -476,6 +1024,37 @@ export default function ExpensesAdmin() {
         </Card>
       </div>
 
+      {/* Bulk Actions */}
+      {selectedExpenses.size > 0 && (
+        <Card className="p-4 rounded-xl bg-primary/5 border-primary/20">
+          <div className="flex items-center justify-between">
+            <p className="font-semibold">{selectedExpenses.size} expense(s) selected</p>
+            <div className="flex gap-2">
+              <Button 
+                className="rounded-xl bg-green-600 hover:bg-green-700"
+                onClick={handleBulkApprove}
+                disabled={actionLoading}
+              >
+                <CheckCircle className="w-4 h-4 mr-2" />
+                Approve Selected
+              </Button>
+              <Button 
+                className="rounded-xl bg-red-600 hover:bg-red-700"
+                onClick={() => {
+                  setActionType('reject');
+                  setRejectReason('');
+                  setIsActionDialogOpen(true);
+                }}
+                disabled={actionLoading}
+              >
+                <XCircle className="w-4 h-4 mr-2" />
+                Reject Selected
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
       <Card className="rounded-xl">
         <div className="overflow-x-auto">
           {filteredExpenses.length === 0 ? (
@@ -486,11 +1065,20 @@ export default function ExpensesAdmin() {
             <table className="w-full">
               <thead>
                 <tr className="border-b">
+                  <th className="text-left p-4 w-12">
+                    <input 
+                      type="checkbox" 
+                      checked={selectAll}
+                      onChange={handleSelectAll}
+                      className="rounded"
+                    />
+                  </th>
                   <th className="text-left p-4">Employee</th>
                   <th className="text-left p-4">Description</th>
                   <th className="text-left p-4">Category</th>
                   <th className="text-left p-4">Amount</th>
                   <th className="text-left p-4">Date</th>
+                  <th className="text-left p-4">Approved By</th>
                   <th className="text-left p-4">Status</th>
                   <th className="text-left p-4">Actions</th>
                 </tr>
@@ -500,6 +1088,14 @@ export default function ExpensesAdmin() {
                   const CategoryIcon = getCategoryIcon(expense.category);
                   return (
                     <tr key={expense._id} className="border-b hover:bg-accent/50">
+                      <td className="p-4 w-12">
+                        <input 
+                          type="checkbox" 
+                          checked={selectedExpenses.has(expense._id)}
+                          onChange={() => handleCheckboxChange(expense._id)}
+                          className="rounded"
+                        />
+                      </td>
                       <td className="p-4">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
@@ -528,6 +1124,16 @@ export default function ExpensesAdmin() {
                         </p>
                       </td>
                       <td className="p-4">
+                        {expense.approvedBy ? (
+                          <div>
+                            <p className="font-medium">{expense.approvedBy.name || 'N/A'}</p>
+                            <p className="text-sm text-muted-foreground">Approved</p>
+                          </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">-</p>
+                        )}
+                      </td>
+                      <td className="p-4">
                         <span className={`px-2 py-1 text-xs rounded-full ${
                           expense.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
                           expense.status === 'approved' ? 'bg-green-100 text-green-800' :
@@ -539,15 +1145,26 @@ export default function ExpensesAdmin() {
                       <td className="p-4">
                         <div className="flex gap-2">
                           {expense.receipt && (
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              onClick={() => handleDownloadReceipt(expense.receipt || '', expense.title || 'receipt')}
-                              disabled={actionLoading}
-                              title="Download receipt"
-                            >
-                              <Download className="w-4 h-4" />
-                            </Button>
+                            <>
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                onClick={() => handleViewReceipt(expense.receipt || '')}
+                                disabled={actionLoading}
+                                title="View receipt"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </Button>
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                onClick={() => handleDownloadReceipt(expense.receipt || '', expense.title || 'receipt')}
+                                disabled={actionLoading}
+                                title="Download receipt"
+                              >
+                                <Download className="w-4 h-4" />
+                              </Button>
+                            </>
                           )}
                           <Button variant="ghost" size="sm" onClick={() => handleEdit(expense)} disabled={actionLoading}>
                             <Edit className="w-4 h-4" />
@@ -769,6 +1386,115 @@ export default function ExpensesAdmin() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* View Receipt Dialog */}
+      <Dialog open={isViewReceiptDialogOpen} onOpenChange={setIsViewReceiptDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh]">
+          <DialogHeader>
+            <DialogTitle>View Receipt</DialogTitle>
+            <DialogDescription>
+              Receipt preview
+            </DialogDescription>
+          </DialogHeader>
+          <div className="overflow-auto max-h-[70vh]">
+            {viewingReceipt && viewingReceipt.trim() ? (
+              <div className="flex items-center justify-center bg-gray-50 rounded-lg p-4">
+                {viewingReceipt.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
+                  <div className="w-full">
+                    <img 
+                      src={viewingReceipt} 
+                      alt="Receipt" 
+                      className="max-w-full h-auto rounded-lg shadow-lg mx-auto"
+                      onLoad={() => console.log('Image loaded successfully:', viewingReceipt)}
+                      onError={(e) => {
+                        console.error('Image load error:', viewingReceipt);
+                        const errorDiv = document.createElement('div');
+                        errorDiv.className = 'text-center py-8';
+                        errorDiv.innerHTML = `
+                          <svg class="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                          </svg>
+                          <p class="text-gray-600 mb-2 font-medium">Receipt file not found</p>
+                          <p class="text-sm text-gray-500 mb-4">The receipt file may have been moved or deleted</p>
+                          <p class="text-xs text-gray-400 font-mono break-all px-4">${viewingReceipt}</p>
+                        `;
+                        e.currentTarget.replaceWith(errorDiv);
+                      }}
+                    />
+                  </div>
+                ) : viewingReceipt.match(/\.pdf$/i) ? (
+                  <div className="w-full">
+                    <iframe 
+                      src={viewingReceipt} 
+                      className="w-full h-[600px] rounded-lg shadow-lg"
+                      title="Receipt PDF"
+                      onError={(e) => {
+                        console.error('PDF load error:', viewingReceipt);
+                        e.currentTarget.style.display = 'none';
+                        const parent = e.currentTarget.parentElement;
+                        if (parent) {
+                          const errorDiv = document.createElement('div');
+                          errorDiv.className = 'text-center py-8';
+                          errorDiv.innerHTML = `
+                            <svg class="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                            </svg>
+                            <p class="text-gray-600 mb-2 font-medium">PDF file not found</p>
+                            <p class="text-sm text-gray-500 mb-4">The receipt file may have been moved or deleted</p>
+                            <p class="text-xs text-gray-400 font-mono break-all px-4">${viewingReceipt}</p>
+                            <button onclick="window.open('${viewingReceipt}', '_blank')" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                              Try Opening in New Tab
+                            </button>
+                          `;
+                          parent.appendChild(errorDiv);
+                        }
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
+                    <p className="text-muted-foreground mb-4">Preview not available for this file type</p>
+                    <p className="text-xs text-gray-500 mb-4 break-all">{viewingReceipt}</p>
+                    <Button 
+                      onClick={() => window.open(viewingReceipt, '_blank')}
+                      className="rounded-xl"
+                    >
+                      <Download className="w-4 h-4 mr-2" />
+                      Open in New Tab
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
+                <p className="text-muted-foreground mb-2">No receipt available</p>
+                <p className="text-sm text-gray-500">This expense does not have a receipt attached. Please upload a receipt to view it here.</p>
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2 pt-4">
+            <Button 
+              variant="outline" 
+              className="flex-1 rounded-xl" 
+              onClick={() => setIsViewReceiptDialogOpen(false)}
+            >
+              Close
+            </Button>
+            {viewingReceipt && viewingReceipt.trim() && (
+              <Button 
+                className="flex-1 rounded-xl" 
+                onClick={() => handleDownloadReceipt(viewingReceipt, 'receipt')}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Download
+              </Button>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
+

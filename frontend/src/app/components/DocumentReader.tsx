@@ -38,6 +38,7 @@ interface DocumentReaderProps {
   onClose: () => void;
   onSubmit: (documentId: string, accepted: boolean, ipAddress: string) => void;
   employeeId: string;
+  isAlreadyAcknowledged?: boolean;
 }
 
 const DocumentReader: React.FC<DocumentReaderProps> = ({
@@ -45,12 +46,13 @@ const DocumentReader: React.FC<DocumentReaderProps> = ({
   isOpen,
   onClose,
   onSubmit,
-  employeeId
+  employeeId,
+  isAlreadyAcknowledged = false
 }) => {
   const [hasRead, setHasRead] = useState(false);
   const [acceptsTerms, setAcceptsTerms] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [acknowledgmentGenerated, setAcknowledgmentGenerated] = useState(false);
+  const [acknowledgmentGenerated, setAcknowledgmentGenerated] = useState(isAlreadyAcknowledged);
 
   if (!isOpen || !document) return null;
 
@@ -545,7 +547,44 @@ For more details, please contact the HR department or your supervisor.
         </div>
 
         {/* Footer with Acknowledgment */}
-        {!acknowledgmentGenerated ? (
+        {acknowledgmentGenerated || isAlreadyAcknowledged ? (
+          <div className="p-6 border-t border-border bg-green-50">
+            <div className="flex items-center gap-3">
+              <CheckCircle2 className="w-6 h-6 text-green-600" />
+              <div>
+                <h3 className="font-semibold text-green-800">
+                  {isAlreadyAcknowledged ? 'Already Acknowledged' : 'Acknowledgment Submitted'}
+                </h3>
+                <p className="text-sm text-green-700">
+                  {isAlreadyAcknowledged 
+                    ? 'You have already acknowledged this document.'
+                    : 'Your acknowledgment has been recorded. You can download your acknowledgment document.'}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-4">
+              <Button
+                variant="outline"
+                onClick={handleClose}
+                className="rounded-xl"
+              >
+                Close
+              </Button>
+              {!isAlreadyAcknowledged && (
+                <Button
+                  onClick={() => {
+                    // In real implementation, this would download the generated acknowledgment
+                    alert(`Downloading ${document.title} Acknowledgment for ${employeeId}`);
+                  }}
+                  className="rounded-xl"
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Download Acknowledgment
+                </Button>
+              )}
+            </div>
+          </div>
+        ) : (
           <div className="p-6 border-t border-border bg-background">
             <div className="space-y-4">
               <h3 className="font-semibold text-lg">Document Acknowledgment</h3>
@@ -601,37 +640,6 @@ For more details, please contact the HR department or your supervisor.
                   )}
                 </Button>
               </div>
-            </div>
-          </div>
-        ) : (
-          <div className="p-6 border-t border-border bg-green-50">
-            <div className="flex items-center gap-3">
-              <CheckCircle2 className="w-6 h-6 text-green-600" />
-              <div>
-                <h3 className="font-semibold text-green-800">Acknowledgment Submitted</h3>
-                <p className="text-sm text-green-700">
-                  Your acknowledgment has been recorded. You can download your acknowledgment document.
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-3 mt-4">
-              <Button
-                variant="outline"
-                onClick={handleClose}
-                className="rounded-xl"
-              >
-                Close
-              </Button>
-              <Button
-                onClick={() => {
-                  // In real implementation, this would download the generated acknowledgment
-                  alert(`Downloading ${document.title} Acknowledgment for ${employeeId}`);
-                }}
-                className="rounded-xl"
-              >
-                <Download className="w-4 h-4 mr-2" />
-                Download Acknowledgment
-              </Button>
             </div>
           </div>
         )}

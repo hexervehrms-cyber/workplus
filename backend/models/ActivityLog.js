@@ -9,8 +9,7 @@ const activityLogSchema = new mongoose.Schema(
       index: true
     },
     orgId: { 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: "Organization",
+      type: mongoose.Schema.Types.Mixed, // Allow both ObjectId and String
       required: true,
       index: true
     },

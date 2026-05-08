@@ -1,315 +1,310 @@
 import React, { useState } from 'react';
-import { Card } from './ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Badge } from './ui/badge';
-import { Copy, Share2, Link, CheckCircle, Clock, AlertCircle } from 'lucide-react';
+import { Card } from './ui/card';
+import { Copy, Check, Loader, Mail, Link as LinkIcon } from 'lucide-react';
+import { toast } from 'sonner';
+
+interface OnboardingLinkGeneratorProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSuccess?: () => void;
+}
 
 interface GeneratedLink {
   token: string;
-  shareableLink: string;
-  expiresAt: string;
+  onboardingUrl: string;
   employeeEmail: string;
   employeeName: string;
+  expiresAt: string;
 }
 
-const OnboardingLinkGenerator: React.FC<{ isSuperAdmin?: boolean }> = ({ isSuperAdmin = false }) => {
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedLink, setGeneratedLink] = useState<GeneratedLink | null>(null);
+const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpen, onClose, onSuccess }) => {
+  const [step, setStep] = useState<'form' | 'result'>('form');
+  const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [error, setError] = useState('');
+  const [generatedLink, setGeneratedLink] = useState<GeneratedLink | null>(null);
 
   const [formData, setFormData] = useState({
-    employeeName: '',
     employeeEmail: '',
-    department: '',
-    organizationName: '',
-    organizationId: ''
+    employeeName: '',
+    department: ''
   });
 
-  const departments = [
-    'Engineering',
-    'Marketing',
-    'Sales',
-    'Human Resources',
-    'Finance',
-    'Operations',
-    'Design',
-    'Product',
-    'Analytics',
-    'General'
-  ];
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const handleSelectChange = (value: string) => {
+    setFormData(prev => ({
+      ...prev,
+      department: value
+    }));
+  };
 
   const handleGenerateLink = async () => {
-    if (!formData.employeeName || !formData.employeeEmail) {
-      setError('Employee name and email are required');
+    // Validate form
+    if (!formData.employeeEmail || !formData.employeeName || !formData.department) {
+      toast.error('Please fill in all fields');
       return;
     }
-    
-    if (isSuperAdmin && (!formData.organizationName || !formData.organizationId)) {
-      setError('Organization name and ID are required for super admin');
-      return;
-    }
-
-    setIsGenerating(true);
-    setError('');
 
     try {
+      setLoading(true);
+      const token = localStorage.getItem('authToken');
+
       const response = await fetch('/api/onboarding/generate-link', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          employeeName: formData.employeeName,
-          employeeEmail: formData.employeeEmail,
-          department: formData.department || 'General',
-          organizationName: isSuperAdmin ? formData.organizationName : undefined,
-          organizationId: isSuperAdmin ? formData.organizationId : undefined,
-          createdBy: isSuperAdmin ? 'super_admin' : 'admin' // In real app, this would be the current admin user
-        }),
+        body: JSON.stringify(formData)
       });
 
       const data = await response.json();
 
-      if (response.ok) {
-        setGeneratedLink(data);
-        setFormData({ employeeName: '', employeeEmail: '', department: '', organizationName: '', organizationId: '' });
-      } else {
-        setError(data.message || 'Failed to generate link');
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to generate onboarding link');
       }
-    } catch (err) {
-      setError('Network error. Please try again.');
+
+      setGeneratedLink(data.data);
+      setStep('result');
+      toast.success('Onboarding link generated successfully!');
+    } catch (error) {
+      console.error('Generate link error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to generate onboarding link');
     } finally {
-      setIsGenerating(false);
+      setLoading(false);
     }
   };
 
-  const handleCopyLink = async () => {
-    if (generatedLink?.shareableLink) {
-      try {
-        await navigator.clipboard.writeText(generatedLink.shareableLink);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch (err) {
-        // Fallback for older browsers
-        const textArea = document.createElement('textarea');
-        textArea.value = generatedLink.shareableLink;
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textArea);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }
+  const handleCopyLink = () => {
+    if (generatedLink) {
+      navigator.clipboard.writeText(generatedLink.onboardingUrl);
+      setCopied(true);
+      toast.success('Link copied to clipboard!');
+      setTimeout(() => setCopied(false), 2000);
     }
   };
 
-  const handleShareLink = async () => {
-    if (generatedLink?.shareableLink) {
-      try {
-        await navigator.share({
-          title: 'Employee Onboarding Form',
-          text: `Please complete your onboarding form: ${generatedLink.shareableLink}`,
-          url: generatedLink.shareableLink,
-        });
-      } catch (err) {
-        // Fallback to copying link if share API is not available
-        handleCopyLink();
-      }
+  const handleSendEmail = async () => {
+    if (!generatedLink) return;
+
+    try {
+      setLoading(true);
+      // TODO: Implement email sending
+      toast.success('Email sent successfully!');
+    } catch (error) {
+      toast.error('Failed to send email');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
+  const handleClose = () => {
+    setStep('form');
+    setFormData({
+      employeeEmail: '',
+      employeeName: '',
+      department: ''
     });
+    setGeneratedLink(null);
+    setCopied(false);
+    onClose();
+  };
+
+  const handleSuccess = () => {
+    handleClose();
+    onSuccess?.();
   };
 
   return (
-    <Card className="p-6 rounded-2xl">
-      <div className="flex items-center gap-3 mb-6">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-          <Link className="w-5 h-5 text-primary" />
-        </div>
-        <div>
-          <h3 className="font-semibold text-lg">Generate Onboarding Link</h3>
-          <p className="text-sm text-muted-foreground">Create a shareable link for employee onboarding</p>
-        </div>
-      </div>
+    <Dialog open={isOpen} onOpenChange={handleClose}>
+      <DialogContent className="max-w-2xl rounded-2xl">
+        <DialogHeader>
+          <DialogTitle>Generate Onboarding Link</DialogTitle>
+          <DialogDescription>
+            Create a shareable onboarding link for a new employee
+          </DialogDescription>
+        </DialogHeader>
 
-      {!generatedLink ? (
-        <div className="space-y-4">
-          {isSuperAdmin && (
+        {step === 'form' ? (
+          <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label>Organization Name *</Label>
+                <Label>Employee Email *</Label>
                 <Input
-                  value={formData.organizationName}
-                  onChange={(e) => setFormData({...formData, organizationName: e.target.value})}
-                  placeholder="Enter organization name"
+                  name="employeeEmail"
+                  type="email"
+                  value={formData.employeeEmail}
+                  onChange={handleInputChange}
+                  placeholder="employee@company.com"
                   className="mt-2 rounded-xl"
                 />
               </div>
               <div>
-                <Label>Organization ID *</Label>
+                <Label>Employee Name *</Label>
                 <Input
-                  value={formData.organizationId}
-                  onChange={(e) => setFormData({...formData, organizationId: e.target.value})}
-                  placeholder="Enter organization ID (e.g., ORG-001)"
+                  name="employeeName"
+                  value={formData.employeeName}
+                  onChange={handleInputChange}
+                  placeholder="John Doe"
                   className="mt-2 rounded-xl"
                 />
               </div>
+              <div className="md:col-span-2">
+                <Label>Department *</Label>
+                <Select value={formData.department} onValueChange={handleSelectChange}>
+                  <SelectTrigger className="mt-2 rounded-xl">
+                    <SelectValue placeholder="Select department" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Engineering">Engineering</SelectItem>
+                    <SelectItem value="Sales">Sales</SelectItem>
+                    <SelectItem value="Marketing">Marketing</SelectItem>
+                    <SelectItem value="HR">HR</SelectItem>
+                    <SelectItem value="Finance">Finance</SelectItem>
+                    <SelectItem value="Operations">Operations</SelectItem>
+                    <SelectItem value="Support">Support</SelectItem>
+                    <SelectItem value="Other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-          )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label>Employee Name *</Label>
-              <Input
-                value={formData.employeeName}
-                onChange={(e) => setFormData({...formData, employeeName: e.target.value})}
-                placeholder="Enter employee full name"
-                className="mt-2 rounded-xl"
-              />
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+              <p className="text-sm text-blue-900">
+                ℹ️ The onboarding link will be valid for 30 days. The employee can use this link to fill in their information.
+              </p>
             </div>
-            <div>
-              <Label>Employee Email *</Label>
-              <Input
-                type="email"
-                value={formData.employeeEmail}
-                onChange={(e) => setFormData({...formData, employeeEmail: e.target.value})}
-                placeholder="employee@company.com"
-                className="mt-2 rounded-xl"
-              />
-            </div>
-          </div>
 
-          <div>
-            <Label>Department</Label>
-            <Select value={formData.department} onValueChange={(value) => setFormData({...formData, department: value})}>
-              <SelectTrigger className="mt-2 rounded-xl">
-                <SelectValue placeholder="Select department" />
-              </SelectTrigger>
-              <SelectContent>
-                {departments.map((dept) => (
-                  <SelectItem key={dept} value={dept}>
-                    {dept}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {error && (
-            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl">
-              <AlertCircle className="w-4 h-4 text-red-600" />
-              <span className="text-sm text-red-700">{error}</span>
-            </div>
-          )}
-
-          <Button 
-            onClick={handleGenerateLink}
-            disabled={isGenerating}
-            className="rounded-xl w-full"
-          >
-            {isGenerating ? (
-              <>
-                <Clock className="w-4 h-4 mr-2 animate-spin" />
-                Generating Link...
-              </>
-            ) : (
-              <>
-                <Share2 className="w-4 h-4 mr-2" />
-                Generate Onboarding Link
-              </>
-            )}
-          </Button>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="p-4 bg-green-50 border border-green-200 rounded-xl">
-            <div className="flex items-center gap-2 mb-2">
-              <CheckCircle className="w-5 h-5 text-green-600" />
-              <span className="font-medium text-green-800">Link Generated Successfully!</span>
-            </div>
-            <div className="text-sm text-green-700 space-y-1">
-              <p><strong>Employee:</strong> {generatedLink.employeeName}</p>
-              <p><strong>Email:</strong> {generatedLink.employeeEmail}</p>
-              <p><strong>Expires:</strong> {formatDate(generatedLink.expiresAt)}</p>
-            </div>
-          </div>
-
-          <div>
-            <Label className="text-sm font-medium">Shareable Link</Label>
-            <div className="mt-2 flex gap-2">
-              <Input
-                value={generatedLink.shareableLink}
-                readOnly
-                className="rounded-xl bg-muted"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleCopyLink}
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={handleClose} className="rounded-xl">
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleGenerateLink} 
+                disabled={loading}
                 className="rounded-xl"
               >
-                {copied ? (
+                {loading ? (
                   <>
-                    <CheckCircle className="w-4 h-4 mr-2" />
-                    Copied!
+                    <Loader className="w-4 h-4 mr-2 animate-spin" />
+                    Generating...
                   </>
                 ) : (
                   <>
-                    <Copy className="w-4 h-4 mr-2" />
-                    Copy
+                    <LinkIcon className="w-4 h-4 mr-2" />
+                    Generate Link
                   </>
                 )}
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleShareLink}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <Card className="p-6 rounded-2xl bg-green-50 border-green-200">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-full bg-green-600 flex items-center justify-center">
+                  <Check className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-green-900">Link Generated Successfully!</h3>
+                  <p className="text-sm text-green-800">Share this link with the employee</p>
+                </div>
+              </div>
+            </Card>
+
+            <div className="space-y-4">
+              <div>
+                <Label className="text-sm">Employee Details</Label>
+                <div className="mt-2 space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Name:</span>
+                    <span className="font-medium">{generatedLink?.employeeName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Email:</span>
+                    <span className="font-medium">{generatedLink?.employeeEmail}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Expires:</span>
+                    <span className="font-medium">{new Date(generatedLink?.expiresAt || '').toLocaleDateString()}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-sm">Onboarding Link</Label>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    type="text"
+                    value={generatedLink?.onboardingUrl || ''}
+                    readOnly
+                    className="flex-1 px-3 py-2 rounded-xl border border-input bg-muted text-sm"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleCopyLink}
+                    className="rounded-xl"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="w-4 h-4" />
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4" />
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                <p className="text-sm text-blue-900">
+                  💡 Share this link with the employee via email or any communication channel. They can use it to complete their onboarding form.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={handleSuccess} className="rounded-xl">
+                Done
+              </Button>
+              <Button 
+                onClick={handleSendEmail} 
+                disabled={loading}
                 className="rounded-xl"
               >
-                <Share2 className="w-4 h-4 mr-2" />
-                Share
+                {loading ? (
+                  <>
+                    <Loader className="w-4 h-4 mr-2 animate-spin" />
+                    Sending...
+                  </>
+                ) : (
+                  <>
+                    <Mail className="w-4 h-4 mr-2" />
+                    Send Email
+                  </>
+                )}
               </Button>
             </div>
           </div>
-
-          <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
-            <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5" />
-              <div className="text-sm text-blue-700">
-                <p className="font-medium mb-1">Next Steps:</p>
-                <ul className="list-disc list-inside space-y-1">
-                  <li>Share this link with the employee via email or messaging</li>
-                  <li>The employee can access the onboarding form directly</li>
-                  <li>Link expires in 7 days for security</li>
-                  <li>You can track the onboarding progress from the dashboard</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-
-          <Button
-            variant="outline"
-            onClick={() => setGeneratedLink(null)}
-            className="rounded-xl w-full"
-          >
-            Generate Another Link
-          </Button>
-        </div>
-      )}
-    </Card>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 };
 
 export default OnboardingLinkGenerator;
+

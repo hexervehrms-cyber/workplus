@@ -252,7 +252,7 @@ const EmployeeHolidayCalendar: React.FC<{ organizationId?: string }> = ({
                 </div>
               ) : (
                 getUpcomingHolidays().map((holiday) => (
-                  <div key={holiday.id} className="flex items-center gap-3 p-3 rounded-lg bg-accent/50">
+                  <div key={holiday.id} className="flex items-center gap-3 p-3 rounded-lg border border-green-200" style={{ backgroundColor: '#F0FDF4' }}>
                     <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
                       <Calendar className="w-4 h-4 text-primary" />
                     </div>

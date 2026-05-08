@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -77,6 +77,11 @@ const DigitalDocumentGenerator: React.FC<DigitalDocumentGeneratorProps> = ({
     'IT Policies',
     'Financial Documents',
     'Legal Documents',
+    'Warning Letter',
+    'CAP (Corrective Action Plan)',
+    'Suspension',
+    'Bench',
+    'Self Training Period',
     'Other'
   ];
 
@@ -96,10 +101,13 @@ const DigitalDocumentGenerator: React.FC<DigitalDocumentGeneratorProps> = ({
     setSuccess('');
 
     try {
-      const response = await fetch('/api/company-documents/digital-generate', {
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      
+      const response = await fetch('/api/documents/digital-generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           title: formData.title,
@@ -117,8 +125,12 @@ const DigitalDocumentGenerator: React.FC<DigitalDocumentGeneratorProps> = ({
       const data = await response.json();
 
       if (response.ok) {
+        console.log('Document generation response:', data);
         setSuccess('Digital document generated successfully!');
-        onDocumentGenerated(data.document);
+        // Extract the document from the nested response structure
+        const generatedDocument = data.data?.document || data.document;
+        console.log('Generated document:', generatedDocument);
+        onDocumentGenerated(generatedDocument);
         
         // Reset form
         setFormData({

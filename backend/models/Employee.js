@@ -8,6 +8,14 @@ const employeeSchema = new mongoose.Schema(
       required: true, 
       unique: true 
     },
+    firstName: {
+      type: String,
+      trim: true
+    },
+    lastName: {
+      type: String,
+      trim: true
+    },
     employeeCode: { 
       type: String, 
       uppercase: true,
@@ -24,10 +32,33 @@ const employeeSchema = new mongoose.Schema(
       trim: true,
       index: true // Index for department queries
     },
+    workLocation: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     baseSalary: { 
       type: Number, 
       default: 0,
       min: [0, 'Salary cannot be negative']
+    },
+    hourlyRate: {
+      type: Number,
+      default: 0,
+      min: [0, 'Hourly rate cannot be negative'],
+      description: "Hourly rate for salary calculation based on working hours"
+    },
+    salaryCalculationType: {
+      type: String,
+      enum: ['fixed', 'hourly', 'daily'],
+      default: 'fixed',
+      description: "How salary is calculated: fixed (baseSalary), hourly (hourlyRate × hours), or daily (dailyRate × days)"
+    },
+    dailyRate: {
+      type: Number,
+      default: 0,
+      min: [0, 'Daily rate cannot be negative'],
+      description: "Daily rate for salary calculation based on working days"
     },
     hra: { 
       type: Number, 
@@ -98,9 +129,77 @@ const employeeSchema = new mongoose.Schema(
       default: "active",
       index: true // Index for status queries
     },
+    createdViaOnboarding: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
     orgId: {
       type: String,
       index: true // Index for tenant queries
+    },
+    // Sensitive Information Fields
+    aadharNumber: {
+      type: String,
+      trim: true,
+      default: null
+    },
+    panNumber: {
+      type: String,
+      trim: true,
+      default: null
+    },
+    bankAccount: {
+      type: String,
+      trim: true,
+      default: null
+    },
+    ifscCode: {
+      type: String,
+      trim: true,
+      default: null
+    },
+    // Lock timestamps for sensitive information (12-hour lock after update)
+    sensitiveInfoLocks: {
+      aadharNumber: {
+        type: Number,
+        default: null
+      },
+      panNumber: {
+        type: Number,
+        default: null
+      },
+      bankAccount: {
+        type: Number,
+        default: null
+      },
+      ifscCode: {
+        type: Number,
+        default: null
+      }
+    },
+    // Shift Timing Configuration
+    shiftTiming: {
+      startTime: {
+        type: String, // Format: "HH:MM" (24-hour format)
+        default: "09:00",
+        description: "Shift start time in HH:MM format"
+      },
+      endTime: {
+        type: String, // Format: "HH:MM" (24-hour format)
+        default: "18:00",
+        description: "Shift end time in HH:MM format"
+      },
+      lateThreshold: {
+        type: Number, // in minutes
+        default: 0,
+        description: "Minutes after shift start time to mark as late (0 = no grace period)"
+      },
+      workingDays: {
+        type: [String], // ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        default: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+        description: "Days of the week when employee is expected to work"
+      }
     }
   },
   { 

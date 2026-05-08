@@ -5,6 +5,7 @@ const expenseSchema = new mongoose.Schema(
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     employeeId: { type: mongoose.Schema.Types.ObjectId, ref: "Employee", index: true },
     employeeName: { type: String, required: true },
+    title: { type: String, default: "" },
     category: { type: String, required: true, index: true },
     amount: { type: Number, required: true },
     date: { type: Date, required: true, index: true },

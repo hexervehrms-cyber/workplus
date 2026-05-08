@@ -25,6 +25,8 @@ class RealTimeSocket {
       return;
     }
 
+    console.log('🔐 [SOCKET] User data from TokenManager:', user);
+
     // Connect to the server with JWT token
     this.socket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000', {
       transports: ['websocket', 'polling'],
@@ -38,17 +40,46 @@ class RealTimeSocket {
       console.log('✅ Socket connected:', this.socket?.id);
       this.reconnectAttempts = 0;
       
+      // Get orgId from user or localStorage
+      let orgId = user.orgId || user.tenantId || 'system';
+      
+      // If still not found, try to get from localStorage
+      if (!orgId || orgId === 'undefined') {
+        try {
+          const storedUser = localStorage.getItem('user');
+          if (storedUser) {
+            const parsedUser = JSON.parse(storedUser);
+            orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
+          }
+        } catch (e) {
+          console.warn('Could not parse stored user');
+        }
+      }
+      
+      // Ensure orgId is always a valid string
+      if (!orgId || orgId === 'undefined' || orgId === 'null') {
+        orgId = 'system';
+      }
+      
+      console.log('🔐 Authenticating with:', { userId: user.id, role: user.role, orgId });
+      
       // Authenticate with user details
       this.socket?.emit('authenticate', {
         userId: user.id,
         role: user.role,
-        tenantId: user.tenantId || user.orgId || 'system'
+        tenantId: orgId
       });
     });
 
     // Handle authentication response
     this.socket.on('authenticated', (data) => {
       console.log('✅ Socket authenticated:', data);
+      
+      // Join organization room for real-time updates
+      if (data.orgId) {
+        this.socket?.emit('join_org_room', { orgId: data.orgId });
+        console.log('📍 Joined org room:', `tenant_${data.orgId}`);
+      }
     });
 
     this.socket.on('auth_error', (error) => {
@@ -125,16 +156,67 @@ class RealTimeSocket {
       this.notifyLeaveUpdate('updated', leave);
     });
 
+    this.socket.on('leave:update', (data) => {
+      console.log('📅 Leave update event:', data);
+      this.notifyLeaveUpdate(data.action, data.leaveRequest);
+    });
+
+    // Expense updates
+    this.socket.on('expense:created', (expense) => {
+      console.log('💰 Expense created:', expense);
+      this.notifyExpenseUpdate('created', expense);
+    });
+
+    this.socket.on('expense:updated', (expense) => {
+      console.log('💰 Expense updated:', expense);
+      this.notifyExpenseUpdate('updated', expense);
+    });
+
+    this.socket.on('expense:deleted', (expense) => {
+      console.log('💰 Expense deleted:', expense);
+      this.notifyExpenseUpdate('deleted', expense);
+    });
+
     // Attendance updates
-    this.socket.on('attendance:create', (attendance) => {
-      console.log('⏰ Attendance recorded:', attendance);
-      this.notifyAttendanceUpdate(attendance);
+    this.socket.on('attendance:update', (data) => {
+      console.log('⏰ Attendance update received:', data);
+      this.notifyAttendanceUpdate(data.attendance || data);
     });
 
     // System notifications
     this.socket.on('notification', (notification) => {
       console.log('🔔 Notification received:', notification);
       this.notifySystemNotification(notification);
+    });
+
+    // Break updates
+    this.socket.on('break:started', (data) => {
+      console.log('☕ [SOCKET] Break started:', data);
+      this.notifyBreakStarted(data);
+      this.notifyAttendanceUpdate({ type: 'break_started', ...data });
+      // Trigger dashboard refresh
+      this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'break_started', data });
+    });
+
+    this.socket.on('break:ended', (data) => {
+      console.log('☕ [SOCKET] Break ended:', data);
+      this.notifyBreakEnded(data);
+      this.notifyAttendanceUpdate({ type: 'break_ended', ...data });
+      // Trigger dashboard refresh
+      this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'break_ended', data });
+    });
+
+    // KPI updates
+    this.socket.on('kpi:update', (data) => {
+      console.log('📊 [SOCKET] KPI update event received from server:', data);
+      console.log('📊 [SOCKET] Full data structure:', JSON.stringify(data, null, 2));
+      console.log('📊 [SOCKET] KPI onBreak value:', data?.kpis?.onBreak);
+      console.log('📊 [SOCKET] KPI activeUsers value:', data?.kpis?.activeUsers);
+      
+      // Notify dashboard with the KPI data
+      this.notifyDashboardUpdate({ type: 'kpi_update', data });
+      
+      console.log('📊 [SOCKET] Dashboard update callbacks count:', this.dashboardUpdateCallbacks.length);
     });
   }
 
@@ -144,7 +226,10 @@ class RealTimeSocket {
   private employeeUpdateCallbacks: ((type: string, employee: any) => void)[] = [];
   private leaveUpdateCallbacks: ((type: string, leave: any) => void)[] = [];
   private attendanceUpdateCallbacks: ((attendance: any) => void)[] = [];
+  private expenseUpdateCallbacks: ((type: string, expense: any) => void)[] = [];
   private notificationCallbacks: ((notification: any) => void)[] = [];
+  private breakStartedCallbacks: ((data: any) => void)[] = [];
+  private breakEndedCallbacks: ((data: any) => void)[] = [];
 
   // Public methods to subscribe to updates
   onDashboardUpdate(callback: (data: any) => void) {
@@ -197,12 +282,42 @@ class RealTimeSocket {
     };
   }
 
+  onExpenseUpdate(callback: (type: string, expense: any) => void) {
+    this.expenseUpdateCallbacks.push(callback);
+    return () => {
+      const index = this.expenseUpdateCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.expenseUpdateCallbacks.splice(index, 1);
+      }
+    };
+  }
+
   onNotification(callback: (notification: any) => void) {
     this.notificationCallbacks.push(callback);
     return () => {
       const index = this.notificationCallbacks.indexOf(callback);
       if (index > -1) {
         this.notificationCallbacks.splice(index, 1);
+      }
+    };
+  }
+
+  onBreakStarted(callback: (data: any) => void) {
+    this.breakStartedCallbacks.push(callback);
+    return () => {
+      const index = this.breakStartedCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.breakStartedCallbacks.splice(index, 1);
+      }
+    };
+  }
+
+  onBreakEnded(callback: (data: any) => void) {
+    this.breakEndedCallbacks.push(callback);
+    return () => {
+      const index = this.breakEndedCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.breakEndedCallbacks.splice(index, 1);
       }
     };
   }
@@ -228,8 +343,20 @@ class RealTimeSocket {
     this.attendanceUpdateCallbacks.forEach(callback => callback(attendance));
   }
 
+  private notifyExpenseUpdate(type: string, expense: any) {
+    this.expenseUpdateCallbacks.forEach(callback => callback(type, expense));
+  }
+
   private notifySystemNotification(notification: any) {
     this.notificationCallbacks.forEach(callback => callback(notification));
+  }
+
+  private notifyBreakStarted(data: any) {
+    this.breakStartedCallbacks.forEach(callback => callback(data));
+  }
+
+  private notifyBreakEnded(data: any) {
+    this.breakEndedCallbacks.forEach(callback => callback(data));
   }
 
   // Emit events to server

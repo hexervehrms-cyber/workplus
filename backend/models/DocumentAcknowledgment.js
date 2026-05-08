@@ -1,25 +1,62 @@
-import mongoose from "mongoose";
+/**
+ * DocumentAcknowledgment Model
+ * Tracks employee acknowledgments of company documents
+ */
 
-const documentAcknowledgmentSchema = new mongoose.Schema(
-  {
-    id: { type: String, required: true, unique: true },
-    documentId: { type: String, required: true },
-    documentName: { type: String },
-    employeeId: { type: String, required: true },
-    employeeName: { type: String },
-    organizationId: { type: String, required: true },
-    status: { type: String, enum: ["Pending", "Completed", "Overdue", "Forced"], default: "Pending" },
-    acknowledgedAt: { type: Date },
-    acknowledgmentMethod: { type: String, enum: ["digital", "manual", "forced"], default: "digital" },
-    acknowledgmentDocumentId: { type: String },
-    ipAddress: { type: String },
-    deviceInfo: { type: String },
-    forcedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    forcedReason: { type: String },
-    reminderCount: { type: Number, default: 0 },
-    lastRemindedAt: { type: Date }
+import mongoose from 'mongoose';
+
+const documentAcknowledgmentSchema = new mongoose.Schema({
+  documentId: {
+    type: String,
+    required: true,
+    index: true
   },
-  { timestamps: true }
-);
+  employeeId: {
+    type: String,
+    required: true,
+    index: true
+  },
+  employeeName: {
+    type: String,
+    required: true
+  },
+  organizationId: {
+    type: String,
+    required: true,
+    index: true
+  },
+  acknowledgedAt: {
+    type: Date,
+    default: Date.now,
+    required: true
+  },
+  ipAddress: {
+    type: String
+  },
+  accepted: {
+    type: Boolean,
+    required: true,
+    default: true
+  },
+  status: {
+    type: String,
+    enum: ['Completed', 'Pending', 'Rejected'],
+    default: 'Completed'
+  },
+  signature: {
+    type: String
+  },
+  notes: {
+    type: String
+  }
+}, {
+  timestamps: true
+});
 
-export default mongoose.model("DocumentAcknowledgment", documentAcknowledgmentSchema);
+// Compound index for efficient queries
+documentAcknowledgmentSchema.index({ documentId: 1, employeeId: 1 }, { unique: true });
+documentAcknowledgmentSchema.index({ organizationId: 1, employeeId: 1 });
+
+const DocumentAcknowledgment = mongoose.model('DocumentAcknowledgment', documentAcknowledgmentSchema);
+
+export default DocumentAcknowledgment;

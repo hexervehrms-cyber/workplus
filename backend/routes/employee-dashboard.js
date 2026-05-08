@@ -16,6 +16,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import multer from 'multer';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { authenticate, requirePermission, auditLog } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
@@ -47,10 +48,16 @@ const __dirname = path.dirname(__filename);
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const uploadPath = file.fieldname === 'receipt' ? 'uploads/receipts' : 
-                      file.fieldname === 'avatar' ? 'uploads/avatars' : 
-                      'uploads/documents';
-    cb(null, uploadPath);
+    const uploadDir = file.fieldname === 'receipt' ? 'backend/uploads/receipts' : 
+                      file.fieldname === 'avatar' ? 'backend/uploads/avatars' : 
+                      'backend/uploads/documents';
+    
+    // Ensure directory exists
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    
+    cb(null, uploadDir);
   },
   filename: function (req, file, cb) {
     const sanitized = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
@@ -1683,7 +1690,23 @@ router.get('/documents',
  */
 router.post('/documents',
   authenticate,
-  upload.single('document'),
+  (req, res, next) => {
+    upload.single('document')(req, res, (err) => {
+      if (err) {
+        console.error('Multer error:', err);
+        logger.error('Multer upload error', { 
+          userId: req.user?.userId,
+          error: err.message,
+          stack: err.stack
+        });
+        return res.status(400).json({
+          success: false,
+          message: err.message || 'File upload failed'
+        });
+      }
+      next();
+    });
+  },
   fileValidator,
   auditLog('upload_document', 'document'),
   asyncHandler(async (req, res) => {
@@ -1743,7 +1766,12 @@ router.post('/documents',
       });
 
     } catch (error) {
-      logger.error('Upload document error', { userId, error: error.message });
+      logger.error('Upload document error', { 
+        userId, 
+        error: error.message,
+        stack: error.stack,
+        file: req.file ? { name: req.file.originalname, size: req.file.size } : null
+      });
       res.status(500).json({
         success: false,
         message: 'Failed to upload document'

@@ -6,6 +6,7 @@ import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, auditLog } from "../middleware/auth.js";
 import { loginLimiter, registerLimiter } from "../middleware/rateLimiter.js";
 import User from "../models/User.js";
+import Employee from "../models/Employee.js";
 import AuthToken from "../models/AuthToken.js";
 import SecurityEvent from "../models/SecurityEvent.js";
 import TwoFactorAuth from "../utils/twoFactor.js";
@@ -89,6 +90,9 @@ router.post("/login",
 
       await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
 
+      // Get employee record if exists
+      let employee = await Employee.findOne({ userId: user._id, orgId: user.orgId || 'system' }).lean();
+
       logger.info('User logged in successfully', {
         userId: user._id,
         email: user.email,
@@ -101,12 +105,16 @@ router.post("/login",
         data: {
           user: {
             id: user._id,
+            userId: user._id,
             name: user.name,
             email: user.email,
             role: user.role,
             avatar: user.avatar,
             organization: user.organization,
-            tenantId: user.orgId || 'system'
+            tenantId: user.orgId || 'system',
+            orgId: user.orgId || 'system',
+            employeeId: employee?._id || '',
+            employeeCode: employee?.employeeCode || ''
           },
           token,
           refreshToken,
@@ -164,34 +172,41 @@ router.get("/me",
         });
         employee = employee.toObject();
       }
-
-      // Map employeeCode to employeeId for frontend consistency
-      if (employee) {
-        employee.employeeId = employee.employeeCode;
-      }
+      
+      console.log('📊 [AUTH-ME] User data:', { firstName: user.profile?.firstName, lastName: user.profile?.lastName, name: user.name });
+      console.log('📊 [AUTH-ME] Employee data:', { firstName: employee?.firstName, lastName: employee?.lastName, phone: employee?.phone, address: employee?.address });
 
       // Combine user and employee data
       const profileData = {
         _id: user._id,
-        firstName: user.profile?.firstName || user.name?.split(' ')[0] || '',
-        lastName: user.profile?.lastName || user.name?.split(' ')[1] || '',
+        id: user._id,
+        userId: user._id,
+        firstName: employee?.firstName || user.profile?.firstName || user.name?.split(' ')[0] || '',
+        lastName: employee?.lastName || user.profile?.lastName || user.name?.split(' ')[1] || '',
         email: user.email,
-        phone: user.contact?.phone || employee?.phone || '',
+        phone: employee?.phone || user.contact?.phone || '',
         dateOfBirth: user.profile?.dateOfBirth || '',
         gender: user.profile?.gender || '',
-        address: user.contact?.address?.street || employee?.address || '',
-        employeeId: employee?.employeeId || '',
+        address: employee?.address || user.contact?.address?.street || '',
+        employeeId: employee?.employeeCode || '',
         employeeCode: employee?.employeeCode || '',
         department: employee?.department || '',
         designation: employee?.designation || '',
         joiningDate: employee?.joiningDate ? new Date(employee.joiningDate).toISOString().split('T')[0] : '',
-        employmentType: user.profile?.employmentType || '',
-        workLocation: user.profile?.workLocation || '',
+        employmentType: employee?.employmentType || user.profile?.employmentType || '',
+        workLocation: employee?.workLocation || '',
         aadharNumber: user.profile?.aadharNumber || '',
         panNumber: user.profile?.panNumber || '',
         bankAccount: employee?.bankDetails?.accountNumber || '',
-        ifscCode: employee?.bankDetails?.ifscCode || ''
+        ifscCode: employee?.bankDetails?.ifscCode || '',
+        role: user.role,
+        avatar: user.avatar,
+        organization: user.organization,
+        tenantId: user.tenantId,
+        orgId: user.orgId
       };
+
+      console.log('📊 [AUTH-ME] Final profile data being returned:', { firstName: profileData.firstName, lastName: profileData.lastName, phone: profileData.phone, address: profileData.address });
 
       res.json({
         success: true,

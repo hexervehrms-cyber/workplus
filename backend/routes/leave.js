@@ -9,10 +9,13 @@
 
 import express from 'express';
 import LeaveRequest from '../models/LeaveRequest.js';
+import Employee from '../models/Employee.js';
+import User from '../models/User.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { paginationMiddleware } from '../middleware/pagination.js';
 import idempotencyMiddleware from '../middleware/idempotency.js';
 import logger from '../utils/logger.js';
+import EmailNotificationService from '../utils/emailNotificationService.js';
 
 const router = express.Router();
 
@@ -56,7 +59,7 @@ router.get('/', asyncHandler(async (req, res) => {
   // Get total count
   const total = await LeaveRequest.countDocuments(query);
 
-  // Get paginated results with .lean()
+  // Get paginated results
   const leaveRequests = await LeaveRequest.find(query)
     .populate('userId', 'name email avatar')
     .populate('employeeId', 'employeeCode department designation')
@@ -64,8 +67,7 @@ router.get('/', asyncHandler(async (req, res) => {
     .populate('rejectedBy', 'name email')
     .sort({ createdAt: -1 })
     .skip(skip)
-    .limit(limit)
-    .lean(); // P0 FIX: Use .lean() for read-only queries
+    .limit(limit);
 
   logger.info('Leave requests listed', { total, page, limit });
 
@@ -73,44 +75,13 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /api/leave-requests/user/:userId
- * Get leave requests for specific user
+ * DELETE /api/leave-requests/:id
+ * Delete leave request (must come before GET /:id)
  */
-router.get('/user/:userId', asyncHandler(async (req, res) => {
-  const { page, limit, skip } = req.pagination;
-  const { userId } = req.params;
-  const { status } = req.query;
+router.delete('/:id', asyncHandler(async (req, res) => {
+  const { id } = req.params;
 
-  const query = { userId };
-  
-  if (status) {
-    query.status = status;
-  }
-
-  const total = await LeaveRequest.countDocuments(query);
-
-  const leaveRequests = await LeaveRequest.find(query)
-    .populate('approvedBy', 'name email')
-    .populate('rejectedBy', 'name email')
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limit)
-    .lean(); // P0 FIX: Use .lean() for read-only queries
-
-  res.paginate(leaveRequests, total);
-}));
-
-/**
- * GET /api/leave-requests/:id
- * Get single leave request
- */
-router.get('/:id', asyncHandler(async (req, res) => {
-  const leaveRequest = await LeaveRequest.findById(req.params.id)
-    .populate('userId', 'name email avatar')
-    .populate('employeeId', 'employeeCode department designation')
-    .populate('approvedBy', 'name email')
-    .populate('rejectedBy', 'name email')
-    .lean(); // P0 FIX: Use .lean() for read-only queries
+  const leaveRequest = await LeaveRequest.findByIdAndDelete(id);
 
   if (!leaveRequest) {
     return res.status(404).json({
@@ -119,185 +90,68 @@ router.get('/:id', asyncHandler(async (req, res) => {
     });
   }
 
+  // Emit real-time updates
+  req.emitLeaveUpdate('deleted', leaveRequest, leaveRequest.orgId);
+  req.emitDashboardUpdate('delete', 'leave_requests', leaveRequest, leaveRequest.orgId);
+
+  logger.info('Leave request deleted', { leaveRequestId: id });
+
   res.json({
     success: true,
+    message: 'Leave request deleted successfully',
     data: leaveRequest
   });
 }));
 
 /**
- * POST /api/leave-requests
- * Create new leave request with smart policy validation and workflow automation
+ * PATCH /api/leave-requests/:id
+ * Update leave request (only for pending requests)
  */
-router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const {
-    userId,
-    employeeId,
-    leaveType,
-    startDate,
-    endDate,
-    reason,
-    isHalfDay = false,
-    orgId
-  } = req.body;
+router.patch('/:id', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { leaveType, startDate, endDate, reason } = req.body;
 
-  // Validate required fields
-  if (!userId || !employeeId || !leaveType || !startDate || !endDate || !reason || !orgId) {
-    return res.status(400).json({
+  // Find the leave request
+  const leaveRequest = await LeaveRequest.findById(id);
+
+  if (!leaveRequest) {
+    return res.status(404).json({
       success: false,
-      message: 'All fields are required'
+      message: 'Leave request not found'
     });
   }
 
-  // Use Leave Policy Engine if available
-  if (global.leavePolicyEngine) {
-    try {
-      const result = await global.leavePolicyEngine.processLeaveRequest({
-        employeeId,
-        leaveType,
-        startDate,
-        endDate,
-        reason,
-        isHalfDay,
-        orgId,
-        requestedBy: userId
-      });
-
-      if (!result.success) {
-        return res.status(400).json({
-          success: false,
-          message: 'Leave request validation failed',
-          errors: result.errors,
-          warnings: result.warnings
-        });
-      }
-
-      logger.info('Smart leave request processed', {
-        leaveRequestId: result.leaveRequest._id,
-        employeeId,
-        leaveType,
-        autoApproved: result.autoApproved,
-        workflowId: result.workflowId
-      });
-
-      return res.status(201).json({
-        success: true,
-        message: result.autoApproved ? 'Leave request auto-approved' : 'Leave request submitted successfully',
-        data: {
-          leaveRequest: result.leaveRequest,
-          autoApproved: result.autoApproved,
-          workflowId: result.workflowId,
-          warnings: result.warnings
-        }
-      });
-
-    } catch (policyError) {
-      logger.warn('Smart leave processing failed, falling back to basic', {
-        error: policyError.message,
-        employeeId
-      });
-      
-      return res.status(400).json({
-        success: false,
-        message: policyError.message
-      });
-    }
-  }
-
-  // Fallback to basic leave request logic
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  
-  if (end < start) {
+  // Only allow editing pending requests
+  if (leaveRequest.status !== 'pending') {
     return res.status(400).json({
       success: false,
-      message: 'End date must be after start date'
+      message: 'Only pending leave requests can be edited'
     });
   }
 
-  const days = isHalfDay ? 0.5 : Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+  // Update the leave request
+  if (leaveType) leaveRequest.type = leaveType;
+  if (startDate) leaveRequest.startDate = new Date(startDate);
+  if (endDate) leaveRequest.endDate = new Date(endDate);
+  if (reason) leaveRequest.reason = reason;
 
-  // Check for overlapping leave requests
-  const overlapping = await LeaveRequest.findOne({
-    employeeId,
-    status: { $in: ['pending', 'approved'] },
-    $or: [
-      {
-        startDate: { $lte: end },
-        endDate: { $gte: start }
-      }
-    ]
-  }).lean();
+  await leaveRequest.save();
 
-  if (overlapping) {
-    return res.status(400).json({
-      success: false,
-      message: 'You already have a leave request for this period',
-      data: overlapping
-    });
-  }
-
-  // Create leave request
-  const leaveRequest = await LeaveRequest.create({
-    userId,
-    employeeId,
-    leaveType,
-    startDate: start,
-    endDate: end,
-    days,
-    reason,
-    isHalfDay,
-    status: 'pending',
-    orgId
+  logger.info('Leave request updated', {
+    leaveRequestId: id,
+    employeeId: leaveRequest.employeeId
   });
 
-  // Emit business event for workflow automation
-  if (global.eventSystem) {
-    await global.eventSystem.emit('leave.requested', {
-      leaveRequest,
-      employee: { _id: employeeId, userId },
-      orgId
-    });
-  }
-
-  // Emit real-time updates to dashboards
-  req.emitLeaveUpdate('created', leaveRequest, orgId);
-  req.emitDashboardUpdate('create', 'leave_requests', leaveRequest, orgId);
-  req.emitActivityUpdate({
-    action: 'leave_request',
-    description: `New ${leaveType} leave request submitted`,
-    userId: userId,
-    orgId: orgId,
-    severity: 'low',
-    category: 'employee'
-  }, orgId);
-
-  // Emit notification to admins
-  req.emitNotification({
-    title: 'New Leave Request',
-    message: `${leaveType} leave request submitted for ${days} day(s)`,
-    type: 'info',
-    action: 'leave_requested',
-    data: { leaveRequestId: leaveRequest._id, leaveType, days }
-  }, null, orgId);
-
-  logger.info('Basic leave request created', { 
-    leaveRequestId: leaveRequest._id, 
-    employeeId,
-    days,
-    leaveType
-  });
-
-  res.status(201).json({
+  res.json({
     success: true,
-    message: 'Leave request submitted successfully',
+    message: 'Leave request updated successfully',
     data: { leaveRequest }
   });
 }));
 
 /**
  * PATCH /api/leave-requests/:id/approve
- * Approve leave request with smart policy engine integration
+ * Approve leave request (must come before GET /:id)
  */
 router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { id } = req.params;
@@ -415,6 +269,33 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
     data: { leaveRequestId: updated._id }
   }, updated.userId, updated.orgId);
 
+  // Send email notification
+  try {
+    const employeeRecord = await Employee.findOne({ userId: updated.userId._id }).select('_id orgId').lean();
+    const employee = {
+      _id: employeeRecord?._id,
+      name: updated.userId?.name || updated.employeeName,
+      email: updated.userId?.email,
+      orgId: employeeRecord?.orgId || updated.orgId
+    };
+    const approver = {
+      _id: updated.approvedBy?._id,
+      name: updated.approvedBy?.name || 'Manager'
+    };
+    if (employee.email && employeeRecord) {
+      await EmailNotificationService.sendLeaveApproved(employee, updated, approver);
+      logger.info('Leave approved email sent', { leaveRequestId: id, email: employee.email });
+    } else {
+      logger.warn('Missing employee data for leave approval notification', { 
+        leaveRequestId: id, 
+        hasEmail: !!employee.email, 
+        hasEmployeeRecord: !!employeeRecord 
+      });
+    }
+  } catch (emailError) {
+    logger.error('Failed to send leave approved email', { error: emailError.message, leaveRequestId: id });
+  }
+
   logger.info('Basic leave request approved', { 
     leaveRequestId: id, 
     approvedBy
@@ -429,7 +310,7 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
 
 /**
  * PATCH /api/leave-requests/:id/reject
- * Reject leave request with smart policy engine integration
+ * Reject leave request (must come before GET /:id)
  */
 router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { id } = req.params;
@@ -548,6 +429,33 @@ router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res)
     data: { leaveRequestId: updated._id, reason: rejectionReason }
   }, updated.userId, updated.orgId);
 
+  // Send email notification
+  try {
+    const employeeRecord = await Employee.findOne({ userId: updated.userId._id }).select('_id orgId').lean();
+    const employee = {
+      _id: employeeRecord?._id,
+      name: updated.userId?.name || updated.employeeName,
+      email: updated.userId?.email,
+      orgId: employeeRecord?.orgId || updated.orgId
+    };
+    const rejector = {
+      _id: updated.rejectedBy?._id,
+      name: updated.rejectedBy?.name || 'Manager'
+    };
+    if (employee.email && employeeRecord) {
+      await EmailNotificationService.sendLeaveRejected(employee, updated, rejector, rejectionReason);
+      logger.info('Leave rejected email sent', { leaveRequestId: id, email: employee.email });
+    } else {
+      logger.warn('Missing employee data for leave rejection notification', { 
+        leaveRequestId: id, 
+        hasEmail: !!employee.email, 
+        hasEmployeeRecord: !!employeeRecord 
+      });
+    }
+  } catch (emailError) {
+    logger.error('Failed to send leave rejected email', { error: emailError.message, leaveRequestId: id });
+  }
+
   logger.info('Basic leave request rejected', { 
     leaveRequestId: id, 
     rejectedBy,
@@ -558,6 +466,330 @@ router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res)
     success: true,
     message: 'Leave request rejected successfully',
     data: updated
+  });
+}));
+
+/**
+ * GET /api/leave-requests/user/:userId
+ * Get leave requests for specific user
+ */
+router.get('/user/:userId', asyncHandler(async (req, res) => {
+  const { page, limit, skip } = req.pagination;
+  const { userId } = req.params;
+  const { status } = req.query;
+
+  const query = { userId };
+  
+  if (status) {
+    query.status = status;
+  }
+
+  const total = await LeaveRequest.countDocuments(query);
+
+  const leaveRequests = await LeaveRequest.find(query)
+    .populate('userId', 'name email avatar')
+    .populate('employeeId', 'employeeCode department designation')
+    .populate('approvedBy', 'name email')
+    .populate('rejectedBy', 'name email')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit);
+
+  res.paginate(leaveRequests, total);
+}));
+
+/**
+ * GET /api/leave-requests/:id
+ * Get single leave request
+ */
+router.get('/:id', asyncHandler(async (req, res) => {
+  const leaveRequest = await LeaveRequest.findById(req.params.id)
+    .populate('userId', 'name email avatar')
+    .populate('employeeId', 'employeeCode department designation')
+    .populate('approvedBy', 'name email')
+    .populate('rejectedBy', 'name email');
+
+  if (!leaveRequest) {
+    return res.status(404).json({
+      success: false,
+      message: 'Leave request not found'
+    });
+  }
+
+  res.json({
+    success: true,
+    data: leaveRequest
+  });
+}));
+
+/**
+ * POST /api/leave-requests
+ * Create new leave request with smart policy validation and workflow automation
+ */
+router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
+  const {
+    userId,
+    employeeId,
+    leaveType,
+    startDate,
+    endDate,
+    reason,
+    isHalfDay = false,
+    isHourlyLeave = false,
+    startTime,
+    endTime,
+    orgId
+  } = req.body;
+
+  console.log('POST /leave-requests - Request body:', {
+    userId,
+    employeeId,
+    leaveType,
+    startDate,
+    endDate,
+    reason,
+    isHalfDay,
+    isHourlyLeave,
+    startTime,
+    endTime,
+    orgId
+  });
+
+  // Validate required fields
+  if (!userId || !employeeId || !leaveType || !startDate || !endDate || !reason || !orgId) {
+    console.error('Missing required fields:', {
+      userId: !!userId,
+      employeeId: !!employeeId,
+      leaveType: !!leaveType,
+      startDate: !!startDate,
+      endDate: !!endDate,
+      reason: !!reason,
+      orgId: !!orgId
+    });
+    return res.status(400).json({
+      success: false,
+      message: 'All fields are required'
+    });
+  }
+
+  // Validate hourly leave fields if applicable
+  if (isHourlyLeave && (!startTime || !endTime)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Start time and end time are required for hourly leave'
+    });
+  }
+
+  // Get employee name from User
+  let employeeName = 'Unknown';
+  try {
+    const user = await User.findById(userId).lean();
+    if (user) {
+      employeeName = user.name || 'Unknown';
+    }
+  } catch (error) {
+    logger.warn('Could not fetch user name for leave request', { userId });
+  }
+
+  // Use Leave Policy Engine if available
+  if (global.leavePolicyEngine) {
+    try {
+      const result = await global.leavePolicyEngine.processLeaveRequest({
+        employeeId,
+        leaveType,
+        startDate,
+        endDate,
+        reason,
+        isHalfDay,
+        isHourlyLeave,
+        startTime,
+        endTime,
+        orgId,
+        requestedBy: userId
+      });
+
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          message: 'Leave request validation failed',
+          errors: result.errors,
+          warnings: result.warnings
+        });
+      }
+
+      logger.info('Smart leave request processed', {
+        leaveRequestId: result.leaveRequest._id,
+        employeeId,
+        leaveType,
+        autoApproved: result.autoApproved,
+        workflowId: result.workflowId
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: result.autoApproved ? 'Leave request auto-approved' : 'Leave request submitted successfully',
+        data: {
+          leaveRequest: result.leaveRequest,
+          autoApproved: result.autoApproved,
+          workflowId: result.workflowId,
+          warnings: result.warnings
+        }
+      });
+
+    } catch (policyError) {
+      logger.warn('Smart leave processing failed, falling back to basic', {
+        error: policyError.message,
+        employeeId
+      });
+      
+      return res.status(400).json({
+        success: false,
+        message: policyError.message
+      });
+    }
+  }
+
+  // Fallback to basic leave request logic
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  
+  console.log('Creating leave request:', {
+    userId,
+    employeeId,
+    leaveType,
+    startDate,
+    endDate,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    reason,
+    isHourlyLeave,
+    startTime,
+    endTime,
+    orgId
+  });
+  
+  if (end < start) {
+    return res.status(400).json({
+      success: false,
+      message: 'End date must be after start date'
+    });
+  }
+
+  const days = isHalfDay ? 0.5 : Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+
+  console.log('Days calculated:', days);
+
+  // Check for overlapping leave requests
+  const overlapping = await LeaveRequest.findOne({
+    employeeId,
+    status: { $in: ['pending', 'approved'] },
+    $or: [
+      {
+        startDate: { $lte: end },
+        endDate: { $gte: start }
+      }
+    ]
+  }).lean();
+
+  console.log('Overlapping check:', {
+    employeeId,
+    overlappingFound: !!overlapping,
+    overlappingData: overlapping
+  });
+
+  if (overlapping) {
+    return res.status(400).json({
+      success: false,
+      message: 'You already have a leave request for this period',
+      data: overlapping
+    });
+  }
+
+  // Create leave request
+  const leaveRequest = await LeaveRequest.create({
+    userId,
+    employeeId,
+    employeeName: employeeName,
+    type: leaveType,
+    startDate: start,
+    endDate: end,
+    reason,
+    status: 'pending',
+    orgId,
+    isHourlyLeave,
+    startTime: isHourlyLeave ? startTime : undefined,
+    endTime: isHourlyLeave ? endTime : undefined
+  });
+
+  // Emit business event for workflow automation
+  if (global.eventSystem) {
+    await global.eventSystem.emit('leave.requested', {
+      leaveRequest,
+      employee: { _id: employeeId, userId },
+      orgId
+    });
+  }
+
+  // Emit real-time updates to dashboards
+  req.emitLeaveUpdate('created', leaveRequest, orgId);
+  req.emitDashboardUpdate('create', 'leave_requests', leaveRequest, orgId);
+  req.emitActivityUpdate({
+    action: 'leave_request',
+    description: `New ${leaveType} leave request submitted`,
+    userId: userId,
+    orgId: orgId,
+    severity: 'low',
+    category: 'employee'
+  }, orgId);
+
+  // Emit notification to admins
+  req.emitNotification({
+    title: 'New Leave Request',
+    message: `${leaveType} leave request submitted for ${days} day(s)`,
+    type: 'info',
+    action: 'leave_requested',
+    data: { leaveRequestId: leaveRequest._id, leaveType, days }
+  }, null, orgId);
+
+  // Send email notification to employee (confirmation)
+  try {
+    const user = await User.findById(userId).select('name email').lean();
+    const employeeRecord = await Employee.findOne({ userId }).select('_id orgId').lean();
+    
+    if (user && user.email && employeeRecord) {
+      await EmailNotificationService.sendLeaveRequestSubmitted(
+        { 
+          _id: employeeRecord._id,
+          name: user.name, 
+          email: user.email,
+          orgId: employeeRecord.orgId || orgId
+        },
+        { _id: leaveRequest._id, type: leaveType, startDate: start, endDate: end, reason }
+      );
+      logger.info('Leave request submitted email sent', { leaveRequestId: leaveRequest._id, email: user.email });
+    } else {
+      logger.warn('Missing user or employee data for leave submission notification', { 
+        leaveRequestId: leaveRequest._id, 
+        hasUser: !!user, 
+        hasEmployeeRecord: !!employeeRecord 
+      });
+    }
+  } catch (emailError) {
+    logger.error('Failed to send leave request submitted email', { error: emailError.message });
+  }
+
+  logger.info('Basic leave request created', { 
+    leaveRequestId: leaveRequest._id, 
+    employeeId,
+    days,
+    leaveType,
+    isHourlyLeave
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Leave request submitted successfully',
+    data: { leaveRequest }
   });
 }));
 
@@ -806,6 +1038,35 @@ router.post('/validate', asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: validation
+  });
+}));
+
+/**
+ * DELETE /api/leave-requests/:id
+ * Delete leave request
+ */
+router.delete('/:id', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  const leaveRequest = await LeaveRequest.findByIdAndDelete(id);
+
+  if (!leaveRequest) {
+    return res.status(404).json({
+      success: false,
+      message: 'Leave request not found'
+    });
+  }
+
+  // Emit real-time updates
+  req.emitLeaveUpdate('deleted', leaveRequest, leaveRequest.orgId);
+  req.emitDashboardUpdate('delete', 'leave_requests', leaveRequest, leaveRequest.orgId);
+
+  logger.info('Leave request deleted', { leaveRequestId: id });
+
+  res.json({
+    success: true,
+    message: 'Leave request deleted successfully',
+    data: leaveRequest
   });
 }));
 

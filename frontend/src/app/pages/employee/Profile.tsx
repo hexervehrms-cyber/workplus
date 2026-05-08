@@ -1,4 +1,4 @@
-import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Edit, Lock, Globe, Loader, X, Upload, Download, Trash2, Check } from 'lucide-react';
+import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Edit, Lock, Globe, Loader, X, Upload, Download, Trash2, Check, LockOpen, Clock } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
 import { Button } from '../../components/ui/button';
@@ -12,6 +12,74 @@ import CurrencySelector from '../../components/CurrencySelector';
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog';
+
+// IndexedDB helper functions
+const DB_NAME = 'WorkplusDB';
+const STORE_NAME = 'documents';
+
+const initDB = (): Promise<IDBDatabase> => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: '_id' });
+      }
+    };
+  });
+};
+
+const saveDocumentToDB = async (doc: Document): Promise<void> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.put(doc);
+    
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve();
+  });
+};
+
+const getDocumentsFromDB = async (): Promise<Document[]> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.getAll();
+    
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result || []);
+  });
+};
+
+const deleteDocumentFromDB = async (docId: string): Promise<void> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.delete(docId);
+    
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve();
+  });
+};
+
+const clearDocumentsFromDB = async (): Promise<void> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.clear();
+    
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve();
+  });
+};
 
 interface EmployeeData {
   _id: string;
@@ -32,6 +100,12 @@ interface EmployeeData {
   panNumber?: string;
   bankAccount?: string;
   ifscCode?: string;
+  sensitiveInfoLocks?: {
+    aadharNumber?: number;
+    panNumber?: number;
+    bankAccount?: number;
+    ifscCode?: number;
+  };
 }
 
 interface Document {
@@ -41,6 +115,8 @@ interface Document {
   uploadedAt: string;
   status: string;
   filePath?: string;
+  category?: string;
+  fileBlob?: Blob;
 }
 
 export default function Profile() {
@@ -49,15 +125,249 @@ export default function Profile() {
   const [employee, setEmployee] = useState<EmployeeData | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // State declarations - MUST be before useEffect hooks
+  const [isEditingPersonal, setIsEditingPersonal] = useState(false);
+  const [isUploadingDocument, setIsUploadingDocument] = useState(false);
+  
+  // Initialize documents from IndexedDB to prevent race condition
+  const [documents, setDocuments] = useState<Document[]>([]);
+  
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [documentType, setDocumentType] = useState<'personal' | 'experience'>('personal');
+  const [selectedCategory, setSelectedCategory] = useState<string>('Letter of Intent');
+
+  // Educational Documents State - Initialize from localStorage
+  const [educationalDocuments, setEducationalDocuments] = useState<{
+    [key: string]: { certificate?: Document; marksheet?: Document; others?: Document };
+  }>(() => {
+    try {
+      const stored = localStorage.getItem('educationalDocuments');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        console.log('Initialized educational documents from localStorage:', parsed);
+        return parsed;
+      }
+    } catch (error) {
+      console.error('Error initializing educational documents from storage:', error);
+    }
+    return {
+      '10th': {},
+      '12th': {},
+      'Graduation': {},
+      'Post Graduation': {},
+      'Diploma': {},
+      'Certificate': {},
+      'Drop out': {}
+    };
+  });
+  const [uploadingEducation, setUploadingEducation] = useState<string | null>(null);
+  const [uploadingEducationType, setUploadingEducationType] = useState<'certificate' | 'marksheet' | 'others' | null>(null);
+  const [submittingEducation, setSubmittingEducation] = useState(false);
+  const [submittingDocuments, setSubmittingDocuments] = useState(false);
+
+  // Confidential Information Lock States
+  const [isEditingSensitive, setIsEditingSensitive] = useState(false);
+  const [sensitiveForm, setSensitiveForm] = useState({
+    aadharNumber: '',
+    panNumber: '',
+    bankAccount: '',
+    ifscCode: ''
+  });
+  const [lockedFields, setLockedFields] = useState<{ [key: string]: boolean }>({
+    aadharNumber: false,
+    panNumber: false,
+    bankAccount: false,
+    ifscCode: false
+  });
+  const [lockTimestamps, setLockTimestamps] = useState<{ [key: string]: number }>({});
+  const [remainingTime, setRemainingTime] = useState<{ [key: string]: string }>({});
+
+  // Edit form states
+  const [personalForm, setPersonalForm] = useState({
+    firstName: '',
+    lastName: '',
+    phone: '',
+    dateOfBirth: '',
+    gender: '',
+    address: ''
+  });
+
+  const [officialForm, setOfficialForm] = useState({
+    employeeId: '',
+    joiningDate: '',
+    department: '',
+    designation: ''
+  });
+
   useEffect(() => {
     fetchEmployeeData();
+    
+    // Load documents from backend
+    const loadDocuments = async () => {
+      try {
+        const token = localStorage.getItem('authToken');
+        const userId = localStorage.getItem('userId');
+        
+        if (!userId) {
+          console.warn('No userId found in localStorage');
+          return;
+        }
+
+        const response = await fetch(`/api/documents/employee/${userId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (!response.ok) {
+          console.warn('Failed to fetch documents from backend');
+          return;
+        }
+
+        const data = await response.json();
+        const backendDocs = data.data || [];
+        
+        console.log('Loaded documents from backend:', backendDocs);
+        setDocuments(backendDocs);
+      } catch (error) {
+        console.error('Error loading documents from backend:', error);
+      }
+    };
+    
+    loadDocuments();
+    // Commented out until backend endpoint is created
+    // fetchEducationalDocuments();
   }, []);
+
+
+
+  // Documents are now persisted on the backend, no need to save to IndexedDB
+  // This useEffect is kept for reference but disabled
+  /*
+  useEffect(() => {
+    const saveDocuments = async () => {
+      try {
+        // Clear old documents and save new ones
+        await clearDocumentsFromDB();
+        
+        for (const doc of documents) {
+          await saveDocumentToDB(doc);
+        }
+        
+        console.log('Saved', documents.length, 'documents to IndexedDB');
+      } catch (error) {
+        console.error('Error saving documents to IndexedDB:', error);
+        if (error instanceof Error && error.name === 'QuotaExceededError') {
+          toast.error('Storage quota exceeded. Please delete some documents.');
+        }
+      }
+    };
+    
+    if (documents.length > 0 || documents.length === 0) {
+      saveDocuments();
+    }
+  }, [documents]);
+  */
+
+  // Save educational documents to localStorage whenever they change
+  useEffect(() => {
+    try {
+      const serialized = JSON.stringify(educationalDocuments);
+      // Check localStorage size (most browsers have 5-10MB limit)
+      const sizeInBytes = new Blob([serialized]).size;
+      console.log(`Educational documents size: ${(sizeInBytes / 1024 / 1024).toFixed(2)}MB`);
+      
+      if (sizeInBytes > 5 * 1024 * 1024) {
+        console.warn('Educational documents exceed 5MB limit, may not persist');
+      }
+      
+      localStorage.setItem('educationalDocuments', serialized);
+      console.log('Saved educational documents to localStorage');
+    } catch (error) {
+      console.error('Error saving educational documents to storage:', error);
+      if (error instanceof Error && error.name === 'QuotaExceededError') {
+        toast.error('Storage quota exceeded. Please delete some documents.');
+      }
+    }
+  }, [educationalDocuments]);
+
+  // Fetch educational documents
+  const fetchEducationalDocuments = async () => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch('/api/employee-dashboard/documents?type=education', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Educational documents fetched:', data);
+        
+        if (data.success && data.data && Array.isArray(data.data)) {
+          // Parse and organize documents by education level and type
+          const organizedDocs: {
+            [key: string]: { certificate?: Document; marksheet?: Document; others?: Document };
+          } = {
+            '10th': {},
+            '12th': {},
+            'Graduation': {},
+            'Post Graduation': {},
+            'Diploma': {},
+            'Certificate': {},
+            'Drop out': {}
+          };
+
+          // Process each document and place it in the correct category
+          data.data.forEach((doc: any) => {
+            const docType = doc.type || '';
+            // Parse type like "education_10th_certificate"
+            const match = docType.match(/education_(.+)_(certificate|marksheet|others)/);
+            
+            if (match) {
+              const levelKey = match[1].replace(/_/g, ' ');
+              const docTypeKey = match[2] as 'certificate' | 'marksheet' | 'others';
+              
+              // Find matching education level (case-insensitive)
+              const educationLevel = Object.keys(organizedDocs).find(
+                level => level.toLowerCase().replace(/\s+/g, '_') === levelKey.toLowerCase()
+              );
+              
+              if (educationLevel) {
+                const document: Document = {
+                  _id: doc._id || doc.id,
+                  name: doc.name,
+                  size: doc.size || 'Unknown',
+                  uploadedAt: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : 'Unknown',
+                  status: doc.status || 'uploaded',
+                  filePath: doc.filePath || doc.url
+                };
+                
+                organizedDocs[educationLevel][docTypeKey] = document;
+              }
+            }
+          });
+
+          console.log('Organized educational documents:', organizedDocs);
+          setEducationalDocuments(organizedDocs);
+        }
+      } else {
+        console.warn('Failed to fetch educational documents:', response.status);
+      }
+    } catch (error) {
+      console.error('Error fetching educational documents:', error);
+      // Don't show error toast, just log it - documents will load from uploads
+    }
+  };
 
   const fetchEmployeeData = async () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:5000/api/auth/me', {
+      const response = await fetch('/api/auth/me', {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -69,11 +379,11 @@ export default function Profile() {
       }
 
       const data = await response.json();
-      console.log('Raw response data:', data);
+      console.log('📊 Raw /api/auth/me response:', data);
       
       // The response data is already in the correct format
       const profileData = data.data || data;
-      console.log('Profile data:', profileData);
+      console.log('📊 Profile data extracted:', profileData);
       
       // Ensure all required fields are present
       const employeeData: EmployeeData = {
@@ -94,10 +404,11 @@ export default function Profile() {
         aadharNumber: profileData.aadharNumber || '',
         panNumber: profileData.panNumber || '',
         bankAccount: profileData.bankAccount || '',
-        ifscCode: profileData.ifscCode || ''
+        ifscCode: profileData.ifscCode || '',
+        sensitiveInfoLocks: profileData.sensitiveInfoLocks || {}
       };
       
-      console.log('Employee data to set:', employeeData);
+      console.log('📊 Employee data to set:', employeeData);
       setEmployee(employeeData);
       
       // Directly update form states
@@ -117,38 +428,89 @@ export default function Profile() {
         designation: employeeData.designation
       });
       
-      console.log('Form states directly updated');
+      console.log('✅ Form states updated successfully');
     } catch (error) {
-      console.error('Error fetching employee data:', error);
+      console.error('❌ Error fetching employee data:', error);
       toast.error('Failed to load employee data');
     } finally {
       setLoading(false);
     }
   };
-  const [isEditingPersonal, setIsEditingPersonal] = useState(false);
-  const [isEditingOfficial, setIsEditingOfficial] = useState(false);
-  const [isUploadingDocument, setIsUploadingDocument] = useState(false);
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [experienceDocuments, setExperienceDocuments] = useState<Document[]>([]);
-  const [uploadingFile, setUploadingFile] = useState(false);
-  const [documentType, setDocumentType] = useState<'personal' | 'experience'>('personal');
 
-  // Edit form states
-  const [personalForm, setPersonalForm] = useState({
-    firstName: '',
-    lastName: '',
-    phone: '',
-    dateOfBirth: '',
-    gender: '',
-    address: ''
-  });
+  // Initialize sensitive form and check lock status
+  useEffect(() => {
+    if (employee) {
+      setSensitiveForm({
+        aadharNumber: employee.aadharNumber || '',
+        panNumber: employee.panNumber || '',
+        bankAccount: employee.bankAccount || '',
+        ifscCode: employee.ifscCode || ''
+      });
 
-  const [officialForm, setOfficialForm] = useState({
-    employeeId: '',
-    joiningDate: '',
-    department: '',
-    designation: ''
-  });
+      // Check lock status for each field
+      if (employee.sensitiveInfoLocks) {
+        const now = Date.now();
+        const LOCK_DURATION = 12 * 60 * 60 * 1000; // 12 hours in milliseconds
+
+        const newLockedFields: { [key: string]: boolean } = {};
+        const newLockTimestamps: { [key: string]: number } = {};
+
+        Object.entries(employee.sensitiveInfoLocks).forEach(([field, timestamp]) => {
+          if (timestamp) {
+            const timeSinceLock = now - timestamp;
+            const isLocked = timeSinceLock < LOCK_DURATION;
+            newLockedFields[field] = isLocked;
+            if (isLocked) {
+              newLockTimestamps[field] = timestamp;
+            }
+          }
+        });
+
+        setLockedFields(newLockedFields);
+        setLockTimestamps(newLockTimestamps);
+      }
+    }
+  }, [employee]);
+
+  // Update countdown timers
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const LOCK_DURATION = 12 * 60 * 60 * 1000;
+      const newRemainingTime: { [key: string]: string } = {};
+      const newLockedFields: { [key: string]: boolean } = { ...lockedFields };
+
+      Object.entries(lockTimestamps).forEach(([field, timestamp]) => {
+        const timeSinceLock = now - timestamp;
+        const timeRemaining = LOCK_DURATION - timeSinceLock;
+
+        if (timeRemaining > 0) {
+          const hours = Math.floor(timeRemaining / (60 * 60 * 1000));
+          const minutes = Math.floor((timeRemaining % (60 * 60 * 1000)) / (60 * 1000));
+          newRemainingTime[field] = `${hours}h ${minutes}m`;
+          newLockedFields[field] = true;
+        } else {
+          newLockedFields[field] = false;
+          delete newRemainingTime[field];
+        }
+      });
+
+      setRemainingTime(newRemainingTime);
+      setLockedFields(newLockedFields);
+    }, 60000); // Update every minute
+
+    return () => clearInterval(interval);
+  }, [lockTimestamps]);
+
+  const documentCategories = [
+    'Letter of Intent',
+    'Offer Letter',
+    'Appointment Letter',
+    'Appraisal Letter',
+    'Salary Slips',
+    'Experience Letter',
+    'Relieving Letter'
+  ];
 
   if (loading) {
     return (
@@ -179,7 +541,15 @@ export default function Profile() {
   const handleUpdatePersonal = async () => {
     try {
       const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:5000/api/profile', {
+      
+      console.log('📝 Sending profile update with data:', {
+        firstName: personalForm.firstName,
+        lastName: personalForm.lastName,
+        phone: personalForm.phone,
+        address: personalForm.address
+      });
+      
+      const response = await fetch('/api/profile', {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -201,62 +571,29 @@ export default function Profile() {
         })
       });
 
+      console.log('📝 Profile update response status:', response.status);
+      
       if (!response.ok) {
-        throw new Error('Failed to update profile');
+        const errorData = await response.json();
+        console.error('❌ Profile update error:', errorData);
+        throw new Error(errorData.message || 'Failed to update profile');
       }
 
+      const responseData = await response.json();
+      console.log('✅ Profile update response:', responseData);
+
       // Add a small delay to ensure database is updated
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       // Refresh employee data from backend to ensure consistency
+      console.log('🔄 Refreshing employee data...');
       await fetchEmployeeData();
 
       setIsEditingPersonal(false);
       toast.success('Personal information updated successfully');
     } catch (error) {
-      console.error('Error updating profile:', error);
-      toast.error('Failed to update personal information');
-    }
-  };
-
-  // Handle official information update
-  const handleUpdateOfficial = async () => {
-    try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:5000/api/profile', {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          employeeDetails: {
-            employeeId: officialForm.employeeId,
-            joiningDate: officialForm.joiningDate,
-            department: officialForm.department,
-            designation: officialForm.designation
-          }
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to update official information');
-      }
-
-      const data = await response.json();
-      console.log('Update response:', data);
-
-      // Add a small delay to ensure database is updated
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Refresh employee data from backend to ensure consistency
-      await fetchEmployeeData();
-
-      setIsEditingOfficial(false);
-      toast.success('Official information updated successfully');
-    } catch (error) {
-      console.error('Error updating official information:', error);
-      toast.error('Failed to update official information');
+      console.error('❌ Error updating profile:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update personal information');
     }
   };
 
@@ -268,12 +605,15 @@ export default function Profile() {
     try {
       setUploadingFile(true);
       const token = localStorage.getItem('authToken');
+      
+      // Create FormData for file upload
       const formData = new FormData();
       formData.append('document', file);
-      formData.append('name', file.name);
-      formData.append('type', documentType === 'personal' ? 'general' : 'experience_letter');
+      formData.append('name', selectedCategory);
+      formData.append('type', documentType);
 
-      const response = await fetch('http://localhost:5000/api/employee-dashboard/documents', {
+      // Upload to backend
+      const response = await fetch('/api/documents/upload', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -282,33 +622,241 @@ export default function Profile() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to upload document');
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to upload document');
       }
 
       const data = await response.json();
+      const uploadedDoc = data.data;
+
+      // Create document object with backend data
       const newDoc: Document = {
-        _id: data.data.id,
-        name: data.data.name,
-        size: data.data.size,
-        uploadedAt: new Date(data.data.uploadedAt).toLocaleDateString(),
-        status: data.data.status === 'uploaded' ? 'Pending' : data.data.status,
-        filePath: data.data.filePath
+        _id: uploadedDoc._id,
+        name: uploadedDoc.name,
+        size: uploadedDoc.size,
+        uploadedAt: new Date(uploadedDoc.uploadedAt).toLocaleDateString(),
+        status: uploadedDoc.status,
+        filePath: uploadedDoc.filePath,
+        category: uploadedDoc.type
       };
 
-      if (documentType === 'personal') {
-        setDocuments([newDoc, ...documents]);
-      } else {
-        setExperienceDocuments([newDoc, ...experienceDocuments]);
-      }
+      // Update state
+      setDocuments([newDoc, ...documents]);
 
-      toast.success('Document uploaded successfully');
-      setIsUploadingDocument(false);
+      toast.success(`${selectedCategory} uploaded successfully`);
+      
+      // Reset file input
+      if (e.target) {
+        e.target.value = '';
+      }
     } catch (error) {
       console.error('Error uploading document:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to upload document');
+      toast.error(error instanceof Error ? error.message : 'An unexpected error occurred. Please try again later.');
+      
+      // Reset file input on error
+      if (e.target) {
+        e.target.value = '';
+      }
     } finally {
       setUploadingFile(false);
+    }
+  };
+
+  // Calculate educational documents progress
+  const calculateEducationProgress = () => {
+    const educationLevels = Object.keys(educationalDocuments);
+    let totalSlots = educationLevels.length * 3; // 3 documents per level (certificate + marksheet + others)
+    let filledSlots = 0;
+
+    Object.values(educationalDocuments).forEach((docs) => {
+      if (docs.certificate) filledSlots++;
+      if (docs.marksheet) filledSlots++;
+      if (docs.others) filledSlots++;
+    });
+
+    return Math.round((filledSlots / totalSlots) * 100);
+  };
+
+  // Handle educational document upload
+  const handleEducationDocumentUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    educationLevel: string,
+    docType: 'certificate' | 'marksheet' | 'others'
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setUploadingFile(true);
+      
+      // Convert file to base64 for storage
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      
+      // Simulate upload delay
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Create document object
+      const newDoc: Document = {
+        _id: `temp_${Date.now()}`,
+        name: file.name,
+        size: `${(file.size / 1024).toFixed(2)} KB`,
+        uploadedAt: new Date().toLocaleDateString(),
+        status: 'uploaded',
+        filePath: base64 // Store base64 data
+      };
+
+      // Update state
+      setEducationalDocuments((prev) => ({
+        ...prev,
+        [educationLevel]: {
+          ...prev[educationLevel],
+          [docType]: newDoc
+        }
+      }));
+
+      toast.success(`${educationLevel} ${docType} uploaded successfully`);
+      
+      // Reset selections after successful upload
+      setUploadingEducation(null);
+      setUploadingEducationType(null);
+      
+      // Reset file input
+      if (e.target) {
+        e.target.value = '';
+      }
+    } catch (error) {
+      console.error('Error uploading education document:', error);
+      toast.error(error instanceof Error ? error.message : 'An unexpected error occurred. Please try again later.');
+      
+      // Reset file input on error
+      if (e.target) {
+        e.target.value = '';
+      }
+    } finally {
+      setUploadingFile(false);
+    }
+  };
+
+  // Handle confidential information update
+  const handleUpdateSensitive = async () => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch('/api/profile', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          sensitiveInfo: {
+            aadharNumber: sensitiveForm.aadharNumber,
+            panNumber: sensitiveForm.panNumber,
+            bankAccount: sensitiveForm.bankAccount,
+            ifscCode: sensitiveForm.ifscCode
+          }
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update confidential information');
+      }
+
+      const data = await response.json();
+      console.log('Confidential info update response:', data);
+
+      // Add a small delay to ensure database is updated
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Refresh employee data from backend to ensure consistency
+      await fetchEmployeeData();
+
+      setIsEditingSensitive(false);
+      toast.success('Confidential information updated and locked for 12 hours');
+    } catch (error) {
+      console.error('Error updating confidential information:', error);
+      toast.error('Failed to update confidential information');
+    }
+  };
+
+  // Handle educational documents submission
+  const handleSubmitEducationalDocuments = async () => {
+    try {
+      setSubmittingEducation(true);
+      const token = localStorage.getItem('authToken');
+      
+      // Prepare educational documents data
+      const educationData = Object.entries(educationalDocuments).reduce((acc, [level, docs]) => {
+        acc[level] = {
+          certificate: docs.certificate ? { id: docs.certificate._id, name: docs.certificate.name } : null,
+          marksheet: docs.marksheet ? { id: docs.marksheet._id, name: docs.marksheet.name } : null,
+          others: docs.others ? { id: docs.others._id, name: docs.others.name } : null
+        };
+        return acc;
+      }, {} as any);
+
+      const response = await fetch('/api/profile', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          educationalDocuments: educationData
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to submit educational documents');
+      }
+
+      toast.success('Educational documents submitted successfully');
+    } catch (error) {
+      console.error('Error submitting educational documents:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to submit educational documents');
+    } finally {
+      setSubmittingEducation(false);
+    }
+  };
+
+  // Handle employment documents submission
+  const handleSubmitEmploymentDocuments = async () => {
+    try {
+      setSubmittingDocuments(true);
+      const token = localStorage.getItem('authToken');
+      
+      // Prepare employment documents data
+      const docsData = documents.map(doc => ({
+        id: doc._id,
+        name: doc.name,
+        category: selectedCategory
+      }));
+
+      const response = await fetch('/api/profile', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          employmentDocuments: docsData
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to submit employment documents');
+      }
+
+      toast.success('Employment documents submitted successfully');
+    } catch (error) {
+      console.error('Error submitting employment documents:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to submit employment documents');
+    } finally {
+      setSubmittingDocuments(false);
     }
   };
 
@@ -332,10 +880,14 @@ export default function Profile() {
         <div className="space-y-2">
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Profile Completion</span>
-            <span className="font-medium">75%</span>
+            <span className="font-medium">{Math.min(75 + Math.floor((documents.length / 7) * 25), 100)}%</span>
           </div>
-          <Progress value={75} className="h-2" />
-          <p className="text-xs text-muted-foreground">Add emergency contact and banking details to complete</p>
+          <Progress value={Math.min(75 + Math.floor((documents.length / 7) * 25), 100)} className="h-2" />
+          <p className="text-xs text-muted-foreground">
+            {documents.length === 0 
+              ? 'Upload documents to complete your profile' 
+              : `${documents.length} of 7 documents uploaded`}
+          </p>
         </div>
       </Card>
 
@@ -492,33 +1044,21 @@ export default function Profile() {
           {/* Official Information */}
           <Card className="p-6 rounded-2xl">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="font-semibold text-lg">Official Information</h3>
-              {!isEditingOfficial ? (
-                <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setIsEditingOfficial(true)}>
-                  <Edit className="w-4 h-4 mr-2" />
-                  Edit
-                </Button>
-              ) : (
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setIsEditingOfficial(false)}>
-                    <X className="w-4 h-4 mr-2" />
-                    Cancel
-                  </Button>
-                  <Button size="sm" className="rounded-xl" onClick={handleUpdateOfficial}>
-                    <Check className="w-4 h-4 mr-2" />
-                    Save Changes
-                  </Button>
-                </div>
-              )}
+              <div>
+                <h3 className="font-semibold text-lg">Official Information</h3>
+                <p className="text-xs text-muted-foreground mt-1">
+                  <Lock className="w-3 h-3 inline mr-1" />
+                  This information can only be edited by Admin/HR
+                </p>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-6">
               <div>
                 <Label>Employee ID</Label>
                 <Input 
                   value={officialForm.employeeId}
-                  onChange={(e) => setOfficialForm({...officialForm, employeeId: e.target.value})}
-                  disabled={!isEditingOfficial}
-                  className={`mt-2 rounded-xl ${isEditingOfficial ? 'bg-background border-primary' : 'bg-muted'}`}
+                  disabled={true}
+                  className="mt-2 rounded-xl bg-muted cursor-not-allowed"
                   placeholder="Enter employee ID"
                 />
               </div>
@@ -527,18 +1067,16 @@ export default function Profile() {
                 <Input 
                   type="date" 
                   value={officialForm.joiningDate}
-                  onChange={(e) => setOfficialForm({...officialForm, joiningDate: e.target.value})}
-                  disabled={!isEditingOfficial}
-                  className={`mt-2 rounded-xl ${isEditingOfficial ? 'bg-background border-primary' : 'bg-muted'}`}
+                  disabled={true}
+                  className="mt-2 rounded-xl bg-muted cursor-not-allowed"
                 />
               </div>
               <div>
                 <Label>Department</Label>
                 <Input 
                   value={officialForm.department}
-                  onChange={(e) => setOfficialForm({...officialForm, department: e.target.value})}
-                  disabled={!isEditingOfficial}
-                  className={`mt-2 rounded-xl ${isEditingOfficial ? 'bg-background border-primary' : 'bg-muted'}`}
+                  disabled={true}
+                  className="mt-2 rounded-xl bg-muted cursor-not-allowed"
                   placeholder="Enter department"
                 />
               </div>
@@ -546,9 +1084,8 @@ export default function Profile() {
                 <Label>Designation</Label>
                 <Input 
                   value={officialForm.designation}
-                  onChange={(e) => setOfficialForm({...officialForm, designation: e.target.value})}
-                  disabled={!isEditingOfficial}
-                  className={`mt-2 rounded-xl ${isEditingOfficial ? 'bg-background border-primary' : 'bg-muted'}`}
+                  disabled={true}
+                  className="mt-2 rounded-xl bg-muted cursor-not-allowed"
                   placeholder="Enter designation"
                 />
               </div>
@@ -594,202 +1131,748 @@ export default function Profile() {
             </div>
           </Card>
 
-          {/* Sensitive Information */}
+          {/* Confidential Information */}
           <Card className="p-6 rounded-2xl">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h3 className="font-semibold text-lg">Sensitive Information</h3>
-                <p className="text-sm text-muted-foreground">Locked fields for security</p>
+                <h3 className="font-semibold text-lg">Confidential Information</h3>
+                <p className="text-sm text-muted-foreground">Locked fields for security - 12 hour edit restriction</p>
               </div>
-              <Lock className="w-5 h-5 text-muted-foreground" />
+              {!isEditingSensitive ? (
+                <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setIsEditingSensitive(true)}>
+                  <Edit className="w-4 h-4 mr-2" />
+                  Edit
+                </Button>
+              ) : (
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setIsEditingSensitive(false)}>
+                    <X className="w-4 h-4 mr-2" />
+                    Cancel
+                  </Button>
+                  <Button size="sm" className="rounded-xl" onClick={handleUpdateSensitive}>
+                    <Check className="w-4 h-4 mr-2" />
+                    Save & Lock
+                  </Button>
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-6">
               <div>
                 <Label>Aadhar Number</Label>
                 <div className="mt-2 flex items-center gap-2">
-                  <Input value={employee.aadharNumber ? '**** **** ****' : 'Not provided'} disabled className="rounded-xl bg-muted" />
-                  <Button variant="outline" size="sm" className="rounded-xl">
-                    <Lock className="w-4 h-4" />
+                  {isEditingSensitive ? (
+                    <Input 
+                      value={sensitiveForm.aadharNumber}
+                      onChange={(e) => setSensitiveForm({...sensitiveForm, aadharNumber: e.target.value})}
+                      disabled={lockedFields.aadharNumber}
+                      className={`rounded-xl ${lockedFields.aadharNumber ? 'bg-muted cursor-not-allowed' : 'bg-background border-primary'}`}
+                      placeholder="Enter Aadhar number"
+                    />
+                  ) : (
+                    <Input 
+                      value={employee.aadharNumber ? '**** **** ****' : 'Not provided'} 
+                      disabled 
+                      className="rounded-xl bg-muted" 
+                    />
+                  )}
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="rounded-xl"
+                    disabled={!isEditingSensitive || lockedFields.aadharNumber}
+                    title={lockedFields.aadharNumber ? `Locked for ${remainingTime.aadharNumber || '12h'}` : 'Field is editable'}
+                  >
+                    {lockedFields.aadharNumber ? (
+                      <div className="flex items-center gap-1">
+                        <Lock className="w-4 h-4" />
+                        <span className="text-xs">{remainingTime.aadharNumber}</span>
+                      </div>
+                    ) : (
+                      <LockOpen className="w-4 h-4" />
+                    )}
                   </Button>
                 </div>
               </div>
               <div>
                 <Label>PAN Number</Label>
                 <div className="mt-2 flex items-center gap-2">
-                  <Input value={employee.panNumber ? '*****' + employee.panNumber.slice(-4) : 'Not provided'} disabled className="rounded-xl bg-muted" />
-                  <Button variant="outline" size="sm" className="rounded-xl">
-                    <Lock className="w-4 h-4" />
+                  {isEditingSensitive ? (
+                    <Input 
+                      value={sensitiveForm.panNumber}
+                      onChange={(e) => setSensitiveForm({...sensitiveForm, panNumber: e.target.value})}
+                      disabled={lockedFields.panNumber}
+                      className={`rounded-xl ${lockedFields.panNumber ? 'bg-muted cursor-not-allowed' : 'bg-background border-primary'}`}
+                      placeholder="Enter PAN number"
+                    />
+                  ) : (
+                    <Input 
+                      value={employee.panNumber ? '*****' + employee.panNumber.slice(-4) : 'Not provided'} 
+                      disabled 
+                      className="rounded-xl bg-muted" 
+                    />
+                  )}
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="rounded-xl"
+                    disabled={!isEditingSensitive || lockedFields.panNumber}
+                    title={lockedFields.panNumber ? `Locked for ${remainingTime.panNumber || '12h'}` : 'Field is editable'}
+                  >
+                    {lockedFields.panNumber ? (
+                      <div className="flex items-center gap-1">
+                        <Lock className="w-4 h-4" />
+                        <span className="text-xs">{remainingTime.panNumber}</span>
+                      </div>
+                    ) : (
+                      <LockOpen className="w-4 h-4" />
+                    )}
                   </Button>
                 </div>
               </div>
               <div>
                 <Label>Bank Account</Label>
                 <div className="mt-2 flex items-center gap-2">
-                  <Input value={employee.bankAccount ? '*********' + employee.bankAccount.slice(-4) : 'Not provided'} disabled className="rounded-xl bg-muted" />
-                  <Button variant="outline" size="sm" className="rounded-xl">
-                    <Lock className="w-4 h-4" />
+                  {isEditingSensitive ? (
+                    <Input 
+                      value={sensitiveForm.bankAccount}
+                      onChange={(e) => setSensitiveForm({...sensitiveForm, bankAccount: e.target.value})}
+                      disabled={lockedFields.bankAccount}
+                      className={`rounded-xl ${lockedFields.bankAccount ? 'bg-muted cursor-not-allowed' : 'bg-background border-primary'}`}
+                      placeholder="Enter bank account number"
+                    />
+                  ) : (
+                    <Input 
+                      value={employee.bankAccount ? '*********' + employee.bankAccount.slice(-4) : 'Not provided'} 
+                      disabled 
+                      className="rounded-xl bg-muted" 
+                    />
+                  )}
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="rounded-xl"
+                    disabled={!isEditingSensitive || lockedFields.bankAccount}
+                    title={lockedFields.bankAccount ? `Locked for ${remainingTime.bankAccount || '12h'}` : 'Field is editable'}
+                  >
+                    {lockedFields.bankAccount ? (
+                      <div className="flex items-center gap-1">
+                        <Lock className="w-4 h-4" />
+                        <span className="text-xs">{remainingTime.bankAccount}</span>
+                      </div>
+                    ) : (
+                      <LockOpen className="w-4 h-4" />
+                    )}
                   </Button>
                 </div>
               </div>
               <div>
                 <Label>IFSC Code</Label>
                 <div className="mt-2 flex items-center gap-2">
-                  <Input value={employee.ifscCode || 'Not provided'} disabled className="rounded-xl bg-muted" />
-                  <Button variant="outline" size="sm" className="rounded-xl">
-                    <Lock className="w-4 h-4" />
+                  {isEditingSensitive ? (
+                    <Input 
+                      value={sensitiveForm.ifscCode}
+                      onChange={(e) => setSensitiveForm({...sensitiveForm, ifscCode: e.target.value})}
+                      disabled={lockedFields.ifscCode}
+                      className={`rounded-xl ${lockedFields.ifscCode ? 'bg-muted cursor-not-allowed' : 'bg-background border-primary'}`}
+                      placeholder="Enter IFSC code"
+                    />
+                  ) : (
+                    <Input 
+                      value={employee.ifscCode || 'Not provided'} 
+                      disabled 
+                      className="rounded-xl bg-muted" 
+                    />
+                  )}
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="rounded-xl"
+                    disabled={!isEditingSensitive || lockedFields.ifscCode}
+                    title={lockedFields.ifscCode ? `Locked for ${remainingTime.ifscCode || '12h'}` : 'Field is editable'}
+                  >
+                    {lockedFields.ifscCode ? (
+                      <div className="flex items-center gap-1">
+                        <Lock className="w-4 h-4" />
+                        <span className="text-xs">{remainingTime.ifscCode}</span>
+                      </div>
+                    ) : (
+                      <LockOpen className="w-4 h-4" />
+                    )}
                   </Button>
                 </div>
               </div>
             </div>
+            {isEditingSensitive && Object.values(lockedFields).some(locked => locked) && (
+              <div className="mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200 flex items-start gap-2">
+                <Clock className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                <div className="text-sm text-amber-800">
+                  <p className="font-medium">Some fields are locked</p>
+                  <p className="text-xs mt-1">Locked fields cannot be edited until the 12-hour restriction expires.</p>
+                </div>
+              </div>
+            )}
           </Card>
 
-          {/* Documents */}
-          <Card className="rounded-2xl overflow-hidden">
-            <div className="p-6 border-b border-border flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-lg">Documents</h3>
-                <p className="text-sm text-muted-foreground">Upload and manage your documents</p>
-              </div>
-              <Dialog open={isUploadingDocument && documentType === 'personal'} onOpenChange={(open) => {
-                if (!open) setIsUploadingDocument(false);
-              }}>
-                <Button className="rounded-xl" onClick={() => {
-                  setDocumentType('personal');
-                  setIsUploadingDocument(true);
-                }}>
-                  <Upload className="w-4 h-4 mr-2" />
-                  Upload Document
-                </Button>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Upload Document</DialogTitle>
-                    <DialogDescription>Upload a document for verification</DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4">
-                    <div className="border-2 border-dashed rounded-xl p-6 text-center">
-                      <input
-                        type="file"
-                        id="doc-upload"
-                        className="hidden"
-                        onChange={handleDocumentUpload}
-                        disabled={uploadingFile}
-                      />
-                      <label htmlFor="doc-upload" className="cursor-pointer">
-                        <FileText className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
-                        <p className="text-sm font-medium">Click to upload or drag and drop</p>
-                        <p className="text-xs text-muted-foreground">PDF, DOC, DOCX up to 10MB</p>
-                      </label>
-                    </div>
-                    {uploadingFile && <p className="text-sm text-center text-muted-foreground">Uploading...</p>}
-                  </div>
-                </DialogContent>
-              </Dialog>
+          {/* Educational Documents Section */}
+          <Card className="p-6 rounded-2xl">
+            <div className="mb-6">
+              <h3 className="font-semibold text-lg mb-2">Educational Documents</h3>
+              <p className="text-sm text-muted-foreground">Upload your educational certificates and marksheets</p>
             </div>
-            <div className="divide-y divide-border">
-              {documents.length === 0 ? (
-                <div className="p-6 text-center text-muted-foreground">
-                  <p>No documents uploaded yet</p>
+
+            {/* Progress Bar */}
+            <div className="mb-6 space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Documents Uploaded</span>
+                <span className="font-medium">{calculateEducationProgress()}%</span>
+              </div>
+              <Progress value={calculateEducationProgress()} className="h-2" />
+              <p className="text-xs text-muted-foreground">
+                {Object.values(educationalDocuments).reduce((count, docs) => {
+                  if (docs.certificate) count++;
+                  if (docs.marksheet) count++;
+                  if (docs.others) count++;
+                  return count;
+                }, 0)} of 21 documents uploaded
+              </p>
+            </div>
+
+            {/* Upload Form */}
+            <div className="bg-muted/30 rounded-xl p-6 mb-6 border-2 border-dashed border-border">
+              <h4 className="font-semibold mb-4 flex items-center gap-2">
+                <Upload className="w-4 h-4" />
+                Upload New Document
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                {/* Education Level Selector */}
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">Education Level</Label>
+                  <select
+                    value={uploadingEducation || ''}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      console.log('Education level selected:', value);
+                      setUploadingEducation(value || null);
+                      // Reset document type when education level changes
+                      setUploadingEducationType(null);
+                    }}
+                    className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary cursor-pointer hover:border-primary transition-colors"
+                  >
+                    <option value="">Select Level</option>
+                    {Object.keys(educationalDocuments).map((level) => (
+                      <option key={level} value={level}>{level}</option>
+                    ))}
+                  </select>
                 </div>
-              ) : (
-                documents.map((doc) => (
-                  <div key={doc._id} className="p-6 flex items-center justify-between hover:bg-accent/50 transition-colors">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-                        <FileText className="w-6 h-6 text-primary" />
-                      </div>
-                      <div>
-                        <h4 className="font-semibold">{doc.name}</h4>
-                        <p className="text-sm text-muted-foreground">
-                          {doc.size} • Uploaded {doc.uploadedAt}
-                        </p>
+
+                {/* Document Type Selector */}
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">Document Type</Label>
+                  <select
+                    value={uploadingEducationType || ''}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      console.log('Document type selected:', value);
+                      if (value === '') {
+                        setUploadingEducationType(null);
+                      } else {
+                        setUploadingEducationType(value as 'certificate' | 'marksheet' | 'others');
+                      }
+                    }}
+                    className={`w-full rounded-xl border border-input px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary transition-colors ${
+                      !uploadingEducation 
+                        ? 'bg-muted cursor-not-allowed opacity-60' 
+                        : 'bg-background cursor-pointer hover:border-primary'
+                    }`}
+                    disabled={!uploadingEducation}
+                  >
+                    <option value="">Select Type</option>
+                    <option value="certificate">Certificate</option>
+                    <option value="marksheet">Marksheet</option>
+                    <option value="others">Others</option>
+                  </select>
+                  {!uploadingEducation && (
+                    <p className="text-xs text-muted-foreground mt-1">Select education level first</p>
+                  )}
+                </div>
+
+                {/* File Upload */}
+                <div className="md:col-span-2">
+                  <Label className="text-sm font-medium mb-2 block">Upload File</Label>
+                  <div className="relative flex gap-2">
+                    <input
+                      type="file"
+                      id="education-file-upload"
+                      className="hidden"
+                      onChange={(e) => {
+                        if (uploadingEducation && uploadingEducationType) {
+                          handleEducationDocumentUpload(e, uploadingEducation, uploadingEducationType);
+                        } else {
+                          toast.error('Please select education level and document type first');
+                          e.target.value = '';
+                        }
+                      }}
+                      accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                      disabled={!uploadingEducation || !uploadingEducationType || uploadingFile}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="flex-1 rounded-xl"
+                      disabled={!uploadingEducation || !uploadingEducationType || uploadingFile}
+                      onClick={() => document.getElementById('education-file-upload')?.click()}
+                    >
+                      {uploadingFile ? (
+                        <>
+                          <Loader className="w-4 h-4 mr-2 animate-spin" />
+                          Uploading...
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-4 h-4 mr-2" />
+                          Choose & Upload
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  {(!uploadingEducation || !uploadingEducationType) && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {!uploadingEducation ? 'Select education level and type first' : 'Select document type first'}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-3">
+                Supported formats: PDF, DOC, DOCX, JPG, PNG (Max 10MB)
+              </p>
+            </div>
+
+            {/* Uploaded Documents List */}
+            <div className="space-y-3">
+              <h4 className="font-semibold text-sm mb-3">Uploaded Documents</h4>
+              {Object.entries(educationalDocuments).map(([level, docs]) => {
+                const hasDocuments = docs.certificate || docs.marksheet || docs.others;
+                if (!hasDocuments) return null;
+
+                return (
+                  <div key={level} className="border border-border rounded-xl p-4 bg-muted/20">
+                    <div className="flex items-center justify-between mb-3">
+                      <h5 className="font-semibold text-sm flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-primary" />
+                        {level}
+                      </h5>
+                      <div className="flex gap-2">
+                        {docs.certificate && (
+                          <Badge variant="default" className="bg-green-600 text-xs">
+                            <Check className="w-3 h-3 mr-1" />
+                            Certificate
+                          </Badge>
+                        )}
+                        {docs.marksheet && (
+                          <Badge variant="default" className="bg-blue-600 text-xs">
+                            <Check className="w-3 h-3 mr-1" />
+                            Marksheet
+                          </Badge>
+                        )}
+                        {docs.others && (
+                          <Badge variant="default" className="bg-purple-600 text-xs">
+                            <Check className="w-3 h-3 mr-1" />
+                            Others
+                          </Badge>
+                        )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <Badge variant={doc.status === 'Verified' ? 'default' : 'secondary'}>
-                        {doc.status}
-                      </Badge>
-                      <Button variant="outline" size="sm" className="rounded-xl">
-                        <Download className="w-4 h-4" />
-                      </Button>
+
+                    <div className="space-y-2">
+                      {docs.certificate && (
+                        <div className="flex items-center justify-between p-3 bg-background rounded-lg border border-border">
+                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-green-100 dark:bg-green-900/20 flex items-center justify-center flex-shrink-0">
+                              <FileText className="w-4 h-4 text-green-600" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium truncate">{docs.certificate.name}</p>
+                              <p className="text-xs text-muted-foreground">Certificate • {docs.certificate.size}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 ml-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0"
+                              onClick={() => {
+                                // Download functionality
+                                if (docs.certificate?.filePath) {
+                                  window.open(docs.certificate.filePath, '_blank');
+                                }
+                              }}
+                            >
+                              <Download className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                              onClick={() => {
+                                // Delete functionality
+                                setEducationalDocuments((prev) => ({
+                                  ...prev,
+                                  [level]: {
+                                    ...prev[level],
+                                    certificate: undefined
+                                  }
+                                }));
+                                toast.success('Certificate removed');
+                              }}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+
+                      {docs.marksheet && (
+                        <div className="flex items-center justify-between p-3 bg-background rounded-lg border border-border">
+                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center flex-shrink-0">
+                              <FileText className="w-4 h-4 text-blue-600" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium truncate">{docs.marksheet.name}</p>
+                              <p className="text-xs text-muted-foreground">Marksheet • {docs.marksheet.size}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 ml-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0"
+                              onClick={() => {
+                                // Download functionality
+                                if (docs.marksheet?.filePath) {
+                                  window.open(docs.marksheet.filePath, '_blank');
+                                }
+                              }}
+                            >
+                              <Download className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                              onClick={() => {
+                                // Delete functionality
+                                setEducationalDocuments((prev) => ({
+                                  ...prev,
+                                  [level]: {
+                                    ...prev[level],
+                                    marksheet: undefined
+                                  }
+                                }));
+                                toast.success('Marksheet removed');
+                              }}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+
+                      {docs.others && (
+                        <div className="flex items-center justify-between p-3 bg-background rounded-lg border border-border">
+                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center flex-shrink-0">
+                              <FileText className="w-4 h-4 text-purple-600" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium truncate">{docs.others.name}</p>
+                              <p className="text-xs text-muted-foreground">Others • {docs.others.size}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 ml-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0"
+                              onClick={() => {
+                                // Download functionality
+                                if (docs.others?.filePath) {
+                                  window.open(docs.others.filePath, '_blank');
+                                }
+                              }}
+                            >
+                              <Download className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                              onClick={() => {
+                                // Delete functionality
+                                setEducationalDocuments((prev) => ({
+                                  ...prev,
+                                  [level]: {
+                                    ...prev[level],
+                                    others: undefined
+                                  }
+                                }));
+                                toast.success('Document removed');
+                              }}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
-                ))
+                );
+              })}
+
+              {Object.values(educationalDocuments).every(docs => !docs.certificate && !docs.marksheet && !docs.others) && (
+                <div className="text-center py-8 text-muted-foreground">
+                  <FileText className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">No documents uploaded yet</p>
+                  <p className="text-xs mt-1">Use the form above to upload your educational documents</p>
+                </div>
               )}
+            </div>
+
+            {/* Submit Button */}
+            <div className="mt-6 flex justify-end">
+              <Button 
+                onClick={handleSubmitEducationalDocuments}
+                disabled={submittingEducation || calculateEducationProgress() === 0}
+                className="rounded-xl"
+              >
+                {submittingEducation ? (
+                  <>
+                    <Loader className="w-4 h-4 mr-2 animate-spin" />
+                    Submitting...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4 mr-2" />
+                    Submit Educational Documents
+                  </>
+                )}
+              </Button>
             </div>
           </Card>
 
-          {/* Experience */}
-          <Card className="rounded-2xl overflow-hidden">
-            <div className="p-6 border-b border-border flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-lg">Experience</h3>
-                <p className="text-sm text-muted-foreground">Upload and manage your experience documents</p>
-              </div>
-              <Dialog open={isUploadingDocument && documentType === 'experience'} onOpenChange={(open) => {
-                if (!open) setIsUploadingDocument(false);
-              }}>
-                <Button className="rounded-xl" onClick={() => {
-                  setDocumentType('experience');
-                  setIsUploadingDocument(true);
-                }}>
-                  <Upload className="w-4 h-4 mr-2" />
-                  Upload Document
-                </Button>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Upload Experience Document</DialogTitle>
-                    <DialogDescription>Upload an experience document for verification</DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4">
-                    <div className="border-2 border-dashed rounded-xl p-6 text-center">
-                      <input
-                        type="file"
-                        id="exp-upload"
-                        className="hidden"
-                        onChange={handleDocumentUpload}
-                        disabled={uploadingFile}
-                      />
-                      <label htmlFor="exp-upload" className="cursor-pointer">
-                        <FileText className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
-                        <p className="text-sm font-medium">Click to upload or drag and drop</p>
-                        <p className="text-xs text-muted-foreground">PDF, DOC, DOCX up to 10MB</p>
-                      </label>
-                    </div>
-                    {uploadingFile && <p className="text-sm text-center text-muted-foreground">Uploading...</p>}
-                  </div>
-                </DialogContent>
-              </Dialog>
+          {/* Document Upload Section */}
+          <Card className="p-6 rounded-2xl">
+            <div className="mb-6">
+              <h3 className="font-semibold text-lg mb-2">Upload Your Documents</h3>
+              <p className="text-sm text-muted-foreground">Upload employment documents from your earlier organization</p>
             </div>
-            <div className="divide-y divide-border">
-              {experienceDocuments.length === 0 ? (
-                <div className="p-6 text-center text-muted-foreground">
-                  <p>No experience documents uploaded yet</p>
+
+            {/* Progress Bar */}
+            <div className="mb-6 space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Documents Uploaded</span>
+                <span className="font-medium">{documents.length > 0 ? Math.round((documents.length / documentCategories.length) * 100) : 0}%</span>
+              </div>
+              <Progress value={documents.length > 0 ? Math.round((documents.length / documentCategories.length) * 100) : 0} className="h-2" />
+              <p className="text-xs text-muted-foreground">
+                {documents.length} of {documentCategories.length} documents uploaded
+              </p>
+            </div>
+
+            {/* Upload Form */}
+            <div className="bg-muted/30 rounded-xl p-6 mb-6 border-2 border-dashed border-border">
+              <h4 className="font-semibold mb-4 flex items-center gap-2">
+                <Upload className="w-4 h-4" />
+                Upload New Document
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Document Category Selector */}
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">Document Category</Label>
+                  <select
+                    value={selectedCategory || ''}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setSelectedCategory(value || documentCategories[0]);
+                      console.log('Document category selected:', value);
+                    }}
+                    className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary cursor-pointer hover:border-primary transition-colors"
+                  >
+                    <option value="">Select Category</option>
+                    {documentCategories.map((category) => (
+                      <option key={category} value={category}>{category}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* File Upload */}
+                <div className="md:col-span-2">
+                  <Label className="text-sm font-medium mb-2 block">Upload File</Label>
+                  <div className="relative flex gap-2">
+                    <input
+                      type="file"
+                      id="employment-doc-upload"
+                      className="hidden"
+                      onChange={(e) => {
+                        if (selectedCategory) {
+                          handleDocumentUpload(e);
+                        } else {
+                          toast.error('Please select a document category first');
+                          e.target.value = '';
+                        }
+                      }}
+                      accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                      disabled={!selectedCategory || uploadingFile}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="flex-1 rounded-xl"
+                      disabled={!selectedCategory || uploadingFile}
+                      onClick={() => document.getElementById('employment-doc-upload')?.click()}
+                    >
+                      {uploadingFile ? (
+                        <>
+                          <Loader className="w-4 h-4 mr-2 animate-spin" />
+                          Uploading...
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-4 h-4 mr-2" />
+                          Choose & Upload
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  {!selectedCategory && (
+                    <p className="text-xs text-muted-foreground mt-1">Select a category first</p>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-3">
+                Supported formats: PDF, DOC, DOCX, JPG, PNG (Max 10MB)
+              </p>
+            </div>
+
+            {/* Uploaded Documents List */}
+            <div className="space-y-3">
+              <h4 className="font-semibold text-sm mb-3">Uploaded Documents</h4>
+              {documents.length > 0 ? (
+                <div className="space-y-3">
+                  {documents.map((doc) => (
+                    <div key={doc._id} className="border border-border rounded-xl p-4 bg-muted/20">
+                      <div className="flex items-center justify-between mb-3">
+                        <h5 className="font-semibold text-sm flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-primary" />
+                          {doc.name}
+                        </h5>
+                        <Badge variant="default" className="bg-blue-600 text-xs">
+                          <Check className="w-3 h-3 mr-1" />
+                          {doc.category || 'Document'}
+                        </Badge>
+                      </div>
+
+                      <div className="flex items-center justify-between p-3 bg-background rounded-lg border border-border">
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center flex-shrink-0">
+                            <FileText className="w-4 h-4 text-blue-600" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{doc.name}</p>
+                            <p className="text-xs text-muted-foreground">{doc.size} • {doc.uploadedAt}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 ml-2">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 w-8 p-0"
+                            onClick={() => {
+                              // Download functionality
+                              if (doc.filePath) {
+                                const apiUrl = (import.meta as any).env.VITE_API_URL || '';
+                                const baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
+                                let fullUrl = doc.filePath;
+                                if (doc.filePath.startsWith('/')) {
+                                  if (baseUrl.endsWith('/api')) {
+                                    fullUrl = baseUrl.slice(0, -4) + doc.filePath;
+                                  } else {
+                                    fullUrl = baseUrl + doc.filePath;
+                                  }
+                                }
+                                const link = document.createElement('a');
+                                link.href = fullUrl;
+                                link.download = doc.name;
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                              }
+                            }}
+                          >
+                            <Download className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                            onClick={async () => {
+                              // Delete functionality
+                              try {
+                                const token = localStorage.getItem('authToken');
+                                const response = await fetch(`/api/documents/${doc._id}`, {
+                                  method: 'DELETE',
+                                  headers: {
+                                    'Authorization': `Bearer ${token}`
+                                  }
+                                });
+
+                                if (!response.ok) {
+                                  throw new Error('Failed to delete document');
+                                }
+
+                                setDocuments(documents.filter(d => d._id !== doc._id));
+                                toast.success('Document deleted');
+                              } catch (error) {
+                                console.error('Error deleting document:', error);
+                                toast.error('Failed to delete document');
+                              }
+                            }}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ) : (
-                experienceDocuments.map((doc) => (
-                  <div key={doc._id} className="p-6 flex items-center justify-between hover:bg-accent/50 transition-colors">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-                        <FileText className="w-6 h-6 text-primary" />
-                      </div>
-                      <div>
-                        <h4 className="font-semibold">{doc.name}</h4>
-                        <p className="text-sm text-muted-foreground">
-                          {doc.size} • Uploaded {doc.uploadedAt}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <Badge variant={doc.status === 'Verified' ? 'default' : 'secondary'}>
-                        {doc.status}
-                      </Badge>
-                      <Button variant="outline" size="sm" className="rounded-xl">
-                        <Download className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))
+                <div className="text-center py-8 text-muted-foreground">
+                  <FileText className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">No documents uploaded yet</p>
+                  <p className="text-xs mt-1">Use the form above to upload your employment documents</p>
+                </div>
               )}
+            </div>
+
+            {/* Submit Button */}
+            <div className="mt-6 flex justify-end">
+              <Button 
+                onClick={handleSubmitEmploymentDocuments}
+                disabled={submittingDocuments || documents.length === 0}
+                className="rounded-xl"
+              >
+                {submittingDocuments ? (
+                  <>
+                    <Loader className="w-4 h-4 mr-2 animate-spin" />
+                    Submitting...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4 mr-2" />
+                    Submit Employment Documents
+                  </>
+                )}
+              </Button>
             </div>
           </Card>
         </div>
@@ -809,3 +1892,4 @@ export default function Profile() {
     </div>
   );
 }
+

@@ -190,6 +190,27 @@ const assetAssignedSchema = new mongoose.Schema(
       },
       uploadedAt: { type: Date, default: Date.now }
     }],
+    // Asset Photos (Multiple)
+    photos: [{
+      photoId: {
+        type: String,
+        default: () => `PHOTO-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`
+      },
+      photoData: {
+        type: String, // Base64 encoded image data
+        required: true
+      },
+      fileName: { type: String },
+      fileSize: { type: Number }, // Size in bytes
+      mimeType: { type: String, default: 'image/jpeg' }, // image/jpeg, image/png, etc.
+      uploadedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User"
+      },
+      uploadedAt: { type: Date, default: Date.now },
+      description: { type: String }, // Optional description of the photo
+      isMainPhoto: { type: Boolean, default: false } // Mark one as main/thumbnail
+    }],
     // Organization context
     orgId: {
       type: String,

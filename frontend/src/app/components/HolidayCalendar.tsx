@@ -185,7 +185,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       return;
     }
 
-    const token = localStorage.getItem('authToken');
+    const token = localStorage.getItem('authToken') || localStorage.getItem('token');
     if (!token) {
       alert('Authentication token not found. Please log in again.');
       return;
@@ -379,6 +379,11 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       console.error('Error publishing calendar:', error);
       alert('Failed to publish calendar');
     }
+  };
+
+  const handleViewCalendar = (calendar: HolidayCalendar) => {
+    setShowCalendarPreview(true);
+    // You can add more logic here to show the specific calendar
   };
 
   const handleDownloadCalendar = async (calendarId: string) => {
@@ -728,6 +733,15 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
                       variant="outline"
                       size="sm"
                       className="rounded-xl"
+                      onClick={() => handleViewCalendar(calendar)}
+                    >
+                      <Eye className="w-4 h-4 mr-2" />
+                      View Calendar
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="rounded-xl"
                       onClick={() => handleDownloadCalendar(calendar.id)}
                     >
                       <Download className="w-4 h-4 mr-2" />
@@ -823,6 +837,91 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
               <Button onClick={handleSaveHoliday}>
                 {editingHoliday ? 'Update Holiday' : 'Add Holiday'}
               </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Calendar Preview Modal */}
+      {showCalendarPreview && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <Card className="w-full max-w-4xl mx-4 p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-semibold">Calendar Preview</h2>
+              <Button variant="ghost" onClick={() => setShowCalendarPreview(false)}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            
+            <div className="space-y-6">
+              {/* Calendar Header */}
+              <div className="text-center">
+                <h3 className="text-2xl font-bold">Holiday Calendar {selectedYear}</h3>
+                <p className="text-muted-foreground">Organization: {organizationId}</p>
+              </div>
+
+              {/* Calendar Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {Array.from({ length: 12 }, (_, monthIndex) => {
+                  const monthDate = new Date(selectedYear, monthIndex, 1);
+                  const monthName = monthDate.toLocaleDateString('en-US', { month: 'long' });
+                  const monthHolidays = holidays.filter(holiday => {
+                    const holidayDate = new Date(holiday.date);
+                    return holidayDate.getMonth() === monthIndex && holidayDate.getFullYear() === selectedYear;
+                  });
+
+                  return (
+                    <Card key={monthIndex} className="p-4 rounded-xl">
+                      <h4 className="font-semibold text-center mb-3">{monthName} {selectedYear}</h4>
+                      <div className="space-y-2">
+                        {monthHolidays.length > 0 ? (
+                          monthHolidays.map((holiday) => (
+                            <div key={holiday._id || holiday.id} className="p-2 rounded-lg border border-green-200" style={{ backgroundColor: '#F0FDF4' }}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full bg-primary"></div>
+                                <div className="flex-1">
+                                  <p className="font-medium text-sm">{holiday.name}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {new Date(holiday.date).toLocaleDateString('en-US', { 
+                                      month: 'short', 
+                                      day: 'numeric' 
+                                    })}
+                                  </p>
+                                </div>
+                                <Badge className={getHolidayTypeColor(holiday.type)} variant="outline">
+                                  {holiday.type}
+                                </Badge>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-center py-4">
+                            <p className="text-xs text-muted-foreground">No holidays</p>
+                          </div>
+                        )}
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+
+              {/* Summary */}
+              <Card className="p-4 rounded-xl bg-accent/30">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
+                  <div>
+                    <p className="text-2xl font-bold text-primary">{holidays.filter(h => new Date(h.date).getFullYear() === selectedYear).length}</p>
+                    <p className="text-sm text-muted-foreground">Total Holidays</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-blue-600">{holidays.filter(h => h.type === 'public' && new Date(h.date).getFullYear() === selectedYear).length}</p>
+                    <p className="text-sm text-muted-foreground">Public Holidays</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-green-600">{holidays.filter(h => h.type === 'optional' && new Date(h.date).getFullYear() === selectedYear).length}</p>
+                    <p className="text-sm text-muted-foreground">Optional Holidays</p>
+                  </div>
+                </div>
+              </Card>
             </div>
           </Card>
         </div>

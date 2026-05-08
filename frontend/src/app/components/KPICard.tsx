@@ -19,6 +19,11 @@ const colorClasses = {
 
 export function KPICard({ title, value, change, icon: Icon, color = 'primary', onClick }: KPICardProps) {
   const isPositive = change !== undefined && change >= 0;
+  
+  // Log when the component renders
+  if (title === 'On Break') {
+    console.log('📊 [KPI-CARD] On Break card rendering with value:', value);
+  }
 
   return (
     <Card

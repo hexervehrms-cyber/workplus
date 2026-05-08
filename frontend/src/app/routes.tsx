@@ -1,42 +1,62 @@
 import { createBrowserRouter, Navigate } from 'react-router';
+import { lazy, Suspense } from 'react';
 import { MainLayout } from './layouts/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import Login from './pages/Login';
 
-// Super Admin Pages
-import SuperAdminDashboard from './pages/super-admin/Dashboard';
-import RoleManagement from './pages/super-admin/RoleManagement';
-import Organizations from './pages/super-admin/Organizations';
-import GlobalUsers from './pages/super-admin/Users';
-import SuperAdminDepartments from './pages/super-admin/Departments';
-import LiveActivity from './pages/super-admin/Activity';
-import Announcements from './pages/super-admin/Announcements';
-import Analytics from './pages/super-admin/Analytics';
-import AuditLogs from './pages/super-admin/Audit';
-import SuperAdminChat from './pages/super-admin/Chat';
+// Loading component for lazy routes
+const LazyLoader = () => (
+  <div className="flex items-center justify-center min-h-screen">
+    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+  </div>
+);
 
-// Admin Pages
-import AdminDashboard from './pages/admin/Dashboard';
-import Employees from './pages/admin/Employees';
-import InviteManagement from './pages/admin/InviteManagement';
-import AdminDepartments from './pages/admin/Departments';
-import LeaveRequests from './pages/admin/LeaveRequests';
-import LeaveManagement from './pages/admin/LeaveManagement';
-import AttendanceAdmin from './pages/admin/Attendance';
-import ExpensesAdmin from './pages/admin/Expenses';
-import ExpenseManagement from './pages/admin/ExpenseManagement';
-import AnnouncementsAdmin from './pages/admin/Announcements';
-import AdminChat from './pages/admin/Chat';
-import HREmployeeOnboarding from './pages/admin/EmployeeOnboarding';
-import AdminCompanyDocs from './pages/admin/CompanyDocs';
-import AdminHolidayCalendar from './pages/admin/HolidayCalendar';
-import AdminPayroll from './pages/admin/Payroll';
-import AttendanceCalendar from './pages/admin/AttendanceCalendar';
+// Lazy load pages for better performance
+const SuperAdminDashboard = lazy(() => import('./pages/super-admin/Dashboard'));
+const RoleManagement = lazy(() => import('./pages/super-admin/RoleManagement'));
+const Organizations = lazy(() => import('./pages/super-admin/Organizations'));
+const GlobalUsers = lazy(() => import('./pages/super-admin/Users'));
+const SuperAdminDepartments = lazy(() => import('./pages/super-admin/Departments'));
+const LiveActivity = lazy(() => import('./pages/super-admin/Activity'));
+const Announcements = lazy(() => import('./pages/super-admin/Announcements'));
+const Analytics = lazy(() => import('./pages/super-admin/Analytics'));
+const AuditLogs = lazy(() => import('./pages/super-admin/Audit'));
+const SuperAdminChat = lazy(() => import('./pages/super-admin/Chat'));
 
-// Employee Pages
-import EmployeeDashboard from './pages/employee/Dashboard';
-import Profile from './pages/employee/Profile';
-import Leave from './pages/employee/Leave';
+// Admin Pages - Lazy loaded
+const AdminDashboard = lazy(() => import('./pages/admin/Dashboard'));
+const Employees = lazy(() => import('./pages/admin/Employees'));
+const EmployeeCorrespondence = lazy(() => import('./pages/admin/EmployeeCorrespondence'));
+const InviteManagement = lazy(() => import('./pages/admin/InviteManagement'));
+const AdminDepartments = lazy(() => import('./pages/admin/Departments'));
+const AdminRoles = lazy(() => import('./pages/admin/Roles'));
+const LeaveRequests = lazy(() => import('./pages/admin/LeaveRequests'));
+const AttendanceAdmin = lazy(() => import('./pages/admin/Attendance'));
+const ExpensesAdmin = lazy(() => import('./pages/admin/Expenses'));
+const AnnouncementsAdmin = lazy(() => import('./pages/admin/Announcements'));
+const AdminChat = lazy(() => import('./pages/admin/Chat'));
+const HREmployeeOnboarding = lazy(() => import('./pages/admin/EmployeeOnboarding'));
+const AdminCompanyDocs = lazy(() => import('./pages/admin/CompanyDocs'));
+const AdminHolidayCalendar = lazy(() => import('./pages/admin/HolidayCalendar'));
+const AdminPayroll = lazy(() => import('./pages/admin/Payroll'));
+const AttendanceCalendar = lazy(() => import('./pages/admin/AttendanceCalendar'));
+const AttendanceHistory = lazy(() => import('./pages/admin/AttendanceHistory'));
+const LeaveAllocation = lazy(() => import('./pages/admin/LeaveAllocation'));
+const LeaveSettings = lazy(() => import('./pages/admin/LeaveSettings'));
+const AdminSettings = lazy(() => import('./pages/admin/Settings'));
+const AdminManagement = lazy(() => import('./pages/admin/AdminManagement'));
+
+// Sales Pages - Lazy loaded
+const SalesDashboard = lazy(() => import('./pages/sales/SalesDashboard'));
+const Leads = lazy(() => import('./pages/sales/Leads'));
+const Deals = lazy(() => import('./pages/sales/Deals'));
+const Calls = lazy(() => import('./pages/sales/Calls'));
+
+// Employee Pages - Lazy loaded
+const EmployeeDashboard = lazy(() => import('./pages/employee/Dashboard'));
+const Profile = lazy(() => import('./pages/employee/Profile'));
+const Leave = lazy(() => import('./pages/employee/Leave'));
+import Calendar from './pages/employee/Calendar';
 import Attendance from './pages/employee/Attendance';
 import Performance from './pages/employee/Performance';
 import Payroll from './pages/employee/Payroll';
@@ -44,12 +64,12 @@ import Expenses from './pages/employee/Expenses';
 import Chat from './pages/employee/Chat';
 import EmployeeOnboarding from './pages/employee/OnboardingForm';
 import EmployeeCompanyDocs from './pages/employee/CompanyDocs';
-import EmployeeHolidayCalendarPage from './pages/employee/HolidayCalendar';
+import EmployeeSettings from './pages/employee/Settings';
 
 // Public Pages
 import Onboarding from './pages/public/Onboarding';
 
-export const router = createBrowserRouter([
+const routes = [
   {
     path: '/login',
     element: <Login />,
@@ -62,332 +82,402 @@ export const router = createBrowserRouter([
       </ProtectedRoute>
     ),
     children: [
-      // Redirect root to appropriate dashboard based on user role
       { index: true, element: <Navigate to="/employee" replace /> },
-      
-      // Super Admin Routes
-      { 
-        path: 'super-admin/*', 
+      {
+        path: 'super-admin',
         element: (
           <ProtectedRoute requiredRole={['super_admin']}>
-            <SuperAdminDashboard />
+            <Suspense fallback={<LazyLoader />}>
+              <SuperAdminDashboard />
+            </Suspense>
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'super-admin', 
+      {
+        path: 'super-admin/role-management',
         element: (
           <ProtectedRoute requiredRole={['super_admin']}>
-            <SuperAdminDashboard />
+            <Suspense fallback={<LazyLoader />}>
+              <RoleManagement />
+            </Suspense>
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'super-admin/role-management', 
-        element: (
-          <ProtectedRoute requiredRole={['super_admin']}>
-            <RoleManagement />
-          </ProtectedRoute>
-        ) 
-      },
-      { 
-        path: 'super-admin/organizations', 
+      {
+        path: 'super-admin/organizations',
         element: (
           <ProtectedRoute requiredRole={['super_admin']}>
             <Organizations />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'super-admin/users', 
+      {
+        path: 'super-admin/users',
         element: (
           <ProtectedRoute requiredRole={['super_admin']}>
             <GlobalUsers />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'super-admin/departments', 
+      {
+        path: 'super-admin/departments',
         element: (
           <ProtectedRoute requiredRole={['super_admin']}>
             <SuperAdminDepartments />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'super-admin/activity', 
+      {
+        path: 'super-admin/activity',
         element: (
           <ProtectedRoute requiredRole={['super_admin']}>
             <LiveActivity />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'super-admin/announcements', 
+      {
+        path: 'super-admin/announcements',
         element: (
           <ProtectedRoute requiredRole={['super_admin']}>
             <Announcements />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'super-admin/analytics', 
+      {
+        path: 'super-admin/analytics',
         element: (
           <ProtectedRoute requiredRole={['super_admin']}>
             <Analytics />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'super-admin/audit', 
+      {
+        path: 'super-admin/audit',
         element: (
           <ProtectedRoute requiredRole={['super_admin']}>
             <AuditLogs />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'super-admin/chat', 
+      {
+        path: 'super-admin/chat',
         element: (
           <ProtectedRoute requiredRole={['super_admin']}>
             <SuperAdminChat />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      
-      // Admin Routes
-      { 
-        path: 'admin', 
+      {
+        path: 'admin',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <AdminDashboard />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/employees', 
+      {
+        path: 'admin/employees',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <Employees />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/company-docs', 
+      {
+        path: 'admin/employees/:employeeId/correspondence',
+        element: (
+          <ProtectedRoute requiredRole={['admin']}>
+            <EmployeeCorrespondence />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/company-docs',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <AdminCompanyDocs />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/invites', 
+      {
+        path: 'admin/invites',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <InviteManagement />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/departments', 
+      {
+        path: 'admin/departments',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <AdminDepartments />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/leaves', 
+      {
+        path: 'admin/roles',
+        element: (
+          <ProtectedRoute requiredRole={['admin']}>
+            <AdminRoles />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/leaves',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <LeaveRequests />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/leave-management', 
+      {
+        path: 'admin/leave-allocation',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
-            <LeaveManagement />
+            <LeaveAllocation />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/holiday-calendar', 
+      {
+        path: 'admin/leave-settings',
+        element: (
+          <ProtectedRoute requiredRole={['admin']}>
+            <LeaveSettings />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/holiday-calendar',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <AdminHolidayCalendar />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/attendance', 
+      {
+        path: 'admin/attendance',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <AttendanceAdmin />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/attendance-calendar', 
+      {
+        path: 'admin/attendance-calendar',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <AttendanceCalendar />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/expenses', 
+      {
+        path: 'admin/attendance-history',
+        element: (
+          <ProtectedRoute requiredRole={['admin']}>
+            <AttendanceHistory />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/expenses',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <ExpensesAdmin />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/expense-management', 
-        element: (
-          <ProtectedRoute requiredRole={['admin']}>
-            <ExpenseManagement />
-          </ProtectedRoute>
-        ) 
-      },
-      { 
-        path: 'admin/payroll', 
+      {
+        path: 'admin/payroll',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <AdminPayroll />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/announcements', 
+      {
+        path: 'admin/announcements',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <AnnouncementsAdmin />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/chat', 
+      {
+        path: 'admin/chat',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <AdminChat />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'admin/employee-onboarding', 
+      {
+        path: 'admin/employee-onboarding',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
             <HREmployeeOnboarding />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      
-      // Employee Routes
-      { 
-        path: 'employee', 
+      {
+        path: 'admin/sales',
+        element: (
+          <ProtectedRoute requiredRole={['admin']}>
+            <SalesDashboard />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/sales/leads',
+        element: (
+          <ProtectedRoute requiredRole={['admin']}>
+            <Leads />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/sales/deals',
+        element: (
+          <ProtectedRoute requiredRole={['admin']}>
+            <Deals />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/sales/calls',
+        element: (
+          <ProtectedRoute requiredRole={['admin']}>
+            <Calls />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'employee',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
             <EmployeeDashboard />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'employee/profile', 
+      {
+        path: 'employee/profile',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
             <Profile />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'employee/company-docs', 
+      {
+        path: 'employee/company-docs',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
             <EmployeeCompanyDocs />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'employee/leave', 
+      {
+        path: 'employee/leave',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
             <Leave />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'employee/holiday-calendar', 
+      {
+        path: 'employee/calendar',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
-            <EmployeeHolidayCalendarPage />
+            <Calendar />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'employee/attendance', 
+      {
+        path: 'employee/attendance',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
             <Attendance />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'employee/performance', 
+      {
+        path: 'employee/performance',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
             <Performance />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'employee/payroll', 
+      {
+        path: 'employee/payroll',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
             <Payroll />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'employee/expenses', 
+      {
+        path: 'employee/expenses',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
             <Expenses />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'employee/chat', 
+      {
+        path: 'employee/chat',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
             <Chat />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      { 
-        path: 'employee/onboarding', 
+      {
+        path: 'employee/onboarding',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
             <EmployeeOnboarding />
           </ProtectedRoute>
-        ) 
+        ),
       },
-      
-      // Settings (placeholder)
-      { 
-        path: 'settings', 
+      {
+        path: 'settings',
         element: (
           <ProtectedRoute>
-            <EmployeeDashboard />
+            {/* Route to appropriate settings page based on role */}
+            <EmployeeSettings />
           </ProtectedRoute>
-        ) 
+        ),
+      },
+      {
+        path: 'employee/settings',
+        element: (
+          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+            <EmployeeSettings />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/settings',
+        element: (
+          <ProtectedRoute requiredRole={['admin']}>
+            <AdminSettings />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/admin-management',
+        element: (
+          <ProtectedRoute requiredRole={['admin']}>
+            <AdminManagement />
+          </ProtectedRoute>
+        ),
       },
     ],
   },
   {
     path: '/onboarding/:token',
-    element: <Onboarding />
-  }
-]);
+    element: <Onboarding />,
+  },
+];
+
+export const router = createBrowserRouter(routes);

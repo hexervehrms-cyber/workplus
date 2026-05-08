@@ -421,9 +421,10 @@ export default function RoleManagement() {
       {/* Roles List */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {roles.map((role) => (
-          <Card key={role.id} className="p-6 rounded-xl">
-            <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3">
+          <Card key={role.id} className="p-6 rounded-xl hover:shadow-lg transition-shadow flex flex-col h-full">
+            {/* Header */}
+            <div className="mb-4">
+              <div className="flex items-center gap-3 mb-3">
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center ${getRoleColor(role.id)}`}>
                   {getRoleIcon(role.id)}
                 </div>
@@ -437,33 +438,13 @@ export default function RoleManagement() {
                   </div>
                 </div>
               </div>
-              <div className="flex gap-2">
-                {!role.isCustom && role.id !== 'SUPER_ADMIN' && (
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => handleEditRole(role)}
-                    className="rounded-lg"
-                  >
-                    <Edit className="w-3 h-3" />
-                  </Button>
-                )}
-                {role.isCustom && (
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => handleDeleteRole(role.id)}
-                    className="rounded-lg text-red-600 hover:text-red-700"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </Button>
-                )}
-              </div>
             </div>
 
+            {/* Description */}
             <p className="text-sm text-muted-foreground mb-4">{role.description}</p>
 
-            <div className="space-y-2">
+            {/* Permissions */}
+            <div className="space-y-2 mb-6 flex-grow">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Permissions</span>
                 <span className="font-medium">{role.permissions.length}</span>
@@ -481,6 +462,59 @@ export default function RoleManagement() {
                   </Badge>
                 )}
               </div>
+            </div>
+
+            {/* Action Buttons - Always at bottom */}
+            <div className="flex gap-2 flex-wrap pt-4 border-t">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => handleEditRole(role)}
+                className="rounded-lg flex-1 flex items-center justify-center gap-2 min-w-[60px]"
+                title="View role details"
+              >
+                <Eye className="w-4 h-4" />
+                <span className="hidden sm:inline text-xs">View</span>
+              </Button>
+              
+              {!role.isCustom && role.id !== 'SUPER_ADMIN' && (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => handleEditRole(role)}
+                  className="rounded-lg flex-1 flex items-center justify-center gap-2 min-w-[60px]"
+                  title="Edit role"
+                >
+                  <Edit className="w-4 h-4" />
+                  <span className="hidden sm:inline text-xs">Edit</span>
+                </Button>
+              )}
+              
+              {role.isCustom && (
+                <>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => handleEditRole(role)}
+                    className="rounded-lg flex-1 flex items-center justify-center gap-2 min-w-[60px]"
+                    title="Update role"
+                  >
+                    <Edit className="w-4 h-4" />
+                    <span className="hidden sm:inline text-xs">Update</span>
+                  </Button>
+                  
+                  <Button 
+                    variant="destructive" 
+                    size="sm" 
+                    onClick={() => handleDeleteRole(role.id)}
+                    className="rounded-lg flex-1 flex items-center justify-center gap-2 min-w-[60px]"
+                    title="Delete role"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span className="hidden sm:inline text-xs">Delete</span>
+                  </Button>
+                </>
+              )}
             </div>
           </Card>
         ))}

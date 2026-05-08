@@ -354,19 +354,21 @@ export class AuthService {
         try {
           const tokenPayload = JSON.parse(atob(token.split('.')[1]));
           const userId = tokenPayload.userId;
-          const orgId = tokenPayload.tenantId || tokenPayload.orgId || user.tenantId || 'system';
+          const orgId = tokenPayload.tenantId || tokenPayload.orgId || user.tenantId || user.orgId || 'system';
           
-          // Store user data with userId and orgId
+          // Store user data with userId, orgId, and employeeId
           const userData = {
-            id: user.id,
+            id: user.id || userId,
             userId: userId,
             name: user.name,
             email: user.email,
             role: user.role,
             avatar: user.avatar,
             organization: user.organization,
-            tenantId: user.tenantId,
-            orgId: orgId
+            tenantId: user.tenantId || orgId,
+            orgId: orgId,
+            employeeId: user.employeeId,
+            employeeCode: user.employeeCode
           };
           
           TokenManager.setUser(userData);
@@ -420,12 +422,19 @@ export class AuthService {
       
       if (response.success && response.data) {
         return {
-          id: response.data.id,
-          name: response.data.name,
+          id: response.data._id || response.data.id || response.data.userId,
+          userId: response.data._id || response.data.id || response.data.userId,
+          name: response.data.firstName && response.data.lastName 
+            ? `${response.data.firstName} ${response.data.lastName}`
+            : response.data.name || '',
           email: response.data.email,
           role: response.data.role,
           avatar: response.data.avatar,
-          organization: response.data.organization
+          organization: response.data.organization,
+          employeeId: response.data.employeeId,
+          employeeCode: response.data.employeeCode,
+          tenantId: response.data.tenantId,
+          orgId: response.data.orgId
         };
       }
 
@@ -493,8 +502,20 @@ export class UserService {
 // ============================================
 export class EmployeeService {
   static async getAllEmployees() {
-    const response = await apiClient.get<any[]>('/employees');
-    return response.data || [];
+    const response = await apiClient.get<any>('/employees?simple=true');
+    console.log('getAllEmployees full response:', response);
+    
+    // Handle paginated response structure
+    if (response.data && Array.isArray(response.data)) {
+      return response.data;
+    }
+    
+    // Fallback for direct array response
+    if (Array.isArray(response)) {
+      return response;
+    }
+    
+    return [];
   }
 
   static async getEmployeeById(employeeId: string) {
@@ -578,38 +599,73 @@ export class ExpenseService {
 // ============================================
 export class LeaveRequestService {
   static async getAllLeaveRequests() {
-    const response = await apiClient.get<any[]>('/leave-requests');
-    return response.data || [];
+    const response = await apiClient.get<any>('/leave-requests');
+    // Handle paginated response
+    if (response.data?.data) {
+      return response.data.data;
+    }
+    if (Array.isArray(response.data)) {
+      return response.data;
+    }
+    return [];
   }
 
   static async getLeaveRequestsByUserId(userId: string) {
-    const response = await apiClient.get<any[]>(`/leave-requests/user/${userId}`);
-    return response.data || [];
+    const response = await apiClient.get<any>(`/leave-requests/user/${userId}`);
+    // Return the full response so frontend can access response.success and response.data
+    return response;
   }
 
   static async createLeaveRequest(leaveData: any) {
     const response = await apiClient.post<any>('/leave-requests', leaveData);
+    return response;
+  }
+
+  static async approveLeaveRequest(requestId: string, data?: any) {
+    const response = await apiClient.patch<any>(`/leave-requests/${requestId}/approve`, data || {});
     return response.data;
   }
 
-  static async approveLeaveRequest(requestId: string) {
-    const response = await apiClient.patch<any>(`/leave-requests/${requestId}/approve`, {});
-    return response.data;
-  }
-
-  static async rejectLeaveRequest(requestId: string, rejectionReason: string) {
-    const response = await apiClient.patch<any>(`/leave-requests/${requestId}/reject`, { rejectionReason });
+  static async rejectLeaveRequest(requestId: string, data?: any) {
+    const response = await apiClient.patch<any>(`/leave-requests/${requestId}/reject`, data || {});
     return response.data;
   }
 
   static async bulkApproveLeaveRequests(requestIds: string[]) {
-    const response = await apiClient.post<any[]>('/leave-requests/bulk-approve', { requestIds });
-    return response.data || [];
+    const response = await apiClient.post<any>('/leave-requests/bulk-approve', { requestIds });
+    if (response.data?.data) {
+      return response.data.data;
+    }
+    if (Array.isArray(response.data)) {
+      return response.data;
+    }
+    return [];
   }
 
   static async bulkRejectLeaveRequests(requestIds: string[], rejectionReason: string) {
-    const response = await apiClient.post<any[]>('/leave-requests/bulk-reject', { requestIds, rejectionReason });
-    return response.data || [];
+    const response = await apiClient.post<any>('/leave-requests/bulk-reject', { requestIds, rejectionReason });
+    if (response.data?.data) {
+      return response.data.data;
+    }
+    if (Array.isArray(response.data)) {
+      return response.data;
+    }
+    return [];
+  }
+
+  static async deleteLeaveRequest(requestId: string) {
+    const response = await apiClient.delete<any>(`/leave-requests/${requestId}`);
+    return response;
+  }
+
+  static async updateLeaveRequest(requestId: string, data: any) {
+    const response = await apiClient.patch<any>(`/leave-requests/${requestId}`, data);
+    return response;
+  }
+
+  static async cleanupAllLeaveRequests() {
+    const response = await apiClient.delete<any>('/leave-requests/cleanup/all');
+    return response;
   }
 }
 
@@ -782,5 +838,129 @@ export class TokenRefreshService {
       TokenManager.clear();
       throw error;
     }
+  }
+}
+
+export class LeaveAllocationService {
+  static async getEmployeeAllocations(employeeId: string, year?: number, month?: number) {
+    let endpoint = `/leave-allocation/employee/${employeeId}`;
+    if (year && month) {
+      endpoint += `?year=${year}&month=${month}`;
+    }
+    const response = await apiClient.get<any>(endpoint);
+    return response.data;
+  }
+
+  static async getOrganizationAllocations(orgId: string, year?: number, month?: number, status?: string) {
+    let endpoint = `/leave-allocation/organization/${orgId}`;
+    const params = new URLSearchParams();
+    if (year) params.append('year', year.toString());
+    if (month) params.append('month', month.toString());
+    if (status) params.append('status', status);
+    
+    if (params.toString()) {
+      endpoint += `?${params.toString()}`;
+    }
+    
+    const response = await apiClient.get<any>(endpoint);
+    return response.data;
+  }
+
+  static async createAllocation(data: any) {
+    const response = await apiClient.post<any>('/leave-allocation', data);
+    return response;
+  }
+
+  static async updateAllocation(allocationId: string, data: any) {
+    const response = await apiClient.patch<any>(`/leave-allocation/${allocationId}`, data);
+    return response.data;
+  }
+
+  static async deleteAllocation(allocationId: string) {
+    const response = await apiClient.delete<any>(`/leave-allocation/${allocationId}`);
+    return response.data;
+  }
+
+  static async getEmployeeBalance(employeeId: string, year?: number, month?: number) {
+    let endpoint = `/leave-allocation/balance/${employeeId}`;
+    const params = new URLSearchParams();
+    if (year) params.append('year', year.toString());
+    if (month) params.append('month', month.toString());
+    
+    if (params.toString()) {
+      endpoint += `?${params.toString()}`;
+    }
+    
+    const response = await apiClient.get<any>(endpoint);
+    // Return the entire response so frontend can access response.success and response.data
+    return response;
+  }
+
+  static async deductLeaves(employeeId: string, leaveType: string, days: number, leaveRequestId?: string) {
+    const response = await apiClient.post<any>('/leave-allocation/deduct', {
+      employeeId,
+      leaveType,
+      days,
+      leaveRequestId
+    });
+    return response.data;
+  }
+
+  static async restoreLeaves(employeeId: string, leaveType: string, days: number, leaveRequestId?: string) {
+    const response = await apiClient.post<any>('/leave-allocation/restore', {
+      employeeId,
+      leaveType,
+      days,
+      leaveRequestId
+    });
+    return response.data;
+  }
+
+  static async bulkAllocate(orgId: string, year: number, month: number, employees: string[], allocations: any, allocatedBy: string) {
+    const response = await apiClient.post<any>('/leave-allocation/bulk-allocate', {
+      orgId,
+      year,
+      month,
+      employees,
+      allocations,
+      allocatedBy
+    });
+    return response.data;
+  }
+
+  static async yearlyAllocate(orgId: string, year: number, employees: string[], casualLeave: number, earnedLeave: number, medicalLeave: number, allocatedBy: string) {
+    const response = await apiClient.post<any>('/leave-allocation/yearly-allocate', {
+      orgId,
+      year,
+      employees,
+      casualLeave,
+      earnedLeave,
+      medicalLeave,
+      allocatedBy
+    });
+    return response;
+  }
+}
+
+// ============================================
+// Leave Type Settings Service
+// ============================================
+export class LeaveTypeSettingsService {
+  static async getSettings(orgId: string) {
+    const response = await apiClient.get<any>(`/leave-type-settings/${orgId}`);
+    return response;
+  }
+
+  static async updateSettings(orgId: string, enabledLeaveTypes: any, updatedBy: string) {
+    const response = await apiClient.put<any>(`/leave-type-settings/${orgId}`, {
+      enabledLeaveTypes,
+      updatedBy
+    });
+    return response;
+  }
+
+  static async getEnabledLeaveTypes(orgId: string) {
+    const response = await apiClient.get<any>(`/leave-type-settings/${orgId}/enabled`);
+    return response;
   }
 }

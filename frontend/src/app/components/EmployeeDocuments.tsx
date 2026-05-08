@@ -41,8 +41,8 @@ const EmployeeDocuments: React.FC<{ employeeId?: string }> = ({ employeeId = 'EM
     'Appointment Letter',
     'Appraisal Letter',
     'Salary Slips',
-    'Warning Letter',
-    'Corrective Action Plan (CAP)'
+    'Relieving Letter',
+    'Experience Letter'
   ];
 
   useEffect(() => {
@@ -52,65 +52,50 @@ const EmployeeDocuments: React.FC<{ employeeId?: string }> = ({ employeeId = 'EM
   const loadDocuments = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/documents/employee/${employeeId}`);
-      const data = await response.json();
-      
-      // Validate response and ensure data is an array
-      const documentsArray = Array.isArray(data?.data) ? data.data : [];
-      setDocuments(documentsArray);
+      const allDocuments: Document[] = [];
+
+      console.log('Loading documents for employeeId:', employeeId);
+
+      // Fetch from existing documents endpoint
+      try {
+        const response = await fetch(`/api/documents/employee/${employeeId}`);
+        const data = await response.json();
+        
+        console.log('Documents from /api/documents/employee:', data);
+        
+        if (Array.isArray(data?.data)) {
+          allDocuments.push(...data.data);
+        }
+      } catch (error) {
+        console.warn('Error loading documents from /api/documents/employee:', error);
+      }
+
+      // Fetch from onboarding documents endpoint
+      try {
+        const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+        console.log('Fetching from /api/onboarding/documents/employee with token:', !!token);
+        
+        const response = await fetch(`/api/onboarding/documents/employee/${employeeId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        const data = await response.json();
+        
+        console.log('Documents from /api/onboarding/documents/employee:', data);
+        
+        if (Array.isArray(data?.data)) {
+          allDocuments.push(...data.data);
+        }
+      } catch (error) {
+        console.warn('Error loading documents from /api/onboarding/documents/employee:', error);
+      }
+
+      console.log('Total documents loaded:', allDocuments.length, allDocuments);
+      setDocuments(allDocuments);
     } catch (error) {
       console.error('Error loading documents:', error);
-      // For demo purposes, add mock documents
-      setDocuments([
-        {
-          id: 'doc_001',
-          employeeId,
-          documentType: 'Offer Letter',
-          organizationId: 'ORG-001',
-          createdBy: 'admin',
-          documentData: {},
-          generatedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-          status: 'Generated',
-          documentUrl: '/documents/offer_letter_EMP001.pdf',
-          fileName: 'Offer_Letter_EMP001.pdf'
-        },
-        {
-          id: 'doc_002',
-          employeeId,
-          documentType: 'Appointment Letter',
-          organizationId: 'ORG-001',
-          createdBy: 'admin',
-          documentData: {},
-          generatedAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString(),
-          status: 'Generated',
-          documentUrl: '/documents/appointment_letter_EMP001.pdf',
-          fileName: 'Appointment_Letter_EMP001.pdf'
-        },
-        {
-          id: 'doc_003',
-          employeeId,
-          documentType: 'Salary Slips',
-          organizationId: 'ORG-001',
-          createdBy: 'admin',
-          documentData: {},
-          generatedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-          status: 'Generated',
-          documentUrl: '/documents/salary_slip_EMP001_Mar2024.pdf',
-          fileName: 'Salary_Slip_EMP001_Mar2024.pdf'
-        },
-        {
-          id: 'doc_004',
-          employeeId,
-          documentType: 'Appraisal Letter',
-          organizationId: 'ORG-001',
-          createdBy: 'admin',
-          documentData: {},
-          generatedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-          status: 'Generated',
-          documentUrl: '/documents/appraisal_letter_EMP001.pdf',
-          fileName: 'Appraisal_Letter_EMP001.pdf'
-        }
-      ]);
+      setDocuments([]);
     } finally {
       setLoading(false);
     }
@@ -150,10 +135,10 @@ const EmployeeDocuments: React.FC<{ employeeId?: string }> = ({ employeeId = 'EM
         return 'text-green-600';
       case 'Salary Slips':
         return 'text-purple-600';
-      case 'Warning Letter':
-        return 'text-red-600';
-      case 'Corrective Action Plan (CAP)':
+      case 'Relieving Letter':
         return 'text-orange-600';
+      case 'Experience Letter':
+        return 'text-teal-600';
       default:
         return 'text-gray-600';
     }
@@ -191,7 +176,7 @@ const EmployeeDocuments: React.FC<{ employeeId?: string }> = ({ employeeId = 'EM
           </div>
           <div>
             <h3 className="font-semibold text-lg">My Submitted Documents</h3>
-            <p className="text-sm text-muted-foreground">View and download your submitted employment documents</p>
+            <p className="text-sm text-muted-foreground">View and download your submitted employment document of your earlier organization</p>
           </div>
         </div>
         <Badge variant="outline" className="text-xs">

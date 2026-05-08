@@ -140,7 +140,7 @@ router.get(
       const skip = (page - 1) * limit;
 
       // Check authorization - employees can only see their own documents
-      if (req.user.role === "employee" && req.user.userId !== employeeId) {
+      if (req.user.role === "employee" && req.user.userId.toString() !== employeeId) {
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 

@@ -183,6 +183,7 @@ async function runTests() {
       leaveType: 'Casual Leave',
       startDate: new Date().toISOString().split('T')[0],
       endDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
+      numberOfDays: 1,
       reason: 'Test leave request'
     },
     employeeToken,
@@ -202,7 +203,13 @@ async function runTests() {
     'Check In',
     'POST',
     '/api/attendance/check-in',
-    { latitude: 28.6139, longitude: 77.2090 },
+    { 
+      latitude: 28.6139, 
+      longitude: 77.2090,
+      userId: employeeUserId,
+      employeeId: employeeUserId,
+      orgId: 'system'
+    },
     employeeToken,
     200
   );
@@ -222,12 +229,12 @@ async function runTests() {
 
   // 9. Documents
   console.log('\n📋 9. DOCUMENTS\n');
-  await test('Get Documents', 'GET', '/api/documents', null, employeeToken, 200);
+  await test('Get Documents', 'GET', '/api/documents/employee/' + employeeUserId, null, employeeToken, 200);
 
   // 10. Dashboard
   console.log('\n📋 10. DASHBOARD\n');
-  await test('Get Admin Dashboard', 'GET', '/api/dashboard', null, adminToken, 200);
-  await test('Get Employee Dashboard', 'GET', '/api/dashboard', null, employeeToken, 200);
+  await test('Get Admin Dashboard Stats', 'GET', '/api/dashboard/stats', null, adminToken, 200);
+  await test('Get Employee Dashboard Stats', 'GET', '/api/dashboard/stats', null, employeeToken, 200);
 
   // 11. Users Management
   console.log('\n📋 11. USERS MANAGEMENT\n');

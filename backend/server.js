@@ -116,6 +116,7 @@ const validateEnvironment = () => {
   
   if (missing.length > 0) {
     console.error('❌ Missing required environment variables:', missing.join(', '));
+    console.error('Available environment variables:', Object.keys(process.env).filter(k => !k.startsWith('npm_')).join(', '));
     process.exit(1);
   }
 
@@ -125,6 +126,13 @@ const validateEnvironment = () => {
   }
 
   console.log('✅ Environment validation passed');
+  console.log('📝 Loaded environment:', {
+    NODE_ENV: process.env.NODE_ENV,
+    PORT: process.env.PORT || 5000,
+    MONGODB_URI: process.env.MONGODB_URI ? '✅ Set' : '❌ Missing',
+    JWT_SECRET: process.env.JWT_SECRET ? '✅ Set' : '❌ Missing',
+    CORS_ORIGIN: process.env.CORS_ORIGIN || 'Not set'
+  });
 };
 
 validateEnvironment();

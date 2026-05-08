@@ -84,7 +84,7 @@ export default defineConfig({
           'vendor-mui': ['@mui/material', '@mui/icons-material'],
           'vendor-charts': ['recharts'],
           'vendor-forms': ['react-hook-form', 'react-dnd', 'react-dnd-html5-backend'],
-          'vendor-utils': ['date-fns', 'clsx', 'tailwind-merge', 'uuid', 'class-variance-authority'],
+          'vendor-utils': ['date-fns', 'clsx', 'tailwind-merge', 'class-variance-authority'],
         },
       },
     },

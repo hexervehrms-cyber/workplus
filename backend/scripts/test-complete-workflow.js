@@ -85,7 +85,8 @@ test('Employee login', result.ok && result.data.success, result.data?.message);
 
 if (result.ok && result.data.success) {
   employeeToken = result.data.data?.token || result.data.token;
-  employeeUserId = result.data.data?.user?.userId || result.data.data?.user?.id;
+  // Extract userId from the user object
+  employeeUserId = result.data.data?.user?.userId || result.data.data?.user?.id || result.data.user?.userId || result.data.user?.id;
   console.log(`   Token: ${employeeToken?.substring(0, 30)}...`);
   console.log(`   User ID: ${employeeUserId}`);
 }
@@ -100,11 +101,13 @@ const startDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().s
 const endDate = new Date(Date.now() + 9 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
 result = await apiCall('POST', '/api/leave-requests', {
+  userId: employeeUserId,
+  employeeId: employeeUserId,
   type: 'Casual Leave',
   startDate,
   endDate,
   reason: 'Personal work',
-  numberOfDays: 3
+  orgId: 'system'
 }, employeeToken);
 
 test('Employee submit leave request', result.ok && result.data.success, result.data?.message);
@@ -157,7 +160,7 @@ if (result.ok && result.data.success) {
 
 console.log('\n📋 STEP 5: EMPLOYEE VIEWS THEIR LEAVE REQUESTS\n');
 
-result = await apiCall('GET', '/api/leave-requests/user', null, employeeToken);
+result = await apiCall('GET', `/api/leave-requests/user/${employeeUserId}`, null, employeeToken);
 
 test('Employee fetch own leave requests', result.ok && result.data.success, result.data?.message);
 
@@ -262,7 +265,7 @@ if (expenseId) {
 
 console.log('\n📋 STEP 12: EMPLOYEE CHECKS UPDATED LEAVE STATUS\n');
 
-result = await apiCall('GET', '/api/leave-requests/user', null, employeeToken);
+result = await apiCall('GET', `/api/leave-requests/user/${employeeUserId}`, null, employeeToken);
 
 test('Employee fetch updated leave requests', result.ok && result.data.success, result.data?.message);
 

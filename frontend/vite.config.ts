@@ -6,6 +6,7 @@ import react from '@vitejs/plugin-react'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+// Vite configuration for WorkPlus Frontend
 function figmaAssetResolver() {
   return {
     name: 'figma-asset-resolver',

@@ -336,10 +336,10 @@ export class AuthService {
 
       console.log('Login response:', response);
 
-      // Backend returns token directly in response.token (not response.data.token)
-      const token = response.token || response.data?.token;
-      const user = response.user || response.data?.user;
-      const refreshToken = response.refreshToken || response.data?.refreshToken;
+      // Backend returns data nested in response.data
+      const token = response.data?.token;
+      const user = response.data?.user;
+      const refreshToken = response.data?.refreshToken;
 
       if (response.success && token && user) {
         // Store token
@@ -354,7 +354,7 @@ export class AuthService {
         try {
           const tokenPayload = JSON.parse(atob(token.split('.')[1]));
           const userId = tokenPayload.userId;
-          const orgId = tokenPayload.tenantId || tokenPayload.orgId || user.tenantId || user.orgId || 'system';
+          const orgId = tokenPayload.orgId || user.orgId || user.tenantId || 'system';
           
           // Store user data with userId, orgId, and employeeId
           const userData = {

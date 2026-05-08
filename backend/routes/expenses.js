@@ -326,6 +326,38 @@ router.post(
         employeeId: req.user.userId
       });
 
+      // Send response immediately
+      const response = sendSuccess(res, expense, "Expense created successfully", 201);
+
+      // Send email notification in background (don't wait for it)
+      setImmediate(async () => {
+        try {
+          const user = await User.findById(req.user.userId).select('name email').lean();
+          const employee = await Employee.findOne({ userId: req.user.userId }).select('_id orgId').lean();
+          
+          if (user && user.email && employee) {
+            await EmailNotificationService.sendExpenseSubmitted(
+              { 
+                _id: employee._id,
+                name: user.name, 
+                email: user.email,
+                orgId: employee.orgId || req.user.orgId
+              },
+              expense
+            );
+            logger.info('Expense submitted email sent', { expenseId: expense._id, email: user.email });
+          } else {
+            logger.warn('Missing user or employee data for expense submission notification', { 
+              expenseId: expense._id, 
+              hasUser: !!user, 
+              hasEmployee: !!employee 
+            });
+          }
+        } catch (emailError) {
+          logger.error('Failed to send expense submitted email', { error: emailError.message });
+        }
+      });
+
       // Emit real-time updates to dashboards
       if (req.emitDashboardUpdate) {
         try {
@@ -335,34 +367,7 @@ router.post(
         }
       }
 
-      // Send email notification to employee (confirmation)
-      try {
-        const user = await User.findById(req.user.userId).select('name email').lean();
-        const employee = await Employee.findOne({ userId: req.user.userId }).select('_id orgId').lean();
-        
-        if (user && user.email && employee) {
-          await EmailNotificationService.sendExpenseSubmitted(
-            { 
-              _id: employee._id,
-              name: user.name, 
-              email: user.email,
-              orgId: employee.orgId || req.user.orgId
-            },
-            expense
-          );
-          logger.info('Expense submitted email sent', { expenseId: expense._id, email: user.email });
-        } else {
-          logger.warn('Missing user or employee data for expense submission notification', { 
-            expenseId: expense._id, 
-            hasUser: !!user, 
-            hasEmployee: !!employee 
-          });
-        }
-      } catch (emailError) {
-        logger.error('Failed to send expense submitted email', { error: emailError.message });
-      }
-
-      return sendSuccess(res, expense, "Expense created successfully", 201);
+      return response;
     } catch (error) {
       logger.error("Create expense error", {
         error: error.message,
@@ -517,39 +522,44 @@ router.put(
         approvedBy: req.user.userId
       });
 
-      // Send email notification to employee
-      try {
-        const user = await User.findById(expense.userId).select('name email').lean();
-        const employee = await Employee.findOne({ userId: expense.userId }).select('_id orgId').lean();
-        const approver = await User.findById(req.user.userId).select('name').lean();
-        
-        if (user && user.email && employee) {
-          await EmailNotificationService.sendExpenseApproved(
-            { 
-              _id: employee._id,
-              name: user.name, 
-              email: user.email,
-              orgId: employee.orgId || req.user.orgId
-            },
-            expense,
-            { 
-              _id: req.user.userId,
-              name: approver?.name || 'Admin' 
-            }
-          );
-          logger.info('Expense approved email sent', { expenseId, email: user.email });
-        } else {
-          logger.warn('Missing user or employee data for expense notification', { 
-            expenseId, 
-            hasUser: !!user, 
-            hasEmployee: !!employee 
-          });
-        }
-      } catch (emailError) {
-        logger.error('Failed to send expense approved email', { error: emailError.message, expenseId });
-      }
+      // Send response immediately
+      const response = sendSuccess(res, expense, "Expense approved successfully");
 
-      return sendSuccess(res, expense, "Expense approved successfully");
+      // Send email notification in background (don't wait for it)
+      setImmediate(async () => {
+        try {
+          const user = await User.findById(expense.userId).select('name email').lean();
+          const employee = await Employee.findOne({ userId: expense.userId }).select('_id orgId').lean();
+          const approver = await User.findById(req.user.userId).select('name').lean();
+          
+          if (user && user.email && employee) {
+            await EmailNotificationService.sendExpenseApproved(
+              { 
+                _id: employee._id,
+                name: user.name, 
+                email: user.email,
+                orgId: employee.orgId || req.user.orgId
+              },
+              expense,
+              { 
+                _id: req.user.userId,
+                name: approver?.name || 'Admin' 
+              }
+            );
+            logger.info('Expense approved email sent', { expenseId, email: user.email });
+          } else {
+            logger.warn('Missing user or employee data for expense notification', { 
+              expenseId, 
+              hasUser: !!user, 
+              hasEmployee: !!employee 
+            });
+          }
+        } catch (emailError) {
+          logger.error('Failed to send expense approved email', { error: emailError.message, expenseId });
+        }
+      });
+
+      return response;
     } catch (error) {
       logger.error("Approve expense error", {
         error: error.message,

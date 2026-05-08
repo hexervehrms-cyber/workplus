@@ -5,6 +5,7 @@
 
 import compression from 'compression';
 import helmet from 'helmet';
+import crypto from 'crypto';
 
 /**
  * Response compression middleware
@@ -81,7 +82,6 @@ export const etagMiddleware = (req, res, next) => {
   
   res.json = function(data) {
     // Generate ETag from response data
-    const crypto = require('crypto');
     const etag = crypto.createHash('md5').update(JSON.stringify(data)).digest('hex');
     
     res.set('ETag', `"${etag}"`);

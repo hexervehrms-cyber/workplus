@@ -336,10 +336,12 @@ export class AuthService {
 
       console.log('Login response:', response);
 
-      // Backend returns data nested in response.data
-      const token = response.data?.token;
-      const user = response.data?.user;
-      const refreshToken = response.data?.refreshToken;
+      // Backend can return token and user in two formats:
+      // 1. Nested in data: response.data.token, response.data.user
+      // 2. At top level: response.token, response.user
+      const token = response.data?.token || response.token;
+      const user = response.data?.user || response.user;
+      const refreshToken = response.data?.refreshToken || response.refreshToken;
 
       if (response.success && token && user) {
         // Store token

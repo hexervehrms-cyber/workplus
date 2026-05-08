@@ -2,8 +2,13 @@
   "buildCommand": "vite build",
   "outputDirectory": "dist",
   "env": {
-    "VITE_API_URL": "@vite_api_url",
-    "VITE_SOCKET_URL": "@vite_socket_url"
+    "VITE_API_URL": "https://workplus-backend-sg3a.onrender.com",
+    "VITE_SOCKET_URL": "https://workplus-backend-sg3a.onrender.com",
+    "VITE_APP_NAME": "WorkPlus Pro",
+    "VITE_APP_VERSION": "1.0.0",
+    "VITE_APP_ENV": "production",
+    "VITE_ENABLE_DEBUG": "false",
+    "VITE_ENABLE_ANALYTICS": "true"
   },
   "rewrites": [
     {

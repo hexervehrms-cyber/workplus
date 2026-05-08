@@ -6,10 +6,10 @@ services:
     buildCommand: npm install
     startCommand: node backend/server.js
     envVars:
-      - key: NODE_ENV
-        value: production
       - key: PORT
         value: 5000
+      - key: NODE_ENV
+        value: production
       - key: MONGODB_URI
         sync: false
       - key: JWT_SECRET
@@ -36,6 +36,18 @@ services:
         value: hr@hexerve.com
       - key: HR_EMAIL
         value: hr@hexerve.com
+      - key: TWILIO_ACCOUNT_SID
+        value: your-twilio-account-sid
+      - key: TWILIO_AUTH_TOKEN
+        value: your-twilio-auth-token
+      - key: TWILIO_PHONE_NUMBER
+        value: +1234567890
+      - key: FIREBASE_PROJECT_ID
+        value: your-firebase-project-id
+      - key: FIREBASE_PRIVATE_KEY
+        value: your-firebase-private-key
+      - key: FIREBASE_CLIENT_EMAIL
+        value: your-firebase-client-email
       - key: VITE_API_URL
         value: https://workplus-backend-sg3a.onrender.com
       - key: VITE_SOCKET_URL

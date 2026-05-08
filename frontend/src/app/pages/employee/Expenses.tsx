@@ -126,10 +126,10 @@ export default function Expenses() {
   // Fetch expenses from API
   useEffect(() => {
     fetchExpenses();
-  }, [user?.id]);
+  }, [user?.userId]);
 
   const fetchExpenses = async () => {
-    if (!user?.id) {
+    if (!user?.userId) {
       console.warn('No user ID available');
       return;
     }
@@ -137,9 +137,9 @@ export default function Expenses() {
     try {
       setLoading(true);
       const token = localStorage.getItem('authToken');
-      console.log('Fetching expenses for user:', user.id);
+      console.log('Fetching expenses for user:', user.userId);
       console.log('User object:', user);
-      const response = await fetch(`/api/expenses/user/${user.id}`, {
+      const response = await fetch(`/api/expenses/user/${user.userId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'

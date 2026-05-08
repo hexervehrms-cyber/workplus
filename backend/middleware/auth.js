@@ -64,13 +64,14 @@ export const authenticate = asyncHandler(async (req, res, next) => {
       });
     }
     
-    // Attach user info to request
+    // Attach user info to request (use consistent orgId naming)
     req.user = {
       userId: user._id,
       email: user.email,
       name: user.name,
       role: user.role,
-      orgId: user.orgId,
+      orgId: user.orgId || 'system',
+      tenantId: user.orgId || 'system', // Alias for compatibility
       departmentId: user.departmentId,
       permissions: user.permissions || []
     };

@@ -14,11 +14,13 @@ services:
       - key: MONGODB_URI
         value: mongodb+srv://atulcse08_db_user:Jadu%40123@workplus.tcf4qho.mongodb.net/workpluspro?retryWrites=true&w=majority
       - key: JWT_SECRET
-        value: workplus-pro-production-jwt-secret-key-minimum-32-characters-long-secure-2024-v1
+        value: workplus-pro-production-jwt-secret-key-minimum-32-characters-long-secure-2024-v1-hexerve-hrms-workplus-prod
       - key: JWT_EXPIRES_IN
         value: 24h
       - key: CORS_ORIGIN
         value: https://hexerve.online,https://www.hexerve.online,https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app
+      - key: FRONTEND_URL
+        value: https://hexerve.online
       - key: SUPER_ADMIN_EMAIL
         value: atul@hexerve.com
       - key: SUPER_ADMIN_PASSWORD

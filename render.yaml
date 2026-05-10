@@ -19,7 +19,7 @@ services:
       - key: CORS_ORIGIN
         value: https://workplus-murex.vercel.app
       - key: SUPER_ADMIN_EMAIL
-        value: superadmin@company.com
+        sync: false
       - key: SUPER_ADMIN_PASSWORD
         value: Admin123!SecurePassword
       - key: SUPER_ADMIN_NAME

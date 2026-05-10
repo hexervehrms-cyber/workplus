@@ -179,7 +179,10 @@ const parseCorsOrigins = () => {
     'https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app',
     'https://workplus-seven.vercel.app',
     'https://workplus.vercel.app',
-    'https://hexerve.online'
+    'https://hexerve.online',
+    'https://www.hexerve.online',
+    'http://hexerve.online',
+    'http://www.hexerve.online'
   ];
   
   // If no origins specified in env, use fallbacks (development mode)
@@ -189,7 +192,16 @@ const parseCorsOrigins = () => {
   }
   
   // In production, return origins from environment plus mandatory production origins
-  return [...new Set([...origins, 'https://hexerve.online', 'https://workplus-murex.vercel.app'])];
+  const productionOrigins = [
+     ...origins,
+     'https://hexerve.online',
+     'https://www.hexerve.online',
+     'http://hexerve.online',
+     'http://www.hexerve.online',
+     'https://workplus-murex.vercel.app'
+   ];
+  
+  return [...new Set(productionOrigins)];
 };
 
 const allowedOrigins = parseCorsOrigins();

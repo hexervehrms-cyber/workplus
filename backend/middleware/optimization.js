@@ -34,7 +34,7 @@ export const securityHeaders = helmet({
       scriptSrc: ["'self'", "'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", 'data:', 'https:'],
-      connectSrc: ["'self'", 'https://workplus-backend-sg3a.onrender.com', 'https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app'],
+      connectSrc: ["'self'", 'https://workplus-backend-sg3a.onrender.com', 'https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app', 'https://hexerve.online', 'https://www.hexerve.online'],
       fontSrc: ["'self'", 'data:'],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],

@@ -37,6 +37,12 @@ const taskSchema = new mongoose.Schema(
       required: true,
       index: true
     },
+    createdBy: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: "User",
+      required: true,
+      index: true
+    },
     orgId: { 
       type: String, 
       required: true,

@@ -484,7 +484,7 @@ app.use(requestTimeout(30000)); // 30 second timeout
 app.use(queryOptimization);
 
 // Apply CSRF protection middleware
-if (process.env.NODE_ENV !== 'development') {
+if (process.env.NODE_ENV !== 'development' && process.env.DISABLE_CSRF !== 'true') {
   app.use(generateCSRFToken);
   app.use(verifyCSRFToken);
 }

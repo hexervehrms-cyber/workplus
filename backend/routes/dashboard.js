@@ -70,6 +70,7 @@ function getDateRange(filterType, customStartDate, customEndDate) {
  * Get dashboard statistics with optional date filtering
  */
 router.get("/stats", asyncHandler(async (req, res) => {
+  console.log('📊 [DASHBOARD-STATS] Fetching stats for orgId:', req.user?.orgId);
   // Disable caching for real-time data
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
@@ -81,12 +82,14 @@ router.get("/stats", asyncHandler(async (req, res) => {
   
   // Get date range
   const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(filterType, startDate, endDate);
+  console.log('📊 [DASHBOARD-STATS] Date range:', { rangeStart, rangeEnd });
   
   // Get total employees
   const totalEmployees = await Employee.countDocuments({ 
     orgId, 
     status: 'active' 
   });
+  console.log('📊 [DASHBOARD-STATS] Total employees:', totalEmployees);
   
   // Get expenses for the selected period
   const expensesResult = await Expense.aggregate([
@@ -106,6 +109,7 @@ router.get("/stats", asyncHandler(async (req, res) => {
   ]);
   
   const thisMonthExpenses = expensesResult[0]?.total || 0;
+  console.log('📊 [DASHBOARD-STATS] Expenses:', thisMonthExpenses);
   
   // Get payroll for the selected period
   const payrollResult = await Payslip.aggregate([
@@ -125,6 +129,7 @@ router.get("/stats", asyncHandler(async (req, res) => {
   ]);
   
   const thisMonthPayroll = payrollResult[0]?.total || 0;
+  console.log('📊 [DASHBOARD-STATS] Payroll:', thisMonthPayroll);
   
   // Total cost (Expenses + Payroll)
   const totalCost = thisMonthExpenses + thisMonthPayroll;
@@ -149,6 +154,7 @@ router.get("/stats", asyncHandler(async (req, res) => {
   
   const avgHours = attendanceStats[0]?.avgHours || 0;
   const avgProductivity = Math.min(100, Math.round((avgHours / 8) * 100));
+  console.log('📊 [DASHBOARD-STATS] Avg Productivity:', avgProductivity);
   
   // Get logged in employees (active sessions)
   const loggedInEmployees = await Session.countDocuments({
@@ -156,6 +162,7 @@ router.get("/stats", asyncHandler(async (req, res) => {
     isActive: true,
     role: 'employee'
   });
+  console.log('📊 [DASHBOARD-STATS] Logged in employees:', loggedInEmployees);
   
   // Get employees on leave
   const onLeaveCount = await LeaveRequest.aggregate([
@@ -168,10 +175,7 @@ router.get("/stats", asyncHandler(async (req, res) => {
       }
     },
     {
-      $group: {
-        _id: '$employeeId',
-        count: { $sum: 1 }
-      }
+      $group: { _id: '$employeeId' }
     },
     {
       $count: 'total'
@@ -179,6 +183,7 @@ router.get("/stats", asyncHandler(async (req, res) => {
   ]);
   
   const onLeave = onLeaveCount[0]?.total || 0;
+  console.log('📊 [DASHBOARD-STATS] On leave:', onLeave);
   
   const statsData = {
     totalEmployees,

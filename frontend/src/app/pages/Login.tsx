@@ -1,6 +1,6 @@
 /**
  * Login Page - Production Ready
- * Features: Direct Super Admin login, error handling, loading states
+ * Features: Secure authentication, error handling, loading states
  */
 
 import { useState, useEffect } from 'react';

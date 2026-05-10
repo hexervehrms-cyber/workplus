@@ -203,7 +203,7 @@ const corsOptions = {
     }
     
     if (allowedOrigins.includes(origin)) {
-      callback(null, true);
+      callback(null, origin);
     } else {
       console.error(`❌ CORS blocked for origin: ${origin}`);
       console.error(`   Allowed origins: ${allowedOrigins.join(', ')}`);
@@ -227,7 +227,7 @@ const io = new Server(server, {
       }
       
       if (allowedOrigins.includes(origin)) {
-        callback(null, true);
+        callback(null, origin);
       } else {
         console.error(`❌ Socket.IO CORS blocked for origin: ${origin}`);
         callback(new Error(`Socket.IO CORS blocked for origin: ${origin}`));

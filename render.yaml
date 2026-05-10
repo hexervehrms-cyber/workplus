@@ -17,7 +17,7 @@ services:
       - key: JWT_EXPIRES_IN
         value: 24h
       - key: CORS_ORIGIN
-        value: https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app
+        value: https://hexerve.online,https://www.hexerve.online,https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app
       - key: SUPER_ADMIN_EMAIL
         value: atul@hexerve.com
       - key: SUPER_ADMIN_PASSWORD

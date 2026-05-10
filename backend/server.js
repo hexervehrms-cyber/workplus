@@ -162,29 +162,75 @@ const app = express();
 const server = createServer(app);
 
 // CORS whitelist - MUST be defined BEFORE Socket.IO initialization
-// Use CORS_ORIGIN from environment variable, with fallbacks for common domains
-const allowedOrigins = [
-  process.env.CORS_ORIGIN, // Primary frontend URL from env
-  process.env.FRONTEND_URL, // Alternative env variable name
-  // Common Vercel deployment patterns
-  "https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app",
-  "https://workplus-seven.vercel.app",
-  "https://workplus.vercel.app"
-  // Note: Local development origins removed for production security
-  // Add them in your .env file for local development: CORS_ORIGIN=http://localhost:5173
-].filter(Boolean); // Remove undefined/null values
+// Parse multiple origins from comma-separated environment variable
+const parseCorsOrigins = () => {
+  const corsOrigin = process.env.CORS_ORIGIN || process.env.FRONTEND_URL || '';
+  const origins = corsOrigin.split(',').map(origin => origin.trim()).filter(Boolean);
+  
+  // Add fallbacks for development and legacy support
+  const fallbackOrigins = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app',
+    'https://workplus-seven.vercel.app',
+    'https://workplus.vercel.app'
+  ];
+  
+  // If no origins specified in env, use fallbacks (development mode)
+  if (origins.length === 0) {
+    console.warn('⚠️  No CORS_ORIGIN specified in environment variables. Using fallback origins for development.');
+    return fallbackOrigins;
+  }
+  
+  // In production, only use explicitly allowed origins from environment
+  return origins;
+};
+
+const allowedOrigins = parseCorsOrigins();
+
+console.log('✅ CORS Allowed Origins:', allowedOrigins);
 
 const corsOptions = {
-  origin: allowedOrigins,
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.error(`❌ CORS blocked for origin: ${origin}`);
+      console.error(`   Allowed origins: ${allowedOrigins.join(', ')}`);
+      callback(new Error(`CORS blocked for origin: ${origin}`));
+    }
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-  optionsSuccessStatus: 200
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-CSRF-Token"],
+  optionsSuccessStatus: 200,
+  preflightContinue: false
 };
 
 // Initialize Socket.IO with CORS options
 const io = new Server(server, {
-  cors: corsOptions,
+  cors: {
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, curl, etc.)
+      if (!origin) {
+        return callback(null, true);
+      }
+      
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.error(`❌ Socket.IO CORS blocked for origin: ${origin}`);
+        callback(new Error(`Socket.IO CORS blocked for origin: ${origin}`));
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'POST']
+  },
   transports: ['websocket', 'polling'],
   pingInterval: 25000,
   pingTimeout: 60000,

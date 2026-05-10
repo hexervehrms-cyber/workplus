@@ -218,7 +218,8 @@ export class ApiClient {
 
     const config: RequestInit = {
       ...options,
-      headers
+      headers,
+      credentials: 'include' // Enable cookie support for CORS
     };
 
     try {

@@ -59,7 +59,7 @@ import Session from "./models/Session.js";
 import { errorHandler, requestIdMiddleware, asyncHandler } from "./middleware/errorHandler.js";
 import { tenantMiddleware, subscriptionMiddleware } from "./middleware/tenant.js";
 import fileValidator from "./middleware/fileValidator.js";
-import { loginLimiter, registerLimiter } from "./middleware/rateLimiter.js";
+// Rate limiter disabled for now - import { loginLimiter, registerLimiter } from "./middleware/rateLimiter.js";
 
 // Import logger
 import logger from "./utils/logger.js";
@@ -1110,7 +1110,7 @@ io.on('error', (error) => {
 // Handle preflight for login
 app.options("/api/auth/login", cors(corsOptions));
 
-app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
+app.post("/api/auth/login", asyncHandler(async (req, res) => {
   try {
     const { email, password } = req.body;
 

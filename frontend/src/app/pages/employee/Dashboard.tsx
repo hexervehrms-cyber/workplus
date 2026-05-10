@@ -6,7 +6,7 @@ import ChatWidget from '../../components/ChatWidget';
 import { useCurrency } from '../../context/CurrencyContext';
 import { useAuth } from '../../context/AuthContext';
 import { ExpenseService, LeaveRequestService } from '../../utils/api';
-import { apiGet, apiPost } from '../../utils/apiHelper';
+import { apiGet, apiPost, buildApiUrl } from '../../utils/apiHelper';
 import realTimeSocket from '../../utils/realTimeSocket';
 import {
   Calendar,
@@ -99,7 +99,7 @@ export default function EmployeeDashboard() {
     
     try {
       const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch(`/api/employees/user/${user.id}`, {
+      const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'

@@ -17,6 +17,7 @@ import { Badge } from './ui/badge';
 import CurrencyChanger from './CurrencyChanger';
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
+import { buildApiUrl } from '../utils/apiHelper';
 
 interface Notification {
   _id: string;
@@ -44,7 +45,7 @@ export function Navbar() {
       setLoading(true);
       const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       
-      const response = await fetch('/api/notifications?limit=10&status=all', {
+      const response = await fetch(buildApiUrl('/notifications?limit=10&status=all'), {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -70,7 +71,7 @@ export function Navbar() {
     try {
       const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       
-      const response = await fetch(`/api/notifications/${notificationId}/read`, {
+      const response = await fetch(buildApiUrl(`/notifications/${notificationId}/read`), {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -95,7 +96,7 @@ export function Navbar() {
     try {
       const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       
-      const response = await fetch('/api/notifications/mark-all-read', {
+      const response = await fetch(buildApiUrl('/notifications/mark-all-read'), {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`,

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Clock, LogIn, LogOut, Pause, MessageSquare, Moon, Calendar, Loader } from 'lucide-react';
+import { buildApiUrl } from '../../utils/apiHelper';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -109,7 +110,7 @@ export default function Attendance() {
   const fetchTodayAttendance = async (empId: string) => {
     try {
       const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/attendance/today', {
+      const response = await fetch(buildApiUrl('/attendance/today'), {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'

@@ -9,8 +9,11 @@
 const getApiBaseUrl = () => {
   const apiUrl = import.meta.env.VITE_API_URL;
   
-  // If no API URL is set, use relative path (development mode with Vite proxy)
+  // If no API URL is set, use the production backend URL as fallback if on a production domain
   if (!apiUrl) {
+    if (typeof window !== 'undefined' && (window.location.hostname.includes('hexerve.online') || window.location.hostname.includes('vercel.app'))) {
+      return 'https://workplus-backend-sg3a.onrender.com/api';
+    }
     return '/api';
   }
   

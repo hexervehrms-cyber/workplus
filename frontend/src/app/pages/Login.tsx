@@ -82,27 +82,6 @@ export default function Login() {
     }
   };
 
-  // Quick login for Super Admin (development/demo)
-  const handleSuperAdminLogin = async () => {
-    setEmail('superadmin@company.com');
-    setPassword('Jadu@123');
-    
-    // Auto-submit after setting values
-    setError('');
-    setLoading(true);
-
-    try {
-      const result = await login('superadmin@company.com', 'Jadu@123');
-      if (!result.success) {
-        setError(result.error || 'Super Admin login failed');
-      }
-    } catch (err: any) {
-      setError('Super Admin login failed. Please check credentials.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Show loading while checking auth state
   if (authLoading) {
     return (
@@ -215,30 +194,8 @@ export default function Login() {
           </form>
         </CardContent>
 
-        <CardFooter className="flex flex-col gap-4 pt-0">
-          <div className="relative w-full">
-            <div className="absolute inset-0 flex items-center">
-              <span className="w-full border-t" />
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-card px-2 text-muted-foreground">
-                Quick Access
-              </span>
-            </div>
-          </div>
-          
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full"
-            onClick={handleSuperAdminLogin}
-            disabled={loading}
-          >
-            <Briefcase className="w-4 h-4 mr-2" />
-            Sign in as Super Admin
-          </Button>
-          
-          <p className="text-xs text-center text-muted-foreground">
+        <CardFooter className="pt-0">
+          <p className="text-xs text-center text-muted-foreground w-full">
             Contact your administrator for account access
           </p>
         </CardFooter>

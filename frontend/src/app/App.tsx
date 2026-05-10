@@ -5,6 +5,7 @@ import { AuthProvider } from './context/AuthContext';
 import { CurrencyProvider } from './context/CurrencyContext';
 import { Toaster } from './components/ui/sonner';
 
+// WorkPlus Pro - Version 1.0.1 (UI Refresh)
 export default function App() {
   return (
     <ThemeProvider>

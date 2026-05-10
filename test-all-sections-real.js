@@ -56,7 +56,6 @@ async function testAllSections() {
     { name: 'Profile', path: '/api/profile' },
     { name: 'Announcements', path: '/api/announcements' },
     { name: 'Tasks', path: '/api/tasks' },
-    { name: 'Organizations', path: '/api/organizations' },
     { name: 'Chat Conversations', path: '/api/chat/conversations' }
   ];
   

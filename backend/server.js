@@ -196,20 +196,7 @@ const allowedOrigins = parseCorsOrigins();
 console.log('✅ CORS Allowed Origins:', allowedOrigins);
 
 const corsOptions = {
-  origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl, etc.)
-    if (!origin) {
-      return callback(null, true);
-    }
-    
-    if (allowedOrigins.includes(origin)) {
-      callback(null, origin);
-    } else {
-      console.error(`❌ CORS blocked for origin: ${origin}`);
-      console.error(`   Allowed origins: ${allowedOrigins.join(', ')}`);
-      callback(new Error(`CORS blocked for origin: ${origin}`));
-    }
-  },
+  origin: allowedOrigins,
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-CSRF-Token"],
@@ -220,19 +207,7 @@ const corsOptions = {
 // Initialize Socket.IO with CORS options
 const io = new Server(server, {
   cors: {
-    origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, curl, etc.)
-      if (!origin) {
-        return callback(null, true);
-      }
-      
-      if (allowedOrigins.includes(origin)) {
-        callback(null, origin);
-      } else {
-        console.error(`❌ Socket.IO CORS blocked for origin: ${origin}`);
-        callback(new Error(`Socket.IO CORS blocked for origin: ${origin}`));
-      }
-    },
+    origin: allowedOrigins,
     credentials: true,
     methods: ['GET', 'POST']
   },

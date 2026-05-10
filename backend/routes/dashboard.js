@@ -75,6 +75,7 @@ router.get("/stats", asyncHandler(async (req, res) => {
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
   
+  // CRITICAL: Enforce orgId validation - users can only access their organization's data
   const orgId = req.user?.orgId || 'system';
   const { filterType = 'month', startDate, endDate } = req.query;
   
@@ -188,8 +189,6 @@ router.get("/stats", asyncHandler(async (req, res) => {
     loggedInEmployees,
     onLeave
   };
-  
-  console.log('📊 [STATS] Response data:', statsData);
   
   res.json({
     success: true,
@@ -311,24 +310,7 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
   
-  console.log('📅 [TODAYS-ATTENDANCE] Fetching for org:', userOrgId);
-  console.log('📅 [TODAYS-ATTENDANCE] Date range:', { today: today.toISOString(), tomorrow: tomorrow.toISOString() });
-  
-  // Handle different orgId formats - super admin can see all orgs
-  let orgQuery = {};
-  if (req.user.role === 'super_admin') {
-    // Super admin can see all organizations
-    orgQuery = {
-      $or: [
-        { orgId: userOrgId },
-        { orgId: 'system' },
-        { orgId: 'workplus_system' }
-      ]
-    };
-  } else {
-    orgQuery = { orgId: userOrgId };
-  }
-  
+  // Get today's date range - use same logic as on-break endpoint
   const todaysAttendance = await Attendance.find({
     ...orgQuery,
     date: { $gte: today, $lt: tomorrow }
@@ -343,15 +325,6 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
   })
   .sort({ checkIn: -1 })
   .lean();
-  
-  console.log('📅 [TODAYS-ATTENDANCE] Records found:', todaysAttendance.length);
-  console.log('📅 [TODAYS-ATTENDANCE] Data:', todaysAttendance.map(a => ({
-    employeeName: a.employeeId?.userId?.name,
-    checkIn: a.checkIn,
-    checkOut: a.checkOut,
-    status: a.status,
-    date: a.date
-  })));
   
   // Format the data for frontend
   const formattedAttendance = todaysAttendance.map(attendance => ({
@@ -487,8 +460,6 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
   const orgId = req.user?.orgId || 'system';
   const { filterType = 'month', startDate, endDate } = req.query;
   
-  console.log('📊 [QUICK-STATS] Request received:', { orgId, filterType, userId: req.user?.id, role: req.user?.role });
-  
   // Get date range
   const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(filterType, startDate, endDate);
   
@@ -529,17 +500,6 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
         checkIn: { $exists: true, $ne: null },
         checkOut: { $exists: false }
       });
-      console.log('📊 [ACTIVE-USERS-QUERY] Query params:', { orgId, startOfDay, endOfDay });
-      console.log('📊 [ACTIVE-USERS-QUERY] Count result:', count);
-      
-      // Debug: Get actual records
-      const records = await Attendance.find({ 
-        orgId, 
-        date: { $gte: startOfDay, $lt: endOfDay },
-        checkIn: { $exists: true, $ne: null },
-        checkOut: { $exists: false }
-      }).select('userId employeeName checkIn checkOut date orgId').lean();
-      console.log('📊 [ACTIVE-USERS-QUERY] Actual records:', JSON.stringify(records, null, 2));
       
       return count;
     })(),
@@ -555,12 +515,6 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
       const endOfDay = new Date(startOfDay);
       endOfDay.setDate(endOfDay.getDate() + 1);
       
-      console.log('📊 [ON-BREAK-QUERY] Query params:', { 
-        orgId, 
-        startOfDay: startOfDay.toISOString(), 
-        endOfDay: endOfDay.toISOString() 
-      });
-      
       const count = await Attendance.countDocuments({
         orgId,
         date: { $gte: startOfDay, $lt: endOfDay },  // Only TODAY
@@ -571,28 +525,6 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
           }
         }
       });
-      console.log('📊 [ON-BREAK-QUERY] Count result:', count);
-      
-      // Debug: Get actual records
-      const records = await Attendance.find({
-        orgId,
-        date: { $gte: startOfDay, $lt: endOfDay },
-        'breaks': {
-          $elemMatch: {
-            startTime: { $exists: true },
-            endTime: { $exists: false }
-          }
-        }
-      }).select('userId employeeName breaks checkIn date orgId').lean();
-      console.log('📊 [ON-BREAK-QUERY] Actual records:', JSON.stringify(records, null, 2));
-      console.log('📊 [ON-BREAK-QUERY] Number of records with active breaks:', records.length);
-      
-      // Additional debug: Check all attendance records for today
-      const allTodayRecords = await Attendance.find({
-        orgId,
-        date: { $gte: startOfDay, $lt: endOfDay }
-      }).select('userId employeeName breaks checkIn checkOut date orgId').lean();
-      console.log('📊 [ON-BREAK-QUERY] All attendance records for today:', JSON.stringify(allTodayRecords, null, 2));
       
       return count;
     })(),
@@ -719,10 +651,6 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
     totalIncentive: totalIncentive[0]?.total || 0
   };
   
-  console.log('📊 [QUICK-STATS] Response data:', responseData);
-  console.log('📊 [QUICK-STATS] onBreak count:', onBreakToday, 'activeUsers count:', activeUsers);
-  console.log('📊 [QUICK-STATS] Response JSON:', JSON.stringify({ success: true, data: responseData }, null, 2));
-  
   res.json({
     success: true,
     data: responseData
@@ -736,8 +664,6 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
 router.post("/test-kpi-emit", asyncHandler(async (req, res) => {
   const orgId = req.user?.orgId || 'system';
   
-  console.log('🧪 [TEST-KPI-EMIT] Manually triggering KPI update for orgId:', orgId);
-  
   // Import emitKPIUpdate
   const { emitKPIUpdate } = await import('../utils/kpiUpdater.js');
   
@@ -746,8 +672,6 @@ router.post("/test-kpi-emit", asyncHandler(async (req, res) => {
     testTrigger: true,
     timestamp: new Date()
   });
-  
-  console.log('🧪 [TEST-KPI-EMIT] KPI update triggered, result:', result);
   
   res.json({
     success: true,

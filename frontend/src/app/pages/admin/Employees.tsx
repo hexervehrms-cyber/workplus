@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useCurrency } from '../../context/CurrencyContext';
 import OnboardingLinkGenerator from '../../components/OnboardingLinkGenerator';
+import { apiPost } from '../../utils/apiHelper';
 
 interface Employee {
   _id: string;
@@ -346,27 +347,8 @@ export default function Employees() {
 
     try {
       setSubmitting(true);
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       
-      if (!token) {
-        toast.error('Authentication token not found. Please log in again.');
-        return;
-      }
-
-      const response = await fetch(`/api/employees/${passwordResetEmployee._id}/reset-password`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ newPassword })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Failed to reset password');
-      }
+      await apiPost(`/employees/${passwordResetEmployee._id}/reset-password`, { newPassword });
 
       toast.success('Password reset successfully');
       setShowPasswordReset(false);

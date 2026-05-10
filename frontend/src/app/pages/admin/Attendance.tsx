@@ -6,6 +6,7 @@ import { Clock, Search, Filter, Calendar, CheckCircle, AlertCircle, Activity, Co
 import { Badge } from '../../components/ui/badge';
 import { apiClient } from '../../utils/api';
 import { toast } from 'sonner';
+import { apiGet, apiPost, buildFileUrl } from '../../utils/apiHelper';
 
 interface AttendanceRecord {
   _id: string;
@@ -315,12 +316,9 @@ export default function AttendanceAdmin() {
       }
       
       // Call the new bulk-export endpoint
-      const token = localStorage.getItem('authToken');
-      const response = await fetch(`/api/attendance/bulk-export?startDate=${exportStartDate}&endDate=${exportEndDate}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const fileUrl = buildFileUrl(`/attendance/bulk-export?startDate=${exportStartDate}&endDate=${exportEndDate}`);
+      
+      const response = await fetch(fileUrl);
       
       if (response.ok) {
         // Get the CSV content
@@ -407,34 +405,20 @@ export default function AttendanceAdmin() {
       }
 
       // Call the new bulk-import endpoint
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/attendance/bulk-import', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ records })
-      });
-
-      const data = await response.json();
+      const data = await apiPost('/attendance/bulk-import', { records });
       
-      if (response.ok) {
-        toast.success(`Successfully imported ${data.data.imported} attendance records${data.data.failed > 0 ? `, ${data.data.failed} failed` : ''}`);
-        
-        if (data.data.errors && data.data.errors.length > 0) {
-          console.log('Import errors:', data.data.errors);
-          // Show first few errors
-          const errorMessages = data.data.errors.slice(0, 3).map(e => `Row ${e.row}: ${e.error}`).join('\n');
-          toast.error(`Some records failed:\n${errorMessages}`);
-        }
-        
-        // Refresh the attendance data
-        await fetchAttendance();
-        await fetchActivityLogs();
-      } else {
-        throw new Error(data.message || 'Failed to import');
+      toast.success(`Successfully imported ${data.data.imported} attendance records${data.data.failed > 0 ? `, ${data.data.failed} failed` : ''}`);
+      
+      if (data.data.errors && data.data.errors.length > 0) {
+        console.log('Import errors:', data.data.errors);
+        // Show first few errors
+        const errorMessages = data.data.errors.slice(0, 3).map(e => `Row ${e.row}: ${e.error}`).join('\n');
+        toast.error(`Some records failed:\n${errorMessages}`);
       }
+      
+      // Refresh the attendance data
+      await fetchAttendance();
+      await fetchActivityLogs();
     } catch (error: any) {
       console.error('Import error:', error);
       toast.error(error.message || 'Failed to import attendance data');

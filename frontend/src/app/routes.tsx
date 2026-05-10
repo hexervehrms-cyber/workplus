@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from 'react-router';
 import { lazy, Suspense } from 'react';
 import { MainLayout } from './layouts/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import Login from './pages/Login';
 
 // Loading component for lazy routes
@@ -77,9 +78,11 @@ const routes = [
   {
     path: '/',
     element: (
-      <ProtectedRoute>
-        <MainLayout />
-      </ProtectedRoute>
+      <ErrorBoundary>
+        <ProtectedRoute>
+          <MainLayout />
+        </ProtectedRoute>
+      </ErrorBoundary>
     ),
     children: [
       { index: true, element: <Navigate to="/employee" replace /> },

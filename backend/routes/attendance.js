@@ -543,6 +543,7 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
   const currentUserId = req.user.userId;
   const userRole = req.user.role;
 
+  // CRITICAL: Enforce orgId validation - users can only access their organization's data
   const query = { orgId: orgId || userOrgId };
 
   // Employees can only see their own attendance

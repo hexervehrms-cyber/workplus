@@ -5,6 +5,7 @@ import { Badge } from '../../components/ui/badge';
 import { Progress } from '../../components/ui/progress';
 import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { useAuth } from '../../context/AuthContext';
+import { apiGet } from '../../utils/apiHelper';
 
 interface PerformanceData {
   month: string;
@@ -58,56 +59,16 @@ export default function Performance() {
       setLoading(true);
       
       // Fetch performance data from API
-      const response = await fetch(`/api/performance/${user?.id}`);
-      if (response.ok) {
-        const data = await response.json();
-        setPerformanceData(data.performanceTrend || []);
-        setSkillsData(data.skills || []);
-        setKpis(data.kpis || []);
-        setAchievements(data.achievements || []);
-        setTeamRanking(data.teamRanking || []);
-        setOverallScore(data.overallScore || 0);
-      } else {
-        // Fallback to default data if API fails
-        setPerformanceData([
-          { month: 'Jan', score: 85 },
-          { month: 'Feb', score: 88 },
-          { month: 'Mar', score: 92 },
-          { month: 'Apr', score: 89 },
-          { month: 'May', score: 95 },
-          { month: 'Jun', score: 92 },
-        ]);
-        setSkillsData([
-          { skill: 'Communication', score: 95 },
-          { skill: 'Technical', score: 88 },
-          { skill: 'Leadership', score: 82 },
-          { skill: 'Teamwork', score: 92 },
-          { skill: 'Problem Solving', score: 90 },
-          { skill: 'Time Management', score: 85 },
-        ]);
-        setKpis([
-          { name: 'Task Completion Rate', value: 95, target: 90, status: 'good' },
-          { name: 'Quality Score', value: 88, target: 85, status: 'good' },
-          { name: 'Attendance', value: 98, target: 95, status: 'good' },
-          { name: 'Customer Satisfaction', value: 82, target: 85, status: 'warning' },
-        ]);
-        setAchievements([
-          { title: 'Top Performer', description: 'Ranked #3 in Q1 2024', date: 'March 2024', icon: Trophy, color: 'text-accent' },
-          { title: 'Perfect Attendance', description: '100% attendance for 3 months', date: 'February 2024', icon: Award, color: 'text-secondary' },
-          { title: 'Quick Learner', description: 'Completed 5 certifications', date: 'January 2024', icon: Target, color: 'text-primary' },
-        ]);
-        setTeamRanking([
-          { rank: 1, name: 'Sarah Johnson', score: 98, avatar: 'SJ' },
-          { rank: 2, name: 'Mike Chen', score: 96, avatar: 'MC' },
-          { rank: 3, name: user?.name || 'You', score: 92, avatar: 'JD', isYou: true },
-          { rank: 4, name: 'Emma Wilson', score: 88, avatar: 'EW' },
-          { rank: 5, name: 'Alex Brown', score: 85, avatar: 'AB' },
-        ]);
-        setOverallScore(92);
-      }
+      const data = await apiGet(`/performance/${user?.id}`);
+      setPerformanceData(data.performanceTrend || []);
+      setSkillsData(data.skills || []);
+      setKpis(data.kpis || []);
+      setAchievements(data.achievements || []);
+      setTeamRanking(data.teamRanking || []);
+      setOverallScore(data.overallScore || 0);
     } catch (error) {
       console.error('Error loading performance data:', error);
-      // Set default data on error
+      // Fallback to default data if API fails
       setPerformanceData([
         { month: 'Jan', score: 85 },
         { month: 'Feb', score: 88 },
@@ -116,10 +77,38 @@ export default function Performance() {
         { month: 'May', score: 95 },
         { month: 'Jun', score: 92 },
       ]);
+      setSkillsData([
+        { skill: 'Communication', score: 95 },
+        { skill: 'Technical', score: 88 },
+        { skill: 'Leadership', score: 82 },
+        { skill: 'Teamwork', score: 92 },
+        { skill: 'Problem Solving', score: 90 },
+        { skill: 'Time Management', score: 85 },
+      ]);
+      setKpis([
+        { name: 'Task Completion Rate', value: 95, target: 90, status: 'good' },
+        { name: 'Quality Score', value: 88, target: 85, status: 'good' },
+        { name: 'Attendance', value: 98, target: 95, status: 'good' },
+        { name: 'Customer Satisfaction', value: 82, target: 85, status: 'warning' },
+      ]);
+      setAchievements([
+        { title: 'Top Performer', description: 'Ranked #3 in Q1 2024', date: 'March 2024', icon: Trophy, color: 'text-accent' },
+        { title: 'Perfect Attendance', description: '100% attendance for 3 months', date: 'February 2024', icon: Award, color: 'text-secondary' },
+        { title: 'Quick Learner', description: 'Completed 5 certifications', date: 'January 2024', icon: Target, color: 'text-primary' },
+      ]);
+      setTeamRanking([
+        { rank: 1, name: 'Sarah Johnson', score: 98, avatar: 'SJ' },
+        { rank: 2, name: 'Mike Chen', score: 96, avatar: 'MC' },
+        { rank: 3, name: user?.name || 'You', score: 92, avatar: 'JD', isYou: true },
+        { rank: 4, name: 'Emma Wilson', score: 88, avatar: 'EW' },
+        { rank: 5, name: 'Alex Brown', score: 85, avatar: 'AB' },
+      ]);
+      setOverallScore(92);
     } finally {
       setLoading(false);
     }
   };
+
   return (
     <div className="p-8 space-y-8">
       {/* Page Header */}

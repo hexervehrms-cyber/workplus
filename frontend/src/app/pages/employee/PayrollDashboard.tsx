@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/button';
 import { Loader, Download, Eye, Calendar, TrendingUp, DollarSign } from 'lucide-react';
 import { toast } from 'sonner';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import { apiGet } from '../../utils/apiHelper';
 
 interface KPIData {
   currentAmount: number;
@@ -36,22 +37,10 @@ export default function PayrollDashboard() {
   const fetchPayrollData = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/payroll/employee/dashboard', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setKpiData(data.data.kpiData);
-        setSalaryHistory(data.data.salaryHistory);
-        setEmployeeType(data.data.employeeType);
-      } else {
-        toast.error('Failed to load payroll data');
-      }
+      const data = await apiGet('/payroll/employee/dashboard');
+      setKpiData(data.data.kpiData);
+      setSalaryHistory(data.data.salaryHistory);
+      setEmployeeType(data.data.employeeType);
     } catch (error) {
       console.error('Error fetching payroll data:', error);
       toast.error('Failed to load payroll data');

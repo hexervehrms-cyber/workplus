@@ -4,7 +4,7 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, auditLog } from "../middleware/auth.js";
-import { loginLimiter, registerLimiter } from "../middleware/rateLimiter.js";
+import { loginLimiter, registerLimiter, passwordResetLimiter } from "../middleware/rateLimiter.js";
 import User from "../models/User.js";
 import Employee from "../models/Employee.js";
 import AuthToken from "../models/AuthToken.js";
@@ -537,8 +537,10 @@ router.post("/disable-2fa",
 /**
  * POST /api/auth/change-password
  * Change user password
+ * PROTECTED: Rate limited to prevent brute force attacks
  */
 router.post("/change-password",
+  passwordResetLimiter,
   authenticate,
   auditLog('change_password', 'auth'),
   asyncHandler(async (req, res) => {
@@ -628,6 +630,11 @@ router.post("/change-password",
           ip: req.ip, 
           userAgent: req.get('User-Agent') 
         },
+        orgId: user.orgId
+      });
+      
+      logger.info('User password changed', {
+        userId,
         orgId: user.orgId
       });
       
@@ -741,157 +748,3 @@ router.get("/security-status",
 );
 
 export default router;
-
-/**
- * POST /api/auth/refresh
- * Refresh access token using refresh token
- */
-router.post("/refresh", 
-  asyncHandler(async (req, res) => {
-    const { refreshToken } = req.body;
-
-    if (!refreshToken) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Refresh token is required",
-        code: "MISSING_REFRESH_TOKEN"
-      });
-    }
-
-    try {
-      // Verify refresh token
-      const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
-      
-      if (decoded.type !== 'refresh') {
-        return res.status(401).json({ 
-          success: false, 
-          message: "Invalid token type",
-          code: "INVALID_TOKEN_TYPE"
-        });
-      }
-
-      // Check if refresh token exists in database
-      const hashedToken = crypto.createHash('sha256').update(refreshToken).digest('hex');
-      const tokenRecord = await AuthToken.findOne({
-        hashedToken,
-        tokenType: 'refresh',
-        userId: decoded.userId,
-        expiresAt: { $gt: new Date() }
-      });
-
-      if (!tokenRecord) {
-        return res.status(401).json({ 
-          success: false, 
-          message: "Invalid or expired refresh token",
-          code: "INVALID_REFRESH_TOKEN"
-        });
-      }
-
-      // Get user
-      const user = await User.findById(decoded.userId).select('-password');
-      if (!user || !user.isActive) {
-        return res.status(401).json({ 
-          success: false, 
-          message: "User not found or inactive",
-          code: "USER_NOT_FOUND"
-        });
-      }
-
-      // Generate new access token
-      const newAccessToken = jwt.sign(
-        { 
-          userId: user._id,
-          email: user.email,
-          role: user.role,
-          orgId: user.orgId || 'system'
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: '24h' }
-      );
-
-      // Update token usage
-      await AuthToken.findByIdAndUpdate(tokenRecord._id, {
-        $inc: { usageCount: 1 },
-        usedAt: new Date()
-      });
-
-      logger.info('Token refreshed successfully', {
-        userId: user._id,
-        email: user.email
-      });
-
-      res.json({
-        success: true,
-        message: "Token refreshed successfully",
-        data: {
-          token: newAccessToken,
-          expiresIn: '24h',
-          user: {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            avatar: user.avatar,
-            organization: user.organization,
-            tenantId: user.orgId || 'system'
-          }
-        }
-      });
-
-    } catch (error) {
-      logger.warn('Token refresh failed', { 
-        error: error.message,
-        refreshToken: refreshToken.substring(0, 20) + '...'
-      });
-
-      if (error.name === 'TokenExpiredError') {
-        return res.status(401).json({
-          success: false,
-          message: "Refresh token has expired. Please log in again.",
-          code: "REFRESH_TOKEN_EXPIRED"
-        });
-      }
-
-      return res.status(401).json({
-        success: false,
-        message: "Invalid refresh token",
-        code: "INVALID_REFRESH_TOKEN"
-      });
-    }
-  })
-);
-
-/**
- * POST /api/auth/logout
- * Logout user and invalidate tokens
- */
-router.post("/logout", 
-  authenticate,
-  asyncHandler(async (req, res) => {
-    try {
-      // Invalidate all refresh tokens for this user
-      await AuthToken.deleteMany({
-        userId: req.user.userId,
-        tokenType: 'refresh'
-      });
-
-      logger.info('User logged out successfully', {
-        userId: req.user.userId,
-        email: req.user.email
-      });
-
-      res.json({
-        success: true,
-        message: "Logged out successfully"
-      });
-
-    } catch (error) {
-      logger.error('Logout error:', error);
-      res.status(500).json({
-        success: false,
-        message: "Logout failed",
-        error: error.message
-      });
-    }
-  })
-);

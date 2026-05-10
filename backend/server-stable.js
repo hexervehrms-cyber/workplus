@@ -99,13 +99,13 @@ const server = createServer(app);
 
 // CORS whitelist - MUST be defined BEFORE Socket.IO initialization
 const allowedOrigins = [
+  process.env.CORS_ORIGIN,
+  process.env.FRONTEND_URL,
   "https://workplus-murex.vercel.app",
   "https://workplus-seven.vercel.app",
-  "https://workplus.vercel.app",
-  "http://localhost:5173",
-  "http://localhost:3000",
-  "http://localhost:3001",
-  process.env.CORS_ORIGIN
+  "https://workplus.vercel.app"
+  // Note: Local development origins removed for production security
+  // Add them in your .env file for local development: CORS_ORIGIN=http://localhost:5173
 ].filter(Boolean);
 
 const corsOptions = {

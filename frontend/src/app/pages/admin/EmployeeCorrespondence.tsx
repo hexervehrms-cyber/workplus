@@ -27,6 +27,7 @@ import {
   Briefcase
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { apiGet, apiPut } from '../../utils/apiHelper';
 
 interface Employee {
   _id: string;
@@ -115,37 +116,26 @@ export default function EmployeeCorrespondence() {
 
   const fetchEmployeeData = async () => {
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch(`/api/employees/${employeeId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Employee data received:', data); // Debug log
-        
-        // Handle different response structures
-        let employeeData = data.employee || data.data || data;
-        
-        // If the employee data doesn't have userId structure, create it
-        if (employeeData && !employeeData.userId && employeeData.name) {
-          employeeData = {
-            ...employeeData,
-            userId: {
-              _id: employeeData._id,
-              name: employeeData.name,
-              email: employeeData.email,
-              isActive: employeeData.isActive !== false
-            }
-          };
-        }
-        
-        setEmployee(employeeData);
-      } else {
-        toast.error('Failed to fetch employee data');
+      const data = await apiGet(`/employees/${employeeId}`);
+      console.log('Employee data received:', data); // Debug log
+      
+      // Handle different response structures
+      let employeeData = data.employee || data.data || data;
+      
+      // If the employee data doesn't have userId structure, create it
+      if (employeeData && !employeeData.userId && employeeData.name) {
+        employeeData = {
+          ...employeeData,
+          userId: {
+            _id: employeeData._id,
+            name: employeeData.name,
+            email: employeeData.email,
+            isActive: employeeData.isActive !== false
+          }
+        };
       }
+      
+      setEmployee(employeeData);
     } catch (error) {
       console.error('Error fetching employee:', error);
       toast.error('Error loading employee data');
@@ -155,38 +145,29 @@ export default function EmployeeCorrespondence() {
   const fetchDocuments = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      
       // Fetch both submitted and issued documents for this employee
-      const [submittedResponse, issuedResponse] = await Promise.all([
-        fetch(`/api/documents/employee/${employeeId}`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        }).catch(err => {
+      const [submittedData, issuedData] = await Promise.all([
+        apiGet(`/documents/employee/${employeeId}`).catch(err => {
           console.warn('Failed to fetch submitted documents:', err);
-          return { ok: false, json: () => Promise.resolve({ data: [] }) };
+          return { data: [] };
         }),
-        fetch(`/api/documents/issued/${employeeId}`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        }).catch(err => {
+        apiGet(`/documents/issued/${employeeId}`).catch(err => {
           console.warn('Failed to fetch issued documents:', err);
-          return { ok: false, json: () => Promise.resolve({ data: [] }) };
+          return { data: [] };
         })
       ]);
 
-      const submittedDocs = submittedResponse.ok ? await submittedResponse.json() : { data: [] };
-      const issuedDocs = issuedResponse.ok ? await issuedResponse.json() : { data: [] };
-
-      console.log('Submitted docs:', submittedDocs);
-      console.log('Issued docs:', issuedDocs);
+      console.log('Submitted docs:', submittedData);
+      console.log('Issued docs:', issuedData);
 
       // Combine and format documents
       const allDocuments: Document[] = [
-        ...(submittedDocs.data || submittedDocs || []).map((doc: any) => ({
+        ...(submittedData.data || submittedData || []).map((doc: any) => ({
           ...doc,
           type: 'submitted' as const,
           status: doc.status || 'pending'
         })),
-        ...(issuedDocs.data || issuedDocs || []).map((doc: any) => ({
+        ...(issuedData.data || issuedData || []).map((doc: any) => ({
           ...doc,
           type: 'issued' as const,
           status: doc.acknowledgedAt ? 'acknowledged' : 'pending'
@@ -227,15 +208,9 @@ export default function EmployeeCorrespondence() {
         formData.append('document', selectedFile);
       }
 
-      const response = await fetch('/api/documents/issue', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
+      const data = await apiPost('/documents/issue', formData);
 
-      if (response.ok) {
+      if (data.success) {
         toast.success('Document issued successfully');
         setShowIssueForm(false);
         setIssueFormData({

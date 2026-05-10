@@ -1,11 +1,13 @@
 /**
  * Security Routes
  * Includes token refresh, file upload validation, and rate limiting
+ * CRITICAL: All routes require authentication
  */
 
 import express from 'express';
 import fileValidator from '../middleware/fileValidator.js';
 import { loginLimiter, registerLimiter, refreshTokenLimiter } from '../middleware/rateLimiter.js';
+import { authenticate, authorize } from '../middleware/auth.js';
 import {
   generateTokenPair,
   refreshAccessToken,
@@ -22,8 +24,9 @@ const router = express.Router();
 /**
  * POST /api/auth/refresh-token
  * Refresh access token using refresh token
+ * PROTECTED: Requires authentication
  */
-router.post('/auth/refresh-token', refreshTokenLimiter, async (req, res) => {
+router.post('/auth/refresh-token', authenticate, refreshTokenLimiter, async (req, res) => {
   try {
     const { refreshToken } = req.body;
     const authHeader = req.headers.authorization;
@@ -35,20 +38,8 @@ router.post('/auth/refresh-token', refreshTokenLimiter, async (req, res) => {
       });
     }
 
-    // Extract user ID from Authorization header (Bearer token)
-    const token = authHeader.replace('Bearer ', '');
-    let userId;
-
-    try {
-      const jwt = await import('jsonwebtoken');
-      const decoded = jwt.default.verify(token, process.env.JWT_SECRET || 'supersecretkey');
-      userId = decoded.userId;
-    } catch (error) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid access token'
-      });
-    }
+    // Extract user ID from authenticated request
+    const userId = req.user.userId;
 
     // Get client IP and user agent for token tracking
     const ipAddress = req.ip || req.connection.remoteAddress;
@@ -79,33 +70,12 @@ router.post('/auth/refresh-token', refreshTokenLimiter, async (req, res) => {
 /**
  * POST /api/auth/logout
  * Logout user and revoke refresh token
+ * PROTECTED: Requires authentication
  */
-router.post('/auth/logout', async (req, res) => {
+router.post('/auth/logout', authenticate, async (req, res) => {
   try {
     const { refreshToken } = req.body;
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader) {
-      return res.status(401).json({
-        success: false,
-        message: 'No token provided'
-      });
-    }
-
-    // Extract user ID from Authorization header
-    const token = authHeader.replace('Bearer ', '');
-    let userId;
-
-    try {
-      const jwt = await import('jsonwebtoken');
-      const decoded = jwt.default.verify(token, process.env.JWT_SECRET || 'supersecretkey');
-      userId = decoded.userId;
-    } catch (error) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token'
-      });
-    }
+    const userId = req.user.userId;
 
     // Revoke refresh token if provided
     if (refreshToken) {
@@ -130,32 +100,11 @@ router.post('/auth/logout', async (req, res) => {
 /**
  * POST /api/auth/logout-all-devices
  * Logout from all devices by revoking all refresh tokens
+ * PROTECTED: Requires authentication
  */
-router.post('/auth/logout-all-devices', async (req, res) => {
+router.post('/auth/logout-all-devices', authenticate, async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader) {
-      return res.status(401).json({
-        success: false,
-        message: 'No token provided'
-      });
-    }
-
-    // Extract user ID from Authorization header
-    const token = authHeader.replace('Bearer ', '');
-    let userId;
-
-    try {
-      const jwt = await import('jsonwebtoken');
-      const decoded = jwt.default.verify(token, process.env.JWT_SECRET || 'supersecretkey');
-      userId = decoded.userId;
-    } catch (error) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token'
-      });
-    }
+    const userId = req.user.userId;
 
     // Revoke all user tokens
     await revokeAllUserTokens(userId);

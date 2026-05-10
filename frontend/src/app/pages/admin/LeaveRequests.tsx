@@ -37,6 +37,7 @@ export default function LeaveRequests() {
   const { user } = useAuth();
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedRequest, setSelectedRequest] = useState<LeaveRequest | null>(null);
   const [showApproveDialog, setShowApproveDialog] = useState(false);
   const [showRejectDialog, setShowRejectDialog] = useState(false);
@@ -50,20 +51,21 @@ export default function LeaveRequests() {
   const fetchLeaveRequests = async () => {
     try {
       setLoading(true);
+      setError(null);
       const requestsData = await LeaveRequestService.getAllLeaveRequests();
       
       if (Array.isArray(requestsData)) {
         const formattedRequests = requestsData.map((req: any) => ({
-          _id: req._id,
+          _id: req._id || req.id,
           id: req._id || req.id,
           employeeId: req.employeeId?._id || req.employeeId,
           employeeName: req.userId?.name || req.employeeName || 'Unknown',
           startDate: req.startDate,
           endDate: req.endDate,
-          reason: req.reason,
-          type: req.type || req.leaveType,
-          leaveType: req.leaveType || req.type,
-          status: req.status,
+          reason: req.reason || '',
+          type: req.type || req.leaveType || 'Leave',
+          leaveType: req.leaveType || req.type || 'Leave',
+          status: req.status || 'pending',
           appliedAt: req.createdAt,
           createdAt: req.createdAt,
           isHourlyLeave: req.isHourlyLeave || false,
@@ -76,7 +78,9 @@ export default function LeaveRequests() {
       }
     } catch (error) {
       console.error('Failed to fetch leave requests:', error);
-      toast.error('Failed to load leave requests');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load leave requests';
+      setError(errorMessage);
+      toast.error(errorMessage);
       setLeaveRequests([]);
     } finally {
       setLoading(false);
@@ -170,6 +174,26 @@ export default function LeaveRequests() {
         <p className="text-muted-foreground">Manage employee leave requests</p>
       </div>
 
+      {/* Error Display */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
+          <XCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <h3 className="font-semibold text-red-900">Error Loading Leave Requests</h3>
+            <p className="text-red-700 text-sm mt-1">{error}</p>
+            <button
+              onClick={() => {
+                setError(null);
+                fetchLeaveRequests();
+              }}
+              className="text-red-600 hover:text-red-700 text-sm font-medium mt-2 underline"
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      )}
+
       <Card className="p-6 rounded-xl">
         {loading ? (
           <div className="flex items-center justify-center py-12">
@@ -199,16 +223,16 @@ export default function LeaveRequests() {
               <tbody>
                 {leaveRequests.map((request) => (
                   <tr key={request.id} className="border-b hover:bg-accent/50">
-                    <td className="p-4 font-medium">{request.employeeName}</td>
-                    <td className="p-4">{request.type || request.leaveType}</td>
+                    <td className="p-4 font-medium">{request.employeeName || 'Unknown'}</td>
+                    <td className="p-4">{request.type || request.leaveType || 'Leave'}</td>
                     <td className="p-4">
-                      {new Date(request.startDate).toLocaleDateString()}
+                      {request.startDate ? new Date(request.startDate).toLocaleDateString() : 'N/A'}
                       {request.isHourlyLeave && request.startTime && (
                         <div className="text-xs text-muted-foreground">{request.startTime}</div>
                       )}
                     </td>
                     <td className="p-4">
-                      {new Date(request.endDate).toLocaleDateString()}
+                      {request.endDate ? new Date(request.endDate).toLocaleDateString() : 'N/A'}
                       {request.isHourlyLeave && request.endTime && (
                         <div className="text-xs text-muted-foreground">{request.endTime}</div>
                       )}

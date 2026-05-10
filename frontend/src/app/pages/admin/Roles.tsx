@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { PERMISSIONS, ROLES, Role, Permission } from '../../utils/roles';
 import { useAuth } from '../../context/AuthContext';
+import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiHelper';
 
 interface CustomRole extends Role {
   isCustom?: boolean;
@@ -111,18 +112,7 @@ export default function AdminRoles() {
       setLoading(true);
       setError(null);
       
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch('/api/roles', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to load roles');
-      }
-
-      const result = await response.json();
+      const result = await apiGet('/roles');
       const rolesData = result.data || result.roles || [];
       
       // Convert to CustomRole format and filter out super admin
@@ -157,24 +147,16 @@ export default function AdminRoles() {
 
     try {
       setError(null);
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       
       const rolePermissions = newRole.selectedPermissions.map(id => 
         Object.values(PERMISSIONS).find(p => p.id === id)
       ).filter(Boolean) as Permission[];
 
-      const response = await fetch('/api/roles', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          name: newRole.name,
-          description: newRole.description,
-          level: newRole.level,
-          permissions: rolePermissions
-        })
+      await apiPost('/roles', {
+        name: newRole.name,
+        description: newRole.description,
+        level: newRole.level,
+        permissions: rolePermissions
       });
 
       if (!response.ok) {
@@ -221,29 +203,17 @@ export default function AdminRoles() {
 
     try {
       setError(null);
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       
       const updatedPermissions = editingRole.selectedPermissions?.map(id => 
         Object.values(PERMISSIONS).find(p => p.id === id)
       ).filter(Boolean) as Permission[] || editingRole.permissions;
 
-      const response = await fetch(`/api/roles/${editingRole.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          name: editingRole.name,
-          description: editingRole.description,
-          level: editingRole.level,
-          permissions: updatedPermissions
-        })
+      await apiPut(`/roles/${editingRole.id}`, {
+        name: editingRole.name,
+        description: editingRole.description,
+        level: editingRole.level,
+        permissions: updatedPermissions
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to update role');
-      }
 
       const updatedRole: CustomRole = {
         ...editingRole,
@@ -269,18 +239,8 @@ export default function AdminRoles() {
 
     try {
       setError(null);
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       
-      const response = await fetch(`/api/roles/${deletingRoleId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to delete role');
-      }
+      await apiDelete(`/roles/${deletingRoleId}`);
 
       setRoles(roles.filter(r => r.id !== deletingRoleId));
       setShowDeleteConfirm(false);

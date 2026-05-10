@@ -9,6 +9,7 @@ import {
   Users, DollarSign, Package
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { apiGet, apiPost, buildFileUrl } from '../../utils/apiHelper';
 
 interface ExportStats {
   totalRecords: number;
@@ -44,16 +45,9 @@ export default function BulkOperations() {
 
     try {
       setLoading(true);
-      const endpoint = `/api/admin/bulk/${activeTab}/export/${format}`;
+      const fileUrl = buildFileUrl(`/admin/bulk/${activeTab}/export/${format}`);
       
-      const response = await fetch(endpoint, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
+      const response = await fetch(fileUrl);
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || `Failed to export ${activeTab}`);
@@ -129,19 +123,7 @@ export default function BulkOperations() {
 
       const endpoint = `/api/admin/bulk/${activeTab}/import/${importFormat}`;
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || `Failed to import ${activeTab}`);
-      }
+      const data = await apiPost(endpoint, formData);
 
       setImportResult({
         success: true,

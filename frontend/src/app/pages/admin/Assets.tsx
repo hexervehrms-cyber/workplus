@@ -13,6 +13,7 @@ import {
   Download, FileUp
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { apiGet, apiPost, apiPut, apiDelete, apiUpload, buildFileUrl } from '../../utils/apiHelper';
 
 interface Asset {
   _id: string;
@@ -68,11 +69,8 @@ export default function Assets() {
   // Import/Export functions
   const handleExportCSV = async () => {
     try {
-      const response = await fetch('/api/assets/export/csv', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
-        }
-      });
+      const fileUrl = buildFileUrl('/assets/export/csv');
+      const response = await fetch(fileUrl);
 
       if (!response.ok) throw new Error('Failed to export assets');
 
@@ -95,11 +93,8 @@ export default function Assets() {
 
   const handleExportJSON = async () => {
     try {
-      const response = await fetch('/api/assets/export/json', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
-        }
-      });
+      const fileUrl = buildFileUrl('/assets/export/json');
+      const response = await fetch(fileUrl);
 
       if (!response.ok) throw new Error('Failed to export assets');
 
@@ -137,26 +132,15 @@ export default function Assets() {
       setSubmitting(true);
       const fileContent = await importFile.text();
 
-      let endpoint = '/api/assets/import/csv';
+      let endpoint = '/assets/import/csv';
       let body: any = { csvData: fileContent };
 
       if (importFormat === 'json') {
-        endpoint = '/api/assets/import/json';
+        endpoint = '/assets/import/json';
         body = { assets: JSON.parse(fileContent) };
       }
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
-        },
-        body: JSON.stringify(body)
-      });
-
-      if (!response.ok) throw new Error('Failed to import assets');
-
-      const data = await response.json();
+      const data = await apiPost(endpoint, body);
       
       toast.success(`${data.data.summary.successful} asset(s) imported successfully`);
       
@@ -249,18 +233,7 @@ export default function Assets() {
         description: photoDescriptions[index] || ''
       }));
 
-      const response = await fetch(`/api/assets/${selectedAsset._id}/photos`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({ photos: photosWithDescriptions })
-      });
-
-      if (!response.ok) throw new Error('Failed to upload photos');
-
-      const data = await response.json();
+      await apiPost(`/assets/${selectedAsset._id}/photos`, { photos: photosWithDescriptions });
       toast.success(`${uploadedPhotos.length} photo(s) uploaded successfully`);
       setUploadedPhotos([]);
       setPhotoDescriptions({});
@@ -277,15 +250,7 @@ export default function Assets() {
 
   const fetchAssetPhotos = async (assetId: string) => {
     try {
-      const response = await fetch(`/api/assets/${assetId}/photos`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to fetch photos');
-
-      const data = await response.json();
+      const data = await apiGet(`/assets/${assetId}/photos`);
       setAssetPhotos(data.data.photos || []);
       setCurrentPhotoIndex(0);
     } catch (error) {
@@ -297,15 +262,7 @@ export default function Assets() {
     if (!selectedAsset) return;
 
     try {
-      const response = await fetch(`/api/assets/${selectedAsset._id}/photos/${photoId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to delete photo');
-
+      await apiDelete(`/assets/${selectedAsset._id}/photos/${photoId}`);
       toast.success('Photo deleted successfully');
       await fetchAssetPhotos(selectedAsset._id);
     } catch (error) {
@@ -318,15 +275,7 @@ export default function Assets() {
     if (!selectedAsset) return;
 
     try {
-      const response = await fetch(`/api/assets/${selectedAsset._id}/photos/${photoId}/set-main`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to set main photo');
-
+      await apiPut(`/assets/${selectedAsset._id}/photos/${photoId}/set-main`, {});
       toast.success('Main photo updated');
       await fetchAssetPhotos(selectedAsset._id);
     } catch (error) {

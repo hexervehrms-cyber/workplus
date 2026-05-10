@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import bcrypt from "bcrypt";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { authorize, requirePermission, auditLog } from "../middleware/auth.js";
+import { passwordResetLimiter } from "../middleware/rateLimiter.js";
 import User from "../models/User.js";
 import Role from "../models/Role.js";
 import Employee from "../models/Employee.js";
@@ -524,8 +525,10 @@ router.delete("/:id",
 /**
  * POST /api/users/:id/reset-password
  * Reset user password
+ * PROTECTED: Rate limited to prevent brute force attacks
  */
 router.post("/:id/reset-password",
+  passwordResetLimiter,
   requirePermission('users', 'update'),
   auditLog('reset_user_password', 'user'),
   asyncHandler(async (req, res) => {
@@ -577,6 +580,12 @@ router.post("/:id/reset-password",
     }
     
     await user.save();
+    
+    logger.info('User password reset', {
+      userId: id,
+      orgId,
+      resetBy: req.user.userId
+    });
     
     res.json({
       success: true,

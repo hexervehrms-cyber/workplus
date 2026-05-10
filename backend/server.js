@@ -120,9 +120,21 @@ const validateEnvironment = () => {
     process.exit(1);
   }
 
-  // Validate JWT_SECRET is not default
-  if (process.env.JWT_SECRET === 'supersecretkey') {
-    console.warn('⚠️  WARNING: JWT_SECRET is using default value. Change this in production!');
+  // CRITICAL: Validate JWT_SECRET is not default or weak
+  const jwtSecret = process.env.JWT_SECRET;
+  const defaultSecrets = [
+    'supersecretkey',
+    'secret',
+    'your-secret-key',
+    'your-secure-jwt-secret-key-minimum-32-characters-long-change-this',
+    'workplus-pro-production-jwt-secret-key-32-chars-minimum-2024'
+  ];
+  
+  if (defaultSecrets.includes(jwtSecret) || jwtSecret.length < 32) {
+    console.error('❌ CRITICAL SECURITY ERROR: JWT_SECRET must be set to a secure value (minimum 32 characters)');
+    console.error('   Current JWT_SECRET length:', jwtSecret.length);
+    console.error('   Please set a strong, unique JWT_SECRET in your environment variables');
+    process.exit(1);
   }
 
   console.log('✅ Environment validation passed');
@@ -130,7 +142,7 @@ const validateEnvironment = () => {
     NODE_ENV: process.env.NODE_ENV,
     PORT: process.env.PORT || 5000,
     MONGODB_URI: process.env.MONGODB_URI ? '✅ Set' : '❌ Missing',
-    JWT_SECRET: process.env.JWT_SECRET ? '✅ Set' : '❌ Missing',
+    JWT_SECRET: process.env.JWT_SECRET ? `✅ Set (${jwtSecret.length} chars)` : '❌ Missing',
     CORS_ORIGIN: process.env.CORS_ORIGIN || 'Not set'
   });
 };
@@ -147,16 +159,17 @@ const app = express();
 const server = createServer(app);
 
 // CORS whitelist - MUST be defined BEFORE Socket.IO initialization
+// Use CORS_ORIGIN from environment variable, with fallbacks for common domains
 const allowedOrigins = [
+  process.env.CORS_ORIGIN, // Primary frontend URL from env
+  process.env.FRONTEND_URL, // Alternative env variable name
+  // Common Vercel deployment patterns
   "https://workplus-murex.vercel.app",
   "https://workplus-seven.vercel.app",
-  "https://workplus.vercel.app",
-  "http://localhost:5173",
-  "http://localhost:5174",
-  "http://localhost:3000",
-  "http://localhost:3001",
-  process.env.CORS_ORIGIN
-].filter(Boolean);
+  "https://workplus.vercel.app"
+  // Note: Local development origins removed for production security
+  // Add them in your .env file for local development: CORS_ORIGIN=http://localhost:5173
+].filter(Boolean); // Remove undefined/null values
 
 const corsOptions = {
   origin: allowedOrigins,
@@ -453,6 +466,9 @@ import {
 // Import deduplication middleware
 import { deduplicationMiddleware, startCacheCleanup } from "./middleware/deduplication.js";
 
+// Import CSRF middleware
+import { generateCSRFToken, verifyCSRFToken, startCSRFCleanup } from "./middleware/csrf.js";
+
 // Import connection monitor
 import { connectionMonitor } from "./utils/connectionMonitor.js";
 
@@ -464,11 +480,18 @@ app.use(optimizeResponse);
 app.use(requestTimeout(30000)); // 30 second timeout
 app.use(queryOptimization);
 
+// Apply CSRF protection middleware
+app.use(generateCSRFToken);
+app.use(verifyCSRFToken);
+
 // Apply deduplication middleware for POST/PUT/DELETE
 app.use(deduplicationMiddleware);
 
 // Start cache cleanup
 startCacheCleanup(60000); // Clean every minute
+
+// Start CSRF token cleanup
+startCSRFCleanup(60 * 60 * 1000); // Clean every hour
 
 // Initialize connection monitoring
 connectionMonitor.initialize();
@@ -499,8 +522,8 @@ app.use("/api/dashboard", authenticate, dashboardEmployeeRoutes);
 // PUBLIC CLEANUP ENDPOINTS (for testing/development)
 // ============================================================================
 
-// Cleanup endpoint to delete all leave requests
-app.delete("/api/leave-requests/cleanup/all", asyncHandler(async (req, res) => {
+// Cleanup endpoint to delete all leave requests - PROTECTED with authentication
+app.delete("/api/leave-requests/cleanup/all", authenticate, asyncHandler(async (req, res) => {
   try {
     const result = await LeaveRequest.deleteMany({});
     logger.info('All leave requests deleted', { deletedCount: result.deletedCount });

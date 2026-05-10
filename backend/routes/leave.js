@@ -25,16 +25,21 @@ router.use(paginationMiddleware);
 /**
  * GET /api/leave-requests
  * List leave requests with pagination
+ * CRITICAL: Enforce orgId validation - users can only access their organization's data
  */
 router.get('/', asyncHandler(async (req, res) => {
   const { page, limit, skip } = req.pagination;
   const { userId, status, type, startDate, endDate, orgId } = req.query;
 
-  // Build query
+  // Build query with CRITICAL orgId validation
   const query = {};
   
-  if (orgId) {
+  // CRITICAL: Enforce orgId - users can only access their organization's data
+  // Super admin can override with orgId parameter, others use their own orgId
+  if (req.user.role === 'super_admin' && orgId) {
     query.orgId = orgId;
+  } else {
+    query.orgId = req.user.orgId;
   }
   
   if (userId) {
@@ -56,6 +61,12 @@ router.get('/', asyncHandler(async (req, res) => {
     };
   }
 
+  logger.info('Fetching leave requests', {
+    userId: req.user.userId,
+    orgId: req.user.orgId,
+    query
+  });
+
   // Get total count
   const total = await LeaveRequest.countDocuments(query);
 
@@ -69,7 +80,7 @@ router.get('/', asyncHandler(async (req, res) => {
     .skip(skip)
     .limit(limit);
 
-  logger.info('Leave requests listed', { total, page, limit });
+  logger.info('Leave requests listed', { total, page, limit, orgId: req.user.orgId });
 
   res.paginate(leaveRequests, total);
 }));
@@ -77,24 +88,43 @@ router.get('/', asyncHandler(async (req, res) => {
 /**
  * DELETE /api/leave-requests/:id
  * Delete leave request (must come before GET /:id)
+ * CRITICAL: Enforce orgId validation
  */
 router.delete('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const leaveRequest = await LeaveRequest.findByIdAndDelete(id);
+  // CRITICAL: Enforce orgId validation - users can only delete their organization's data
+  const leaveRequest = await LeaveRequest.findOne({
+    _id: id,
+    orgId: req.user.orgId
+  });
 
   if (!leaveRequest) {
     return res.status(404).json({
       success: false,
-      message: 'Leave request not found'
+      message: 'Leave request not found or access denied'
     });
   }
+
+  // Only allow deletion of pending requests
+  if (leaveRequest.status !== 'pending') {
+    return res.status(400).json({
+      success: false,
+      message: 'Only pending leave requests can be deleted'
+    });
+  }
+
+  await LeaveRequest.findByIdAndDelete(id);
 
   // Emit real-time updates
   req.emitLeaveUpdate('deleted', leaveRequest, leaveRequest.orgId);
   req.emitDashboardUpdate('delete', 'leave_requests', leaveRequest, leaveRequest.orgId);
 
-  logger.info('Leave request deleted', { leaveRequestId: id });
+  logger.info('Leave request deleted', { 
+    leaveRequestId: id,
+    orgId: req.user.orgId,
+    userId: req.user.userId
+  });
 
   res.json({
     success: true,
@@ -106,18 +136,22 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 /**
  * PATCH /api/leave-requests/:id
  * Update leave request (only for pending requests)
+ * CRITICAL: Enforce orgId validation
  */
 router.patch('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { leaveType, startDate, endDate, reason } = req.body;
 
-  // Find the leave request
-  const leaveRequest = await LeaveRequest.findById(id);
+  // CRITICAL: Enforce orgId validation - users can only update their organization's data
+  const leaveRequest = await LeaveRequest.findOne({
+    _id: id,
+    orgId: req.user.orgId
+  });
 
   if (!leaveRequest) {
     return res.status(404).json({
       success: false,
-      message: 'Leave request not found'
+      message: 'Leave request not found or access denied'
     });
   }
 
@@ -139,7 +173,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 
   logger.info('Leave request updated', {
     leaveRequestId: id,
-    employeeId: leaveRequest.employeeId
+    employeeId: leaveRequest.employeeId,
+    orgId: req.user.orgId,
+    userId: req.user.userId
   });
 
   res.json({
@@ -201,6 +237,14 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
     return res.status(404).json({
       success: false,
       message: 'Leave request not found'
+    });
+  }
+
+  // Verify orgId - prevent cross-tenant access
+  if (leaveRequest.orgId && leaveRequest.orgId !== req.user.orgId && req.user.role !== 'super_admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Unauthorized access'
     });
   }
 
@@ -360,6 +404,14 @@ router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res)
     return res.status(404).json({
       success: false,
       message: 'Leave request not found'
+    });
+  }
+
+  // Verify orgId - prevent cross-tenant access
+  if (leaveRequest.orgId && leaveRequest.orgId !== req.user.orgId && req.user.role !== 'super_admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Unauthorized access'
     });
   }
 
@@ -767,6 +819,22 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
         { _id: leaveRequest._id, type: leaveType, startDate: start, endDate: end, reason }
       );
       logger.info('Leave request submitted email sent', { leaveRequestId: leaveRequest._id, email: user.email });
+      
+      // Send notification to HR/admin
+      const hrEmail = process.env.HR_EMAIL || 'hr@hexerve.com';
+      if (hrEmail) {
+        await EmailNotificationService.sendLeaveRequestSubmittedToHR(
+          {
+            name: user.name,
+            email: user.email,
+            employeeCode: employeeRecord.employeeCode,
+            department: employeeRecord.department
+          },
+          { _id: leaveRequest._id, type: leaveType, startDate: start, endDate: end, reason },
+          hrEmail
+        );
+        logger.info('Leave request submitted notification sent to HR', { leaveRequestId: leaveRequest._id, hrEmail });
+      }
     } else {
       logger.warn('Missing user or employee data for leave submission notification', { 
         leaveRequestId: leaveRequest._id, 
@@ -1038,35 +1106,6 @@ router.post('/validate', asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: validation
-  });
-}));
-
-/**
- * DELETE /api/leave-requests/:id
- * Delete leave request
- */
-router.delete('/:id', asyncHandler(async (req, res) => {
-  const { id } = req.params;
-
-  const leaveRequest = await LeaveRequest.findByIdAndDelete(id);
-
-  if (!leaveRequest) {
-    return res.status(404).json({
-      success: false,
-      message: 'Leave request not found'
-    });
-  }
-
-  // Emit real-time updates
-  req.emitLeaveUpdate('deleted', leaveRequest, leaveRequest.orgId);
-  req.emitDashboardUpdate('delete', 'leave_requests', leaveRequest, leaveRequest.orgId);
-
-  logger.info('Leave request deleted', { leaveRequestId: id });
-
-  res.json({
-    success: true,
-    message: 'Leave request deleted successfully',
-    data: leaveRequest
   });
 }));
 

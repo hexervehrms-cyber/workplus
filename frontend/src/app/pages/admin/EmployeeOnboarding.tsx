@@ -6,6 +6,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Search, UserPlus } from 'lucide-react';
+import { apiPost } from '../../utils/apiHelper';
 
 const HREmployeeOnboarding: React.FC = () => {
   const [selectedEmployee, setSelectedEmployee] = useState('');
@@ -25,18 +26,14 @@ const HREmployeeOnboarding: React.FC = () => {
       formData.append('submittedBy', 'hr_admin');
 
       // Submit to backend API with FormData
-      const response = await fetch('/api/onboarding/submit', {
-        method: 'POST',
-        body: formData, // Don't set Content-Type header, let browser set it for FormData
-      });
+      const data = await apiPost('/onboarding/submit', formData);
 
-      if (response.ok) {
+      if (data.success) {
         alert('Employee onboarding form submitted successfully!');
         setShowForm(false);
         setSelectedEmployee('');
       } else {
-        const errorData = await response.json();
-        alert('Error submitting form: ' + (errorData.message || 'Please try again.'));
+        alert('Error submitting form: ' + (data.message || 'Please try again.'));
       }
     } catch (error) {
       console.error('Error submitting form:', error);

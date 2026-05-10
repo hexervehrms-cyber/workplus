@@ -3,21 +3,32 @@
  * Features: Auto auth header, timeout, retry, error handling
  */
 
-// API Configuration
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
-const API_TIMEOUT = 30000; // 30 seconds
-const MAX_RETRIES = 1;
-
-// Ensure API base URL includes /api prefix
+// API Configuration - Production Ready
+// In production, VITE_API_URL should be the full backend URL (e.g., https://workplus-backend-sg3a.onrender.com)
+// In development, it falls back to /api which uses Vite proxy
 const getApiBaseUrl = () => {
-  const baseUrl = API_BASE_URL.endsWith('/') ? API_BASE_URL.slice(0, -1) : API_BASE_URL;
-  // If it's already /api, return it
+  const apiUrl = import.meta.env.VITE_API_URL;
+  
+  // If no API URL is set, use relative path (development mode with Vite proxy)
+  if (!apiUrl) {
+    return '/api';
+  }
+  
+  // Remove trailing slash if present
+  const baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
+  
+  // If it's already /api or ends with /api, return as is
   if (baseUrl === '/api' || baseUrl.endsWith('/api')) {
     return baseUrl;
   }
-  // Otherwise add /api
+  
+  // Otherwise add /api prefix
   return `${baseUrl}/api`;
 };
+
+const API_BASE_URL = getApiBaseUrl();
+const API_TIMEOUT = 30000; // 30 seconds
+const MAX_RETRIES = 1;
 
 // API response interface
 export interface ApiResponse<T> {
@@ -576,12 +587,12 @@ export class ExpenseService {
   }
 
   static async approveExpense(expenseId: string) {
-    const response = await apiClient.patch<any>(`/expenses/${expenseId}/approve`, {});
+    const response = await apiClient.put<any>(`/expenses/${expenseId}/approve`, {});
     return response.data;
   }
 
   static async rejectExpense(expenseId: string, rejectionReason: string) {
-    const response = await apiClient.patch<any>(`/expenses/${expenseId}/reject`, { rejectionReason });
+    const response = await apiClient.put<any>(`/expenses/${expenseId}/reject`, { rejectionReason });
     return response.data;
   }
 

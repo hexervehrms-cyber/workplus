@@ -27,6 +27,7 @@ router.get("/", asyncHandler(async (req, res) => {
     search
   } = req.query;
   
+  // CRITICAL: Enforce orgId validation - users can only access their organization's data
   const filter = { orgId };
   
   // Role-based filtering

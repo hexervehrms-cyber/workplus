@@ -10,6 +10,7 @@ import {
   DollarSign, Plus, Search, Loader2, X, Calculator, Download, Eye, Trash2, CheckCircle, Clock
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { apiGet, apiPost, apiPut } from '../../utils/apiHelper';
 
 interface PayrollCalculation {
   _id: string;
@@ -80,16 +81,7 @@ export default function PayrollCalculation() {
   const fetchPayrolls = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch('/api/payroll', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to fetch payrolls');
-
-      const data = await response.json();
+      const data = await apiGet('/payroll');
       setPayrolls(data.data || []);
     } catch (error: any) {
       console.error('Error fetching payrolls:', error);
@@ -101,16 +93,7 @@ export default function PayrollCalculation() {
 
   const fetchEmployees = async () => {
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch('/api/employees', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to fetch employees');
-
-      const data = await response.json();
+      const data = await apiGet('/employees');
       setEmployees(data.data?.employees || []);
     } catch (error: any) {
       console.error('Error fetching employees:', error);
@@ -127,16 +110,9 @@ export default function PayrollCalculation() {
 
     try {
       setSubmitting(true);
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
 
-      const response = await fetch('/api/payroll/calculate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          employeeId: formData.employeeId,
+      const data = await apiPost('/payroll/calculate', {
+        employeeId: formData.employeeId,
           fromDate: formData.fromDate,
           toDate: formData.toDate,
           baseSalary: parseFloat(formData.baseSalary),
@@ -186,17 +162,8 @@ export default function PayrollCalculation() {
 
     try {
       setSubmitting(true);
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
 
-      const response = await fetch(`/api/payroll/fnf/calculate/${fnfData.employeeId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to calculate FNF');
-
-      const data = await response.json();
+      const data = await apiGet(`/payroll/fnf/calculate/${fnfData.employeeId}`);
       setFnfData({ ...fnfData, fnfResult: data.data });
       toast.success('FNF calculated successfully');
     } catch (error: any) {
@@ -209,18 +176,7 @@ export default function PayrollCalculation() {
 
   const handleApprovePayroll = async (payrollId: string) => {
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-
-      const response = await fetch(`/api/payroll/${payrollId}/approve`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to approve payroll');
-
-      const data = await response.json();
+      const data = await apiPut(`/payroll/${payrollId}/approve`, {});
       setPayrolls(payrolls.map(p => p._id === payrollId ? data.data : p));
       toast.success('Payroll approved');
     } catch (error: any) {
@@ -231,18 +187,7 @@ export default function PayrollCalculation() {
 
   const handleMarkPaid = async (payrollId: string) => {
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-
-      const response = await fetch(`/api/payroll/${payrollId}/mark-paid`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to mark as paid');
-
-      const data = await response.json();
+      const data = await apiPut(`/payroll/${payrollId}/mark-paid`, {});
       setPayrolls(payrolls.map(p => p._id === payrollId ? data.data : p));
       toast.success('Payroll marked as paid');
     } catch (error: any) {

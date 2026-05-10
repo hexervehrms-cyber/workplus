@@ -1,22 +1,19 @@
 import React from 'react';
 import OnboardingForm from '../../components/OnboardingForm';
+import { apiPost } from '../../utils/apiHelper';
 
 const EmployeeOnboarding: React.FC = () => {
   const handleFormSubmit = async (formData: FormData) => {
     try {
       // Submit to backend API with FormData for file uploads
-      const response = await fetch('/api/onboarding/submit', {
-        method: 'POST',
-        body: formData, // Don't set Content-Type header, let browser set it with boundary
-      });
+      const data = await apiPost('/onboarding/submit', formData);
 
-      if (response.ok) {
+      if (data.success) {
         alert('Form submitted successfully!');
         // Redirect to profile or success page
         window.location.href = '/employee/profile';
       } else {
-        const errorData = await response.json();
-        alert(errorData.message || 'Error submitting form. Please try again.');
+        alert(data.message || 'Error submitting form. Please try again.');
       }
     } catch (error) {
       console.error('Error submitting form:', error);

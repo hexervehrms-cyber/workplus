@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { Receipt, Search, Filter, Download, Eye, CheckCircle, AlertCircle, Tag, Car, Utensils, Home, Briefcase, Plane, Heart, Book, ShoppingCart, Coffee, IndianRupee, Edit, Trash2, XCircle, Loader, Train, Fuel, Hotel, Phone, Wifi, Laptop, Printer, FileText, Users, Lightbulb, Wrench, GraduationCap, Stethoscope, Building2, Truck, Package, FileDown, FileUp } from 'lucide-react';
 import { useCurrency } from '../../context/CurrencyContext';
+import { apiGet, apiPut, apiDelete, apiPost } from '../../utils/apiHelper';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -122,19 +123,7 @@ export default function ExpensesAdmin() {
   // Fetch expenses from API
   const fetchExpenses = useCallback(async () => {
     try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch(`/api/expenses?page=${page}&limit=10`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch expenses');
-      }
-
-      const data = await response.json();
+      const data = await apiGet(`/expenses?page=${page}&limit=10`);
       console.log('Fetched expenses data:', data);
       console.log('Expenses array:', data.data);
       setExpenses(data.data || []);
@@ -304,16 +293,9 @@ export default function ExpensesAdmin() {
 
     try {
       setActionLoading(true);
-      const token = localStorage.getItem('authToken');
       
       for (const expenseId of selectedExpenses) {
-        await fetch(`/api/expenses/${expenseId}/approve`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
+        await apiPut(`/expenses/${expenseId}/approve`, {});
       }
 
       toast.success(`${selectedExpenses.size} expense(s) approved`);
@@ -337,18 +319,10 @@ export default function ExpensesAdmin() {
 
     try {
       setActionLoading(true);
-      const token = localStorage.getItem('authToken');
       
       for (const expenseId of selectedExpenses) {
-        await fetch(`/api/expenses/${expenseId}/reject`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            rejectionReason: rejectReason
-          })
+        await apiPut(`/expenses/${expenseId}/reject`, {
+          rejectionReason: rejectReason
         });
       }
 
@@ -385,35 +359,14 @@ export default function ExpensesAdmin() {
         };
         console.log('Sending update data:', updateData);
         
-        const response = await fetch(`/api/expenses/${selectedExpense._id}`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(updateData)
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to update expense');
-        }
+        await apiPut(`/expenses/${selectedExpense._id}`, updateData);
 
         toast.success('Expense updated successfully');
         setIsEditDialogOpen(false);
         await fetchExpenses();
       } else if (actionType === 'approve') {
         // Approve expense
-        const response = await fetch(`/api/expenses/${selectedExpense._id}/approve`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to approve expense');
-        }
+        await apiPut(`/expenses/${selectedExpense._id}/approve`, {});
 
         console.log('Expense approved, fetching updated list...');
         toast.success('Expense approved successfully');
@@ -428,20 +381,9 @@ export default function ExpensesAdmin() {
           return;
         } else if (selectedExpense) {
           // Single reject
-          const response = await fetch(`/api/expenses/${selectedExpense._id}/reject`, {
-            method: 'PUT',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              rejectionReason: rejectReason
-            })
+          await apiPut(`/expenses/${selectedExpense._id}/reject`, {
+            rejectionReason: rejectReason
           });
-
-          if (!response.ok) {
-            throw new Error('Failed to reject expense');
-          }
 
           toast.success('Expense rejected');
           setIsActionDialogOpen(false);
@@ -450,17 +392,7 @@ export default function ExpensesAdmin() {
         await fetchExpenses();
       } else if (actionType === 'delete') {
         // Delete expense
-        const response = await fetch(`/api/expenses/${selectedExpense._id}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to delete expense');
-        }
+        await apiDelete(`/expenses/${selectedExpense._id}`);
 
         toast.success('Expense deleted');
         setIsActionDialogOpen(false);
@@ -483,25 +415,13 @@ export default function ExpensesAdmin() {
 
     try {
       setActionLoading(true);
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/expenses', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          title: newExpenseData.title,
-          category: newExpenseData.category,
-          description: newExpenseData.description,
-          amount: parseFloat(newExpenseData.amount),
-          date: newExpenseData.date
-        })
+      await apiPost('/expenses', {
+        title: newExpenseData.title,
+        category: newExpenseData.category,
+        description: newExpenseData.description,
+        amount: parseFloat(newExpenseData.amount),
+        date: newExpenseData.date
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to create expense');
-      }
 
       toast.success('Expense created successfully');
       setIsNewExpenseDialogOpen(false);
@@ -736,24 +656,9 @@ export default function ExpensesAdmin() {
       for (let idx = 0; idx < importedExpenses.length; idx++) {
         const expense = importedExpenses[idx];
         try {
-          const response = await fetch('/api/expenses', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(expense)
-          });
-
-          if (response.ok) {
-            successCount++;
-            console.log(`✓ Imported: ${expense.title}`);
-          } else {
-            const errorData = await response.json();
-            failureCount++;
-            submitErrors.push(`${expense.title}: ${errorData.message || 'Unknown error'}`);
-            console.error(`✗ Failed to import: ${expense.title}`, errorData);
-          }
+          await apiPost('/expenses', expense);
+          successCount++;
+          console.log(`✓ Imported: ${expense.title}`);
         } catch (error) {
           failureCount++;
           submitErrors.push(`${expense.title}: ${error instanceof Error ? error.message : 'Network error'}`);

@@ -304,7 +304,7 @@ class AccountingConnectors {
   async connectTally(config) {
     try {
       const connection = {
-        serverUrl: config.serverUrl || 'http://localhost:9000',
+        serverUrl: config.serverUrl || process.env.TALLY_SERVER_URL || 'http://localhost:9000',
         companyName: config.companyName,
         username: config.username,
         password: config.password

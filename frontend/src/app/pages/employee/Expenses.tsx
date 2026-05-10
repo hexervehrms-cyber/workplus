@@ -3,6 +3,7 @@ import { Receipt, Plus, Upload, Filter, Calendar, DollarSign, CheckCircle, Clock
 import { useCurrency } from '../../context/CurrencyContext';
 import { useAuth } from '../../context/AuthContext';
 import { socketService } from '../../utils/socket';
+import { apiGet, apiPost, apiPut, apiDelete, apiUpload, buildFileUrl } from '../../utils/apiHelper';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -104,6 +105,7 @@ export default function Expenses() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingReceipt, setUploadingReceipt] = useState(false);
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
@@ -131,37 +133,30 @@ export default function Expenses() {
   const fetchExpenses = async () => {
     if (!user?.userId) {
       console.warn('No user ID available');
+      setError('User information not available');
+      setLoading(false);
       return;
     }
     
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken');
+      setError(null);
       console.log('Fetching expenses for user:', user.userId);
-      console.log('User object:', user);
-      const response = await fetch(`/api/expenses/user/${user.userId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (!response.ok) {
-        console.error('Failed to fetch expenses:', response.status, response.statusText);
-        throw new Error('Failed to fetch expenses');
+      const data = await apiGet(`/expenses/user/${user.userId}`);
+      
+      if (data.data && Array.isArray(data.data)) {
+        setExpenses(data.data);
+      } else if (Array.isArray(data)) {
+        setExpenses(data);
+      } else {
+        setExpenses([]);
       }
-
-      const data = await response.json();
-      console.log('Fetched expenses:', data);
-      console.log('Expenses with receipts:', data.data?.filter((e: any) => e.receipt).map((e: any) => ({
-        id: e._id,
-        title: e.title,
-        receipt: e.receipt
-      })));
-      setExpenses(data.data || []);
     } catch (error) {
       console.error('Error fetching expenses:', error);
-      toast.error('Failed to load expenses');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load expenses';
+      setError(errorMessage);
+      toast.error(errorMessage);
+      setExpenses([]);
     } finally {
       setLoading(false);
     }
@@ -265,16 +260,7 @@ export default function Expenses() {
     try {
       console.log('Download receipt - receiptPath:', receiptPath);
       
-      // Construct the full URL
-      // If running on localhost:5173, backend is on localhost:5000
-      const backendUrl = window.location.hostname === 'localhost' 
-        ? 'http://localhost:5000' 
-        : window.location.origin;
-      
-      // receiptPath should be like "/uploads/receipts/filename.pdf"
-      const fullUrl = receiptPath.startsWith('http') 
-        ? receiptPath 
-        : `${backendUrl}${receiptPath}`;
+      const fullUrl = buildFileUrl(receiptPath);
       
       console.log('Download URL:', fullUrl);
       
@@ -308,18 +294,7 @@ export default function Expenses() {
     console.log('Receipt path type:', typeof receiptPath);
     console.log('Receipt path length:', receiptPath.length);
     
-    // Construct the full URL
-    // If running on localhost:5173, backend is on localhost:5000
-    const backendUrl = window.location.hostname === 'localhost' 
-      ? 'http://localhost:5000' 
-      : window.location.origin;
-    
-    console.log('Backend URL:', backendUrl);
-    
-    // receiptPath should be like "/uploads/receipts/filename.pdf"
-    const fullUrl = receiptPath.startsWith('http') 
-      ? receiptPath 
-      : `${backendUrl}${receiptPath}`;
+    const fullUrl = buildFileUrl(receiptPath);
     
     console.log('Full URL:', fullUrl);
     console.log('=== END DEBUG ===');
@@ -347,18 +322,13 @@ export default function Expenses() {
         const formDataWithFile = new FormData();
         formDataWithFile.append('receipt', receiptFile);
         
-        const uploadResponse = await fetch('/api/expenses/upload-receipt', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          },
-          body: formDataWithFile
-        });
-
-        if (uploadResponse.ok) {
-          const uploadData = await uploadResponse.json();
+        try {
+          const uploadData = await apiUpload('/expenses/upload-receipt', formDataWithFile);
           receiptPath = uploadData.data?.filePath || '';
           console.log('Receipt uploaded:', receiptPath);
+        } catch (uploadError) {
+          console.error('Receipt upload failed:', uploadError);
+          throw new Error('Failed to upload receipt');
         }
       }
 
@@ -378,32 +348,15 @@ export default function Expenses() {
 
       console.log(editingId ? 'Updating expense data:' : 'Submitting expense data:', expenseData);
 
-      const url = editingId 
-        ? `/api/expenses/${editingId}`
-        : '/api/expenses';
-      
       const method = editingId ? 'PUT' : 'POST';
+      const endpoint = editingId ? `/expenses/${editingId}` : '/expenses';
 
-      console.log(`Sending ${method} request to:`, url);
+      console.log(`Sending ${method} request to:`, endpoint);
 
-      const response = await fetch(url, {
-        method,
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(expenseData)
-      });
+      const data = editingId 
+        ? await apiPut(endpoint, expenseData)
+        : await apiPost(endpoint, expenseData);
 
-      console.log('Response status:', response.status);
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error('Failed to submit expense:', response.status, errorData);
-        throw new Error(errorData.message || 'Failed to submit expense');
-      }
-
-      const data = await response.json();
       console.log(editingId ? 'Expense updated:' : 'Expense created:', data);
       toast.success(editingId ? 'Expense updated successfully' : 'Expense submitted successfully');
       setOpen(false);
@@ -447,27 +400,11 @@ export default function Expenses() {
     }
 
     try {
-      const token = localStorage.getItem('authToken');
-      console.log('Sending DELETE request to:', `/api/expenses/${expenseId}`);
+      console.log('Sending DELETE request to:', `/expenses/${expenseId}`);
       
-      const response = await fetch(`/api/expenses/${expenseId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      await apiDelete(`/expenses/${expenseId}`);
 
-      console.log('Delete response status:', response.status);
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error('Delete error response:', errorData);
-        throw new Error(errorData.message || 'Failed to delete expense');
-      }
-
-      const data = await response.json();
-      console.log('Delete response data:', data);
+      console.log('Delete successful');
       toast.success('Expense deleted successfully');
       await fetchExpenses();
     } catch (error) {
@@ -711,24 +648,9 @@ export default function Expenses() {
       for (let idx = 0; idx < importedExpenses.length; idx++) {
         const expense = importedExpenses[idx];
         try {
-          const response = await fetch('/api/expenses', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(expense)
-          });
-
-          if (response.ok) {
-            successCount++;
-            console.log(`✓ Imported: ${expense.title}`);
-          } else {
-            const errorData = await response.json();
-            failureCount++;
-            submitErrors.push(`${expense.title}: ${errorData.message || 'Unknown error'}`);
-            console.error(`✗ Failed to import: ${expense.title}`, errorData);
-          }
+          const data = await apiPost('/expenses', expense);
+          successCount++;
+          console.log(`✓ Imported: ${expense.title}`);
         } catch (error) {
           failureCount++;
           submitErrors.push(`${expense.title}: ${error instanceof Error ? error.message : 'Network error'}`);
@@ -816,6 +738,26 @@ export default function Expenses() {
 
   return (
     <div className="p-8 space-y-8">
+      {/* Error Display */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
+          <XCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <h3 className="font-semibold text-red-900">Error Loading Expenses</h3>
+            <p className="text-red-700 text-sm mt-1">{error}</p>
+            <button
+              onClick={() => {
+                setError(null);
+                fetchExpenses();
+              }}
+              className="text-red-600 hover:text-red-700 text-sm font-medium mt-2 underline"
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>

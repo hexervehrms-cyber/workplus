@@ -10,12 +10,20 @@ export class TenantSocketService {
   connect(userId: string, role: string, tenantId: string): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        this.socket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000', {
+        // In production, VITE_SOCKET_URL should be the full backend URL
+        // In development, use window.location.origin or env variable
+        const socketUrl = import.meta.env.VITE_SOCKET_URL || 
+                           import.meta.env.VITE_API_URL ||
+                           (import.meta.env.PROD ? 'https://workplus-backend-sg3a.onrender.com' : window.location.origin);
+        
+        this.socket = io(socketUrl, {
           query: {
             userId,
             role,
             tenantId
-          }
+          },
+          transports: ['websocket', 'polling'],
+          withCredentials: true
         });
 
         this.tenantId = tenantId;

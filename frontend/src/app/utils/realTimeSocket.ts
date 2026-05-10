@@ -27,12 +27,19 @@ class RealTimeSocket {
 
     console.log('🔐 [SOCKET] User data from TokenManager:', user);
 
+    // In production, VITE_SOCKET_URL should be the full backend URL
+    // In development, use window.location.origin or env variable
+    const socketUrl = import.meta.env.VITE_SOCKET_URL || 
+                       import.meta.env.VITE_API_URL ||
+                       (import.meta.env.PROD ? 'https://workplus-backend-sg3a.onrender.com' : window.location.origin);
+
     // Connect to the server with JWT token
-    this.socket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000', {
+    this.socket = io(socketUrl, {
       transports: ['websocket', 'polling'],
       auth: {
         token: token
-      }
+      },
+      withCredentials: true
     });
 
     // Handle connection

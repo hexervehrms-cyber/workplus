@@ -5,6 +5,7 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { toast } from 'sonner';
+import { apiGet, buildFileUrl } from '../../utils/apiHelper';
 
 interface SalarySlip {
   _id: string;
@@ -57,28 +58,15 @@ export default function Payroll() {
   const fetchEmployeeAndSlips = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken');
       const userId = localStorage.getItem('userId');
 
       // First, get the employee record to get employeeId
-      const employeeResponse = await fetch(`/api/employees/user/${userId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const employeeData = await apiGet(`/employees/user/${userId}`);
+      const empId = employeeData.data._id;
+      setEmployeeId(empId);
 
-      if (employeeResponse.ok) {
-        const employeeData = await employeeResponse.json();
-        const empId = employeeData.data._id;
-        setEmployeeId(empId);
-
-        // Now fetch salary slips using employeeId
-        await fetchSalarySlips(empId, token);
-      } else {
-        console.error('Failed to fetch employee data');
-        toast.error('Failed to load employee information');
-      }
+      // Now fetch salary slips using employeeId
+      await fetchSalarySlips(empId);
     } catch (error) {
       console.error('Error fetching employee and slips:', error);
       toast.error('Failed to load salary information');
@@ -87,23 +75,11 @@ export default function Payroll() {
     }
   };
 
-  const fetchSalarySlips = async (empId: string, token: string) => {
+  const fetchSalarySlips = async (empId: string) => {
     try {
-      const response = await fetch(`/api/salary/slips/${empId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log('📊 [PAYROLL] Salary slips fetched:', data);
-        setSalarySlips(data.data || []);
-      } else {
-        console.error('Failed to fetch salary slips:', response.status);
-        toast.error('Failed to load salary slips');
-      }
+      const data = await apiGet(`/salary/slips/${empId}`);
+      console.log('📊 [PAYROLL] Salary slips fetched:', data);
+      setSalarySlips(data.data || []);
     } catch (error) {
       console.error('Error fetching salary slips:', error);
       toast.error('Failed to load salary slips');
@@ -112,13 +88,9 @@ export default function Payroll() {
 
   const handleDownloadSalarySlip = async (slipId: string) => {
     try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch(`/api/salary/slip/${slipId}/download`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
+      const fileUrl = buildFileUrl(`/salary/slip/${slipId}/download`);
+      
+      const response = await fetch(fileUrl);
       if (response.ok) {
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);

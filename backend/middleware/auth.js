@@ -8,6 +8,16 @@ import logger from "../utils/logger.js";
  * Verifies JWT token and attaches user to request
  */
 export const authenticate = asyncHandler(async (req, res, next) => {
+  // Validate JWT_SECRET is configured
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+    logger.error('CRITICAL: JWT_SECRET not properly configured');
+    return res.status(500).json({
+      success: false,
+      message: "Server configuration error",
+      code: "CONFIG_ERROR"
+    });
+  }
+
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {

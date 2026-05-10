@@ -7,7 +7,11 @@ import { io, Socket } from 'socket.io-client';
 import { TokenManager } from './api';
 
 // Socket configuration
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || 'https://workplus-backend-sg3a.onrender.com';
+// In production, VITE_SOCKET_URL is set to the backend URL
+// In development, use environment variable or window.location.origin as fallback
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 
+                   import.meta.env.VITE_API_URL || 
+                   (import.meta.env.PROD ? 'https://workplus-backend-sg3a.onrender.com' : window.location.origin);
 
 // Connection states
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';

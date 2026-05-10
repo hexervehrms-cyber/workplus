@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Loader, Download, Filter, X, Calendar, Clock, Coffee, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { apiGet } from '../../utils/apiHelper';
 
 interface AttendanceRecord {
   _id: string;
@@ -92,18 +93,8 @@ export default function AttendanceHistory() {
 
   const fetchEmployees = async () => {
     try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/employees?simple=true&limit=1000', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setEmployees(data.data || []);
-      }
+      const data = await apiGet('/employees?simple=true&limit=1000');
+      setEmployees(data.data || []);
     } catch (error) {
       console.error('Error fetching employees:', error);
       toast.error('Failed to load employees');
@@ -118,7 +109,6 @@ export default function AttendanceHistory() {
 
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken');
       
       const params = new URLSearchParams({
         page: page.toString(),
@@ -129,18 +119,9 @@ export default function AttendanceHistory() {
       if (endDate) params.append('endDate', endDate);
       if (statusFilter) params.append('status', statusFilter);
 
-      const response = await fetch(
-        `/api/attendance-history/employee/${selectedEmployee}?${params}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
+      const data = await apiGet(`/attendance-history/employee/${selectedEmployee}?${params}`);
 
-      if (response.ok) {
-        const data = await response.json();
+      if (data.success) {
         setAttendanceRecords(data.data || []);
         setTotalRecords(data.total || 0);
         toast.success(`Loaded ${data.data?.length || 0} attendance records`);

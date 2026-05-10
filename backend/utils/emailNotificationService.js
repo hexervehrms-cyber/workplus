@@ -8,6 +8,16 @@
 import logger from './logger.js';
 import Notification from '../models/Notification.js';
 
+/**
+ * Get the frontend URL for email links
+ * Priority: FRONTEND_URL env var > CORS_ORIGIN env var > localhost fallback
+ */
+const getFrontendUrl = () => {
+  // In production, FRONTEND_URL or CORS_ORIGIN env variable must be set
+  // Fallback to production URL if not set
+  return process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://workplus-murex.vercel.app';
+};
+
 class EmailNotificationService {
   /**
    * Create in-app notification
@@ -152,7 +162,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Gross Earnings:</span><span class="value">₹${salarySlip.grossEarnings.toLocaleString()}</span></div>
 <div class="info-row"><span class="label">Deductions:</span><span class="value">₹${(salarySlip.grossEarnings - salarySlip.netSalary).toLocaleString()}</span></div></div>
 <div class="highlight"><div style="font-size:14px;opacity:0.9">Net Salary</div><div class="amount">₹${salarySlip.netSalary.toLocaleString()}</div></div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/payroll" class="button">📄 View Payslip</a></div>
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/payroll" class="button">📄 View Payslip</a></div>
 <div class="success"><strong>✓</strong> Review your payslip and report discrepancies within 7 days.</div>`;
     
     // Create in-app notification
@@ -223,6 +233,33 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
     });
   }
 
+  static async sendLeaveRequestSubmittedToHR(employee, leaveRequest, hrEmail) {
+    const start = new Date(leaveRequest.startDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+    const end = new Date(leaveRequest.endDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+    const days = Math.ceil((new Date(leaveRequest.endDate) - new Date(leaveRequest.startDate)) / (1000 * 60 * 60 * 24)) + 1;
+    
+    const content = `<p>Dear HR Team,</p>
+<p>An employee has submitted a leave request.</p>
+<div class="card"><h3 style="margin-top:0;color:#667eea">📅 Leave Details</h3>
+<div class="info-row"><span class="label">Employee Name:</span><span class="value">${employee.name}</span></div>
+<div class="info-row"><span class="label">Employee Email:</span><span class="value">${employee.email}</span></div>
+<div class="info-row"><span class="label">Leave Type:</span><span class="value">${leaveRequest.type}</span></div>
+<div class="info-row"><span class="label">From:</span><span class="value">${start}</span></div>
+<div class="info-row"><span class="label">To:</span><span class="value">${end}</span></div>
+<div class="info-row"><span class="label">Duration:</span><span class="value">${days} day(s)</span></div>
+<div class="info-row"><span class="label">Reason:</span><span class="value">${leaveRequest.reason}</span></div>
+<div class="info-row"><span class="label">Status:</span><span class="value" style="color:#ffc107">⏳ Pending</span></div></div>
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/leave-requests" class="button">📋 Review Leave</a></div>`;
+    
+    // Send email to HR
+    await this.sendEmail({
+      to: hrEmail,
+      subject: `New Leave Request - ${employee.name}: ${leaveRequest.type} (${days} days)`,
+      html: this.getEmailTemplate(content, '📅 New Leave Request'),
+      text: `Leave request from ${start} to ${end} submitted by ${employee.name}.`
+    });
+  }
+
   static async sendLeaveApproved(employee, leaveRequest, approver) {
     const start = new Date(leaveRequest.startDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     const end = new Date(leaveRequest.endDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -235,7 +272,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">From:</span><span class="value">${start}</span></div>
 <div class="info-row"><span class="label">To:</span><span class="value">${end}</span></div>
 <div class="info-row"><span class="label">Approved By:</span><span class="value">${approver.name}</span></div></div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/leave" class="button">📋 View Leaves</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/leave" class="button">📋 View Leaves</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -276,7 +313,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">To:</span><span class="value">${end}</span></div>
 <div class="info-row"><span class="label">Rejected By:</span><span class="value">${rejector.name}</span></div>
 <div class="info-row"><span class="label">Reason:</span><span class="value">${reason || 'Not specified'}</span></div></div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/leave" class="button">📋 Submit New Request</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/leave" class="button">📋 Submit New Request</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -304,8 +341,45 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
     });
   }
 
+  static async sendExpenseRejected(employee, expense, rejector, reason) {
+    const content = `<p>Dear <strong>${employee.name}</strong>,</p>
+<p>Your expense claim has been <strong style="color:#dc3545">rejected</strong>.</p>
+<div class="alert" style="background:#f8d7da;border-left-color:#dc3545"><strong>✗ Expense Rejected</strong></div>
+<div class="card"><h3 style="margin-top:0;color:#dc3545">💳 Expense Details</h3>
+<div class="info-row"><span class="label">Title:</span><span class="value">${expense.title || expense.category}</span></div>
+<div class="info-row"><span class="label">Amount:</span><span class="value">₹${expense.amount.toLocaleString()}</span></div>
+<div class="info-row"><span class="label">Rejected By:</span><span class="value">${rejector.name}</span></div>
+<div class="info-row"><span class="label">Reason:</span><span class="value">${reason || 'Not specified'}</span></div></div>
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/expenses" class="button">📋 Submit New Request</a></div>`;
+    
+    // Create in-app notification
+    await this.createInAppNotification({
+      title: 'Expense Claim Rejected',
+      message: `Your expense claim of ₹${expense.amount.toLocaleString()} has been rejected. Reason: ${reason || 'Not specified'}`,
+      type: 'expense_rejected',
+      priority: 'high',
+      recipientId: employee._id,
+      senderId: rejector._id,
+      orgId: employee.orgId || 'system',
+      actionUrl: '/employee/expenses',
+      actionText: 'View Expense',
+      relatedEntity: {
+        entityType: 'expense',
+        entityId: expense._id
+      }
+    });
+
+    // Send email
+    await this.sendEmail({
+      to: employee.email,
+      subject: `Expense Rejected - ₹${expense.amount.toLocaleString()}`,
+      html: this.getEmailTemplate(content, '❌ Expense Rejected'),
+      text: `Expense of ₹${expense.amount.toLocaleString()} rejected. Reason: ${reason || 'Not specified'}`
+    });
+  }
+
   // ============================================
-  // EXPENSE NOTIFICATIONS
+  // ATTENDANCE NOTIFICATIONS
   // ============================================
 
   static async sendExpenseSubmitted(employee, expense) {
@@ -341,6 +415,28 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       subject: `Expense Submitted - ₹${expense.amount.toLocaleString()}`,
       html: this.getEmailTemplate(content, '💳 Expense Submitted'),
       text: `Expense of ₹${expense.amount.toLocaleString()} submitted.`
+    });
+  }
+
+  static async sendExpenseSubmittedToHR(employee, expense, hrEmail) {
+    const content = `<p>Dear HR Team,</p>
+<p>An employee has submitted an expense claim.</p>
+<div class="card"><h3 style="margin-top:0;color:#667eea">💳 Expense Details</h3>
+<div class="info-row"><span class="label">Employee Name:</span><span class="value">${employee.name}</span></div>
+<div class="info-row"><span class="label">Employee Email:</span><span class="value">${employee.email}</span></div>
+<div class="info-row"><span class="label">Title:</span><span class="value">${expense.title || expense.category}</span></div>
+<div class="info-row"><span class="label">Category:</span><span class="value">${expense.category}</span></div>
+<div class="info-row"><span class="label">Amount:</span><span class="value">₹${expense.amount.toLocaleString()}</span></div>
+<div class="info-row"><span class="label">Date:</span><span class="value">${new Date(expense.date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
+<div class="info-row"><span class="label">Status:</span><span class="value" style="color:#ffc107">⏳ Pending</span></div></div>
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/expenses" class="button">📋 Review Expense</a></div>`;
+    
+    // Send email to HR
+    await this.sendEmail({
+      to: hrEmail,
+      subject: `New Expense Claim - ${employee.name}: ₹${expense.amount.toLocaleString()}`,
+      html: this.getEmailTemplate(content, '💳 New Expense Claim'),
+      text: `Expense of ₹${expense.amount.toLocaleString()} submitted by ${employee.name}.`
     });
   }
 
@@ -389,7 +485,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
     const content = `<p>Dear <strong>${employee.name}</strong>,</p>
 <p>Reminder to mark your attendance for today.</p>
 <div class="alert"><strong>⏰ Reminder:</strong> Please check in to mark attendance.</div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/attendance" class="button">✓ Mark Attendance</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/attendance" class="button">✓ Mark Attendance</a></div>`;
     
     await this.sendEmail({
       to: employee.email,
@@ -407,7 +503,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="card"><h3 style="margin-top:0;color:#28a745">🕐 Check-In Details</h3>
 <div class="info-row"><span class="label">Time:</span><span class="value">${time}</span></div>
 <div class="info-row"><span class="label">Date:</span><span class="value">${new Date(checkInTime).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div></div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/attendance" class="button">📊 View Attendance</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/attendance" class="button">📊 View Attendance</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -442,7 +538,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Date:</span><span class="value">${date}</span></div>
 ${employee.employeeCode ? `<div class="info-row"><span class="label">Employee Code:</span><span class="value">${employee.employeeCode}</span></div>` : ''}
 ${employee.department ? `<div class="info-row"><span class="label">Department:</span><span class="value">${employee.department}</span></div>` : ''}</div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/admin/attendance" class="button">📊 View Attendance</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/attendance" class="button">📊 View Attendance</a></div>`;
     
     // Send email to HR FROM employee's email
     await this.sendEmail({
@@ -464,7 +560,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
 <div class="info-row"><span class="label">Time:</span><span class="value">${time}</span></div>
 <div class="info-row"><span class="label">Date:</span><span class="value">${new Date(checkOutTime).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
 <div class="info-row"><span class="label">Work Hours:</span><span class="value">${workHours} hours</span></div></div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/attendance" class="button">📊 View Attendance</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/attendance" class="button">📊 View Attendance</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -500,7 +596,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
 <div class="info-row"><span class="label">Work Hours:</span><span class="value">${workHours} hours</span></div>
 ${employee.employeeCode ? `<div class="info-row"><span class="label">Employee Code:</span><span class="value">${employee.employeeCode}</span></div>` : ''}
 ${employee.department ? `<div class="info-row"><span class="label">Department:</span><span class="value">${employee.department}</span></div>` : ''}</div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/admin/attendance" class="button">📊 View Attendance</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/attendance" class="button">📊 View Attendance</a></div>`;
     
     // Send email to HR FROM employee's email
     await this.sendEmail({
@@ -522,7 +618,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
 <div class="info-row"><span class="label">Type:</span><span class="value">${breakType}</span></div>
 <div class="info-row"><span class="label">Time:</span><span class="value">${time}</span></div>
 <div class="info-row"><span class="label">Duration:</span><span class="value">${duration} minutes</span></div></div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/attendance" class="button">📊 View Attendance</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/attendance" class="button">📊 View Attendance</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -559,7 +655,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
 <div class="info-row"><span class="label">Date:</span><span class="value">${date}</span></div>
 ${employee.employeeCode ? `<div class="info-row"><span class="label">Employee Code:</span><span class="value">${employee.employeeCode}</span></div>` : ''}
 ${employee.department ? `<div class="info-row"><span class="label">Department:</span><span class="value">${employee.department}</span></div>` : ''}</div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/admin/attendance" class="button">📊 View Attendance</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/attendance" class="button">📊 View Attendance</a></div>`;
     
     // Send email to HR
     await this.sendEmail({
@@ -582,7 +678,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
 <div class="info-row"><span class="label">Organizer:</span><span class="value">${meeting.organizer || 'HR'}</span></div>
 ${meeting.location ? `<div class="info-row"><span class="label">Location:</span><span class="value">${meeting.location}</span></div>` : ''}
 ${meeting.description ? `<div class="info-row"><span class="label">Description:</span><span class="value">${meeting.description}</span></div>` : ''}</div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/attendance" class="button">📋 View Meeting</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/attendance" class="button">📋 View Meeting</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -622,7 +718,7 @@ ${meeting.location ? `<div class="info-row"><span class="label">Location:</span>
 ${meeting.description ? `<div class="info-row"><span class="label">Description:</span><span class="value">${meeting.description}</span></div>` : ''}
 ${employee.employeeCode ? `<div class="info-row"><span class="label">Employee Code:</span><span class="value">${employee.employeeCode}</span></div>` : ''}
 ${employee.department ? `<div class="info-row"><span class="label">Department:</span><span class="value">${employee.department}</span></div>` : ''}</div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/admin/attendance" class="button">📊 View Attendance</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/attendance" class="button">📊 View Attendance</a></div>`;
     
     // Send email to HR
     await this.sendEmail({
@@ -646,7 +742,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
 <div class="info-row"><span class="label">Uploaded By:</span><span class="value">${document.uploadedBy}</span></div>
 <div class="info-row"><span class="label">Date:</span><span class="value">${new Date(document.uploadDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
 ${document.description ? `<div class="info-row"><span class="label">Description:</span><span class="value">${document.description}</span></div>` : ''}</div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/documents" class="button">📥 View Document</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/documents" class="button">📥 View Document</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -683,7 +779,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
 <div class="info-row"><span class="label">Submitted By:</span><span class="value">${document.submittedBy}</span></div>
 <div class="info-row"><span class="label">Date:</span><span class="value">${new Date(document.submissionDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
 ${document.description ? `<div class="info-row"><span class="label">Description:</span><span class="value">${document.description}</span></div>` : ''}</div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/admin/documents" class="button">✓ Review & Approve</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/documents" class="button">✓ Review & Approve</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -719,7 +815,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
 <div class="info-row"><span class="label">Type:</span><span class="value">${document.type}</span></div>
 <div class="info-row"><span class="label">Approved By:</span><span class="value">${approver.name}</span></div>
 <div class="info-row"><span class="label">Date:</span><span class="value">${new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div></div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/documents" class="button">📥 View Document</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/documents" class="button">📥 View Document</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -760,7 +856,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
 <div class="info-row"><span class="label">Gross Earnings:</span><span class="value">₹${payslip.grossEarnings.toLocaleString()}</span></div>
 <div class="info-row"><span class="label">Deductions:</span><span class="value">₹${(payslip.grossEarnings - payslip.netSalary).toLocaleString()}</span></div></div>
 <div class="highlight"><div style="font-size:14px;opacity:0.9">Net Salary</div><div class="amount">₹${payslip.netSalary.toLocaleString()}</div></div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/payroll" class="button">📄 Download Payslip</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/payroll" class="button">📄 Download Payslip</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -803,7 +899,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
 <div class="info-row"><span class="label">Allocated Date:</span><span class="value">${new Date(asset.allocationDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
 ${asset.description ? `<div class="info-row"><span class="label">Description:</span><span class="value">${asset.description}</span></div>` : ''}</div>
 <div class="alert" style="background:#d4edda;border-left-color:#28a745"><strong>📋</strong> Please acknowledge receipt of this asset.</div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/assets" class="button">✓ Acknowledge Asset</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/assets" class="button">✓ Acknowledge Asset</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -839,7 +935,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
 <div class="info-row"><span class="label">Type:</span><span class="value">${asset.type}</span></div>
 <div class="info-row"><span class="label">Serial Number:</span><span class="value">${asset.serialNumber}</span></div>
 <div class="info-row"><span class="label">Allocated Date:</span><span class="value">${new Date(asset.allocationDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div></div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/assets" class="button">📋 View Assets</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/assets" class="button">📋 View Assets</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -872,7 +968,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
 <div class="info-row"><span class="label">Serial Number:</span><span class="value">${asset.serialNumber}</span></div>
 <div class="info-row"><span class="label">Return Date:</span><span class="value">${new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
 <div class="info-row"><span class="label">Received By:</span><span class="value">${returnedBy}</span></div></div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/employee/assets" class="button">📋 View Assets</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/assets" class="button">📋 View Assets</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -906,7 +1002,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
 <div class="info-row"><span class="label">Email:</span><span class="value">${employee.email}</span></div>
 <div class="info-row"><span class="label">Password:</span><span class="value" style="font-family:monospace;background:#f0f0f0;padding:5px 10px;border-radius:4px">${tempPassword}</span></div></div>
 <div class="alert" style="background:#fff3cd;border-left-color:#ffc107"><strong>🔒</strong> Change password after first login.</div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/login" class="button">🚀 Login Now</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/login" class="button">🚀 Login Now</a></div>`;
     
     await this.sendEmail({
       to: employee.email,
@@ -923,7 +1019,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
 <div class="info-row"><span class="label">Email:</span><span class="value">${employee.email}</span></div>
 <div class="info-row"><span class="label">New Password:</span><span class="value" style="font-family:monospace;background:#f0f0f0;padding:5px 10px;border-radius:4px">${newPassword}</span></div></div>
 <div class="alert" style="background:#fff3cd;border-left-color:#ffc107"><strong>🔒 Security:</strong> Change this password immediately after login.</div>
-<div style="text-align:center"><a href="${process.env.VITE_APP_URL || 'http://localhost:5173'}/login" class="button">🔑 Login Now</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/login" class="button">🔑 Login Now</a></div>`;
     
     await this.sendEmail({
       to: employee.email,

@@ -6,6 +6,7 @@ import ChatWidget from '../../components/ChatWidget';
 import { useCurrency } from '../../context/CurrencyContext';
 import { useAuth } from '../../context/AuthContext';
 import { ExpenseService, LeaveRequestService } from '../../utils/api';
+import { apiGet, apiPost } from '../../utils/apiHelper';
 import realTimeSocket from '../../utils/realTimeSocket';
 import {
   Calendar,
@@ -129,62 +130,40 @@ export default function EmployeeDashboard() {
       
       console.log('📊 [EMPLOYEE-DASHBOARD] fetchDashboardData called with forceRefresh:', forceRefresh);
       
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       const orgId = user?.orgId || user?.tenantId || 'system';
       
       // Fetch employee data
       let employeeData = null;
       try {
-        const employeeResponse = await fetch(`/api/employees/user/${user.id}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        if (employeeResponse.ok) {
-          const employeeResult = await employeeResponse.json();
-          if (employeeResult.data) {
-            employeeData = employeeResult.data;
-          }
+        const employeeResult = await apiGet(`/employees/user/${user.id}`);
+        if (employeeResult.data) {
+          employeeData = employeeResult.data;
         }
       } catch (err) {
         console.warn('Failed to fetch employee data:', err);
       }
       
       // Fetch today's attendance data
-      const attendanceResponse = await fetch('/api/attendance/today', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
       let attendanceData = null;
-      if (attendanceResponse.ok) {
-        const attendanceResult = await attendanceResponse.json();
+      try {
+        const attendanceResult = await apiGet('/attendance/today');
         console.log('Attendance API response:', attendanceResult);
         if (attendanceResult.success && attendanceResult.data) {
           attendanceData = attendanceResult.data;
         }
-      } else {
-        console.warn('Attendance API error:', attendanceResponse.status);
+      } catch (err) {
+        console.warn('Attendance API error:', err);
       }
       
       // Fetch dashboard data
-      const response = await fetch('/api/dashboard/employee', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
       let data = {};
-      if (response.ok) {
-        const result = await response.json();
+      try {
+        const result = await apiGet('/dashboard/employee');
         if (result.success && result.data) {
           data = result.data;
         }
+      } catch (err) {
+        console.warn('Dashboard API error:', err);
       }
       
       // Merge all data
@@ -199,18 +178,9 @@ export default function EmployeeDashboard() {
       
       // Fetch holidays
       try {
-        const holidayResponse = await fetch('/api/holidays', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (holidayResponse.ok) {
-          const holidayData = await holidayResponse.json();
-          if (holidayData.success && Array.isArray(holidayData.data)) {
-            setHolidays(holidayData.data);
-          }
+        const holidayData = await apiGet('/holidays');
+        if (holidayData.success && Array.isArray(holidayData.data)) {
+          setHolidays(holidayData.data);
         }
       } catch (err) {
         console.warn('Failed to fetch holidays:', err);
@@ -449,43 +419,34 @@ export default function EmployeeDashboard() {
   const fetchAttendanceHistory = useCallback(async () => {
     try {
       setAttendanceLoading(true);
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       
       // Fetch last 30 days of attendance
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
       
-      const response = await fetch(`/api/attendance?limit=30&startDate=${thirtyDaysAgo.toISOString()}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const result = await apiGet(`/attendance?limit=30&startDate=${thirtyDaysAgo.toISOString()}`);
       
-      if (response.ok) {
-        const result = await response.json();
-        if (result.success && Array.isArray(result.data)) {
-          setAttendanceHistory(result.data);
-          
-          // Extract break history from attendance records
-          const breaks: any[] = [];
-          result.data.forEach((record: any) => {
-            if (record.breaks && Array.isArray(record.breaks)) {
-              record.breaks.forEach((breakItem: any) => {
-                breaks.push({
-                  date: record.date,
-                  breakType: breakItem.breakType || 'regular',
-                  startTime: breakItem.startTime,
-                  endTime: breakItem.endTime,
-                  duration: breakItem.endTime && breakItem.startTime 
-                    ? ((new Date(breakItem.endTime).getTime() - new Date(breakItem.startTime).getTime()) / (1000 * 60)).toFixed(0)
-                    : 'In Progress'
-                });
+      if (result.success && Array.isArray(result.data)) {
+        setAttendanceHistory(result.data);
+        
+        // Extract break history from attendance records
+        const breaks: any[] = [];
+        result.data.forEach((record: any) => {
+          if (record.breaks && Array.isArray(record.breaks)) {
+            record.breaks.forEach((breakItem: any) => {
+              breaks.push({
+                date: record.date,
+                breakType: breakItem.breakType || 'regular',
+                startTime: breakItem.startTime,
+                endTime: breakItem.endTime,
+                duration: breakItem.endTime && breakItem.startTime 
+                  ? ((new Date(breakItem.endTime).getTime() - new Date(breakItem.startTime).getTime()) / (1000 * 60)).toFixed(0)
+                  : 'In Progress'
               });
-            }
-          });
-          setBreakHistory(breaks);
-        }
+            });
+          }
+        });
+        setBreakHistory(breaks);
       }
     } catch (err) {
       console.warn('Failed to fetch attendance history:', err);
@@ -542,29 +503,15 @@ export default function EmployeeDashboard() {
       // Disable refresh during action
       setDisableRefresh(true);
 
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch('/api/attendance/check-in', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          userId: user?.id,
-          employeeId: currentEmployeeId,
-          employeeName: user?.name || 'Employee',
-          orgId: user?.orgId || user?.tenantId || 'system',
-          location: 'Office',
-          notes: 'Check-in from dashboard'
-        })
+      const result = await apiPost('/attendance/check-in', {
+        userId: user?.id,
+        employeeId: currentEmployeeId,
+        employeeName: user?.name || 'Employee',
+        orgId: user?.orgId || user?.tenantId || 'system',
+        location: 'Office',
+        notes: 'Check-in from dashboard'
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Check-in failed');
-      }
-
-      const result = await response.json();
       if (result.success) {
         // Immediately update state
         const now = new Date();
@@ -630,29 +577,15 @@ export default function EmployeeDashboard() {
       // Disable refresh during action
       setDisableRefresh(true);
 
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch('/api/attendance/check-out', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          userId: user?.id,
-          employeeId: currentEmployeeId,
-          employeeName: user?.name || 'Employee',
-          orgId: user?.orgId || user?.tenantId || 'system',
-          location: 'Office',
-          notes: 'Check-out from dashboard'
-        })
+      const result = await apiPost('/attendance/check-out', {
+        userId: user?.id,
+        employeeId: currentEmployeeId,
+        employeeName: user?.name || 'Employee',
+        orgId: user?.orgId || user?.tenantId || 'system',
+        location: 'Office',
+        notes: 'Check-out from dashboard'
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Check-out failed');
-      }
-
-      const result = await response.json();
       console.log('Check-out response:', result);
       if (result.success) {
         // Immediately update state
@@ -749,28 +682,14 @@ export default function EmployeeDashboard() {
       // Disable refresh completely during action
       setDisableRefresh(true);
 
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch('/api/attendance/break-start', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          employeeId: currentEmployeeId,
-          orgId: user?.orgId || user?.tenantId || 'system',
-          employeeName: user?.name || 'Employee',
-          breakType: breakType,
-          notes: `${breakType === 'lunch' ? 'Lunch Break' : 'Break'} started from dashboard`
-        })
+      const result = await apiPost('/attendance/break-start', {
+        employeeId: currentEmployeeId,
+        orgId: user?.orgId || user?.tenantId || 'system',
+        employeeName: user?.name || 'Employee',
+        breakType: breakType,
+        notes: `${breakType === 'lunch' ? 'Lunch Break' : 'Break'} started from dashboard`
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Break start failed');
-      }
-
-      const result = await response.json();
       if (result.success) {
         // Immediately update state - this will persist until manually changed
         setTodayAttendance(prev => ({
@@ -826,27 +745,13 @@ export default function EmployeeDashboard() {
       // Disable refresh completely during action
       setDisableRefresh(true);
 
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch('/api/attendance/break-end', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          employeeId: currentEmployeeId,
-          orgId: user?.orgId || user?.tenantId || 'system',
-          employeeName: user?.name || 'Employee',
-          notes: 'Break ended from dashboard'
-        })
+      const result = await apiPost('/attendance/break-end', {
+        employeeId: currentEmployeeId,
+        orgId: user?.orgId || user?.tenantId || 'system',
+        employeeName: user?.name || 'Employee',
+        notes: 'Break ended from dashboard'
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Break end failed');
-      }
-
-      const result = await response.json();
       if (result.success) {
         // Immediately update state - this will persist until manually changed
         setTodayAttendance(prev => ({
@@ -911,28 +816,14 @@ export default function EmployeeDashboard() {
       // Disable refresh completely during action
       setDisableRefresh(true);
 
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch('/api/attendance/meeting-start', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          employeeId: currentEmployeeId,
-          orgId: user?.orgId || user?.tenantId || 'system',
-          meetingTitle: 'Meeting',
-          meetingType: 'internal',
-          notes: 'Meeting started from dashboard'
-        })
+      const result = await apiPost('/attendance/meeting-start', {
+        employeeId: currentEmployeeId,
+        orgId: user?.orgId || user?.tenantId || 'system',
+        meetingTitle: 'Meeting',
+        meetingType: 'internal',
+        notes: 'Meeting started from dashboard'
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Meeting start failed');
-      }
-
-      const result = await response.json();
       if (result.success) {
         // Immediately update state - this will persist until manually changed
         setTodayAttendance(prev => ({
@@ -985,26 +876,12 @@ export default function EmployeeDashboard() {
       // Disable refresh completely during action
       setDisableRefresh(true);
 
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch('/api/attendance/meeting-end', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          employeeId: currentEmployeeId,
-          orgId: user?.orgId || user?.tenantId || 'system',
-          notes: 'Meeting ended from dashboard'
-        })
+      const result = await apiPost('/attendance/meeting-end', {
+        employeeId: currentEmployeeId,
+        orgId: user?.orgId || user?.tenantId || 'system',
+        notes: 'Meeting ended from dashboard'
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Meeting end failed');
-      }
-
-      const result = await response.json();
       if (result.success) {
         // Immediately update state - this will persist until manually changed
         setTodayAttendance(prev => ({

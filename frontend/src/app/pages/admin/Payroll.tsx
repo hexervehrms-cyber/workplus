@@ -11,6 +11,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '
 import { Plus, Edit, Trash2, Download, Check, X, Loader, ChevronsUpDown, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '../../components/ui/utils';
+import { apiGet, apiPost, apiPut, apiDelete, buildFileUrl } from '../../utils/apiHelper';
 
 interface SalaryStructure {
   _id: string;
@@ -190,18 +191,8 @@ export default function Payroll() {
   const fetchStructures = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/salary/structures', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setStructures(data.data || []);
-      }
+      const data = await apiGet('/salary/structures');
+      setStructures(data.data || []);
     } catch (error) {
       console.error('Error fetching structures:', error);
       toast.error('Failed to load salary structures');
@@ -214,18 +205,8 @@ export default function Payroll() {
   const fetchSalarySlips = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/salary/slips/all', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setSalarySlips(data.data || []);
-      }
+      const data = await apiGet('/salary/slips/all');
+      setSalarySlips(data.data || []);
     } catch (error) {
       console.error('Error fetching salary slips:', error);
       toast.error('Failed to load salary slips');
@@ -237,22 +218,9 @@ export default function Payroll() {
   // Fetch employees
   const fetchEmployees = async () => {
     try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/employees?simple=true&limit=1000', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Employees fetched:', data.data);
-        setEmployees(data.data || []);
-      } else {
-        console.error('Failed to fetch employees:', response.status);
-        toast.error('Failed to load employees');
-      }
+      const data = await apiGet('/employees?simple=true&limit=1000');
+      console.log('Employees fetched:', data.data);
+      setEmployees(data.data || []);
     } catch (error) {
       console.error('Error fetching employees:', error);
       toast.error('Failed to load employees');
@@ -296,11 +264,9 @@ export default function Payroll() {
       setSubmitting(true);
       const token = localStorage.getItem('authToken');
       
-      const url = editingStructureId 
-        ? `/api/salary/structure/${editingStructureId}`
-        : '/api/salary/structure';
-      
-      const method = editingStructureId ? 'PUT' : 'POST';
+      const endpoint = editingStructureId 
+        ? `/salary/structure/${editingStructureId}`
+        : '/salary/structure';
       
       const payload = {
         employeeId: selectedEmployee,
@@ -314,21 +280,11 @@ export default function Payroll() {
       console.log('📤 [SALARY] Earnings:', earnings);
       console.log('📤 [SALARY] Deductions:', deductions);
       
-      const response = await fetch(url, {
-        method,
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+      const data = await (editingStructureId ? apiPut(endpoint, payload) : apiPost(endpoint, payload));
 
-      console.log('📥 [SALARY] Response status:', response.status);
-      
-      const data = await response.json();
       console.log('📥 [SALARY] Response data:', data);
 
-      if (response.ok) {
+      if (data.success) {
         toast.success(editingStructureId ? 'Salary structure updated successfully' : 'Salary structure created successfully');
         setShowStructureDialog(false);
         setEditingStructureId(null);
@@ -336,7 +292,7 @@ export default function Payroll() {
         fetchStructures();
       } else {
         console.error('❌ [SALARY] Error response:', data);
-        toast.error(data.message || `Failed to create salary structure (${response.status})`);
+        toast.error(data.message || `Failed to create salary structure`);
       }
     } catch (error) {
       console.error('❌ [SALARY] Error creating structure:', error);
@@ -353,42 +309,12 @@ export default function Payroll() {
     }
 
     try {
-      const token = localStorage.getItem('authToken');
       console.log('🗑️ [SALARY] Deleting structure:', structureId);
-      console.log('🗑️ [SALARY] Token:', token ? 'Present' : 'Missing');
       
-      const response = await fetch(`/api/salary/structure/${structureId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      await apiDelete(`/salary/structure/${structureId}`);
 
-      console.log('📥 [SALARY] Delete response status:', response.status);
-      console.log('📥 [SALARY] Delete response headers:', response.headers);
-      
-      const contentType = response.headers.get('content-type');
-      console.log('📥 [SALARY] Content-Type:', contentType);
-      
-      let data;
-      try {
-        data = await response.json();
-        console.log('📥 [SALARY] Delete response data:', data);
-      } catch (parseError) {
-        console.error('❌ [SALARY] Failed to parse response as JSON:', parseError);
-        const text = await response.text();
-        console.log('📥 [SALARY] Response text:', text);
-        data = { message: text || 'Unknown error' };
-      }
-
-      if (response.ok) {
-        toast.success('Salary structure deleted successfully');
-        fetchStructures();
-      } else {
-        console.error('❌ [SALARY] Delete error:', data);
-        toast.error(data.message || `Failed to delete salary structure (${response.status})`);
-      }
+      toast.success('Salary structure deleted successfully');
+      fetchStructures();
     } catch (error) {
       console.error('❌ [SALARY] Error deleting structure:', error);
       toast.error('Failed to delete salary structure: ' + (error instanceof Error ? error.message : 'Unknown error'));
@@ -447,21 +373,9 @@ export default function Payroll() {
   // Handle approve structure
   const handleApproveStructure = async (structureId: string) => {
     try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch(`/api/salary/structure/${structureId}/approve`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        toast.success('Salary structure approved');
-        fetchStructures();
-      } else {
-        toast.error('Failed to approve salary structure');
-      }
+      await apiPut(`/salary/structure/${structureId}/approve`, {});
+      toast.success('Salary structure approved');
+      fetchStructures();
     } catch (error) {
       console.error('Error approving structure:', error);
       toast.error('Failed to approve salary structure');
@@ -489,13 +403,7 @@ export default function Payroll() {
       setShowStructureDialog(true);
       
       // Fetch full structure details in background
-      fetch(`/api/salary/structures?limit=1000`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      })
-        .then(res => res.json())
+      apiGet('/salary/structures?limit=1000')
         .then(data => {
           const fullStructure = data.data?.find((s: any) => s._id === structure._id);
           if (fullStructure) {
@@ -540,21 +448,13 @@ export default function Payroll() {
 
     try {
       setSlipGenerating(true);
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/salary/slip/generate', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          employeeId: slipEmployeeId,
-          month: parseInt(slipMonth.toString()),
-          year: parseInt(slipYear.toString())
-        })
+      const data = await apiPost('/salary/slip/generate', {
+        employeeId: slipEmployeeId,
+        month: parseInt(slipMonth.toString()),
+        year: parseInt(slipYear.toString())
       });
 
-      if (response.ok) {
+      if (data.success) {
         toast.success('Salary slip generated successfully');
         setShowGenerateSlipDialog(false);
         setSlipEmployeeId('');
@@ -562,8 +462,7 @@ export default function Payroll() {
         setSlipYear(new Date().getFullYear());
         fetchSalarySlips();
       } else {
-        const error = await response.json();
-        toast.error(error.message || 'Failed to generate salary slip');
+        toast.error(data.message || 'Failed to generate salary slip');
       }
     } catch (error) {
       console.error('Error generating salary slip:', error);
@@ -576,21 +475,9 @@ export default function Payroll() {
   // Handle approve salary slip
   const handleApproveSalarySlip = async (slipId: string) => {
     try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch(`/api/salary/slip/${slipId}/approve`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        toast.success('Salary slip approved');
-        fetchSalarySlips();
-      } else {
-        toast.error('Failed to approve salary slip');
-      }
+      await apiPut(`/salary/slip/${slipId}/approve`, {});
+      toast.success('Salary slip approved');
+      fetchSalarySlips();
     } catch (error) {
       console.error('Error approving salary slip:', error);
       toast.error('Failed to approve salary slip');
@@ -600,13 +487,9 @@ export default function Payroll() {
   // Handle download salary slip as PDF
   const handleDownloadSalarySlip = async (slipId: string) => {
     try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch(`/api/salary/slip/${slipId}/download`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
+      const fileUrl = buildFileUrl(`/salary/slip/${slipId}/download`);
+      
+      const response = await fetch(fileUrl);
       if (response.ok) {
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);

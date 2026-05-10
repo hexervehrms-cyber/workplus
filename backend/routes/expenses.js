@@ -10,6 +10,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, authorize } from "../middleware/auth.js";
+import { validateExpenseCreation, validateExpenseUpdate, handleValidationErrors } from "../middleware/validation.js";
 import Expense from "../models/Expense.js";
 import Employee from "../models/Employee.js";
 import { sendSuccess, sendError, sendPaginated } from "../utils/apiResponse.js";
@@ -163,14 +164,8 @@ router.get(
       const { page = 1, limit = 10, status } = req.query;
       const skip = (page - 1) * limit;
 
-      console.log("=== GET USER EXPENSES DEBUG ===");
-      console.log("Params userId:", userId, "Type:", typeof userId);
-      console.log("Req user userId:", req.user.userId, "Type:", typeof req.user.userId);
-      console.log("Comparison:", req.user.userId.toString(), "===", userId, "?", req.user.userId.toString() === userId);
-
       // Check authorization - employees can only see their own expenses
       if (req.user.role === "employee" && req.user.userId.toString() !== userId) {
-        console.log("❌ GET AUTHORIZATION DENIED - Employee trying to access other user's expenses");
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
@@ -183,17 +178,16 @@ router.get(
         queryUserId = new mongoose.Types.ObjectId(userId);
       }
 
-      const query = { userId: queryUserId };
+      // CRITICAL: Enforce orgId validation - users can only access their organization's data
+      const query = { userId: queryUserId, orgId: req.user.orgId };
       if (status) {
         query.status = status;
       }
 
-      console.log("Query:", query);
-
       logger.info("Fetching user expenses", {
         userId,
         reqUserId: req.user.userId,
-        query
+        orgId: req.user.orgId
       });
 
       // Get total count
@@ -206,12 +200,10 @@ router.get(
         .limit(parseInt(limit))
         .lean();
 
-      console.log("✅ Expenses found:", expenses.length);
-
       logger.info("User expenses fetched", {
         userId,
         count: expenses.length,
-        expenses: expenses.map(e => ({ _id: e._id, title: e.title, amount: e.amount, status: e.status }))
+        orgId: req.user.orgId
       });
 
       return sendPaginated(
@@ -223,7 +215,6 @@ router.get(
         "Expenses fetched successfully"
       );
     } catch (error) {
-      console.log("❌ GET ERROR:", error.message);
       logger.error("Get user expenses error", {
         error: error.message,
         userId: req.params.userId
@@ -293,17 +284,19 @@ router.get(
 /**
  * POST /api/expenses
  * Create a new expense
+ * PROTECTED: Requires authentication and input validation
  */
 router.post(
   "/",
   authenticate,
+  validateExpenseCreation,
   asyncHandler(async (req, res) => {
     try {
       const { title, amount, category, description, receipt, employeeName, date } = req.body;
 
-      // Validate required fields
-      if (!title || !amount || !category) {
-        return sendError(res, "Missing required fields", 400, "VALIDATION_ERROR");
+      // Additional validation for orgId
+      if (!req.user.orgId) {
+        return sendError(res, "Organization not found", 400, "VALIDATION_ERROR");
       }
 
       const expense = await Expense.create({
@@ -323,11 +316,12 @@ router.post(
 
       logger.info("Expense created", {
         expenseId: expense._id,
-        employeeId: req.user.userId
+        employeeId: req.user.userId,
+        orgId: req.user.orgId
       });
 
       // Send response immediately
-      const response = sendSuccess(res, expense, "Expense created successfully", 201);
+      sendSuccess(res, expense, "Expense created successfully", 201);
 
       // Send email notification in background (don't wait for it)
       setImmediate(async () => {
@@ -346,6 +340,22 @@ router.post(
               expense
             );
             logger.info('Expense submitted email sent', { expenseId: expense._id, email: user.email });
+            
+            // Send notification to HR/admin
+            const hrEmail = process.env.HR_EMAIL || 'hr@hexerve.com';
+            if (hrEmail) {
+              await EmailNotificationService.sendExpenseSubmittedToHR(
+                {
+                  name: user.name,
+                  email: user.email,
+                  employeeCode: employee.employeeCode,
+                  department: employee.department
+                },
+                expense,
+                hrEmail
+              );
+              logger.info('Expense submitted notification sent to HR', { expenseId: expense._id, hrEmail });
+            }
           } else {
             logger.warn('Missing user or employee data for expense submission notification', { 
               expenseId: expense._id, 
@@ -367,11 +377,26 @@ router.post(
         }
       }
 
-      return response;
+      // Emit notification to HR/admin
+      if (req.emitNotification) {
+        try {
+          req.emitNotification({
+            title: 'New Expense Claim',
+            message: `${expense.title || expense.category} expense of ₹${expense.amount.toLocaleString()} submitted`,
+            type: 'info',
+            action: 'expense_submitted',
+            data: { expenseId: expense._id, amount: expense.amount, category: expense.category }
+          }, null, req.user.orgId);
+          logger.info('Expense submitted notification sent to HR/admin', { expenseId: expense._id, orgId: req.user.orgId });
+        } catch (e) {
+          logger.warn('Failed to emit expense notification', { error: e.message });
+        }
+      }
     } catch (error) {
       logger.error("Create expense error", {
         error: error.message,
-        userId: req.user.userId
+        userId: req.user.userId,
+        orgId: req.user.orgId
       });
       return sendError(res, "Failed to create expense", 500, "CREATE_ERROR");
     }
@@ -390,28 +415,11 @@ router.put(
       const { expenseId } = req.params;
       const { title, amount, category, description, receipt, date } = req.body;
 
-      console.log("=== UPDATE EXPENSE DEBUG ===");
-      console.log("Params:", { expenseId });
-      console.log("User:", { 
-        userId: req.user.userId, 
-        userIdType: typeof req.user.userId,
-        role: req.user.role 
-      });
-      console.log("Body:", { title, amount, category, description, receipt, date });
-
       // Find expense
       const expense = await Expense.findById(expenseId);
       if (!expense) {
-        console.log("Expense not found:", expenseId);
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
       }
-
-      console.log("Expense found:", {
-        _id: expense._id,
-        userId: expense.userId,
-        userIdType: typeof expense.userId,
-        status: expense.status
-      });
 
       // Check authorization - only owner or admin can edit
       const expenseUserIdStr = expense.userId.toString();
@@ -419,21 +427,9 @@ router.put(
       const isOwner = expenseUserIdStr === reqUserIdStr;
       const isAdmin = ["admin", "super_admin", "hr"].includes(req.user.role);
       
-      console.log("Authorization check:", {
-        expenseUserIdStr,
-        reqUserIdStr,
-        isOwner,
-        userRole: req.user.role,
-        isAdmin,
-        allowed: isOwner || isAdmin
-      });
-      
       if (!isOwner && !isAdmin) {
-        console.log("❌ UPDATE AUTHORIZATION DENIED");
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
-
-      console.log("✅ Authorization passed");
 
       // Update fields
       if (title !== undefined && title !== null && title !== '') expense.title = title;
@@ -451,22 +447,12 @@ router.put(
         expense.amount = Number(expense.amount);
       }
 
-      console.log("Updated expense object:", {
-        title: expense.title,
-        amount: expense.amount,
-        category: expense.category,
-        date: expense.date
-      });
-
       await expense.save();
-
-      console.log("✅ Expense saved successfully");
 
       logger.info("Expense updated", {
         expenseId,
         userId: req.user.userId,
-        updatedTitle: expense.title,
-        updatedAmount: expense.amount
+        orgId: req.user.orgId
       });
 
       // Emit real-time updates to dashboards
@@ -478,10 +464,8 @@ router.put(
         }
       }
 
-      return sendSuccess(res, expense, "Expense updated successfully");
+      sendSuccess(res, expense, "Expense updated successfully");
     } catch (error) {
-      console.log("❌ UPDATE ERROR:", error.message);
-      console.log("Stack:", error.stack);
       logger.error("Update expense error", {
         error: error.message,
         expenseId: req.params.expenseId,
@@ -510,6 +494,11 @@ router.put(
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
       }
 
+      // Verify orgId - prevent cross-tenant access
+      if (expense.orgId !== req.user.orgId && req.user.role !== "super_admin") {
+        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      }
+
       // Update status
       expense.status = "approved";
       expense.approvedBy = req.user.userId;
@@ -523,7 +512,7 @@ router.put(
       });
 
       // Send response immediately
-      const response = sendSuccess(res, expense, "Expense approved successfully");
+      sendSuccess(res, expense, "Expense approved successfully");
 
       // Send email notification in background (don't wait for it)
       setImmediate(async () => {
@@ -558,8 +547,6 @@ router.put(
           logger.error('Failed to send expense approved email', { error: emailError.message, expenseId });
         }
       });
-
-      return response;
     } catch (error) {
       logger.error("Approve expense error", {
         error: error.message,
@@ -590,6 +577,11 @@ router.put(
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
       }
 
+      // Verify orgId - prevent cross-tenant access
+      if (expense.orgId !== req.user.orgId && req.user.role !== "super_admin") {
+        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      }
+
       // Update status
       expense.status = "rejected";
       expense.rejectedBy = req.user.userId;
@@ -601,6 +593,41 @@ router.put(
       logger.info("Expense rejected", {
         expenseId,
         rejectedBy: req.user.userId
+      });
+
+      // Send email notification in background (don't wait for it)
+      setImmediate(async () => {
+        try {
+          const user = await User.findById(expense.userId).select('name email').lean();
+          const employee = await Employee.findOne({ userId: expense.userId }).select('_id orgId').lean();
+          const rejector = await User.findById(req.user.userId).select('name').lean();
+          
+          if (user && user.email && employee) {
+            await EmailNotificationService.sendExpenseRejected(
+              { 
+                _id: employee._id,
+                name: user.name, 
+                email: user.email,
+                orgId: employee.orgId || req.user.orgId
+              },
+              expense,
+              { 
+                _id: req.user.userId,
+                name: rejector?.name || 'Admin' 
+              },
+              rejectionReason || 'Not specified'
+            );
+            logger.info('Expense rejected email sent', { expenseId, email: user.email });
+          } else {
+            logger.warn('Missing user or employee data for expense rejection notification', { 
+              expenseId, 
+              hasUser: !!user, 
+              hasEmployee: !!employee 
+            });
+          }
+        } catch (emailError) {
+          logger.error('Failed to send expense rejected email', { error: emailError.message, expenseId });
+        }
       });
 
       return sendSuccess(res, expense, "Expense rejected successfully");
@@ -653,30 +680,17 @@ router.delete(
       const isOwner = expenseUserIdStr === reqUserIdStr;
       const isAdmin = ["admin", "super_admin", "hr"].includes(req.user.role);
       
-      console.log("Authorization check:", {
-        expenseUserIdStr,
-        reqUserIdStr,
-        isOwner,
-        userRole: req.user.role,
-        isAdmin,
-        allowed: isOwner || isAdmin
-      });
-      
       if (!isOwner && !isAdmin) {
-        console.log("❌ DELETE AUTHORIZATION DENIED");
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
-
-      console.log("✅ Authorization passed");
 
       // Delete expense
       await Expense.findByIdAndDelete(expenseId);
 
-      console.log("✅ Expense deleted successfully");
-
       logger.info("Expense deleted", {
         expenseId,
-        userId: req.user.userId
+        userId: req.user.userId,
+        orgId: req.user.orgId
       });
 
       // Emit real-time updates to dashboards
@@ -690,8 +704,6 @@ router.delete(
 
       return sendSuccess(res, { id: expenseId }, "Expense deleted successfully");
     } catch (error) {
-      console.log("❌ DELETE ERROR:", error.message);
-      console.log("Stack:", error.stack);
       logger.error("Delete expense error", {
         error: error.message,
         expenseId: req.params.expenseId,

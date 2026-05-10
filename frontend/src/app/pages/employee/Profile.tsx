@@ -12,6 +12,7 @@ import CurrencySelector from '../../components/CurrencySelector';
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog';
+import { apiGet, apiPost, apiPut, apiDelete, apiUpload } from '../../utils/apiHelper';
 
 // IndexedDB helper functions
 const DB_NAME = 'WorkplusDB';
@@ -213,23 +214,15 @@ export default function Profile() {
           return;
         }
 
-        const response = await fetch(`/api/documents/employee/${userId}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (!response.ok) {
-          console.warn('Failed to fetch documents from backend');
-          return;
+        try {
+          const data = await apiGet(`/documents/employee/${userId}`);
+          const backendDocs = data.data || [];
+          
+          console.log('Loaded documents from backend:', backendDocs);
+          setDocuments(backendDocs);
+        } catch (error) {
+          console.error('Error loading documents from backend:', error);
         }
-
-        const data = await response.json();
-        const backendDocs = data.data || [];
-        
-        console.log('Loaded documents from backend:', backendDocs);
-        setDocuments(backendDocs);
       } catch (error) {
         console.error('Error loading documents from backend:', error);
       }
@@ -295,90 +288,65 @@ export default function Profile() {
   // Fetch educational documents
   const fetchEducationalDocuments = async () => {
     try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/employee-dashboard/documents?type=education', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const data = await apiGet('/employee-dashboard/documents?type=education');
+      console.log('Educational documents fetched:', data);
+      
+      if (data.success && data.data && Array.isArray(data.data)) {
+        // Parse and organize documents by education level and type
+        const organizedDocs: {
+          [key: string]: { certificate?: Document; marksheet?: Document; others?: Document };
+        } = {
+          '10th': {},
+          '12th': {},
+          'Graduation': {},
+          'Post Graduation': {},
+          'Diploma': {},
+          'Certificate': {},
+          'Drop out': {}
+        };
 
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Educational documents fetched:', data);
-        
-        if (data.success && data.data && Array.isArray(data.data)) {
-          // Parse and organize documents by education level and type
-          const organizedDocs: {
-            [key: string]: { certificate?: Document; marksheet?: Document; others?: Document };
-          } = {
-            '10th': {},
-            '12th': {},
-            'Graduation': {},
-            'Post Graduation': {},
-            'Diploma': {},
-            'Certificate': {},
-            'Drop out': {}
-          };
-
-          // Process each document and place it in the correct category
-          data.data.forEach((doc: any) => {
-            const docType = doc.type || '';
-            // Parse type like "education_10th_certificate"
-            const match = docType.match(/education_(.+)_(certificate|marksheet|others)/);
+        // Process each document and place it in the correct category
+        data.data.forEach((doc: any) => {
+          const docType = doc.type || '';
+          // Parse type like "education_10th_certificate"
+          const match = docType.match(/education_(.+)_(certificate|marksheet|others)/);
+          
+          if (match) {
+            const levelKey = match[1].replace(/_/g, ' ');
+            const docTypeKey = match[2] as 'certificate' | 'marksheet' | 'others';
             
-            if (match) {
-              const levelKey = match[1].replace(/_/g, ' ');
-              const docTypeKey = match[2] as 'certificate' | 'marksheet' | 'others';
+            // Find matching education level (case-insensitive)
+            const educationLevel = Object.keys(organizedDocs).find(
+              level => level.toLowerCase().replace(/\s+/g, '_') === levelKey.toLowerCase()
+            );
+            
+            if (educationLevel) {
+              const document: Document = {
+                _id: doc._id || doc.id,
+                name: doc.name,
+                size: doc.size || 'Unknown',
+                uploadedAt: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : 'Unknown',
+                status: doc.status || 'uploaded',
+                filePath: doc.filePath || doc.url
+              };
               
-              // Find matching education level (case-insensitive)
-              const educationLevel = Object.keys(organizedDocs).find(
-                level => level.toLowerCase().replace(/\s+/g, '_') === levelKey.toLowerCase()
-              );
-              
-              if (educationLevel) {
-                const document: Document = {
-                  _id: doc._id || doc.id,
-                  name: doc.name,
-                  size: doc.size || 'Unknown',
-                  uploadedAt: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : 'Unknown',
-                  status: doc.status || 'uploaded',
-                  filePath: doc.filePath || doc.url
-                };
-                
-                organizedDocs[educationLevel][docTypeKey] = document;
-              }
+              organizedDocs[educationLevel][docTypeKey] = document;
             }
-          });
+          }
+        });
 
-          console.log('Organized educational documents:', organizedDocs);
-          setEducationalDocuments(organizedDocs);
-        }
-      } else {
-        console.warn('Failed to fetch educational documents:', response.status);
+        console.log('Organized educational documents:', organizedDocs);
+        setEducationalDocuments(organizedDocs);
       }
     } catch (error) {
       console.error('Error fetching educational documents:', error);
-      // Don't show error toast, just log it - documents will load from uploads
     }
   };
 
   const fetchEmployeeData = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch employee data');
-      }
-
-      const data = await response.json();
+      const data = await apiGet('/auth/me');
       console.log('📊 Raw /api/auth/me response:', data);
       
       // The response data is already in the correct format
@@ -549,38 +517,22 @@ export default function Profile() {
         address: personalForm.address
       });
       
-      const response = await fetch('/api/profile', {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+      const responseData = await apiPut('/profile', {
+        profile: {
+          firstName: personalForm.firstName,
+          lastName: personalForm.lastName
         },
-        body: JSON.stringify({
-          profile: {
-            firstName: personalForm.firstName,
-            lastName: personalForm.lastName
-          },
-          contact: {
-            phone: personalForm.phone,
-            address: personalForm.address
-          },
-          employeeDetails: {
-            phone: personalForm.phone,
-            address: personalForm.address
-          }
-        })
+        contact: {
+          phone: personalForm.phone,
+          address: personalForm.address
+        },
+        employeeDetails: {
+          phone: personalForm.phone,
+          address: personalForm.address
+        }
       });
 
-      console.log('📝 Profile update response status:', response.status);
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error('❌ Profile update error:', errorData);
-        throw new Error(errorData.message || 'Failed to update profile');
-      }
-
-      const responseData = await response.json();
-      console.log('✅ Profile update response:', responseData);
+      console.log('📝 Profile update response status:', responseData);
 
       // Add a small delay to ensure database is updated
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -613,20 +565,7 @@ export default function Profile() {
       formData.append('type', documentType);
 
       // Upload to backend
-      const response = await fetch('/api/documents/upload', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to upload document');
-      }
-
-      const data = await response.json();
+      const data = await apiUpload('/documents/upload', formData);
       const uploadedDoc = data.data;
 
       // Create document object with backend data
@@ -745,28 +684,15 @@ export default function Profile() {
   // Handle confidential information update
   const handleUpdateSensitive = async () => {
     try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/profile', {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          sensitiveInfo: {
-            aadharNumber: sensitiveForm.aadharNumber,
-            panNumber: sensitiveForm.panNumber,
-            bankAccount: sensitiveForm.bankAccount,
-            ifscCode: sensitiveForm.ifscCode
-          }
-        })
+      const data = await apiPut('/profile', {
+        sensitiveInfo: {
+          aadharNumber: sensitiveForm.aadharNumber,
+          panNumber: sensitiveForm.panNumber,
+          bankAccount: sensitiveForm.bankAccount,
+          ifscCode: sensitiveForm.ifscCode
+        }
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to update confidential information');
-      }
-
-      const data = await response.json();
       console.log('Confidential info update response:', data);
 
       // Add a small delay to ensure database is updated
@@ -787,7 +713,6 @@ export default function Profile() {
   const handleSubmitEducationalDocuments = async () => {
     try {
       setSubmittingEducation(true);
-      const token = localStorage.getItem('authToken');
       
       // Prepare educational documents data
       const educationData = Object.entries(educationalDocuments).reduce((acc, [level, docs]) => {
@@ -799,20 +724,9 @@ export default function Profile() {
         return acc;
       }, {} as any);
 
-      const response = await fetch('/api/profile', {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          educationalDocuments: educationData
-        })
+      await apiPut('/profile', {
+        educationalDocuments: educationData
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to submit educational documents');
-      }
 
       toast.success('Educational documents submitted successfully');
     } catch (error) {
@@ -827,7 +741,6 @@ export default function Profile() {
   const handleSubmitEmploymentDocuments = async () => {
     try {
       setSubmittingDocuments(true);
-      const token = localStorage.getItem('authToken');
       
       // Prepare employment documents data
       const docsData = documents.map(doc => ({
@@ -836,20 +749,9 @@ export default function Profile() {
         category: selectedCategory
       }));
 
-      const response = await fetch('/api/profile', {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          employmentDocuments: docsData
-        })
+      await apiPut('/profile', {
+        employmentDocuments: docsData
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to submit employment documents');
-      }
 
       toast.success('Employment documents submitted successfully');
     } catch (error) {
@@ -1818,18 +1720,7 @@ export default function Profile() {
                             onClick={async () => {
                               // Delete functionality
                               try {
-                                const token = localStorage.getItem('authToken');
-                                const response = await fetch(`/api/documents/${doc._id}`, {
-                                  method: 'DELETE',
-                                  headers: {
-                                    'Authorization': `Bearer ${token}`
-                                  }
-                                });
-
-                                if (!response.ok) {
-                                  throw new Error('Failed to delete document');
-                                }
-
+                                await apiDelete(`/documents/${doc._id}`);
                                 setDocuments(documents.filter(d => d._id !== doc._id));
                                 toast.success('Document deleted');
                               } catch (error) {

@@ -434,7 +434,7 @@ class IntegrationEngine {
       version: '1.0.0',
       connect: async (config) => {
         return {
-          serverUrl: config.serverUrl || 'http://localhost:9000',
+          serverUrl: config.serverUrl || process.env.TALLY_SERVER_URL || 'http://localhost:9000',
           companyName: config.companyName
         };
       },

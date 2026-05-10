@@ -91,6 +91,9 @@ import chatRoutes from "./routes/chat.js";
 import onboardingRoutes from "./routes/onboarding.js";
 import salaryRoutes from "./routes/salary.js";
 import payrollRoutes from "./routes/payroll.js";
+import announcementsRoutes from "./routes/announcements.js";
+import tasksRoutes from "./routes/tasks.js";
+import organizationsRoutes from "./routes/organizations.js";
 
 // Import sales routes
 import callsRoutes from "./routes/sales/calls.js";
@@ -556,6 +559,15 @@ app.use("/api/employees", authenticate, employeesRoutes);
 
 // Documents routes (with authentication)
 app.use("/api/documents", authenticate, documentsRoutes);
+
+// Announcements routes (with authentication)
+app.use("/api/announcements", authenticate, announcementsRoutes);
+
+// Tasks routes (with authentication)
+app.use("/api/tasks", authenticate, tasksRoutes);
+
+// Organizations routes (with authentication)
+app.use("/api/organizations", authenticate, organizationsRoutes);
 
 // Expenses routes (with authentication)
 app.use("/api/expenses", authenticate, expensesRoutes);

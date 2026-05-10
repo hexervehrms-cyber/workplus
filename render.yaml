@@ -13,7 +13,7 @@ services:
       - key: MONGODB_URI
         sync: false
       - key: JWT_SECRET
-        sync: false
+        value: WorkPlus-Pro-Production-JWT-Secret-Key-32-Chars-Minimum-2024-Secure-Random-String-For-Hexerve-HRMS
       - key: JWT_EXPIRES_IN
         value: 24h
       - key: CORS_ORIGIN
@@ -21,7 +21,7 @@ services:
       - key: SUPER_ADMIN_EMAIL
         value: superadmin@company.com
       - key: SUPER_ADMIN_PASSWORD
-        sync: false
+        value: Admin123!SecurePassword
       - key: SUPER_ADMIN_NAME
         value: Super Admin
       - key: SMTP_HOST

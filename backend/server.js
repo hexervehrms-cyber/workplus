@@ -11,7 +11,7 @@
  * - Health checks
  * - Environment validation
  * 
- * Last redeploy: 2025-05-10 (rate limiter fix)
+ * Last redeploy: 2025-05-10 23:30 (CORS fix)
  */
 
 import express from "express";

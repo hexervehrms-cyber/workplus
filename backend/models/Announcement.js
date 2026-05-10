@@ -53,8 +53,7 @@ const announcementSchema = new mongoose.Schema(
       index: true
     },
     orgId: { 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: "Organization",
+      type: String, 
       required: true,
       index: true
     },

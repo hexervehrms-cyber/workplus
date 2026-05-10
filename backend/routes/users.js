@@ -79,6 +79,51 @@ router.get("/",
 );
 
 /**
+ * GET /api/users/stats
+ * Get user statistics
+ */
+router.get("/stats",
+  requirePermission('users', 'read'),
+  auditLog('view_user_stats', 'users'),
+  asyncHandler(async (req, res) => {
+    const orgId = req.user?.orgId || 'system';
+    
+    const [
+      totalUsers,
+      activeUsers,
+      inactiveUsers,
+      roleStats,
+      departmentStats
+    ] = await Promise.all([
+      User.countDocuments({ orgId, deletedAt: null }),
+      User.countDocuments({ orgId, isActive: true, deletedAt: null }),
+      User.countDocuments({ orgId, isActive: false, deletedAt: null }),
+      User.aggregate([
+        { $match: { orgId, deletedAt: null } },
+        { $group: { _id: '$role', count: { $sum: 1 } } },
+        { $sort: { count: -1 } }
+      ]),
+      User.aggregate([
+        { $match: { orgId, deletedAt: null, departmentId: { $ne: null } } },
+        { $group: { _id: '$departmentId', count: { $sum: 1 } } },
+        { $sort: { count: -1 } }
+      ])
+    ]);
+    
+    res.json({
+      success: true,
+      data: {
+        totalUsers,
+        activeUsers,
+        inactiveUsers,
+        roleDistribution: roleStats,
+        departmentDistribution: departmentStats
+      }
+    });
+  })
+);
+
+/**
  * GET /api/users/:id
  * Get user by ID
  */
@@ -681,51 +726,6 @@ router.delete("/:id/permissions",
       success: true,
       message: "Permission revoked successfully",
       data: user.customPermissions
-    });
-  })
-);
-
-/**
- * GET /api/users/stats
- * Get user statistics
- */
-router.get("/stats",
-  requirePermission('users', 'read'),
-  auditLog('view_user_stats', 'users'),
-  asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || 'system';
-    
-    const [
-      totalUsers,
-      activeUsers,
-      inactiveUsers,
-      roleStats,
-      departmentStats
-    ] = await Promise.all([
-      User.countDocuments({ orgId, deletedAt: null }),
-      User.countDocuments({ orgId, isActive: true, deletedAt: null }),
-      User.countDocuments({ orgId, isActive: false, deletedAt: null }),
-      User.aggregate([
-        { $match: { orgId, deletedAt: null } },
-        { $group: { _id: '$role', count: { $sum: 1 } } },
-        { $sort: { count: -1 } }
-      ]),
-      User.aggregate([
-        { $match: { orgId, deletedAt: null, departmentId: { $ne: null } } },
-        { $group: { _id: '$departmentId', count: { $sum: 1 } } },
-        { $sort: { count: -1 } }
-      ])
-    ]);
-    
-    res.json({
-      success: true,
-      data: {
-        totalUsers,
-        activeUsers,
-        inactiveUsers,
-        roleDistribution: roleStats,
-        departmentDistribution: departmentStats
-      }
     });
   })
 );

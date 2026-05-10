@@ -65,7 +65,7 @@ async function runTests() {
   console.log('WORKPLUS PRO - COMPREHENSIVE API TESTING SUITE');
   console.log('='.repeat(70));
   console.log(`Backend: ${API_BASE_URL}`);
-  console.log(`Frontend: https://workplus-murex.vercel.app`);
+  console.log(`Frontend: https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app`);
   console.log(`Started: ${new Date().toISOString()}`);
   console.log('='.repeat(70));
 
@@ -335,7 +335,7 @@ async function runTests() {
     console.log('\n⚠️ AUTHENTICATION REQUIRED');
     console.log('   To test authenticated endpoints:');
     console.log('   1. Check Render dashboard for SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD');
-    console.log('   2. Or test via the frontend at https://workplus-murex.vercel.app');
+    console.log('   2. Or test via the frontend at https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app');
     console.log('   3. Or create a test user via the registration endpoint if enabled');
   } else {
     console.log('\n✅ AUTHENTICATED TESTING COMPLETE');

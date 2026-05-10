@@ -302,7 +302,7 @@ async function runTests() {
     console.log('   Role: super_admin');
     console.log('\n🚀 READY FOR PRODUCTION LOGIN');
     console.log('\n💡 LOGIN INSTRUCTIONS:');
-    console.log('   1. Go to: https://workplus-murex.vercel.app/login');
+    console.log('   1. Go to: https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app/login');
     console.log('   2. Enter email:', SUPER_ADMIN_EMAIL);
     console.log('   3. Enter password:', SUPER_ADMIN_PASSWORD);
     console.log('   4. Click "Sign In"');

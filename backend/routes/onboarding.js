@@ -78,7 +78,7 @@ router.post('/generate-link',
 
       // Generate onboarding URL
       // Use FRONTEND_URL from environment variable (set in production)
-      const frontendUrl = process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://workplus-murex.vercel.app';
+      const frontendUrl = process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app';
       const onboardingUrl = `${frontendUrl}/onboarding/${token}`;
 
       // TODO: Send email to employee with onboarding link

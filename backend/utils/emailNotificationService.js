@@ -15,7 +15,7 @@ import Notification from '../models/Notification.js';
 const getFrontendUrl = () => {
   // In production, FRONTEND_URL or CORS_ORIGIN env variable must be set
   // Fallback to production URL if not set
-  return process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://workplus-murex.vercel.app';
+  return process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app';
 };
 
 class EmailNotificationService {

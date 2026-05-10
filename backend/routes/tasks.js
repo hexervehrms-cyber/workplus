@@ -91,6 +91,89 @@ router.get("/", asyncHandler(async (req, res) => {
 }));
 
 /**
+ * GET /api/tasks/my-tasks
+ * Get tasks assigned to current user
+ */
+router.get("/my-tasks", asyncHandler(async (req, res) => {
+  const orgId = req.user?.orgId || 'system';
+  const userId = req.user?.userId;
+  const { status, priority, overdue } = req.query;
+  
+  const filter = { 
+    orgId,
+    assignedTo: userId,
+    isDeleted: false
+  };
+  
+  if (status) filter.status = status;
+  if (priority) filter.priority = priority;
+  
+  // Filter overdue tasks
+  if (overdue === 'true') {
+    filter.dueDate = { $lt: new Date() };
+    filter.status = { $ne: 'completed' };
+  }
+  
+  const tasks = await Task.find(filter)
+    .populate('createdBy', 'name email avatar')
+    .populate('assignedBy', 'name email')
+    .sort({ dueDate: 1, priority: -1 })
+    .lean();
+  
+  res.json({
+    success: true,
+    data: tasks
+  });
+}));
+
+/**
+ * GET /api/tasks/dashboard-stats
+ * Get task statistics for dashboard
+ */
+router.get("/dashboard-stats", asyncHandler(async (req, res) => {
+  const orgId = req.user?.orgId || 'system';
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+  
+  let filter = { orgId, isDeleted: false };
+  
+  // Role-based filtering
+  if (userRole === 'employee') {
+    filter.assignedTo = userId;
+  }
+  
+  const [
+    totalTasks,
+    todoTasks,
+    inProgressTasks,
+    completedTasks,
+    overdueTasks
+  ] = await Promise.all([
+    Task.countDocuments(filter),
+    Task.countDocuments({ ...filter, status: 'todo' }),
+    Task.countDocuments({ ...filter, status: 'in_progress' }),
+    Task.countDocuments({ ...filter, status: 'completed' }),
+    Task.countDocuments({
+      ...filter,
+      dueDate: { $lt: new Date() },
+      status: { $ne: 'completed' }
+    })
+  ]);
+  
+  res.json({
+    success: true,
+    data: {
+      totalTasks,
+      todoTasks,
+      inProgressTasks,
+      completedTasks,
+      overdueTasks,
+      completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
+    }
+  });
+}));
+
+/**
  * GET /api/tasks/:id
  * Get task by ID
  */
@@ -444,89 +527,6 @@ router.post("/:id/comments", asyncHandler(async (req, res) => {
     success: true,
     message: "Comment added successfully",
     data: newComment
-  });
-}));
-
-/**
- * GET /api/tasks/my-tasks
- * Get tasks assigned to current user
- */
-router.get("/my-tasks", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
-  const userId = req.user?.userId;
-  const { status, priority, overdue } = req.query;
-  
-  const filter = { 
-    orgId,
-    assignedTo: userId,
-    isDeleted: false
-  };
-  
-  if (status) filter.status = status;
-  if (priority) filter.priority = priority;
-  
-  // Filter overdue tasks
-  if (overdue === 'true') {
-    filter.dueDate = { $lt: new Date() };
-    filter.status = { $ne: 'completed' };
-  }
-  
-  const tasks = await Task.find(filter)
-    .populate('createdBy', 'name email avatar')
-    .populate('assignedBy', 'name email')
-    .sort({ dueDate: 1, priority: -1 })
-    .lean();
-  
-  res.json({
-    success: true,
-    data: tasks
-  });
-}));
-
-/**
- * GET /api/tasks/dashboard-stats
- * Get task statistics for dashboard
- */
-router.get("/dashboard-stats", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
-  const userId = req.user?.userId;
-  const userRole = req.user?.role;
-  
-  let filter = { orgId, isDeleted: false };
-  
-  // Role-based filtering
-  if (userRole === 'employee') {
-    filter.assignedTo = userId;
-  }
-  
-  const [
-    totalTasks,
-    todoTasks,
-    inProgressTasks,
-    completedTasks,
-    overdueTasks
-  ] = await Promise.all([
-    Task.countDocuments(filter),
-    Task.countDocuments({ ...filter, status: 'todo' }),
-    Task.countDocuments({ ...filter, status: 'in_progress' }),
-    Task.countDocuments({ ...filter, status: 'completed' }),
-    Task.countDocuments({
-      ...filter,
-      dueDate: { $lt: new Date() },
-      status: { $ne: 'completed' }
-    })
-  ]);
-  
-  res.json({
-    success: true,
-    data: {
-      totalTasks,
-      todoTasks,
-      inProgressTasks,
-      completedTasks,
-      overdueTasks,
-      completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
-    }
   });
 }));
 

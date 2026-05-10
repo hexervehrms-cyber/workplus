@@ -551,6 +551,55 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * GET /api/leave-requests/stats/summary
+ * Get leave request statistics
+ */
+router.get('/stats/summary', asyncHandler(async (req, res) => {
+  const { orgId, startDate, endDate } = req.query;
+
+  const query = {};
+  
+  if (orgId) {
+    query.orgId = orgId;
+  }
+  
+  if (startDate && endDate) {
+    query.startDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  }
+
+  const [total, pending, approved, rejected, byType, byStatus] = await Promise.all([
+    LeaveRequest.countDocuments(query),
+    LeaveRequest.countDocuments({ ...query, status: 'pending' }),
+    LeaveRequest.countDocuments({ ...query, status: 'approved' }),
+    LeaveRequest.countDocuments({ ...query, status: 'rejected' }),
+    LeaveRequest.aggregate([
+      { $match: query },
+      { $group: { _id: '$type', count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ]),
+    LeaveRequest.aggregate([
+      { $match: query },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ])
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      total,
+      pending,
+      approved,
+      rejected,
+      byType,
+      byStatus
+    }
+  });
+}));
+
+/**
  * GET /api/leave-requests/:id
  * Get single leave request
  */
@@ -954,55 +1003,6 @@ router.post('/bulk-reject', idempotencyMiddleware, asyncHandler(async (req, res)
     message: `${result.modifiedCount} leave requests rejected successfully`,
     data: {
       modifiedCount: result.modifiedCount
-    }
-  });
-}));
-
-/**
- * GET /api/leave-requests/stats/summary
- * Get leave request statistics
- */
-router.get('/stats/summary', asyncHandler(async (req, res) => {
-  const { orgId, startDate, endDate } = req.query;
-
-  const query = {};
-  
-  if (orgId) {
-    query.orgId = orgId;
-  }
-  
-  if (startDate && endDate) {
-    query.startDate = {
-      $gte: new Date(startDate),
-      $lte: new Date(endDate)
-    };
-  }
-
-  const [total, pending, approved, rejected, byType, byStatus] = await Promise.all([
-    LeaveRequest.countDocuments(query),
-    LeaveRequest.countDocuments({ ...query, status: 'pending' }),
-    LeaveRequest.countDocuments({ ...query, status: 'approved' }),
-    LeaveRequest.countDocuments({ ...query, status: 'rejected' }),
-    LeaveRequest.aggregate([
-      { $match: query },
-      { $group: { _id: '$type', count: { $sum: 1 } } },
-      { $sort: { count: -1 } }
-    ]),
-    LeaveRequest.aggregate([
-      { $match: query },
-      { $group: { _id: '$status', count: { $sum: 1 } } }
-    ])
-  ]);
-
-  res.json({
-    success: true,
-    data: {
-      total,
-      pending,
-      approved,
-      rejected,
-      byType,
-      byStatus
     }
   });
 }));

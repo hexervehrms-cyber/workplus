@@ -56,7 +56,7 @@ async function runTests() {
   console.log('WorkPlus Pro API Testing Suite');
   console.log('='.repeat(60));
   console.log(`Backend URL: ${API_BASE_URL}`);
-  console.log(`Frontend URL: https://workplus-murex.vercel.app`);
+  console.log(`Frontend URL: https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app`);
   console.log(`Started at: ${new Date().toISOString()}`);
   console.log('='.repeat(60));
 
@@ -176,7 +176,7 @@ async function runTests() {
     console.log('\n⚠️  AUTHENTICATION REQUIRED');
     console.log('   - Provide valid super admin credentials to test authenticated endpoints');
     console.log('   - Check SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD in Render environment');
-    console.log('   - Alternatively, test the frontend at https://workplus-murex.vercel.app');
+    console.log('   - Alternatively, test the frontend at https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app');
   }
 
   const healthPassed = testResults.filter(r => r.test.includes('Health') && r.status === 'PASS').length;

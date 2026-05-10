@@ -23,6 +23,65 @@ const router = express.Router();
 router.use(paginationMiddleware);
 
 /**
+ * GET /api/employees/stats/summary
+ * Get employee statistics
+ */
+router.get('/stats/summary', asyncHandler(async (req, res) => {
+  const { orgId } = req.query;
+
+  const query = orgId ? { orgId } : {};
+
+  const [total, active, inactive, terminated, byDepartment] = await Promise.all([
+    Employee.countDocuments(query),
+    Employee.countDocuments({ ...query, status: 'active' }),
+    Employee.countDocuments({ ...query, status: 'inactive' }),
+    Employee.countDocuments({ ...query, status: 'terminated' }),
+    Employee.aggregate([
+      { $match: query },
+      { $group: { _id: '$department', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 }
+    ])
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      total,
+      active,
+      inactive,
+      terminated,
+      byDepartment
+    }
+  });
+}));
+
+/**
+ * GET /api/employees/lifecycle/analytics
+ * Get lifecycle analytics for organization
+ */
+router.get('/lifecycle/analytics', asyncHandler(async (req, res) => {
+  const { orgId, timeframe = 30 } = req.query;
+
+  if (!global.employeeLifecycleEngine) {
+    return res.status(503).json({
+      success: false,
+      message: 'Employee lifecycle system not available'
+    });
+  }
+
+  const analytics = await global.employeeLifecycleEngine.getLifecycleAnalytics(
+    orgId || req.user.orgId,
+    parseInt(timeframe)
+  );
+
+  res.json({
+    success: true,
+    data: analytics
+  });
+}));
+
+/**
  * GET /api/employees
  * List all employees with pagination
  * Query params: page, limit, status, department, simple
@@ -139,6 +198,40 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
   });
 
   res.paginate(employees, total);
+}));
+
+/**
+ * GET /api/employees/stats/summary
+ * Get employee statistics
+ */
+router.get('/stats/summary', asyncHandler(async (req, res) => {
+  const { orgId } = req.query;
+
+  const query = orgId ? { orgId } : {};
+
+  const [total, active, inactive, terminated, byDepartment] = await Promise.all([
+    Employee.countDocuments(query),
+    Employee.countDocuments({ ...query, status: 'active' }),
+    Employee.countDocuments({ ...query, status: 'inactive' }),
+    Employee.countDocuments({ ...query, status: 'terminated' }),
+    Employee.aggregate([
+      { $match: query },
+      { $group: { _id: '$department', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 }
+    ])
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      total,
+      active,
+      inactive,
+      terminated,
+      byDepartment
+    }
+  });
 }));
 
 /**
@@ -756,40 +849,6 @@ router.delete('/:id', authorize('super_admin', 'admin', 'hr'), asyncHandler(asyn
 }));
 
 /**
- * GET /api/employees/stats/summary
- * Get employee statistics
- */
-router.get('/stats/summary', asyncHandler(async (req, res) => {
-  const { orgId } = req.query;
-
-  const query = orgId ? { orgId } : {};
-
-  const [total, active, inactive, terminated, byDepartment] = await Promise.all([
-    Employee.countDocuments(query),
-    Employee.countDocuments({ ...query, status: 'active' }),
-    Employee.countDocuments({ ...query, status: 'inactive' }),
-    Employee.countDocuments({ ...query, status: 'terminated' }),
-    Employee.aggregate([
-      { $match: query },
-      { $group: { _id: '$department', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 10 }
-    ])
-  ]);
-
-  res.json({
-    success: true,
-    data: {
-      total,
-      active,
-      inactive,
-      terminated,
-      byDepartment
-    }
-  });
-}));
-
-/**
  * POST /api/employees/:id/start-onboarding
  * Start onboarding process for an employee
  */
@@ -992,31 +1051,6 @@ router.get('/:id/lifecycle', asyncHandler(async (req, res) => {
       onboardingChecklist: employee.onboardingChecklist || [],
       offboardingChecklist: employee.offboardingChecklist || []
     }
-  });
-}));
-
-/**
- * GET /api/employees/lifecycle/analytics
- * Get lifecycle analytics for organization
- */
-router.get('/lifecycle/analytics', asyncHandler(async (req, res) => {
-  const { orgId, timeframe = 30 } = req.query;
-
-  if (!global.employeeLifecycleEngine) {
-    return res.status(503).json({
-      success: false,
-      message: 'Employee lifecycle system not available'
-    });
-  }
-
-  const analytics = await global.employeeLifecycleEngine.getLifecycleAnalytics(
-    orgId || req.user.orgId,
-    parseInt(timeframe)
-  );
-
-  res.json({
-    success: true,
-    data: analytics
   });
 }));
 

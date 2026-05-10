@@ -167,7 +167,7 @@ const allowedOrigins = [
   process.env.CORS_ORIGIN, // Primary frontend URL from env
   process.env.FRONTEND_URL, // Alternative env variable name
   // Common Vercel deployment patterns
-  "https://workplus-murex.vercel.app",
+  "https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app",
   "https://workplus-seven.vercel.app",
   "https://workplus.vercel.app"
   // Note: Local development origins removed for production security
@@ -484,8 +484,10 @@ app.use(requestTimeout(30000)); // 30 second timeout
 app.use(queryOptimization);
 
 // Apply CSRF protection middleware
-app.use(generateCSRFToken);
-app.use(verifyCSRFToken);
+if (process.env.NODE_ENV !== 'development') {
+  app.use(generateCSRFToken);
+  app.use(verifyCSRFToken);
+}
 
 // Apply deduplication middleware for POST/PUT/DELETE
 app.use(deduplicationMiddleware);

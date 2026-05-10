@@ -101,7 +101,7 @@ const server = createServer(app);
 const allowedOrigins = [
   process.env.CORS_ORIGIN,
   process.env.FRONTEND_URL,
-  "https://workplus-murex.vercel.app",
+  "https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app",
   "https://workplus-seven.vercel.app",
   "https://workplus.vercel.app"
   // Note: Local development origins removed for production security

@@ -10,6 +10,7 @@ import LeaveRequest from "../models/LeaveRequest.js";
 import Expense from "../models/Expense.js";
 import Payslip from "../models/Payroll.js";
 import { calculateAllKPIChanges } from "../utils/kpiCalculations.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 

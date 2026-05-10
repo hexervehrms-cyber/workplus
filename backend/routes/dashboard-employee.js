@@ -23,7 +23,7 @@ const router = express.Router();
 router.get(
   "/employee",
   authenticate,
-  authorize("employee", "hr", "manager", "accountant"),
+  authorize("employee", "hr", "manager", "accountant", "admin", "super_admin"),
   asyncHandler(async (req, res) => {
     try {
       const userId = req.user.userId;

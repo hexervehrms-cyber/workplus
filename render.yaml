@@ -13,17 +13,17 @@ services:
       - key: MONGODB_URI
         value: mongodb+srv://atulcse08_db_user:Jadu%40123@workplus.tcf4qho.mongodb.net/workpluspro?retryWrites=true&w=majority
       - key: JWT_SECRET
-        value: workplus-pro-production-jwt-secret-key-32-chars-minimum-2024-hexerve-hrms
+        value: workplus-pro-production-jwt-secret-key-minimum-32-characters-long-secure-2024-v1
       - key: JWT_EXPIRES_IN
         value: 24h
       - key: CORS_ORIGIN
-        value: https://workplus-murex.vercel.app
+        value: https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app
       - key: SUPER_ADMIN_EMAIL
-        value: superadmin@company.com
+        value: atul@hexerve.com
       - key: SUPER_ADMIN_PASSWORD
         value: Jadu@123
       - key: SUPER_ADMIN_NAME
-        value: Super Admin
+        value: Atul
       - key: SMTP_HOST
         value: smtp.office365.com
       - key: SMTP_PORT

@@ -13,7 +13,7 @@ const router = express.Router();
  * GET /api/organizations
  * Get all organizations (Super Admin only)
  */
-router.get("/", authorize(['super_admin']), asyncHandler(async (req, res) => {
+router.get("/", authorize('super_admin'), asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
   const search = req.query.search || '';
@@ -88,7 +88,7 @@ router.get("/", authorize(['super_admin']), asyncHandler(async (req, res) => {
  * GET /api/organizations/:id
  * Get organization by ID (Super Admin only)
  */
-router.get("/:id", authorize(['super_admin']), asyncHandler(async (req, res) => {
+router.get("/:id", authorize('super_admin'), asyncHandler(async (req, res) => {
   const { id } = req.params;
   
   if (!mongoose.Types.ObjectId.isValid(id)) {

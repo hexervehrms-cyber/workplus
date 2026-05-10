@@ -108,8 +108,11 @@ import revenueRoutes from "./routes/sales/revenue.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load environment variables
-dotenv.config({ path: path.join(__dirname, '.env') });
+// Load environment variables from .env ONLY in development
+// In production (Render), use environment variables from dashboard/render.yaml
+if (process.env.NODE_ENV !== 'production' && !process.env.JWT_SECRET) {
+  dotenv.config({ path: path.join(__dirname, '.env') });
+}
 
 // ============================================================================
 // ENVIRONMENT VALIDATION

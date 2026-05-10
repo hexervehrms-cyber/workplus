@@ -833,11 +833,11 @@ export default function EmployeeDashboard() {
         
         toast.success('Meeting started!');
         
-        // Wait longer before re-enabling refresh to ensure stability
-        setTimeout(() => {
+        // Fetch fresh data after meeting start
+        setTimeout(async () => {
+          await fetchDashboardData();
           setDisableRefresh(false);
-          // Don't fetch immediately, let the next periodic refresh handle it
-        }, 2000);
+        }, 500);
       }
     } catch (err) {
       console.error('Meeting start error:', err);
@@ -891,11 +891,11 @@ export default function EmployeeDashboard() {
         
         toast.success('Meeting ended!');
         
-        // Wait longer before re-enabling refresh to ensure stability
-        setTimeout(() => {
+        // Fetch fresh data after meeting end
+        setTimeout(async () => {
+          await fetchDashboardData();
           setDisableRefresh(false);
-          // Don't fetch immediately, let the next periodic refresh handle it
-        }, 2000);
+        }, 500);
       } else {
         // Re-enable refresh if failed
         setDisableRefresh(false);

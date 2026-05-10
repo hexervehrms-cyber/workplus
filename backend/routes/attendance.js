@@ -988,7 +988,17 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
 
   const updatedAttendance = await Attendance.findByIdAndUpdate(
     attendance._id,
-    { $set: { meetingMode } },
+    { 
+      $set: { meetingMode },
+      $push: {
+        meetings: {
+          startTime: meetingMode.startTime,
+          title: meetingTitle,
+          type: meetingType,
+          ipAddress: req.ip || req.connection.remoteAddress
+        }
+      }
+    },
     { new: true }
   ).populate('userId', 'name email avatar')
    .populate('employeeId', 'employeeCode department');
@@ -1059,16 +1069,24 @@ router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', '
   const endTime = new Date();
   const meetingDuration = (endTime - attendance.meetingMode.startTime) / (1000 * 60);
 
+  // Find the index of the last meeting (which should be the active one)
+  const meetingIndex = attendance.meetings?.length ? attendance.meetings.length - 1 : -1;
+
+  const updateFields = {
+    'meetingMode.isActive': false,
+    'meetingMode.endTime': endTime,
+    'meetingMode.duration': Math.round(meetingDuration),
+    'meetingMode.endNotes': notes
+  };
+
+  if (meetingIndex !== -1) {
+    updateFields[`meetings.${meetingIndex}.endTime`] = endTime;
+    updateFields[`meetings.${meetingIndex}.duration`] = Math.round(meetingDuration);
+  }
+
   const updatedAttendance = await Attendance.findByIdAndUpdate(
     attendance._id,
-    {
-      $set: {
-        'meetingMode.isActive': false,
-        'meetingMode.endTime': endTime,
-        'meetingMode.duration': Math.round(meetingDuration),
-        'meetingMode.endNotes': notes
-      }
-    },
+    { $set: updateFields },
     { new: true }
   ).populate('userId', 'name email avatar')
    .populate('employeeId', 'employeeCode department');

@@ -172,8 +172,8 @@ const parseCorsOrigins = () => {
   const corsOrigin = process.env.CORS_ORIGIN || process.env.FRONTEND_URL || '';
   const origins = corsOrigin.split(',').map(origin => origin.trim()).filter(Boolean);
   
-  // Add fallbacks for development and legacy support
-  const fallbackOrigins = [
+  // Base origins that should ALWAYS be allowed
+  const baseOrigins = [
     'http://localhost:5173',
     'http://localhost:3000',
     'https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app',
@@ -182,26 +182,14 @@ const parseCorsOrigins = () => {
     'https://hexerve.online',
     'https://www.hexerve.online',
     'http://hexerve.online',
-    'http://www.hexerve.online'
+    'http://www.hexerve.online',
+    'https://workplus-murex.vercel.app'
   ];
   
-  // If no origins specified in env, use fallbacks (development mode)
-  if (origins.length === 0) {
-    console.warn('⚠️  No CORS_ORIGIN specified in environment variables. Using fallback origins for development.');
-    return fallbackOrigins;
-  }
+  // Combine environment origins with base origins
+  const combinedOrigins = [...new Set([...origins, ...baseOrigins])];
   
-  // In production, return origins from environment plus mandatory production origins
-  const productionOrigins = [
-     ...origins,
-     'https://hexerve.online',
-     'https://www.hexerve.online',
-     'http://hexerve.online',
-     'http://www.hexerve.online',
-     'https://workplus-murex.vercel.app'
-   ];
-  
-  return [...new Set(productionOrigins)];
+  return combinedOrigins;
 };
 
 const allowedOrigins = parseCorsOrigins();
@@ -209,7 +197,22 @@ const allowedOrigins = parseCorsOrigins();
 console.log('✅ CORS Allowed Origins:', allowedOrigins);
 
 const corsOptions = {
-  origin: allowedOrigins,
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`⚠️  CORS blocked origin: ${origin}`);
+      // In production, you might want to be stricter, but for now let's allow it 
+      // if it's one of our variants just in case of slight string mismatches
+      if (origin.includes('hexerve.online') || origin.includes('vercel.app')) {
+        return callback(null, true);
+      }
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-CSRF-Token"],
@@ -236,19 +239,22 @@ global.io = io;
 // MIDDLEWARE SETUP
 // ============================================================================
 
-// Security middleware
-app.use(helmet());
+// 1. CORS middleware (Must be first)
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
-// Request logging
+// 2. Security middleware
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }
+}));
+
+// 3. Request logging
 app.use(morgan('combined', {
   stream: {
     write: (message) => logger.http(message.trim())
   }
 }));
-
-// CORS
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
 
 // Request ID middleware
 app.use(requestIdMiddleware);

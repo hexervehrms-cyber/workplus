@@ -10,6 +10,8 @@
  * - Request logging
  * - Health checks
  * - Environment validation
+ * 
+ * Last redeploy: 2025-05-10 (rate limiter fix)
  */
 
 import express from "express";

@@ -19,16 +19,30 @@ export const seedSuperAdmin = async () => {
       return false;
     }
 
-    // Check if super admin already exists
-    const existingSuperAdmin = await User.findOne({ 
-      email: superAdminEmail,
-      role: 'super_admin'
+    // Check if a user with this email already exists (any role)
+    const existingUser = await User.findOne({ 
+      email: superAdminEmail.toLowerCase().trim()
     });
 
-    if (existingSuperAdmin) {
+    if (existingUser) {
+      // If the user exists but isn't a super_admin, update them to super_admin
+      // This ensures we don't get duplicate key errors
+      if (existingUser.role !== 'super_admin') {
+        existingUser.role = 'super_admin';
+        existingUser.orgId = 'system';
+        existingUser.isActive = true;
+        await existingUser.save();
+        
+        logger.info('ℹ️  Existing user promoted to Super Admin', {
+          email: superAdminEmail,
+          id: existingUser._id
+        });
+        return true;
+      }
+      
       logger.info('ℹ️  Super Admin already exists', {
         email: superAdminEmail,
-        id: existingSuperAdmin._id
+        id: existingUser._id
       });
       return true;
     }

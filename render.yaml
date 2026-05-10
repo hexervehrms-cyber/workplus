@@ -11,17 +11,17 @@ services:
       - key: NODE_ENV
         value: production
       - key: MONGODB_URI
-        sync: false
+        value: mongodb+srv://atulcse08_db_user:Jadu%40123@workplus.tcf4qho.mongodb.net/workpluspro?retryWrites=true&w=majority
       - key: JWT_SECRET
-        value: Hexerve-WorkPlus-Pro-Secure-JWT-Token-2024-Production-Environment-Unique-Secret-Key-For-Authentication
+        value: workplus-pro-production-jwt-secret-key-32-chars-minimum-2024-hexerve-hrms
       - key: JWT_EXPIRES_IN
         value: 24h
       - key: CORS_ORIGIN
         value: https://workplus-murex.vercel.app
       - key: SUPER_ADMIN_EMAIL
-        sync: false
+        value: superadmin@company.com
       - key: SUPER_ADMIN_PASSWORD
-        value: Admin123!SecurePassword
+        value: Jadu@123
       - key: SUPER_ADMIN_NAME
         value: Super Admin
       - key: SMTP_HOST
@@ -29,9 +29,9 @@ services:
       - key: SMTP_PORT
         value: 587
       - key: SMTP_USER
-        sync: false
+        value: hr@hexerve.com
       - key: SMTP_PASS
-        sync: false
+        value: Jadu@333
       - key: FROM_EMAIL
         value: hr@hexerve.com
       - key: HR_EMAIL
@@ -65,13 +65,13 @@ services:
       - key: TEAMS_APP_ID
         value: 7b85498f-d7ec-4f0d-a60b-fa6baf6391d2
       - key: TEAMS_APP_PASSWORD
-        sync: false
+        value: 5Wy8Q~ERfF~2WSBaoK2PmCnH1EaTMq67.d0NOaPB
       - key: TEAMS_TENANT_ID
         value: 4d3f5d68-c721-43c9-8f42-a05555c64d4a
       - key: TEAMS_BOT_ID
         value: 7b85498f-d7ec-4f0d-a60b-fa6baf6391d2
       - key: TEAMS_BOT_PASSWORD
-        sync: false
+        value: 10f5016e-64d9-4211-b9d5-ab0a45ccd6fb
       - key: TEAMS_WEBHOOK_URL
         value: https://workplus-backend-sg3a.onrender.com/api/chat/teams/webhook
       - key: TEAMS_INTEGRATION_ENABLED

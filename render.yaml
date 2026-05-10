@@ -1,6 +1,7 @@
 services:
   - type: web
     name: workplus-backend
+    # Redeploy to apply rate limiter fix - 2025-05-10
     env: node
     plan: standard
     buildCommand: npm install

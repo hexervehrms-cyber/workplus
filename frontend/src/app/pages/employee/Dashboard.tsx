@@ -491,10 +491,15 @@ export default function EmployeeDashboard() {
           currentBreakDuration: 0,
           breakType: 'regular'
         };
+        
+        // Update state synchronously
         setTodayAttendance(updatedState);
         setIsCheckedIn(true);
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
         toast.success('Checked in successfully!');
+        setDisableRefresh(false);
+      } else {
+        toast.error(result?.message || 'Check-in failed');
         setDisableRefresh(false);
       }
     } catch (err) {
@@ -546,10 +551,15 @@ export default function EmployeeDashboard() {
           currentBreakDuration: 0,
           breakType: 'regular'
         };
+        
+        // Update state synchronously
         setTodayAttendance(updatedState);
         setIsCheckedIn(false);
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
         toast.success('Checked out successfully!');
+        setDisableRefresh(false);
+      } else {
+        toast.error(result?.message || 'Check-out failed');
         setDisableRefresh(false);
       }
     } catch (err) {

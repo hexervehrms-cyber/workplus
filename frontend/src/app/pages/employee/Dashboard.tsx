@@ -497,10 +497,8 @@ export default function EmployeeDashboard() {
         toast.success('Checked in successfully!');
         
         // Fetch fresh data immediately to ensure UI is in sync with database
-        setTimeout(async () => {
-          await fetchDashboardData();
-          setDisableRefresh(false);
-        }, 800);
+        setDisableRefresh(false);
+        await fetchDashboardData();
       }
     } catch (err) {
       console.error('Check-in error:', err);
@@ -557,10 +555,8 @@ export default function EmployeeDashboard() {
         toast.success('Checked out successfully!');
         
         // Fetch fresh data immediately to ensure UI is in sync with database
-        setTimeout(async () => {
-          await fetchDashboardData();
-          setDisableRefresh(false);
-        }, 800);
+        setDisableRefresh(false);
+        await fetchDashboardData();
       }
     } catch (err) {
       console.error('Check-out error:', err);
@@ -635,11 +631,8 @@ export default function EmployeeDashboard() {
         toast.success(`${breakLabel} started!`);
         
         // Immediately fetch fresh data to ensure state is in sync with database
-        console.log('☕ [BREAK-START] Fetching fresh data after break start');
-        setTimeout(async () => {
-          await fetchDashboardData();
-          setDisableRefresh(false);
-        }, 800);  // Increased delay to ensure database is updated
+        setDisableRefresh(false);
+        await fetchDashboardData();
       } else {
         setDisableRefresh(false);
       }
@@ -699,11 +692,8 @@ export default function EmployeeDashboard() {
         toast.success('Break ended!');
         
         // Immediately fetch fresh data to ensure state is in sync with database
-        console.log('☕ [BREAK-END] Fetching fresh data after break end');
-        setTimeout(async () => {
-          await fetchDashboardData();
-          setDisableRefresh(false);
-        }, 800);  // Increased delay to ensure database is updated
+        setDisableRefresh(false);
+        await fetchDashboardData();
       } else {
         // Re-enable refresh if failed
         setDisableRefresh(false);
@@ -769,10 +759,8 @@ export default function EmployeeDashboard() {
         toast.success('Meeting started!');
         
         // Fetch fresh data after meeting start
-        setTimeout(async () => {
-          await fetchDashboardData();
-          setDisableRefresh(false);
-        }, 800);  // Increased delay to ensure database is updated
+        setDisableRefresh(false);
+        await fetchDashboardData();
       } else {
         setDisableRefresh(false);
       }
@@ -829,10 +817,8 @@ export default function EmployeeDashboard() {
         toast.success('Meeting ended!');
         
         // Fetch fresh data after meeting end
-        setTimeout(async () => {
-          await fetchDashboardData();
-          setDisableRefresh(false);
-        }, 800);  // Increased delay to ensure database is updated
+        setDisableRefresh(false);
+        await fetchDashboardData();
       } else {
         // Re-enable refresh if failed
         setDisableRefresh(false);
@@ -882,7 +868,7 @@ export default function EmployeeDashboard() {
           </Button>
 
           {/* Check In/Out Button */}
-          {!isCheckedIn ? (
+          {!todayAttendance.isCheckedIn ? (
             <Button 
               className="rounded-xl bg-green-600 hover:bg-green-700" 
               onClick={handleCheckIn}

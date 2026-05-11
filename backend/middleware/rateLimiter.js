@@ -34,10 +34,11 @@ const keyGenerator = (req) => {
 
 /**
  * Skip rate limiting in test environment or when disabled
- * Temporarily disabled to fix login issues
+ * ENABLED for production security
  */
 const shouldSkip = (req) => {
-  return true;
+  // Only skip in development environment
+  return process.env.NODE_ENV === 'development';
 };
 
 /**

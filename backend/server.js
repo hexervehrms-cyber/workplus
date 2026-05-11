@@ -531,10 +531,11 @@ app.use(optimizeResponse);
 app.use(requestTimeout(30000)); // 30 second timeout
 app.use(queryOptimization);
 
-// Apply CSRF protection middleware - Disabled by default in production to fix login issues
-if (process.env.NODE_ENV !== 'development' && process.env.ENABLE_CSRF === 'true') {
+// Apply CSRF protection middleware - ENABLED for production security
+if (process.env.NODE_ENV === 'production' || process.env.ENABLE_CSRF === 'true') {
   app.use(generateCSRFToken);
   app.use(verifyCSRFToken);
+  logger.info('CSRF protection enabled');
 }
 
 // Apply deduplication middleware for POST/PUT/DELETE

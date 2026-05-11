@@ -91,7 +91,6 @@ const navigationItems: NavItem[] = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/employee', roles: ['employee', 'hr', 'manager', 'accountant'] },
   { icon: UserCircle, label: 'My Profile', path: '/employee/profile', roles: ['employee', 'hr', 'manager', 'accountant'] },
   { icon: FolderOpen, label: 'Company Docs', path: '/employee/company-docs', roles: ['employee', 'hr', 'manager', 'accountant'] },
-  { icon: CalendarDays, label: 'Calendar', path: '/employee/calendar', roles: ['employee', 'hr', 'manager', 'accountant'] },
   { 
     icon: Calendar, 
     label: 'Leave', 

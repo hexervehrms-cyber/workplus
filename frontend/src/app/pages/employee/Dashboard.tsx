@@ -90,12 +90,17 @@ export default function EmployeeDashboard() {
   const [attendanceHistory, setAttendanceHistory] = useState<any[]>([]);
   const [breakHistory, setBreakHistory] = useState<any[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const attendanceCacheKey = `employee_dashboard_attendance_${user?.id || 'unknown'}`;
 
   // Helper function to fetch employee ID
   const ensureEmployeeId = async (): Promise<string | null> => {
     if (employeeId) return employeeId;
     
     if (!user?.id) return null;
+    if (user?.employeeId) {
+      setEmployeeId(user.employeeId);
+      return user.employeeId;
+    }
     
     try {
       const token = localStorage.getItem('authToken') || localStorage.getItem('token');
@@ -204,6 +209,17 @@ export default function EmployeeDashboard() {
           };
         });
         setIsCheckedIn(isCurrentlyCheckedIn);
+        localStorage.setItem(attendanceCacheKey, JSON.stringify({
+          isCheckedIn: isCurrentlyCheckedIn,
+          checkInTime,
+          checkOutTime,
+          hoursWorked: attendance.hoursWorked || 0,
+          status: attendance.status || 'absent',
+          isOnBreak: calculatedIsOnBreak,
+          isInMeeting: attendanceData.liveStatus?.isInMeeting || false,
+          currentBreakDuration: calculatedBreakDuration,
+          breakType: calculatedBreakType
+        }));
       } else {
         setIsCheckedIn(false);
         setTodayAttendance(prev => {
@@ -270,12 +286,20 @@ export default function EmployeeDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, attendanceCacheKey, actionInProgress, disableRefresh]);
 
   // Fetch data on mount with force refresh
   useEffect(() => {
+    const cachedAttendance = localStorage.getItem(attendanceCacheKey);
+    if (cachedAttendance) {
+      try {
+        const parsed = JSON.parse(cachedAttendance);
+        setIsCheckedIn(!!parsed.isCheckedIn);
+        setTodayAttendance(prev => ({ ...prev, ...parsed }));
+      } catch (_) {}
+    }
     fetchDashboardData(true);  // Force refresh on page load
-  }, [fetchDashboardData]);
+  }, [fetchDashboardData, attendanceCacheKey]);
 
   // Fetch employee ID on mount
   useEffect(() => {
@@ -418,36 +442,20 @@ export default function EmployeeDashboard() {
       setActionInProgress(true);
       setLastActionTime(Date.now());
       
-      const currentEmployeeId = await ensureEmployeeId();
-
-      if (!currentEmployeeId) {
-        setError('Employee ID not found. Unable to check in.');
-        toast.error('Unable to check in. Please try refreshing the page.');
-        setActionInProgress(false);  // Clear flag before returning
-        return;
-      }
-
       // Disable refresh during action
       setDisableRefresh(true);
 
       const result = await apiPost('/attendance/check-in', {
-        userId: user?.id,
-        employeeId: currentEmployeeId,
-        employeeName: user?.name || 'Employee',
-        orgId: user?.orgId || user?.tenantId || 'system',
         location: 'Office',
         notes: 'Check-in from dashboard'
       });
 
       if (result.success) {
-        // Immediately update state
-        const now = new Date();
-        const checkInTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-        
-        console.log('Check-in successful:', { checkInTime });
-        
+        const checkInAt = result?.data?.checkIn ? new Date(result.data.checkIn) : new Date();
+        const checkInTime = checkInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
         setIsCheckedIn(true);
-        setTodayAttendance({
+        const updatedState = {
           isCheckedIn: true,
           checkInTime: checkInTime,
           checkOutTime: null,
@@ -457,26 +465,19 @@ export default function EmployeeDashboard() {
           isInMeeting: false,
           currentBreakDuration: 0,
           breakType: 'regular'
-        });
-        
+        };
+        setTodayAttendance(updatedState);
+        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
         toast.success('Checked in successfully!');
-        
-        // Re-enable refresh after delay
-        setTimeout(() => {
-          setDisableRefresh(false);
-        }, 1000);
+        setDisableRefresh(false);
       }
     } catch (err) {
       console.error('Check-in error:', err);
       setError(err instanceof Error ? err.message : 'Check-in failed');
       toast.error(err instanceof Error ? err.message : 'Check-in failed');
-      // Re-enable refresh on error
       setDisableRefresh(false);
     } finally {
-      // Always clear action lock
-      setTimeout(() => {
-        setActionInProgress(false);
-      }, 1000);
+      setActionInProgress(false);
     }
   };
 
@@ -491,81 +492,44 @@ export default function EmployeeDashboard() {
     try {
       setActionInProgress(true);
       setLastActionTime(Date.now());
-      
-      const currentEmployeeId = await ensureEmployeeId();
-
-      if (!currentEmployeeId) {
-        setError('Employee ID not found. Unable to check out.');
-        toast.error('Unable to check out. Please try refreshing the page.');
-        setActionInProgress(false);  // Clear flag before returning
-        return;
-      }
 
       // Disable refresh during action
       setDisableRefresh(true);
 
       const result = await apiPost('/attendance/check-out', {
-        userId: user?.id,
-        employeeId: currentEmployeeId,
-        employeeName: user?.name || 'Employee',
-        orgId: user?.orgId || user?.tenantId || 'system',
         location: 'Office',
         notes: 'Check-out from dashboard'
       });
 
-      console.log('Check-out response:', result);
       if (result.success) {
-        // Immediately update state
-        const now = new Date();
-        const checkOutTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const checkOutAt = result?.data?.checkOut ? new Date(result.data.checkOut) : new Date();
+        const checkOutTime = checkOutAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
         const hoursWorked = result.data?.hoursWorked || 0;
-        
-        console.log('Check-out successful:', { checkOutTime, hoursWorked, isCheckedIn: false });
-        
+
         setIsCheckedIn(false);
-        setTodayAttendance(prev => {
-          console.log('Setting todayAttendance to:', {
-            isCheckedIn: false,
-            checkInTime: prev.checkInTime,
-            checkOutTime: checkOutTime,
-            hoursWorked: hoursWorked,
-            status: 'checked_out',
-            isOnBreak: false,
-            isInMeeting: false,
-            currentBreakDuration: 0,
-            breakType: 'regular'
-          });
-          return {
-            isCheckedIn: false,
-            checkInTime: prev.checkInTime,
-            checkOutTime: checkOutTime,
-            hoursWorked: hoursWorked,
-            status: 'checked_out',
-            isOnBreak: false,
-            isInMeeting: false,
-            currentBreakDuration: 0,
-            breakType: 'regular'
-          };
-        });
-        
+        const updatedState = {
+          isCheckedIn: false,
+          checkInTime: todayAttendance.checkInTime,
+          checkOutTime: checkOutTime,
+          hoursWorked: hoursWorked,
+          status: 'checked_out',
+          isOnBreak: false,
+          isInMeeting: false,
+          currentBreakDuration: 0,
+          breakType: 'regular'
+        };
+        setTodayAttendance(updatedState);
+        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
         toast.success('Checked out successfully!');
-        
-        // Re-enable refresh after delay
-        setTimeout(() => {
-          setDisableRefresh(false);
-        }, 2000);
+        setDisableRefresh(false);
       }
     } catch (err) {
       console.error('Check-out error:', err);
       setError(err instanceof Error ? err.message : 'Check-out failed');
       toast.error(err instanceof Error ? err.message : 'Check-out failed');
-      // Re-enable refresh on error
       setDisableRefresh(false);
     } finally {
-      // Always clear action lock
-      setTimeout(() => {
-        setActionInProgress(false);
-      }, 1000);
+      setActionInProgress(false);
     }
   };
 

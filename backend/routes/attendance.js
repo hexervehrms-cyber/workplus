@@ -17,6 +17,72 @@ import EmailNotificationService from '../utils/emailNotificationService.js';
 
 const router = express.Router();
 
+const queueHrAttendanceEmail = (type, payload) => {
+  setImmediate(async () => {
+    try {
+      const { effectiveEmployeeId, effectiveOrgId, effectiveEmployeeName, attendance, hoursWorked } = payload;
+      const hrEmail = process.env.HR_EMAIL;
+      if (!hrEmail) {
+        logger.warn(`HR_EMAIL not configured; skipping ${type} HR email`, {
+          employeeId: effectiveEmployeeId,
+          orgId: effectiveOrgId
+        });
+        return;
+      }
+
+      const employee = await Employee.findById(effectiveEmployeeId)
+        .select('firstName lastName email employeeCode department userId')
+        .populate('userId', 'name email')
+        .lean();
+
+      if (!employee) return;
+
+      const empName = employee.firstName && employee.lastName
+        ? `${employee.firstName} ${employee.lastName}`
+        : employee.userId?.name || effectiveEmployeeName;
+      const employeeEmail = employee.userId?.email || employee.email;
+
+      if (!employeeEmail) return;
+
+      if (type === 'check-in') {
+        await EmailNotificationService.sendCheckInNotificationToHR(
+          {
+            name: empName,
+            email: employeeEmail,
+            employeeCode: employee.employeeCode,
+            department: employee.department
+          },
+          attendance.checkIn,
+          hrEmail
+        );
+      } else if (type === 'check-out') {
+        await EmailNotificationService.sendCheckOutNotificationToHR(
+          {
+            name: empName,
+            email: employeeEmail,
+            employeeCode: employee.employeeCode,
+            department: employee.department
+          },
+          new Date(),
+          Math.round((hoursWorked || 0) * 100) / 100,
+          hrEmail
+        );
+      }
+
+      logger.info(`${type} notification sent to HR`, {
+        employeeName: empName,
+        employeeEmail,
+        hrEmail,
+        orgId: effectiveOrgId
+      });
+    } catch (emailError) {
+      logger.error(`Failed to send ${type} notification to HR`, {
+        error: emailError.message
+      });
+    }
+  });
+};
+
 /**
  * GET /api/attendance/today
  * Get today's attendance for the current user
@@ -349,77 +415,12 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     data: attendance
   });
 
-  // Send check-in notification to HR AFTER check-in is confirmed
-  try {
-    const hrEmail = process.env.HR_EMAIL;
-    console.log('📧 SENDING CHECK-IN EMAIL TO HR:', { hrEmail, employeeId });
-    if (!hrEmail) {
-      logger.warn('HR_EMAIL not configured; skipping check-in HR email', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
-      return;
-    }
-    
-    const employee = await Employee.findById(effectiveEmployeeId)
-      .select('firstName lastName email employeeCode department userId')
-      .populate('userId', 'name email')
-      .lean();
-    
-    console.log('📧 EMPLOYEE DATA FETCHED:', {
-      found: !!employee,
-      firstName: employee?.firstName,
-      lastName: employee?.lastName,
-      email: employee?.email,
-      userId: employee?.userId,
-      userEmail: employee?.userId?.email
-    });
-    
-    if (employee && hrEmail) {
-      // Get name from employee - use firstName and lastName
-      const empName = employee.firstName && employee.lastName 
-        ? `${employee.firstName} ${employee.lastName}`
-        : employee.userId?.name || effectiveEmployeeName;
-      
-      const employeeEmail = employee.userId?.email || employee.email;
-      
-      console.log('📧 PREPARED EMAIL DATA:', {
-        empName,
-        employeeEmail,
-        hrEmail,
-        checkInTime: attendance.checkIn
-      });
-      
-      if (employeeEmail) {
-        console.log('📧 SENDING EMAIL FROM:', employeeEmail, 'TO:', hrEmail);
-        const result = await EmailNotificationService.sendCheckInNotificationToHR(
-          {
-            name: empName,
-            email: employeeEmail,
-            employeeCode: employee.employeeCode,
-            department: employee.department
-          },
-          attendance.checkIn,
-          hrEmail
-        );
-        console.log('📧 EMAIL SEND RESULT:', result);
-        logger.info('Check-in notification sent to HR', {
-          employeeName: empName,
-          employeeEmail: employeeEmail,
-          hrEmail,
-          checkInTime: attendance.checkIn
-        });
-      } else {
-        console.log('⚠️ NO EMPLOYEE EMAIL FOUND');
-      }
-    } else {
-      console.log('⚠️ EMPLOYEE NOT FOUND OR NO HR EMAIL');
-    }
-  } catch (emailError) {
-    console.log('❌ EMAIL ERROR:', emailError);
-    logger.error('Failed to send check-in notification to HR', {
-      error: emailError.message,
-      employeeName: effectiveEmployeeName
-    });
-    // Don't fail the check-in if email fails - it's already confirmed
-  }
+  queueHrAttendanceEmail('check-in', {
+    effectiveEmployeeId,
+    effectiveOrgId,
+    effectiveEmployeeName,
+    attendance
+  });
 }));
 
 /**
@@ -567,79 +568,13 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     data: updatedAttendance
   });
 
-  // Send check-out notification to HR AFTER check-out is confirmed
-  try {
-    const hrEmail = process.env.HR_EMAIL;
-    console.log('📧 SENDING CHECK-OUT EMAIL TO HR:', { hrEmail, employeeId });
-    if (!hrEmail) {
-      logger.warn('HR_EMAIL not configured; skipping check-out HR email', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
-      return;
-    }
-    
-    const employee = await Employee.findById(effectiveEmployeeId)
-      .select('firstName lastName email employeeCode department userId')
-      .populate('userId', 'name email')
-      .lean();
-    
-    console.log('📧 EMPLOYEE DATA FETCHED:', {
-      found: !!employee,
-      firstName: employee?.firstName,
-      lastName: employee?.lastName,
-      email: employee?.email,
-      userId: employee?.userId,
-      userEmail: employee?.userId?.email
-    });
-    
-    if (employee && hrEmail) {
-      // Get name from employee - use firstName and lastName
-      const empName = employee.firstName && employee.lastName 
-        ? `${employee.firstName} ${employee.lastName}`
-        : employee.userId?.name || effectiveEmployeeName;
-      
-      const employeeEmail = employee.userId?.email || employee.email;
-      
-      console.log('📧 PREPARED EMAIL DATA:', {
-        empName,
-        employeeEmail,
-        hrEmail,
-        checkOutTime: new Date(),
-        hoursWorked: Math.round(hoursWorked * 100) / 100
-      });
-      
-      if (employeeEmail) {
-        console.log('📧 SENDING EMAIL FROM:', employeeEmail, 'TO:', hrEmail);
-        await EmailNotificationService.sendCheckOutNotificationToHR(
-          {
-            name: empName,
-            email: employeeEmail,
-            employeeCode: employee.employeeCode,
-            department: employee.department
-          },
-          new Date(),
-          Math.round(hoursWorked * 100) / 100,
-          hrEmail
-        );
-        logger.info('Check-out notification sent to HR', {
-          employeeName: empName,
-          employeeEmail: employeeEmail,
-          hrEmail,
-          checkOutTime: new Date(),
-          hoursWorked: Math.round(hoursWorked * 100) / 100
-        });
-      } else {
-        console.log('⚠️ NO EMPLOYEE EMAIL FOUND');
-      }
-    } else {
-      console.log('⚠️ EMPLOYEE NOT FOUND OR NO HR EMAIL');
-    }
-  } catch (emailError) {
-    console.log('❌ EMAIL ERROR:', emailError);
-    logger.error('Failed to send check-out notification to HR', {
-      error: emailError.message,
-      employeeName: effectiveEmployeeName
-    });
-    // Don't fail the check-out if email fails - it's already confirmed
-  }
+  queueHrAttendanceEmail('check-out', {
+    effectiveEmployeeId,
+    effectiveOrgId,
+    effectiveEmployeeName,
+    attendance: updatedAttendance,
+    hoursWorked
+  });
 }));
 
 /**

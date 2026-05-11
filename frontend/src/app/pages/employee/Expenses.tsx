@@ -128,10 +128,11 @@ export default function Expenses() {
   // Fetch expenses from API
   useEffect(() => {
     fetchExpenses();
-  }, [user?.userId]);
+  }, [user?.userId, user?.id]);
 
   const fetchExpenses = async () => {
-    if (!user?.userId) {
+    const stableUserId = user?.userId || user?.id;
+    if (!stableUserId) {
       console.warn('No user ID available');
       setError('User information not available');
       setLoading(false);
@@ -141,8 +142,7 @@ export default function Expenses() {
     try {
       setLoading(true);
       setError(null);
-      console.log('Fetching expenses for user:', user.userId);
-      const data = await apiGet(`/expenses/user/${user.userId}`);
+      const data = await apiGet(`/expenses/user/${stableUserId}`);
       
       if (data.data && Array.isArray(data.data)) {
         setExpenses(data.data);

@@ -346,37 +346,34 @@ export default function Profile() {
   const fetchEmployeeData = async () => {
     try {
       setLoading(true);
-      const data = await apiGet('/auth/me');
-      console.log('📊 Raw /api/auth/me response:', data);
-      
-      // The response data is already in the correct format
-      const profileData = data.data || data;
-      console.log('📊 Profile data extracted:', profileData);
+      const data = await apiGet('/profile');
+      const payload = data?.data || data;
+      const profileData = payload?.user || {};
+      const employeeProfile = payload?.employee || {};
       
       // Ensure all required fields are present
       const employeeData: EmployeeData = {
-        _id: profileData._id || '',
-        firstName: profileData.firstName || '',
-        lastName: profileData.lastName || '',
-        email: profileData.email || '',
-        phone: profileData.phone || '',
-        dateOfBirth: profileData.dateOfBirth || '',
-        gender: profileData.gender || '',
-        address: profileData.address || '',
-        employeeId: profileData.employeeId || profileData.employeeCode || '',
-        department: profileData.department || '',
-        designation: profileData.designation || '',
-        joiningDate: profileData.joiningDate || '',
-        employmentType: profileData.employmentType || '',
-        workLocation: profileData.workLocation || '',
-        aadharNumber: profileData.aadharNumber || '',
-        panNumber: profileData.panNumber || '',
-        bankAccount: profileData.bankAccount || '',
-        ifscCode: profileData.ifscCode || '',
-        sensitiveInfoLocks: profileData.sensitiveInfoLocks || {}
+        _id: employeeProfile?._id || profileData?._id || '',
+        firstName: employeeProfile?.firstName || profileData?.profile?.firstName || '',
+        lastName: employeeProfile?.lastName || profileData?.profile?.lastName || '',
+        email: profileData?.email || '',
+        phone: employeeProfile?.phone || profileData?.contact?.phone || '',
+        dateOfBirth: '',
+        gender: '',
+        address: employeeProfile?.address || profileData?.contact?.address?.street || '',
+        employeeId: employeeProfile?.employeeId || employeeProfile?.employeeCode || '',
+        department: employeeProfile?.department || '',
+        designation: employeeProfile?.designation || '',
+        joiningDate: employeeProfile?.joiningDate || '',
+        employmentType: '',
+        workLocation: employeeProfile?.workLocation || '',
+        aadharNumber: employeeProfile?.aadharNumber || '',
+        panNumber: employeeProfile?.panNumber || '',
+        bankAccount: employeeProfile?.bankAccount || employeeProfile?.bankDetails?.accountNumber || '',
+        ifscCode: employeeProfile?.ifscCode || employeeProfile?.bankDetails?.ifscCode || '',
+        sensitiveInfoLocks: employeeProfile?.sensitiveInfoLocks || {}
       };
       
-      console.log('📊 Employee data to set:', employeeData);
       setEmployee(employeeData);
       
       // Directly update form states
@@ -384,8 +381,8 @@ export default function Profile() {
         firstName: employeeData.firstName,
         lastName: employeeData.lastName,
         phone: employeeData.phone,
-        dateOfBirth: employeeData.dateOfBirth ? (typeof employeeData.dateOfBirth === 'string' ? employeeData.dateOfBirth.split('T')[0] : new Date(employeeData.dateOfBirth).toISOString().split('T')[0]) : '',
-        gender: employeeData.gender,
+        dateOfBirth: '',
+        gender: '',
         address: employeeData.address
       });
 
@@ -395,8 +392,6 @@ export default function Profile() {
         department: employeeData.department,
         designation: employeeData.designation
       });
-      
-      console.log('✅ Form states updated successfully');
     } catch (error) {
       console.error('❌ Error fetching employee data:', error);
       toast.error('Failed to load employee data');
@@ -508,23 +503,16 @@ export default function Profile() {
   // Handle personal information update
   const handleUpdatePersonal = async () => {
     try {
-      const token = localStorage.getItem('authToken');
-      
-      console.log('📝 Sending profile update with data:', {
-        firstName: personalForm.firstName,
-        lastName: personalForm.lastName,
-        phone: personalForm.phone,
-        address: personalForm.address
-      });
-      
-      const responseData = await apiPut('/profile', {
+      await apiPut('/profile', {
         profile: {
           firstName: personalForm.firstName,
           lastName: personalForm.lastName
         },
         contact: {
           phone: personalForm.phone,
-          address: personalForm.address
+          address: {
+            street: personalForm.address
+          }
         },
         employeeDetails: {
           phone: personalForm.phone,
@@ -532,13 +520,10 @@ export default function Profile() {
         }
       });
 
-      console.log('📝 Profile update response status:', responseData);
-
       // Add a small delay to ensure database is updated
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       // Refresh employee data from backend to ensure consistency
-      console.log('🔄 Refreshing employee data...');
       await fetchEmployeeData();
 
       setIsEditingPersonal(false);

@@ -43,7 +43,6 @@ export default function PayrollDashboard() {
       setEmployeeType(data.data.employeeType);
     } catch (error) {
       console.error('Error fetching payroll data:', error);
-      toast.error('Failed to load payroll data');
     } finally {
       setLoading(false);
     }
@@ -54,7 +53,7 @@ export default function PayrollDashboard() {
       <div className="p-8 flex items-center justify-center min-h-screen">
         <div className="flex flex-col items-center gap-4">
           <Loader className="w-8 h-8 animate-spin" />
-          <p className="text-muted-foreground">Loading payroll data...</p>
+          <p className="text-muted-foreground"></p>
         </div>
       </div>
     );

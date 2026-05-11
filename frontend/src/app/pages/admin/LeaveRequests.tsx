@@ -78,9 +78,8 @@ export default function LeaveRequests() {
       }
     } catch (error) {
       console.error('Failed to fetch leave requests:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to load leave requests';
+      const errorMessage = error instanceof Error ? error.message : '';
       setError(errorMessage);
-      toast.error(errorMessage);
       setLeaveRequests([]);
     } finally {
       setLoading(false);
@@ -202,7 +201,7 @@ export default function LeaveRequests() {
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin mr-2" />
-            <p>Loading leave requests...</p>
+            <p></p>
           </div>
         ) : leaveRequests.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">

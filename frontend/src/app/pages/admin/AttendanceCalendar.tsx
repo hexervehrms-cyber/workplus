@@ -57,7 +57,6 @@ export default function AttendanceCalendar() {
       }
     } catch (error) {
       console.error('Error loading attendance:', error);
-      toast.error('Failed to load attendance data');
     } finally {
       setLoading(false);
     }
@@ -238,7 +237,7 @@ export default function AttendanceCalendar() {
                 {loading ? (
                   <tr>
                     <td colSpan={6} className="p-4 text-center text-muted-foreground">
-                      Loading...
+                      
                     </td>
                   </tr>
                 ) : attendance.length === 0 ? (

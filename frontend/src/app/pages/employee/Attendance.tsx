@@ -182,7 +182,6 @@ export default function Attendance() {
       }
     } catch (error) {
       console.error('Error fetching attendance:', error);
-      toast.error('Failed to load attendance data');
     } finally {
       setLoading(false);
     }
@@ -233,7 +232,7 @@ export default function Attendance() {
       setFilteredAttendance(filtered);
       
       if (filtered.length === 0 && (filterStartDate || filterEndDate)) {
-        toast.info('No records found for the selected date range');
+        // Intentionally silent to keep UI free of non-critical info toasts.
       }
     } catch (error) {
       console.error('Error filtering records:', error);

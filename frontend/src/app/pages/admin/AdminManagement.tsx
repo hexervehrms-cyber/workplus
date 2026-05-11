@@ -62,7 +62,6 @@ export default function AdminManagement() {
       }
     } catch (err) {
       console.error('Error loading admins:', err);
-      toast.error('Failed to load admin users');
     } finally {
       setPageLoading(false);
     }

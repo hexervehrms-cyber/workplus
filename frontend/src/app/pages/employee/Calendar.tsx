@@ -96,7 +96,6 @@ export default function Calendar() {
         }
       } catch (error) {
         console.error('Error fetching data:', error);
-        toast.error('Failed to load data');
       } finally {
         setLoading(false);
       }

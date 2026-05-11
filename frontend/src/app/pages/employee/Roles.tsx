@@ -3,7 +3,6 @@ import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Shield, Loader, CheckCircle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { toast } from 'sonner';
 
 interface Permission {
   id: string;
@@ -163,10 +162,7 @@ export default function EmployeeRoles() {
     try {
       setLoading(true);
       
-      if (!user?.role) {
-        toast.error('Unable to load your role information');
-        return;
-      }
+      if (!user?.role) return;
 
       // Get role information from predefined roles
       const roleKey = user.role.toLowerCase();
@@ -186,7 +182,6 @@ export default function EmployeeRoles() {
       }
     } catch (error) {
       console.error('Error loading role:', error);
-      toast.error('Failed to load role information');
     } finally {
       setLoading(false);
     }
@@ -197,7 +192,7 @@ export default function EmployeeRoles() {
       <div className="p-8 flex items-center justify-center min-h-screen">
         <div className="text-center">
           <Loader className="w-8 h-8 animate-spin mx-auto mb-2" />
-          <p className="text-muted-foreground">Loading your role information...</p>
+          <p className="text-muted-foreground"></p>
         </div>
       </div>
     );

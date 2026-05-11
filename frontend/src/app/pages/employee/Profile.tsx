@@ -394,7 +394,6 @@ export default function Profile() {
       });
     } catch (error) {
       console.error('❌ Error fetching employee data:', error);
-      toast.error('Failed to load employee data');
     } finally {
       setLoading(false);
     }
@@ -480,7 +479,7 @@ export default function Profile() {
       <div className="p-8 flex items-center justify-center min-h-screen">
         <div className="flex flex-col items-center gap-4">
           <Loader className="w-8 h-8 animate-spin" />
-          <p className="text-muted-foreground">Loading your profile...</p>
+          <p className="text-muted-foreground"></p>
         </div>
       </div>
     );

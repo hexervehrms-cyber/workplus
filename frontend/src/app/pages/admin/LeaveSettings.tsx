@@ -91,7 +91,6 @@ export default function LeaveSettings() {
       }
     } catch (error) {
       console.error('Error fetching leave settings:', error);
-      toast.error('Failed to load leave settings');
     } finally {
       setLoading(false);
     }
@@ -171,7 +170,7 @@ export default function LeaveSettings() {
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin mr-2" />
-            <p>Loading leave settings...</p>
+            <p></p>
           </div>
         ) : (
           <div className="space-y-6">

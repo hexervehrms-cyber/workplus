@@ -49,7 +49,6 @@ export default function AdminSettings() {
         }
       } catch (error) {
         console.error('Error fetching admin data:', error);
-        toast.error('Failed to load admin information');
       } finally {
         setLoading(false);
       }

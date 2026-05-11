@@ -548,7 +548,7 @@ export default function AttendanceHistory() {
                       {salarySlipLoading ? (
                         <>
                           <Loader className="w-4 h-4 mr-2 animate-spin" />
-                          Loading...
+                          
                         </>
                       ) : (
                         <>

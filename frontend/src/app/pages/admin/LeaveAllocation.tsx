@@ -176,7 +176,6 @@ export default function LeaveAllocation() {
       }
     } catch (error) {
       console.error('Error fetching data:', error);
-      toast.error('Failed to load data');
     } finally {
       setLoading(false);
     }
@@ -426,7 +425,7 @@ export default function LeaveAllocation() {
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin mr-2" />
-            <p>Loading allocations...</p>
+            <p></p>
           </div>
         ) : allocations.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">

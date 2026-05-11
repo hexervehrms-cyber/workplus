@@ -282,7 +282,7 @@ export default function EmployeeDashboard() {
       setUpcomingEvents(events);
     } catch (err) {
       console.error('Failed to fetch dashboard data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load dashboard');
+      setError(err instanceof Error ? err.message : '');
     } finally {
       setLoading(false);
     }

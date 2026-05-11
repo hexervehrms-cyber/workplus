@@ -300,7 +300,7 @@ export default function AdminRoles() {
       <div className="p-8 flex items-center justify-center min-h-screen">
         <div className="text-center">
           <Loader className="w-8 h-8 animate-spin mx-auto mb-4 text-primary" />
-          <p className="text-muted-foreground">Loading roles...</p>
+          <p className="text-muted-foreground"></p>
         </div>
       </div>
     );

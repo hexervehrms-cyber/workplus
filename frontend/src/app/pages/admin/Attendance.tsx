@@ -120,7 +120,6 @@ export default function AttendanceAdmin() {
       }
     } catch (error) {
       console.error('Error fetching attendance:', error);
-      toast.error('Failed to load attendance data');
     } finally {
       setLoading(false);
     }

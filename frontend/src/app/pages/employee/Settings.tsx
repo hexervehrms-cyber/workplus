@@ -44,7 +44,6 @@ export default function EmployeeSettings() {
         }
       } catch (error) {
         console.error('Error fetching employee data:', error);
-        toast.error('Failed to load employee information');
       } finally {
         setLoading(false);
       }

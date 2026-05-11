@@ -69,7 +69,6 @@ export default function Payroll() {
       await fetchSalarySlips(empId);
     } catch (error) {
       console.error('Error fetching employee and slips:', error);
-      toast.error('Failed to load salary information');
     } finally {
       setLoading(false);
     }
@@ -82,7 +81,6 @@ export default function Payroll() {
       setSalarySlips(data.data || []);
     } catch (error) {
       console.error('Error fetching salary slips:', error);
-      toast.error('Failed to load salary slips');
     }
   };
 

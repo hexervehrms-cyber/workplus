@@ -245,7 +245,17 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
     
     // Update phone and address from contact
     if (contact.phone) employeeUpdateData.phone = contact.phone.trim();
-    if (contact.address) employeeUpdateData.address = contact.address.trim();
+    if (contact.address) {
+      if (typeof contact.address === 'string') {
+        employeeUpdateData.address = contact.address.trim();
+      } else if (typeof contact.address === 'object' && contact.address !== null) {
+        // Frontend sends nested shape: contact.address.street
+        const street = contact.address.street;
+        if (typeof street === 'string' && street.trim()) {
+          employeeUpdateData.address = street.trim();
+        }
+      }
+    }
     
     if (employeeDetails.employeeId) employeeUpdateData.employeeCode = employeeDetails.employeeId.trim();
     if (employeeDetails.joiningDate) employeeUpdateData.joiningDate = new Date(employeeDetails.joiningDate);

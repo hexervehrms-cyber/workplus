@@ -251,12 +251,8 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   });
 
   // Emit real-time update
-  if (global.socketManager) {
-    global.socketManager.broadcastToOrganization(orgId, 'attendance:checkin', {
-      attendance,
-      employeeName,
-      timestamp: new Date()
-    });
+  if (req.emitAttendanceUpdate) {
+    req.emitAttendanceUpdate(attendance, orgId);
   }
 
   // Emit KPI update for real-time dashboard refresh
@@ -439,13 +435,8 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   });
 
   // Emit real-time update
-  if (global.socketManager) {
-    global.socketManager.broadcastToOrganization(orgId, 'attendance:checkout', {
-      attendance: updatedAttendance,
-      employeeName,
-      hoursWorked: Math.round(hoursWorked * 100) / 100,
-      timestamp: new Date()
-    });
+  if (req.emitAttendanceUpdate) {
+    req.emitAttendanceUpdate(updatedAttendance, orgId);
   }
 
   // Emit KPI update for real-time dashboard refresh
@@ -840,6 +831,9 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   ).populate('userId', 'name email avatar')
    .populate('employeeId', 'employeeCode department');
 
+  // Emit real-time event to notify admin dashboard
+  req.emitAttendanceUpdate(updatedAttendance, orgId);
+
   // Log activity
   await ActivityLog.logActivity({
     userId: currentUserId,
@@ -1029,6 +1023,11 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
     message: 'Meeting started successfully',
     data: updatedAttendance
   });
+
+  // Emit real-time event to notify admin dashboard
+  if (req.emitAttendanceUpdate) {
+    req.emitAttendanceUpdate(updatedAttendance, orgId);
+  }
 }));
 
 /**
@@ -1117,6 +1116,11 @@ router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', '
     message: 'Meeting ended successfully',
     data: updatedAttendance
   });
+
+  // Emit real-time event to notify admin dashboard
+  if (req.emitAttendanceUpdate) {
+    req.emitAttendanceUpdate(updatedAttendance, orgId);
+  }
 }));
 
 /**

@@ -13,7 +13,7 @@ class RealTimeSocket {
 
   private connect() {
     const user = TokenManager.getUser();
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('authToken') || localStorage.getItem('token');
 
     if (!user?.id) {
       console.warn('No user data found for socket connection');

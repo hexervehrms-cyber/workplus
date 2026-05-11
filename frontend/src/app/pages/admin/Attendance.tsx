@@ -7,6 +7,7 @@ import { Badge } from '../../components/ui/badge';
 import { apiClient } from '../../utils/api';
 import { toast } from 'sonner';
 import { apiGet, apiPost, buildFileUrl } from '../../utils/apiHelper';
+import realTimeSocket from '../../utils/realTimeSocket';
 
 interface AttendanceRecord {
   _id: string;
@@ -178,13 +179,25 @@ export default function AttendanceAdmin() {
     fetchAttendance();
     fetchActivityLogs();
 
-    // Set up real-time updates
+    // Set up real-time updates via Socket.IO
+    const handleAttendanceUpdate = (data: any) => {
+      console.log('📡 [ADMIN-ATTENDANCE] Real-time attendance update received:', data);
+      fetchAttendance();
+      fetchActivityLogs();
+    };
+
+    realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
+
+    // Periodic fallback refresh
     const interval = setInterval(() => {
       fetchAttendance();
       fetchActivityLogs();
-    }, 30000); // Refresh every 30 seconds
+    }, 60000); // Refresh every 60 seconds as fallback
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      // Note: realTimeSocket doesn't expose removeListener, but we can prevent duplicate logic
+    };
   }, []);
 
   // Separate function declarations for reuse

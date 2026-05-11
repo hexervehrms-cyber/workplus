@@ -346,14 +346,16 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
   }
 
   // Emit activity log
-  req.emitActivityUpdate({
-    action: 'profile_update',
-    description: 'Profile updated',
-    userId: userId,
-    orgId: userOrgId,
-    severity: 'low',
-    category: 'employee'
-  }, userOrgId);
+  if (typeof req.emitActivityUpdate === 'function') {
+    req.emitActivityUpdate({
+      action: 'profile_update',
+      description: 'Profile updated',
+      userId: userId,
+      orgId: userOrgId,
+      severity: 'low',
+      category: 'employee'
+    }, userOrgId);
+  }
 
   logger.info('Profile updated', { 
     userId, 
@@ -425,14 +427,16 @@ router.post('/avatar', authorize('super_admin', 'admin', 'hr', 'manager', 'emplo
   }
 
   // Emit activity log
-  req.emitActivityUpdate({
-    action: 'avatar_update',
-    description: 'Profile picture updated',
-    userId: userId,
-    orgId: userOrgId,
-    severity: 'low',
-    category: 'employee'
-  }, userOrgId);
+  if (typeof req.emitActivityUpdate === 'function') {
+    req.emitActivityUpdate({
+      action: 'avatar_update',
+      description: 'Profile picture updated',
+      userId: userId,
+      orgId: userOrgId,
+      severity: 'low',
+      category: 'employee'
+    }, userOrgId);
+  }
 
   logger.info('Avatar uploaded', { 
     userId, 
@@ -506,14 +510,16 @@ router.put('/password', authorize('super_admin', 'admin', 'hr', 'manager', 'empl
   await User.findByIdAndUpdate(userId, { password: hashedNewPassword, 'security.passwordLastChanged': new Date() });
 
   // Emit activity log
-  req.emitActivityUpdate({
-    action: 'password_change',
-    description: 'Password changed',
-    userId: userId,
-    orgId: userOrgId,
-    severity: 'medium',
-    category: 'security'
-  }, userOrgId);
+  if (typeof req.emitActivityUpdate === 'function') {
+    req.emitActivityUpdate({
+      action: 'password_change',
+      description: 'Password changed',
+      userId: userId,
+      orgId: userOrgId,
+      severity: 'medium',
+      category: 'security'
+    }, userOrgId);
+  }
 
   logger.info('Password changed', { userId });
 

@@ -299,10 +299,18 @@ router.post(
         return sendError(res, "Organization not found", 400, "VALIDATION_ERROR");
       }
 
+      const employee = await Employee.findOne({ userId: req.user.userId, orgId: req.user.orgId })
+        .select('_id firstName lastName')
+        .lean();
+
+      if (!employee) {
+        return sendError(res, "Employee profile not found for authenticated user", 403, "FORBIDDEN");
+      }
+
       const expense = await Expense.create({
         userId: req.user.userId,
-        employeeId: req.user.userId,
-        employeeName: employeeName || req.user.name,
+        employeeId: employee._id,
+        employeeName: employeeName || `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || req.user.name,
         orgId: req.user.orgId,
         title,
         amount: Number(amount),
@@ -327,29 +335,34 @@ router.post(
       setImmediate(async () => {
         try {
           const user = await User.findById(req.user.userId).select('name email').lean();
-          const employee = await Employee.findOne({ userId: req.user.userId }).select('_id orgId').lean();
+          const employeeRecord = await Employee.findOne({ userId: req.user.userId, orgId: req.user.orgId })
+            .select('_id orgId employeeCode department')
+            .lean();
           
-          if (user && user.email && employee) {
+          if (user && user.email && employeeRecord) {
             await EmailNotificationService.sendExpenseSubmitted(
               { 
-                _id: employee._id,
+                _id: employeeRecord._id,
                 name: user.name, 
                 email: user.email,
-                orgId: employee.orgId || req.user.orgId
+                orgId: employeeRecord.orgId || req.user.orgId
               },
               expense
             );
             logger.info('Expense submitted email sent', { expenseId: expense._id, email: user.email });
             
             // Send notification to HR/admin
-            const hrEmail = process.env.HR_EMAIL || 'hr@hexerve.com';
+            const hrEmail = process.env.HR_EMAIL;
+            if (!hrEmail) {
+              logger.warn('HR_EMAIL not configured; skipping expense HR email', { expenseId: expense._id, orgId: req.user.orgId });
+            }
             if (hrEmail) {
               await EmailNotificationService.sendExpenseSubmittedToHR(
                 {
                   name: user.name,
                   email: user.email,
-                  employeeCode: employee.employeeCode,
-                  department: employee.department
+                  employeeCode: employeeRecord.employeeCode,
+                  department: employeeRecord.department
                 },
                 expense,
                 hrEmail
@@ -360,7 +373,7 @@ router.post(
             logger.warn('Missing user or employee data for expense submission notification', { 
               expenseId: expense._id, 
               hasUser: !!user, 
-              hasEmployee: !!employee 
+              hasEmployee: !!employeeRecord 
             });
           }
         } catch (emailError) {

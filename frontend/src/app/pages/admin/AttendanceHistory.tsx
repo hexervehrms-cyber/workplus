@@ -144,7 +144,6 @@ export default function AttendanceHistory() {
 
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken');
       
       const params = new URLSearchParams({
         page: page.toString(),
@@ -154,23 +153,9 @@ export default function AttendanceHistory() {
       if (startDate) params.append('startDate', startDate);
       if (endDate) params.append('endDate', endDate);
 
-      const response = await fetch(
-        `/api/attendance-history/breaks/${selectedEmployee}?${params}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        setBreakRecords(data.breaks || []);
-        toast.success(`Loaded ${data.breaks?.length || 0} break records`);
-      } else {
-        toast.error('Failed to fetch break history');
-      }
+      const data = await apiGet(`/attendance-history/breaks/${selectedEmployee}?${params}`);
+      setBreakRecords(data?.data?.breaks || data?.breaks || []);
+      toast.success(`Loaded ${(data?.data?.breaks || data?.breaks || []).length} break records`);
     } catch (error) {
       console.error('Error fetching break history:', error);
       toast.error('Failed to fetch break history');
@@ -186,26 +171,12 @@ export default function AttendanceHistory() {
     }
 
     try {
-      const token = localStorage.getItem('authToken');
-      
       const params = new URLSearchParams();
       if (startDate) params.append('startDate', startDate);
       if (endDate) params.append('endDate', endDate);
 
-      const response = await fetch(
-        `/api/attendance-history/summary/${selectedEmployee}?${params}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        setSummary(data.data);
-      }
+      const data = await apiGet(`/attendance-history/summary/${selectedEmployee}?${params}`);
+      setSummary(data?.data || null);
     } catch (error) {
       console.error('Error fetching summary:', error);
     }
@@ -219,7 +190,6 @@ export default function AttendanceHistory() {
 
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken');
       
       const params = new URLSearchParams({
         page: page.toString(),
@@ -229,24 +199,10 @@ export default function AttendanceHistory() {
       if (startDate) params.append('startDate', startDate);
       if (endDate) params.append('endDate', endDate);
 
-      const response = await fetch(
-        `/api/attendance-history/leaves/${selectedEmployee}?${params}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        setLeaveRecords(data.data || []);
-        setTotalRecords(data.total || 0);
-        toast.success(`Loaded ${data.data?.length || 0} leave records`);
-      } else {
-        toast.error('Failed to fetch leave history');
-      }
+      const data = await apiGet(`/attendance-history/leaves/${selectedEmployee}?${params}`);
+      setLeaveRecords(data?.data || []);
+      setTotalRecords(data?.total || 0);
+      toast.success(`Loaded ${data?.data?.length || 0} leave records`);
     } catch (error) {
       console.error('Error fetching leave history:', error);
       toast.error('Failed to fetch leave history');
@@ -291,27 +247,9 @@ export default function AttendanceHistory() {
 
     try {
       setSalarySlipLoading(true);
-      const token = localStorage.getItem('authToken');
-      
-      const response = await fetch(
-        `/api/salary/slip/${selectedEmployee}/${salarySlipMonth}/${salarySlipYear}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        setSalarySlipContent(data.data);
-        toast.success('Salary slip loaded successfully');
-      } else if (response.status === 404) {
-        toast.error('Salary slip not found for this month');
-      } else {
-        toast.error('Failed to fetch salary slip');
-      }
+      const data = await apiGet(`/salary/slip/${selectedEmployee}/${salarySlipMonth}/${salarySlipYear}`);
+      setSalarySlipContent(data?.data || '');
+      toast.success('Salary slip loaded successfully');
     } catch (error) {
       console.error('Error fetching salary slip:', error);
       toast.error('Failed to fetch salary slip');
@@ -333,23 +271,10 @@ export default function AttendanceHistory() {
 
     try {
       setSalarySlipLoading(true);
-      const token = localStorage.getItem('authToken');
-      
-      const response = await fetch(
-        `/api/salary/slip/${selectedEmployee}/${salarySlipMonth}/${salarySlipYear}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
+      const data = await apiGet(`/salary/slip/${selectedEmployee}/${salarySlipMonth}/${salarySlipYear}`);
+      const slip = data?.data;
 
-      if (response.ok) {
-        const data = await response.json();
-        const slip = data.data;
-        
-        // Create blob and download
+      if (slip) {
         const blob = new Blob([slip.htmlContent || salarySlipContent], { type: 'text/html;charset=utf-8;' });
         const link = document.createElement('a');
         const url = URL.createObjectURL(blob);
@@ -359,7 +284,6 @@ export default function AttendanceHistory() {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        
         toast.success('Salary slip downloaded successfully');
       } else {
         toast.error('Failed to download salary slip');

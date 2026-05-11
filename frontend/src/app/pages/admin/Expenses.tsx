@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -89,6 +89,7 @@ const CurrencyAmount: React.FC<{ amount: number; className?: string }> = ({ amou
 export default function ExpensesAdmin() {
   const { formatCurrency } = useCurrency();
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [searchTerm, setSearchTerm] = useState('');
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isActionDialogOpen, setIsActionDialogOpen] = useState(false);
@@ -124,8 +125,6 @@ export default function ExpensesAdmin() {
   const fetchExpenses = useCallback(async () => {
     try {
       const data = await apiGet(`/expenses?page=${page}&limit=10`);
-      console.log('Fetched expenses data:', data);
-      console.log('Expenses array:', data.data);
       setExpenses(data.data || []);
       setTotalExpenses(data.pagination?.total || 0);
     } catch (error) {
@@ -138,29 +137,42 @@ export default function ExpensesAdmin() {
     fetchExpenses();
   }, [fetchExpenses]);
 
-  // Log whenever expenses change to verify calculations
-  useEffect(() => {
-    const pendingTotal = expenses.filter(e => e.status === 'pending').reduce((sum, e) => sum + (e.amount || 0), 0);
-    const approvedTotal = expenses.filter(e => e.status === 'approved').reduce((sum, e) => sum + (e.amount || 0), 0);
-    console.log('Expenses updated:', {
-      total: expenses.length,
-      pending: expenses.filter(e => e.status === 'pending').length,
-      pendingAmount: pendingTotal,
-      approved: expenses.filter(e => e.status === 'approved').length,
-      approvedAmount: approvedTotal,
-      allExpenses: expenses.map(e => ({ 
-        id: e._id, 
-        amount: e.amount, 
-        amountType: typeof e.amount,
-        status: e.status,
-        title: e.title 
-      }))
-    });
-  }, [expenses]);
+  const normalizedSearch = searchTerm.trim().toLowerCase();
 
-  const filteredExpenses = selectedCategory === 'all' 
-    ? expenses 
-    : expenses.filter(expense => expense.category === selectedCategory);
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter((expense) => {
+      const categoryMatches = selectedCategory === 'all' || expense.category === selectedCategory;
+      if (!categoryMatches) return false;
+      if (!normalizedSearch) return true;
+
+      const haystack = [
+        expense.employeeName,
+        expense.title,
+        expense.description,
+        expense.category,
+        expense.status
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return haystack.includes(normalizedSearch);
+    });
+  }, [expenses, selectedCategory, normalizedSearch]);
+
+  const expenseStats = useMemo(() => {
+    const pending = expenses.filter((e) => e.status === 'pending');
+    const approved = expenses.filter((e) => e.status === 'approved');
+    const pendingAmount = pending.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const approvedAmount = approved.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+    return {
+      pendingCount: pending.length,
+      approvedCount: approved.length,
+      pendingAmount,
+      approvedAmount
+    };
+  }, [expenses]);
 
   const getCategoryIcon = (categoryName: string) => {
     const category = expenseCategories.find(cat => cat.name === categoryName);
@@ -367,12 +379,9 @@ export default function ExpensesAdmin() {
       } else if (actionType === 'approve') {
         // Approve expense
         await apiPut(`/expenses/${selectedExpense._id}/approve`, {});
-
-        console.log('Expense approved, fetching updated list...');
         toast.success('Expense approved successfully');
         setIsActionDialogOpen(false);
         await fetchExpenses();
-        console.log('Expenses list updated after approval');
       } else if (actionType === 'reject') {
         // Reject expense (single or bulk)
         if (selectedExpenses.size > 0) {
@@ -391,10 +400,14 @@ export default function ExpensesAdmin() {
         }
         await fetchExpenses();
       } else if (actionType === 'delete') {
+        if (selectedExpense.status !== 'approved') {
+          toast.error('Hard delete is allowed only for approved expenses');
+          return;
+        }
         // Delete expense
         await apiDelete(`/expenses/${selectedExpense._id}`);
 
-        toast.success('Expense deleted');
+        toast.success('Approved expense permanently deleted');
         setIsActionDialogOpen(false);
         await fetchExpenses();
       }
@@ -870,6 +883,8 @@ export default function ExpensesAdmin() {
             type="text"
             placeholder="Search expenses..."
             className="w-full pl-10 pr-4 py-2 border rounded-xl bg-background"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
         <Button variant="outline" className="rounded-xl">
@@ -886,12 +901,12 @@ export default function ExpensesAdmin() {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <p className="text-xl font-bold">{expenses.filter(e => e.status === 'pending').length}</p>
+                <p className="text-xl font-bold">{expenseStats.pendingCount}</p>
               </div>
               <p className="text-sm text-muted-foreground">Pending</p>
               <div className="text-sm font-semibold mt-1 flex items-center gap-1">
                 <IndianRupee className="w-4 h-4" />
-                <span>{(expenses.filter(e => e.status === 'pending').reduce((sum, e) => sum + (e.amount || 0), 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span>{expenseStats.pendingAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
           </div>
@@ -903,12 +918,12 @@ export default function ExpensesAdmin() {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <p className="text-xl font-bold">{expenses.filter(e => e.status === 'approved').length}</p>
+                <p className="text-xl font-bold">{expenseStats.approvedCount}</p>
               </div>
               <p className="text-sm text-muted-foreground">Approved</p>
               <div className="text-sm font-semibold mt-1 flex items-center gap-1">
                 <IndianRupee className="w-4 h-4" />
-                <span>{(expenses.filter(e => e.status === 'approved').reduce((sum, e) => sum + (e.amount || 0), 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span>{expenseStats.approvedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
           </div>
@@ -921,7 +936,7 @@ export default function ExpensesAdmin() {
             <div>
               <div className="text-xl font-bold flex items-center gap-1">
                 <IndianRupee className="w-5 h-5" />
-                <span>{(expenses.filter(e => e.status === 'approved').reduce((sum, e) => sum + (e.amount || 0), 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span>{expenseStats.approvedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
               <p className="text-sm text-muted-foreground">Total Claimed</p>
             </div>
@@ -1080,9 +1095,17 @@ export default function ExpensesAdmin() {
                           <Button variant="ghost" size="sm" onClick={() => handleReject(expense)} disabled={actionLoading || expense.status !== 'pending'}>
                             <XCircle className="w-4 h-4 text-red-600" />
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => handleDelete(expense)} disabled={actionLoading}>
-                            <Trash2 className="w-4 h-4 text-red-600" />
-                          </Button>
+                          {expense.status === 'approved' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDelete(expense)}
+                              disabled={actionLoading}
+                              title="Hard delete approved expense"
+                            >
+                              <Trash2 className="w-4 h-4 text-red-600" />
+                            </Button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1175,11 +1198,11 @@ export default function ExpensesAdmin() {
       <Dialog open={isActionDialogOpen} onOpenChange={setIsActionDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{actionType === 'approve' ? 'Approve Expense' : actionType === 'reject' ? 'Reject Expense' : 'Delete Expense'}</DialogTitle>
+            <DialogTitle>{actionType === 'approve' ? 'Approve Expense' : actionType === 'reject' ? 'Reject Expense' : 'Hard Delete Expense'}</DialogTitle>
             <DialogDescription>
               {actionType === 'approve' && 'Are you sure you want to approve this expense?'}
               {actionType === 'reject' && 'Please provide a reason for rejection:'}
-              {actionType === 'delete' && 'Are you sure you want to delete this expense? This action cannot be undone.'}
+              {actionType === 'delete' && 'This will permanently remove this approved expense from the database (hard delete). This action cannot be undone.'}
             </DialogDescription>
           </DialogHeader>
           {actionType === 'reject' && (
@@ -1199,14 +1222,14 @@ export default function ExpensesAdmin() {
               Cancel
             </Button>
             <Button 
-              className={`flex-1 rounded-xl ${actionType === 'reject' ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}`}
+              className={`flex-1 rounded-xl ${actionType === 'approve' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}
               onClick={processAction}
               disabled={actionLoading}
             >
               {actionLoading ? <Loader className="w-4 h-4 mr-2 animate-spin" /> : null}
               {actionType === 'approve' && 'Approve'}
               {actionType === 'reject' && 'Reject'}
-              {actionType === 'delete' && 'Delete'}
+              {actionType === 'delete' && 'Hard Delete'}
             </Button>
           </div>
         </DialogContent>

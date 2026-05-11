@@ -83,7 +83,7 @@ export default function Attendance() {
     try {
       if (!user?.id) return;
       const token = localStorage.getItem('authToken');
-      const response = await fetch(`/api/employees/user/${user.id}`, {
+      const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -172,7 +172,7 @@ export default function Attendance() {
   const fetchAttendanceHistory = async () => {
     try {
       const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/attendance?limit=7', {
+      const response = await fetch(buildApiUrl('/attendance?limit=7'), {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -279,7 +279,7 @@ export default function Attendance() {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/attendance/check-in', {
+      const response = await fetch(buildApiUrl('/attendance/check-in'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -300,6 +300,8 @@ export default function Attendance() {
         throw new Error(error.message || 'Check-in failed');
       }
 
+      const result = await response.json();
+
       // Update state immediately - DO NOT fetch from server
       setCheckedIn(true);
       setCurrentHours(0);
@@ -307,6 +309,10 @@ export default function Attendance() {
       setBreakType(null);
       setIsInMeeting(false);
       addActivityLog('Checked In', 'working');
+      setTodayData((prev: any) => ({
+        ...(prev || {}),
+        attendance: result?.data || result?.data?.attendance || prev?.attendance
+      }));
       
       // Save checked-in state to localStorage
       const today = new Date().toDateString();
@@ -317,20 +323,10 @@ export default function Attendance() {
         breakType: null,
         isInMeeting: false
       }));
-      
-      // Add today's check-in to attendance history immediately
-      const checkInRecord: AttendanceRecord = {
-        _id: Date.now().toString(),
-        date: new Date().toISOString(),
-        checkIn: new Date().toISOString(),
-        status: 'present'
-      };
-      setAttendanceHistory(prev => [checkInRecord, ...prev]);
-      
-      // Also refresh from server
-      setTimeout(() => {
-        fetchAttendanceHistory();
-      }, 500);
+
+      // Refresh from server (source of truth; no fake/local injected records)
+      await fetchTodayAttendance(employeeId);
+      await fetchAttendanceHistory();
       
       toast.success('Checked in successfully');
     } catch (error) {
@@ -351,7 +347,7 @@ export default function Attendance() {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/attendance/check-out', {
+      const response = await fetch(buildApiUrl('/attendance/check-out'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -380,6 +376,10 @@ export default function Attendance() {
       setBreakType(null);
       setIsInMeeting(false);
       addActivityLog('Checked Out', 'completed');
+      setTodayData((prev: any) => ({
+        ...(prev || {}),
+        attendance: result?.data || result?.data?.attendance || prev?.attendance
+      }));
       
       // Save checked-out state to localStorage
       const today = new Date().toDateString();
@@ -396,8 +396,9 @@ export default function Attendance() {
         setCurrentHours(result.data.hoursWorked);
       }
 
-      // Refresh history only
-      fetchAttendanceHistory();
+      // Refresh from server (source of truth)
+      await fetchTodayAttendance(employeeId);
+      await fetchAttendanceHistory();
       
       toast.success('Checked out successfully');
     } catch (error) {
@@ -418,7 +419,7 @@ export default function Attendance() {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/attendance/break-start', {
+      const response = await fetch(buildApiUrl('/attendance/break-start'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -472,7 +473,7 @@ export default function Attendance() {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/attendance/break-end', {
+      const response = await fetch(buildApiUrl('/attendance/break-end'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -536,7 +537,7 @@ export default function Attendance() {
       if (isOnBreak) {
         console.log('On break, ending break first...');
         try {
-          const breakEndResponse = await fetch('/api/attendance/break-end', {
+          const breakEndResponse = await fetch(buildApiUrl('/attendance/break-end'), {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${token}`,
@@ -584,7 +585,7 @@ export default function Attendance() {
       
       console.log('Sending meeting-start request:', meetingData);
       
-      const response = await fetch('/api/attendance/meeting-start', {
+      const response = await fetch(buildApiUrl('/attendance/meeting-start'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -641,7 +642,7 @@ export default function Attendance() {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
-      const response = await fetch('/api/attendance/meeting-end', {
+      const response = await fetch(buildApiUrl('/attendance/meeting-end'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,

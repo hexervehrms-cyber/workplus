@@ -164,6 +164,9 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
  */
 router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { userId, employeeId, employeeName, orgId, location, notes } = req.body;
+  const authUserId = req.user?.userId;
+  const authOrgId = req.user?.orgId;
+  const authRole = req.user?.role;
   
   console.log('CHECK-IN REQUEST:', {
     bodyUserId: userId,
@@ -173,11 +176,38 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     authOrgId: req.user?.orgId
   });
   
-  if (!userId || !employeeId || !orgId) {
-    return res.status(400).json({
-      success: false,
-      message: 'Missing required fields: userId, employeeId, orgId'
-    });
+  // Enforce tenant/user isolation. Employee check-in is always for authenticated user.
+  let effectiveUserId = userId;
+  let effectiveEmployeeId = employeeId;
+  let effectiveOrgId = orgId || authOrgId;
+  let effectiveEmployeeName = employeeName;
+
+  if (authRole === 'employee') {
+    const employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId }).select('_id firstName lastName userId').lean();
+    if (!employee) {
+      return res.status(403).json({
+        success: false,
+        message: 'Employee profile not found for authenticated user'
+      });
+    }
+    effectiveUserId = authUserId;
+    effectiveEmployeeId = employee._id;
+    effectiveOrgId = authOrgId;
+    effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employeeName || 'Employee';
+  } else {
+    if (!effectiveUserId || !effectiveEmployeeId || !effectiveOrgId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: userId, employeeId, orgId'
+      });
+    }
+    // Non-employee actors cannot write attendance for another org
+    if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized org access'
+      });
+    }
   }
 
   const today = new Date();
@@ -189,8 +219,8 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
 
   // Check if already checked in today
   const existingAttendance = await Attendance.findOne({
-    userId,
-    orgId,
+    userId: effectiveUserId,
+    orgId: effectiveOrgId,
     date: { $gte: today, $lt: tomorrow }
   });
 
@@ -209,13 +239,13 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
 
   // Create new attendance record
   const attendance = await Attendance.create({
-    userId,
-    employeeId,
-    employeeName,
+    userId: effectiveUserId,
+    employeeId: effectiveEmployeeId,
+    employeeName: effectiveEmployeeName,
     date: today,
     checkIn: new Date(),
     status: 'present',
-    orgId,
+    orgId: effectiveOrgId,
     checkInLocation: location || 'Office',
     checkInIP: req.ip || req.connection.remoteAddress,
     checkInNotes: notes
@@ -231,18 +261,18 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
 
   // Log activity
   await ActivityLog.logActivity({
-    userId,
-    orgId,
+    userId: effectiveUserId,
+    orgId: effectiveOrgId,
     action: 'attendance_checkin',
     entity: {
       entityType: 'attendance',
       entityId: attendance._id,
-      entityName: `${employeeName} - Check In`
+      entityName: `${effectiveEmployeeName} - Check In`
     },
     details: {
       location: location || 'Office',
       notes,
-      employeeName
+      employeeName: effectiveEmployeeName
     },
     ipAddress: req.ip,
     userAgent: req.get('User-Agent'),
@@ -252,13 +282,13 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
 
   // Emit real-time update
   if (req.emitAttendanceUpdate) {
-    req.emitAttendanceUpdate(attendance, orgId);
+    req.emitAttendanceUpdate(attendance, effectiveOrgId);
   }
 
   // Emit KPI update for real-time dashboard refresh
-  await emitKPIUpdate(req.io, orgId, 'check_in', {
-    employeeId,
-    employeeName
+  await emitKPIUpdate(req.io, effectiveOrgId, 'check_in', {
+    employeeId: effectiveEmployeeId,
+    employeeName: effectiveEmployeeName
   });
 
   // Send response first to confirm check-in
@@ -270,10 +300,14 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
 
   // Send check-in notification to HR AFTER check-in is confirmed
   try {
-    const hrEmail = process.env.HR_EMAIL || 'hr@hexerve.com';
+    const hrEmail = process.env.HR_EMAIL;
     console.log('📧 SENDING CHECK-IN EMAIL TO HR:', { hrEmail, employeeId });
+    if (!hrEmail) {
+      logger.warn('HR_EMAIL not configured; skipping check-in HR email', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
+      return;
+    }
     
-    const employee = await Employee.findById(employeeId)
+    const employee = await Employee.findById(effectiveEmployeeId)
       .select('firstName lastName email employeeCode department userId')
       .populate('userId', 'name email')
       .lean();
@@ -291,7 +325,7 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
       // Get name from employee - use firstName and lastName
       const empName = employee.firstName && employee.lastName 
         ? `${employee.firstName} ${employee.lastName}`
-        : employee.userId?.name || employeeName;
+        : employee.userId?.name || effectiveEmployeeName;
       
       const employeeEmail = employee.userId?.email || employee.email;
       
@@ -331,7 +365,7 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     console.log('❌ EMAIL ERROR:', emailError);
     logger.error('Failed to send check-in notification to HR', {
       error: emailError.message,
-      employeeName
+      employeeName: effectiveEmployeeName
     });
     // Don't fail the check-in if email fails - it's already confirmed
   }
@@ -343,12 +377,40 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
  */
 router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { userId, employeeId, employeeName, orgId, location, notes } = req.body;
-  
-  if (!userId || !employeeId || !orgId) {
-    return res.status(400).json({
-      success: false,
-      message: 'Missing required fields: userId, employeeId, orgId'
-    });
+  const authUserId = req.user?.userId;
+  const authOrgId = req.user?.orgId;
+  const authRole = req.user?.role;
+
+  let effectiveUserId = userId;
+  let effectiveEmployeeId = employeeId;
+  let effectiveOrgId = orgId || authOrgId;
+  let effectiveEmployeeName = employeeName;
+
+  if (authRole === 'employee') {
+    const employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId }).select('_id firstName lastName').lean();
+    if (!employee) {
+      return res.status(403).json({
+        success: false,
+        message: 'Employee profile not found for authenticated user'
+      });
+    }
+    effectiveUserId = authUserId;
+    effectiveEmployeeId = employee._id;
+    effectiveOrgId = authOrgId;
+    effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employeeName || 'Employee';
+  } else {
+    if (!effectiveUserId || !effectiveEmployeeId || !effectiveOrgId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: userId, employeeId, orgId'
+      });
+    }
+    if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized org access'
+      });
+    }
   }
 
   const today = new Date();
@@ -358,8 +420,8 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
   // Find today's attendance record
   const attendance = await Attendance.findOne({
-    userId,
-    orgId,
+    userId: effectiveUserId,
+    orgId: effectiveOrgId,
     date: { $gte: today, $lt: tomorrow }
   }).sort({ _id: -1 });
 
@@ -414,19 +476,19 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
   // Log activity
   await ActivityLog.logActivity({
-    userId,
-    orgId,
+    userId: effectiveUserId,
+    orgId: effectiveOrgId,
     action: 'attendance_checkout',
     entity: {
       entityType: 'attendance',
       entityId: attendance._id,
-      entityName: `${employeeName} - Check Out`
+      entityName: `${effectiveEmployeeName} - Check Out`
     },
     details: {
       location: location || 'Office',
       hoursWorked: Math.round(hoursWorked * 100) / 100,
       notes,
-      employeeName
+      employeeName: effectiveEmployeeName
     },
     ipAddress: req.ip,
     userAgent: req.get('User-Agent'),
@@ -436,13 +498,13 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
   // Emit real-time update
   if (req.emitAttendanceUpdate) {
-    req.emitAttendanceUpdate(updatedAttendance, orgId);
+    req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
   }
 
   // Emit KPI update for real-time dashboard refresh
-  await emitKPIUpdate(req.io, orgId, 'check_out', {
-    employeeId,
-    employeeName,
+  await emitKPIUpdate(req.io, effectiveOrgId, 'check_out', {
+    employeeId: effectiveEmployeeId,
+    employeeName: effectiveEmployeeName,
     hoursWorked: Math.round(hoursWorked * 100) / 100
   });
 
@@ -455,10 +517,14 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
   // Send check-out notification to HR AFTER check-out is confirmed
   try {
-    const hrEmail = process.env.HR_EMAIL || 'hr@hexerve.com';
+    const hrEmail = process.env.HR_EMAIL;
     console.log('📧 SENDING CHECK-OUT EMAIL TO HR:', { hrEmail, employeeId });
+    if (!hrEmail) {
+      logger.warn('HR_EMAIL not configured; skipping check-out HR email', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
+      return;
+    }
     
-    const employee = await Employee.findById(employeeId)
+    const employee = await Employee.findById(effectiveEmployeeId)
       .select('firstName lastName email employeeCode department userId')
       .populate('userId', 'name email')
       .lean();
@@ -476,7 +542,7 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       // Get name from employee - use firstName and lastName
       const empName = employee.firstName && employee.lastName 
         ? `${employee.firstName} ${employee.lastName}`
-        : employee.userId?.name || employeeName;
+        : employee.userId?.name || effectiveEmployeeName;
       
       const employeeEmail = employee.userId?.email || employee.email;
       
@@ -518,7 +584,7 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     console.log('❌ EMAIL ERROR:', emailError);
     logger.error('Failed to send check-out notification to HR', {
       error: emailError.message,
-      employeeName
+      employeeName: effectiveEmployeeName
     });
     // Don't fail the check-out if email fails - it's already confirmed
   }

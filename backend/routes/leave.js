@@ -530,7 +530,15 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
   const { userId } = req.params;
   const { status } = req.query;
 
-  const query = { userId };
+  // Enforce tenant/user isolation for leave data
+  if (req.user.role === 'employee' && req.user.userId.toString() !== userId.toString()) {
+    return res.status(403).json({
+      success: false,
+      message: 'Unauthorized access'
+    });
+  }
+
+  const query = { userId, orgId: req.user.orgId };
   
   if (status) {
     query.status = status;
@@ -783,6 +791,7 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   // Check for overlapping leave requests
   const overlapping = await LeaveRequest.findOne({
     employeeId,
+    orgId,
     status: { $in: ['pending', 'approved'] },
     $or: [
       {
@@ -870,7 +879,10 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
       logger.info('Leave request submitted email sent', { leaveRequestId: leaveRequest._id, email: user.email });
       
       // Send notification to HR/admin
-      const hrEmail = process.env.HR_EMAIL || 'hr@hexerve.com';
+      const hrEmail = process.env.HR_EMAIL;
+      if (!hrEmail) {
+        logger.warn('HR_EMAIL not configured; skipping leave HR email', { leaveRequestId: leaveRequest._id, orgId });
+      }
       if (hrEmail) {
         await EmailNotificationService.sendLeaveRequestSubmittedToHR(
           {

@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from './ui/select';
 import { LeaveRequestService } from '../utils/api';
+import { apiGet } from '../utils/apiHelper';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
@@ -76,23 +77,13 @@ export default function InteractiveCalendar() {
         }
 
         // Fetch holidays
-        const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-        const holidayResponse = await fetch('/api/holidays', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (holidayResponse.ok) {
-          const holidayData = await holidayResponse.json();
-          if (holidayData.success && Array.isArray(holidayData.data)) {
-            setHolidays(holidayData.data);
-          }
+        const holidayData = await apiGet('/holidays');
+        if (holidayData?.success && Array.isArray(holidayData.data)) {
+          setHolidays(holidayData.data);
         }
       } catch (error) {
         console.error('Error fetching data:', error);
-        toast.error('Failed to load data');
+        // Avoid noisy global toast on dashboard load; keep calendar usable with partial data.
       } finally {
         setLoading(false);
       }
@@ -105,19 +96,9 @@ export default function InteractiveCalendar() {
   useEffect(() => {
     const refreshHolidays = async () => {
       try {
-        const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-        const holidayResponse = await fetch('/api/holidays', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (holidayResponse.ok) {
-          const holidayData = await holidayResponse.json();
-          if (holidayData.success && Array.isArray(holidayData.data)) {
-            setHolidays(holidayData.data);
-          }
+        const holidayData = await apiGet('/holidays');
+        if (holidayData?.success && Array.isArray(holidayData.data)) {
+          setHolidays(holidayData.data);
         }
       } catch (error) {
         console.error('Error refreshing holidays:', error);

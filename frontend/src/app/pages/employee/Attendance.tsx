@@ -48,6 +48,7 @@ export default function Attendance() {
   const [filterStartDate, setFilterStartDate] = useState<string>('');
   const [filterEndDate, setFilterEndDate] = useState<string>('');
   const [filterLoading, setFilterLoading] = useState(false);
+  const attendanceCacheKey = `employee_attendance_state_${user?.id || 'unknown'}`;
 
   // Load activity logs from localStorage on mount
   useEffect(() => {
@@ -82,6 +83,10 @@ export default function Attendance() {
   const fetchEmployeeId = async () => {
     try {
       if (!user?.id) return;
+      if ((user as any)?.employeeId) {
+        setEmployeeId((user as any).employeeId);
+        return (user as any).employeeId;
+      }
       const token = localStorage.getItem('authToken');
       const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
         headers: {
@@ -138,6 +143,7 @@ export default function Attendance() {
           setIsOnBreak(state.isOnBreak || false);
           setBreakType(state.breakType || null);
           setIsInMeeting(state.isInMeeting || false);
+          localStorage.setItem(attendanceCacheKey, JSON.stringify(state));
         } catch (e) {
           console.warn('Failed to parse stored state, using server state');
           // Fallback to server state
@@ -148,6 +154,13 @@ export default function Attendance() {
           setIsOnBreak(data.data?.liveStatus?.isOnBreak || false);
           setBreakType(null);
           setIsInMeeting(data.data?.liveStatus?.isInMeeting || false);
+          localStorage.setItem(attendanceCacheKey, JSON.stringify({
+            checkedIn: isCheckedInNow,
+            currentHours: data.data?.liveStatus?.currentHours || 0,
+            isOnBreak: data.data?.liveStatus?.isOnBreak || false,
+            breakType: null,
+            isInMeeting: data.data?.liveStatus?.isInMeeting || false
+          }));
         }
       } else {
         // No localStorage state, use server state
@@ -159,6 +172,13 @@ export default function Attendance() {
         setIsOnBreak(data.data?.liveStatus?.isOnBreak || false);
         setBreakType(null);
         setIsInMeeting(data.data?.liveStatus?.isInMeeting || false);
+        localStorage.setItem(attendanceCacheKey, JSON.stringify({
+          checkedIn: isCheckedInNow,
+          currentHours: data.data?.liveStatus?.currentHours || 0,
+          isOnBreak: data.data?.liveStatus?.isOnBreak || false,
+          breakType: null,
+          isInMeeting: data.data?.liveStatus?.isInMeeting || false
+        }));
       }
     } catch (error) {
       console.error('Error fetching attendance:', error);
@@ -271,28 +291,25 @@ export default function Attendance() {
 
   // Check In
   const handleCheckIn = async () => {
-    if (!employeeId) {
-      toast.error('Employee ID not found');
-      return;
-    }
-
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
+      const payload: any = {
+        location: 'Office',
+        notes: 'Check-in from attendance page'
+      };
+      // Optional identifiers for non-employee roles only; employee flow resolves from JWT.
+      if (employeeId) payload.employeeId = employeeId;
+      if (user?.id) payload.userId = user.id;
+      if (user?.name) payload.employeeName = user.name;
+      if (getOrgId()) payload.orgId = getOrgId();
       const response = await fetch(buildApiUrl('/attendance/check-in'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          userId: user?.id,
-          employeeId,
-          employeeName: user?.name || 'Employee',
-          orgId: getOrgId(),
-          location: 'Office',
-          notes: 'Check-in from attendance page'
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
@@ -323,9 +340,18 @@ export default function Attendance() {
         breakType: null,
         isInMeeting: false
       }));
+      localStorage.setItem(attendanceCacheKey, JSON.stringify({
+        checkedIn: true,
+        currentHours: 0,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: false
+      }));
 
-      // Refresh from server (source of truth; no fake/local injected records)
-      await fetchTodayAttendance(employeeId);
+      // Refresh from server in background (source of truth).
+      if (employeeId) {
+        void fetchTodayAttendance(employeeId);
+      }
       
       toast.success('Checked in successfully');
     } catch (error) {
@@ -338,27 +364,23 @@ export default function Attendance() {
 
   // Check Out
   const handleCheckOut = async () => {
-    if (!employeeId) {
-      toast.error('Employee ID not found');
-      return;
-    }
-
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
+      const payload: any = {
+        location: 'Office',
+        notes: 'Check-out from attendance page'
+      };
+      if (employeeId) payload.employeeId = employeeId;
+      if (user?.id) payload.userId = user.id;
+      if (getOrgId()) payload.orgId = getOrgId();
       const response = await fetch(buildApiUrl('/attendance/check-out'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          userId: user?.id,
-          employeeId,
-          orgId: getOrgId(),
-          location: 'Office',
-          notes: 'Check-out from attendance page'
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
@@ -389,14 +411,23 @@ export default function Attendance() {
         breakType: null,
         isInMeeting: false
       }));
+      localStorage.setItem(attendanceCacheKey, JSON.stringify({
+        checkedIn: false,
+        currentHours: result.data?.hoursWorked || 0,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: false
+      }));
       
       // Update hours from response
       if (result.data?.hoursWorked) {
         setCurrentHours(result.data.hoursWorked);
       }
 
-      // Refresh from server (source of truth)
-      await fetchTodayAttendance(employeeId);
+      // Refresh from server in background (source of truth)
+      if (employeeId) {
+        void fetchTodayAttendance(employeeId);
+      }
       // History rarely changes; refresh it after check-out only
       await fetchAttendanceHistory();
       
@@ -411,26 +442,22 @@ export default function Attendance() {
 
   // Break Start
   const handleBreakStart = async (breakType = 'regular') => {
-    if (!employeeId) {
-      toast.error('Employee ID not found');
-      return;
-    }
-
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
+      const payload: any = {
+        breakType,
+        notes: `Break started`
+      };
+      if (employeeId) payload.employeeId = employeeId;
+      if (getOrgId()) payload.orgId = getOrgId();
       const response = await fetch(buildApiUrl('/attendance/break-start'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          employeeId,
-          orgId: getOrgId(),
-          breakType,
-          notes: `Break started`
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
@@ -453,6 +480,13 @@ export default function Attendance() {
         breakType,
         isInMeeting: false
       }));
+      localStorage.setItem(attendanceCacheKey, JSON.stringify({
+        checkedIn: true,
+        currentHours,
+        isOnBreak: true,
+        breakType,
+        isInMeeting: false
+      }));
       
       toast.success(`${breakLabel} started`);
     } catch (error) {
@@ -465,25 +499,21 @@ export default function Attendance() {
 
   // Break End
   const handleBreakEnd = async () => {
-    if (!employeeId) {
-      toast.error('Employee ID not found');
-      return;
-    }
-
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
+      const payload: any = {
+        notes: 'Break ended'
+      };
+      if (employeeId) payload.employeeId = employeeId;
+      if (getOrgId()) payload.orgId = getOrgId();
       const response = await fetch(buildApiUrl('/attendance/break-end'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          employeeId,
-          orgId: getOrgId(),
-          notes: 'Break ended'
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
@@ -505,6 +535,13 @@ export default function Attendance() {
         breakType: null,
         isInMeeting: false
       }));
+      localStorage.setItem(attendanceCacheKey, JSON.stringify({
+        checkedIn: true,
+        currentHours,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: false
+      }));
       
       toast.success('Break ended');
     } catch (error) {
@@ -519,11 +556,6 @@ export default function Attendance() {
   const handleMeetingStart = async () => {
     console.log('Meeting start clicked - isOnBreak:', isOnBreak);
     
-    if (!employeeId) {
-      toast.error('Employee ID not found');
-      return;
-    }
-
     if (!checkedIn) {
       toast.error('Please check in first before starting a meeting');
       return;
@@ -575,13 +607,13 @@ export default function Attendance() {
         }
       }
       
-      const meetingData = {
-        employeeId,
-        orgId: getOrgId(),
+      const meetingData: any = {
         meetingTitle: 'Meeting',
         meetingType: 'internal',
         notes: 'Meeting started'
       };
+      if (employeeId) meetingData.employeeId = employeeId;
+      if (getOrgId()) meetingData.orgId = getOrgId();
       
       console.log('Sending meeting-start request:', meetingData);
       
@@ -620,6 +652,13 @@ export default function Attendance() {
         breakType: null,
         isInMeeting: true
       }));
+      localStorage.setItem(attendanceCacheKey, JSON.stringify({
+        checkedIn: true,
+        currentHours,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: true
+      }));
       
       toast.success('Meeting started');
     } catch (error) {
@@ -634,25 +673,21 @@ export default function Attendance() {
 
   // Meeting End
   const handleMeetingEnd = async () => {
-    if (!employeeId) {
-      toast.error('Employee ID not found');
-      return;
-    }
-
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
+      const payload: any = {
+        notes: 'Meeting ended'
+      };
+      if (employeeId) payload.employeeId = employeeId;
+      if (getOrgId()) payload.orgId = getOrgId();
       const response = await fetch(buildApiUrl('/attendance/meeting-end'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          employeeId,
-          orgId: getOrgId(),
-          notes: 'Meeting ended'
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
@@ -667,6 +702,13 @@ export default function Attendance() {
       // Save state to localStorage
       const today = new Date().toDateString();
       localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        currentHours,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: false
+      }));
+      localStorage.setItem(attendanceCacheKey, JSON.stringify({
         checkedIn: true,
         currentHours,
         isOnBreak: false,
@@ -711,6 +753,19 @@ export default function Attendance() {
 
   // Initial load only
   useEffect(() => {
+    const cached = localStorage.getItem(attendanceCacheKey);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        setCheckedIn(!!parsed.checkedIn);
+        setCurrentHours(parsed.currentHours || 0);
+        setIsOnBreak(!!parsed.isOnBreak);
+        setBreakType(parsed.breakType || null);
+        setIsInMeeting(!!parsed.isInMeeting);
+        setLoading(false);
+      } catch (_) {}
+    }
+
     const init = async () => {
       const empId = await fetchEmployeeId();
       if (empId) {
@@ -718,8 +773,8 @@ export default function Attendance() {
         await fetchAttendanceHistory();
       }
     };
-    init();
-  }, [user?.id]);
+    void init();
+  }, [user?.id, attendanceCacheKey]);
 
   return (
     <div className="p-8 space-y-8">
@@ -731,7 +786,6 @@ export default function Attendance() {
       {loading ? (
         <Card className="p-8 rounded-2xl text-center">
           <Loader className="w-8 h-8 animate-spin mx-auto mb-2" />
-          <p className="text-muted-foreground">Loading attendance data...</p>
         </Card>
       ) : (
         <>

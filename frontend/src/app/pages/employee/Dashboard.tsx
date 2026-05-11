@@ -822,7 +822,7 @@ export default function EmployeeDashboard() {
             onClick={todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? handleBreakEnd : () => handleBreakStart('regular')}
             disabled={!todayAttendance.isCheckedIn || todayAttendance.isInMeeting || (todayAttendance.isOnBreak && todayAttendance.breakType !== 'regular') || actionInProgress}
           >
-            {actionInProgress ? 'Loading...' : (todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? 'End Break' : 'Break')}
+            {todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? 'End Break' : 'Break'}
           </Button>
 
           {/* Meeting Button */}
@@ -832,7 +832,7 @@ export default function EmployeeDashboard() {
             onClick={todayAttendance.isInMeeting ? handleMeetingEnd : handleMeetingStart}
             disabled={!todayAttendance.isCheckedIn || todayAttendance.isOnBreak || actionInProgress}
           >
-            {actionInProgress ? 'Loading...' : (todayAttendance.isInMeeting ? 'End Meeting' : 'Meeting')}
+            {todayAttendance.isInMeeting ? 'End Meeting' : 'Meeting'}
           </Button>
 
           {/* Check In/Out Button */}
@@ -843,7 +843,7 @@ export default function EmployeeDashboard() {
               disabled={actionInProgress}
             >
               <Clock className="w-4 h-4 mr-2" />
-              {actionInProgress ? 'Loading...' : 'Check In'}
+              Check In
             </Button>
           ) : (
             <Button 
@@ -852,7 +852,7 @@ export default function EmployeeDashboard() {
               disabled={actionInProgress}
             >
               <LogOut className="w-4 h-4 mr-2" />
-              {actionInProgress ? 'Loading...' : 'Check Out'}
+              Check Out
             </Button>
           )}
         </div>
@@ -1000,7 +1000,7 @@ export default function EmployeeDashboard() {
                   disabled={!todayAttendance.isCheckedIn || todayAttendance.isInMeeting || (todayAttendance.isOnBreak && todayAttendance.breakType !== 'regular') || actionInProgress}
                   className="rounded-lg"
                 >
-                  {actionInProgress ? 'Loading...' : (todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? 'End Break' : 'Break')}
+                  {todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? 'End Break' : 'Break'}
                 </Button>
 
                 {/* Meeting Button */}
@@ -1011,7 +1011,7 @@ export default function EmployeeDashboard() {
                   disabled={!todayAttendance.isCheckedIn || todayAttendance.isOnBreak || actionInProgress}
                   className="rounded-lg"
                 >
-                  {actionInProgress ? 'Loading...' : (todayAttendance.isInMeeting ? 'End Meeting' : 'Meeting')}
+                  {todayAttendance.isInMeeting ? 'End Meeting' : 'Meeting'}
                 </Button>
               </div>
               

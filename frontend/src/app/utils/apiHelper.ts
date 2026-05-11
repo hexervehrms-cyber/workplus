@@ -1,9 +1,13 @@
 /**
- * API Helper - Centralized API call utility
+ * API Helper - Centralized API call utility with caching
  * Ensures all API calls use the correct base URL for production and development
  */
 
 import { TokenManager } from './api';
+
+// Simple request cache for GET requests
+const requestCache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Get the API base URL
@@ -81,16 +85,45 @@ export const apiRequest = async <T = any>(
 };
 
 /**
- * GET request
+ * GET request with caching
  */
-export const apiGet = async <T = any>(endpoint: string): Promise<T> => {
-  return apiRequest<T>(endpoint, { method: 'GET' });
+export const apiGet = async <T = any>(endpoint: string, useCache = true): Promise<T> => {
+  // Check cache for GET requests
+  if (useCache && requestCache.has(endpoint)) {
+    const cached = requestCache.get(endpoint);
+    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+      console.log(`📦 Using cached data for ${endpoint}`);
+      return cached.data;
+    }
+  }
+
+  const data = await apiRequest<T>(endpoint, { method: 'GET' });
+  
+  // Cache the result
+  if (useCache) {
+    requestCache.set(endpoint, { data, timestamp: Date.now() });
+  }
+  
+  return data;
+};
+
+/**
+ * Clear cache for specific endpoint or all
+ */
+export const clearApiCache = (endpoint?: string) => {
+  if (endpoint) {
+    requestCache.delete(endpoint);
+  } else {
+    requestCache.clear();
+  }
 };
 
 /**
  * POST request
  */
 export const apiPost = async <T = any>(endpoint: string, data?: any): Promise<T> => {
+  // Clear cache on POST (data mutation)
+  clearApiCache();
   return apiRequest<T>(endpoint, {
     method: 'POST',
     body: data ? JSON.stringify(data) : undefined
@@ -101,6 +134,8 @@ export const apiPost = async <T = any>(endpoint: string, data?: any): Promise<T>
  * PUT request
  */
 export const apiPut = async <T = any>(endpoint: string, data?: any): Promise<T> => {
+  // Clear cache on PUT (data mutation)
+  clearApiCache();
   return apiRequest<T>(endpoint, {
     method: 'PUT',
     body: data ? JSON.stringify(data) : undefined
@@ -111,6 +146,8 @@ export const apiPut = async <T = any>(endpoint: string, data?: any): Promise<T> 
  * PATCH request
  */
 export const apiPatch = async <T = any>(endpoint: string, data?: any): Promise<T> => {
+  // Clear cache on PATCH (data mutation)
+  clearApiCache();
   return apiRequest<T>(endpoint, {
     method: 'PATCH',
     body: data ? JSON.stringify(data) : undefined
@@ -121,6 +158,8 @@ export const apiPatch = async <T = any>(endpoint: string, data?: any): Promise<T
  * DELETE request
  */
 export const apiDelete = async <T = any>(endpoint: string): Promise<T> => {
+  // Clear cache on DELETE (data mutation)
+  clearApiCache();
   return apiRequest<T>(endpoint, { method: 'DELETE' });
 };
 
@@ -147,6 +186,8 @@ export const apiUpload = async <T = any>(
     throw new Error(errorData.message || 'Upload failed');
   }
 
+  // Clear cache on upload
+  clearApiCache();
   return response.json();
 };
 

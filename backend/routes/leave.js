@@ -329,6 +329,16 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
     if (employee.email && employeeRecord) {
       await EmailNotificationService.sendLeaveApproved(employee, updated, approver);
       logger.info('Leave approved email sent', { leaveRequestId: id, email: employee.email });
+      
+      // Send notification to HR/admin
+      const hrEmail = process.env.HR_EMAIL;
+      if (!hrEmail) {
+        logger.warn('HR_EMAIL not configured; skipping leave HR email', { leaveRequestId: id, orgId: updated.orgId });
+      }
+      if (hrEmail) {
+        await EmailNotificationService.sendLeaveApprovedToHR(employee, updated, approver, hrEmail);
+        logger.info('Leave approved notification sent to HR', { leaveRequestId: id, hrEmail });
+      }
     } else {
       logger.warn('Missing employee data for leave approval notification', { 
         leaveRequestId: id, 

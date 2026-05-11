@@ -132,32 +132,58 @@ export default function EmployeeDashboard() {
     try {
       setLoading(true);
       setError(null);
-      const [employeeResult, attendanceResult, dashboardResult, holidayResult] = await Promise.allSettled([
-        apiGet(`/employees/user/${user.id}`),
-        apiGet('/attendance/today'),
-        apiGet('/dashboard/employee'),
-        apiGet('/holidays')
-      ]);
+      
+      // Set a timeout to prevent infinite loading
+      const timeoutId = setTimeout(() => {
+        setLoading(false);
+      }, 5000); // 5 second timeout
+      
+      // Fetch only critical data first (attendance), then holidays separately
+      const attendanceResult = await apiGet('/attendance/today');
+      clearTimeout(timeoutId);
+      
+      // Fetch holidays in parallel but don't block on it - use cached version first
+      const cachedHolidays = localStorage.getItem('cached_holidays');
+      if (cachedHolidays) {
+        try {
+          const parsed = JSON.parse(cachedHolidays);
+          setHolidays(parsed);
+        } catch (e) {
+          console.warn('Failed to parse cached holidays');
+        }
+      }
+      
+      // Fetch fresh holidays in background
+      apiGet('/holidays').then(result => {
+        if (result?.success && Array.isArray(result.data)) {
+          console.log('✅ Dashboard: Loaded', result.data.length, 'holidays');
+          setHolidays(result.data);
+          // Cache holidays for offline access
+          localStorage.setItem('cached_holidays', JSON.stringify(result.data));
+        }
+      }).catch(err => {
+        console.warn('⚠️ Holiday fetch failed:', err);
+        // Try to fetch from localStorage as fallback
+        const cachedHolidays = localStorage.getItem('cached_holidays');
+        if (cachedHolidays) {
+          try {
+            const parsed = JSON.parse(cachedHolidays);
+            console.log('📦 Using cached holidays:', parsed.length);
+            setHolidays(parsed);
+          } catch (e) {
+            console.warn('Failed to parse cached holidays');
+          }
+        }
+      });
 
-      const employeeData =
-        employeeResult.status === 'fulfilled' ? employeeResult.value?.data : null;
       const attendanceData =
-        attendanceResult.status === 'fulfilled' && attendanceResult.value?.success
-          ? attendanceResult.value.data
+        attendanceResult?.success
+          ? attendanceResult.data
           : null;
-      let data =
-        dashboardResult.status === 'fulfilled' && dashboardResult.value?.success
-          ? (dashboardResult.value.data || {})
-          : {};
-
-      if (attendanceData) data = { ...data, attendance: { today: attendanceData.attendance } };
-      if (employeeData) data = { ...data, employee: employeeData };
+      
+      let data = { attendance: { today: attendanceData?.attendance } };
       
       setDashboardData(data);
-      
-      if (holidayResult.status === 'fulfilled' && holidayResult.value?.success && Array.isArray(holidayResult.value.data)) {
-        setHolidays(holidayResult.value.data);
-      }
       
       // Update today's attendance
       if (attendanceData?.attendance) {
@@ -469,7 +495,11 @@ export default function EmployeeDashboard() {
         setTodayAttendance(updatedState);
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
         toast.success('Checked in successfully!');
-        setDisableRefresh(false);
+        
+        // Re-enable refresh after action completes
+        setTimeout(() => {
+          setDisableRefresh(false);
+        }, 1000);
       }
     } catch (err) {
       console.error('Check-in error:', err);
@@ -477,7 +507,10 @@ export default function EmployeeDashboard() {
       toast.error(err instanceof Error ? err.message : 'Check-in failed');
       setDisableRefresh(false);
     } finally {
-      setActionInProgress(false);
+      // Clear action lock after delay to prevent rapid re-clicks
+      setTimeout(() => {
+        setActionInProgress(false);
+      }, 1500);
     }
   };
 
@@ -521,7 +554,11 @@ export default function EmployeeDashboard() {
         setTodayAttendance(updatedState);
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
         toast.success('Checked out successfully!');
-        setDisableRefresh(false);
+        
+        // Re-enable refresh after action completes
+        setTimeout(() => {
+          setDisableRefresh(false);
+        }, 1000);
       }
     } catch (err) {
       console.error('Check-out error:', err);
@@ -529,7 +566,10 @@ export default function EmployeeDashboard() {
       toast.error(err instanceof Error ? err.message : 'Check-out failed');
       setDisableRefresh(false);
     } finally {
-      setActionInProgress(false);
+      // Clear action lock after delay to prevent rapid re-clicks
+      setTimeout(() => {
+        setActionInProgress(false);
+      }, 1500);
     }
   };
 
@@ -597,7 +637,9 @@ export default function EmployeeDashboard() {
         setTimeout(async () => {
           await fetchDashboardData();
           setDisableRefresh(false);
-        }, 500);  // Small delay to ensure database is updated
+        }, 800);  // Increased delay to ensure database is updated
+      } else {
+        setDisableRefresh(false);
       }
     } catch (err) {
       console.error('Break start error:', err);
@@ -605,10 +647,10 @@ export default function EmployeeDashboard() {
       // Re-enable refresh on error
       setDisableRefresh(false);
     } finally {
-      // Always clear action lock
+      // Always clear action lock after delay
       setTimeout(() => {
         setActionInProgress(false);
-      }, 1000);
+      }, 1500);
     }
   };
 
@@ -659,7 +701,7 @@ export default function EmployeeDashboard() {
         setTimeout(async () => {
           await fetchDashboardData();
           setDisableRefresh(false);
-        }, 500);  // Small delay to ensure database is updated
+        }, 800);  // Increased delay to ensure database is updated
       } else {
         // Re-enable refresh if failed
         setDisableRefresh(false);
@@ -670,10 +712,10 @@ export default function EmployeeDashboard() {
       // Re-enable refresh if error
       setDisableRefresh(false);
     } finally {
-      // Always clear action lock
+      // Always clear action lock after delay
       setTimeout(() => {
         setActionInProgress(false);
-      }, 1000);
+      }, 1500);
     }
   };
 
@@ -728,7 +770,9 @@ export default function EmployeeDashboard() {
         setTimeout(async () => {
           await fetchDashboardData();
           setDisableRefresh(false);
-        }, 500);
+        }, 800);  // Increased delay to ensure database is updated
+      } else {
+        setDisableRefresh(false);
       }
     } catch (err) {
       console.error('Meeting start error:', err);
@@ -736,10 +780,10 @@ export default function EmployeeDashboard() {
       // Re-enable refresh on error
       setDisableRefresh(false);
     } finally {
-      // Always clear action lock
+      // Always clear action lock after delay
       setTimeout(() => {
         setActionInProgress(false);
-      }, 1000);
+      }, 1500);
     }
   };
 
@@ -786,7 +830,7 @@ export default function EmployeeDashboard() {
         setTimeout(async () => {
           await fetchDashboardData();
           setDisableRefresh(false);
-        }, 500);
+        }, 800);  // Increased delay to ensure database is updated
       } else {
         // Re-enable refresh if failed
         setDisableRefresh(false);
@@ -797,10 +841,10 @@ export default function EmployeeDashboard() {
       // Re-enable refresh if error
       setDisableRefresh(false);
     } finally {
-      // Always clear action lock
+      // Always clear action lock after delay
       setTimeout(() => {
         setActionInProgress(false);
-      }, 1000);
+      }, 1500);
     }
   };
 

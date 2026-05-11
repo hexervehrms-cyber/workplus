@@ -22,19 +22,15 @@ function figmaAssetResolver() {
 export default defineConfig({
   plugins: [
     figmaAssetResolver(),
-    // The React and Tailwind plugins are both required for Make, even if
-    // Tailwind is not being actively used – do not remove them
     react(),
     tailwindcss(),
   ],
   resolve: {
     alias: {
-      // Alias @ to the src directory
       '@': path.resolve(__dirname, './src'),
     },
   },
 
-  // Proxy API requests to backend
   server: {
     proxy: {
       '/api': {
@@ -45,11 +41,15 @@ export default defineConfig({
     },
   },
 
-  // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
 
   build: {
-    chunkSizeWarningLimit: 1000, // Increase warning threshold to 1MB
+    // Performance optimizations
+    minify: 'esbuild', // Use esbuild instead of terser (faster and built-in)
+    chunkSizeWarningLimit: 1000,
+    sourcemap: false, // Disable sourcemaps in production for security
+    cssCodeSplit: true, // Split CSS into separate files
+    reportCompressedSize: false, // Faster builds
     rollupOptions: {
       output: {
         manualChunks: {

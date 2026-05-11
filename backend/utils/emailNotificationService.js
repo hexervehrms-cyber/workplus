@@ -69,12 +69,17 @@ class EmailNotificationService {
 
   /**
    * Send email using nodemailer with Microsoft 365 SMTP
-   * Supports custom from email address
+   * Supports sending from employee email addresses
    */
   static async sendEmail(emailData) {
     try {
-      if (!process.env.SMTP_HOST || !process.env.SMTP_USER) {
-        logger.warn('Email service not configured', { to: emailData.to });
+      if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+        logger.warn('Email service not configured', { 
+          to: emailData.to,
+          hasHost: !!process.env.SMTP_HOST,
+          hasUser: !!process.env.SMTP_USER,
+          hasPass: !!process.env.SMTP_PASS
+        });
         return false;
       }
 
@@ -83,35 +88,49 @@ class EmailNotificationService {
       const transporter = nodemailer.default.createTransport({
         host: process.env.SMTP_HOST,
         port: parseInt(process.env.SMTP_PORT) || 587,
-        secure: false,
+        secure: false, // Use TLS (not SSL)
         auth: {
           user: process.env.SMTP_USER,
           pass: process.env.SMTP_PASS
         },
         tls: {
-          ciphers: 'SSLv3',
-          rejectUnauthorized: false
+          rejectUnauthorized: false // For Office 365
         }
       });
 
       await transporter.verify();
 
-      // Use custom from email if provided, otherwise use default
-      const fromEmail = emailData.from || process.env.FROM_EMAIL || process.env.SMTP_USER;
+      // Always send FROM the authenticated SMTP account (hr@hexerve.com)
+      // Use replyTo for employee email to comply with Office 365 security
+      const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER;
       const fromName = emailData.fromName || 'WorkPlus HR';
+      const replyToEmail = emailData.replyTo || emailData.from || fromEmail;
 
       const info = await transporter.sendMail({
         from: `"${fromName}" <${fromEmail}>`,
         to: emailData.to,
         subject: emailData.subject,
         html: emailData.html,
-        text: emailData.text
+        text: emailData.text,
+        replyTo: replyToEmail
       });
 
-      logger.info('Email sent', { to: emailData.to, from: fromEmail, subject: emailData.subject, messageId: info.messageId });
+      logger.info('Email sent successfully', { 
+        to: emailData.to, 
+        from: fromEmail, 
+        replyTo: replyToEmail,
+        subject: emailData.subject, 
+        messageId: info.messageId,
+        smtp: process.env.SMTP_HOST
+      });
       return true;
     } catch (error) {
-      logger.error('Email send failed', { error: error.message, to: emailData.to });
+      logger.error('Email send failed', { 
+        error: error.message, 
+        to: emailData.to,
+        smtp: process.env.SMTP_HOST,
+        user: process.env.SMTP_USER
+      });
       return false;
     }
   }
@@ -251,9 +270,10 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Status:</span><span class="value" style="color:#ffc107">⏳ Pending</span></div></div>
 <div style="text-align:center"><a href="${getFrontendUrl()}/admin/leave-requests" class="button">📋 Review Leave</a></div>`;
     
-    // Send email to HR
+    // Send email to HR with employee email in reply-to
     await this.sendEmail({
       to: hrEmail,
+      replyTo: employee.email,
       subject: `New Leave Request - ${employee.name}: ${leaveRequest.type} (${days} days)`,
       html: this.getEmailTemplate(content, '📅 New Leave Request'),
       text: `Leave request from ${start} to ${end} submitted by ${employee.name}.`
@@ -297,6 +317,30 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       subject: `Leave Approved - ${start} to ${end}`,
       html: this.getEmailTemplate(content, '✅ Leave Approved'),
       text: `Leave from ${start} to ${end} approved.`
+    });
+  }
+
+  static async sendLeaveApprovedToHR(employee, leaveRequest, approver, hrEmail) {
+    const start = new Date(leaveRequest.startDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+    const end = new Date(leaveRequest.endDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+    
+    const content = `<p>Dear HR Team,</p>
+<p>A leave request has been approved.</p>
+<div class="card"><h3 style="margin-top:0;color:#28a745">📅 Leave Approved</h3>
+<div class="info-row"><span class="label">Employee:</span><span class="value">${employee.name}</span></div>
+<div class="info-row"><span class="label">Type:</span><span class="value">${leaveRequest.type}</span></div>
+<div class="info-row"><span class="label">From:</span><span class="value">${start}</span></div>
+<div class="info-row"><span class="label">To:</span><span class="value">${end}</span></div>
+<div class="info-row"><span class="label">Approved By:</span><span class="value">${approver.name}</span></div></div>
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/leave-requests" class="button">📋 View All Leaves</a></div>`;
+    
+    // Send email to HR with employee email in reply-to
+    await this.sendEmail({
+      to: hrEmail,
+      replyTo: employee.email,
+      subject: `Leave Approved - ${employee.name} (${start} to ${end})`,
+      html: this.getEmailTemplate(content, '✅ Leave Approved'),
+      text: `Leave approved for ${employee.name} from ${start} to ${end}.`
     });
   }
 
@@ -431,9 +475,10 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Status:</span><span class="value" style="color:#ffc107">⏳ Pending</span></div></div>
 <div style="text-align:center"><a href="${getFrontendUrl()}/admin/expenses" class="button">📋 Review Expense</a></div>`;
     
-    // Send email to HR
+    // Send email to HR with employee email in reply-to
     await this.sendEmail({
       to: hrEmail,
+      replyTo: employee.email,
       subject: `New Expense Claim - ${employee.name}: ₹${expense.amount.toLocaleString()}`,
       html: this.getEmailTemplate(content, '💳 New Expense Claim'),
       text: `Expense of ₹${expense.amount.toLocaleString()} submitted by ${employee.name}.`
@@ -474,6 +519,26 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       subject: `Expense Approved - ₹${expense.amount.toLocaleString()}`,
       html: this.getEmailTemplate(content, '✅ Expense Approved'),
       text: `Expense of ₹${expense.amount.toLocaleString()} approved.`
+    });
+  }
+
+  static async sendExpenseApprovedToHR(employee, expense, approver, hrEmail) {
+    const content = `<p>Dear HR Team,</p>
+<p>An expense claim has been approved.</p>
+<div class="card"><h3 style="margin-top:0;color:#28a745">💳 Expense Approved</h3>
+<div class="info-row"><span class="label">Employee:</span><span class="value">${employee.name}</span></div>
+<div class="info-row"><span class="label">Title:</span><span class="value">${expense.title || expense.category}</span></div>
+<div class="info-row"><span class="label">Amount:</span><span class="value">₹${expense.amount.toLocaleString()}</span></div>
+<div class="info-row"><span class="label">Approved By:</span><span class="value">${approver.name}</span></div></div>
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/expenses" class="button">📋 View All Expenses</a></div>`;
+    
+    // Send email to HR with employee email in reply-to
+    await this.sendEmail({
+      to: hrEmail,
+      replyTo: employee.email,
+      subject: `Expense Approved - ${employee.name} (₹${expense.amount.toLocaleString()})`,
+      html: this.getEmailTemplate(content, '✅ Expense Approved'),
+      text: `Expense approved for ${employee.name}: ₹${expense.amount.toLocaleString()}.`
     });
   }
 
@@ -540,11 +605,10 @@ ${employee.employeeCode ? `<div class="info-row"><span class="label">Employee Co
 ${employee.department ? `<div class="info-row"><span class="label">Department:</span><span class="value">${employee.department}</span></div>` : ''}</div>
 <div style="text-align:center"><a href="${getFrontendUrl()}/admin/attendance" class="button">📊 View Attendance</a></div>`;
     
-    // Send email to HR FROM employee's email
+    // Send email to HR - FROM the authenticated account, but with employee in reply-to
     await this.sendEmail({
       to: hrEmail,
-      from: employee.email,
-      fromName: employee.name,
+      replyTo: employee.email,
       subject: `Employee Check-In: ${employee.name} - ${time}`,
       html: this.getEmailTemplate(content, '🕐 Employee Check-In Notification'),
       text: `${employee.name} checked in at ${time}`
@@ -598,11 +662,10 @@ ${employee.employeeCode ? `<div class="info-row"><span class="label">Employee Co
 ${employee.department ? `<div class="info-row"><span class="label">Department:</span><span class="value">${employee.department}</span></div>` : ''}</div>
 <div style="text-align:center"><a href="${getFrontendUrl()}/admin/attendance" class="button">📊 View Attendance</a></div>`;
     
-    // Send email to HR FROM employee's email
+    // Send email to HR with employee email in reply-to
     await this.sendEmail({
       to: hrEmail,
-      from: employee.email,
-      fromName: employee.name,
+      replyTo: employee.email,
       subject: `Employee Check-Out: ${employee.name} - ${time} (${workHours}h)`,
       html: this.getEmailTemplate(content, '🕐 Employee Check-Out Notification'),
       text: `${employee.name} checked out at ${time}. Work hours: ${workHours}`

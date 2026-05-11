@@ -549,6 +549,27 @@ router.put(
               }
             );
             logger.info('Expense approved email sent', { expenseId, email: user.email });
+            
+            // Send notification to HR/admin
+            const hrEmail = process.env.HR_EMAIL;
+            if (!hrEmail) {
+              logger.warn('HR_EMAIL not configured; skipping expense HR email', { expenseId, orgId: req.user.orgId });
+            }
+            if (hrEmail) {
+              await EmailNotificationService.sendExpenseApprovedToHR(
+                {
+                  name: user.name,
+                  email: user.email
+                },
+                expense,
+                { 
+                  _id: req.user.userId,
+                  name: approver?.name || 'Admin' 
+                },
+                hrEmail
+              );
+              logger.info('Expense approved notification sent to HR', { expenseId, hrEmail });
+            }
           } else {
             logger.warn('Missing user or employee data for expense notification', { 
               expenseId, 

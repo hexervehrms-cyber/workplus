@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { LeaveRequestService } from '../../utils/api';
+import { buildApiUrl } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from 'sonner';
 
@@ -78,9 +79,14 @@ export default function Calendar() {
           setLeaveHistory(leaveResponse.data);
         }
 
-        // Fetch holidays
+        // Fetch holidays with proper error handling
         const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-        const holidayResponse = await fetch('/api/holidays', {
+        if (!token) {
+          console.warn('No auth token found for holiday fetch');
+          return;
+        }
+
+        const holidayResponse = await fetch(buildApiUrl('/holidays'), {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -90,8 +96,23 @@ export default function Calendar() {
         if (holidayResponse.ok) {
           const holidayData = await holidayResponse.json();
           if (holidayData.success && Array.isArray(holidayData.data)) {
-            console.log('Loaded holidays:', holidayData.data);
+            console.log('✅ Loaded holidays:', holidayData.data.length, 'holidays');
             setHolidays(holidayData.data);
+            // Cache holidays for offline access
+            localStorage.setItem('cached_holidays', JSON.stringify(holidayData.data));
+          }
+        } else {
+          console.warn('Holiday fetch failed with status:', holidayResponse.status);
+          // Try to use cached holidays
+          const cachedHolidays = localStorage.getItem('cached_holidays');
+          if (cachedHolidays) {
+            try {
+              const parsed = JSON.parse(cachedHolidays);
+              console.log('📦 Using cached holidays:', parsed.length);
+              setHolidays(parsed);
+            } catch (e) {
+              console.warn('Failed to parse cached holidays');
+            }
           }
         }
       } catch (error) {
@@ -109,7 +130,9 @@ export default function Calendar() {
     const refreshHolidays = async () => {
       try {
         const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-        const holidayResponse = await fetch('/api/holidays', {
+        if (!token) return;
+
+        const holidayResponse = await fetch(buildApiUrl('/holidays'), {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -119,7 +142,10 @@ export default function Calendar() {
         if (holidayResponse.ok) {
           const holidayData = await holidayResponse.json();
           if (holidayData.success && Array.isArray(holidayData.data)) {
+            console.log('✅ Real-time holiday update:', holidayData.data.length, 'holidays');
             setHolidays(holidayData.data);
+            // Cache holidays for offline access
+            localStorage.setItem('cached_holidays', JSON.stringify(holidayData.data));
           }
         }
       } catch (error) {

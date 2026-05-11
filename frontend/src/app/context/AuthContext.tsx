@@ -132,11 +132,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSocketConnected(state === 'connected');
       
       if (state === 'reconnecting') {
-        toast.info('Reconnecting to real-time server...');
+        // Keep silent during transient reconnects to avoid noisy UI popups
       } else if (state === 'disconnected') {
         toast.error('Lost connection to real-time server');
-      } else if (state === 'connected' && socketConnected === false) {
-        toast.success('Reconnected to real-time server');
       }
     });
 

@@ -1341,40 +1341,34 @@ router.get('/on-break', authorize('super_admin', 'admin', 'hr', 'manager'), asyn
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
-  console.log('🔍 [ON-BREAK] Fetching employees on break for org:', userOrgId);
-  console.log('🔍 [ON-BREAK] Date range:', { today, tomorrow });
-
-  // Find all attendance records for today
+  // Fetch only records that are likely on active break
   const attendanceRecords = await Attendance.find({
     orgId: userOrgId,
     date: { $gte: today, $lt: tomorrow },
     checkIn: { $exists: true, $ne: null },
-    checkOut: { $exists: false }
+    $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
+    breaks: {
+      $elemMatch: {
+        startTime: { $exists: true },
+        endTime: { $exists: false }
+      }
+    }
   })
   .populate('userId', 'name email avatar')
   .populate('employeeId', 'employeeCode department designation')
+  .select('userId employeeId checkIn breaks')
   .lean();
-
-  console.log('🔍 [ON-BREAK] Total attendance records found:', attendanceRecords.length);
-  console.log('🔍 [ON-BREAK] Attendance records:', attendanceRecords.map(r => ({
-    employeeName: r.userId?.name,
-    breaks: r.breaks,
-    checkIn: r.checkIn,
-    checkOut: r.checkOut
-  })));
 
   // Filter employees currently on break
   const employeesOnBreak = attendanceRecords
     .filter(record => {
       if (!record.breaks || record.breaks.length === 0) {
-        console.log('🔍 [ON-BREAK] Employee', record.userId?.name, 'has no breaks');
         return false;
       }
       
       // Check if the last break has no end time (currently on break)
       const lastBreak = record.breaks[record.breaks.length - 1];
       const isOnBreak = lastBreak.startTime && !lastBreak.endTime;
-      console.log('🔍 [ON-BREAK] Employee', record.userId?.name, 'last break:', lastBreak, 'isOnBreak:', isOnBreak);
       return isOnBreak;
     })
     .map(record => {
@@ -1395,8 +1389,6 @@ router.get('/on-break', authorize('super_admin', 'admin', 'hr', 'manager'), asyn
         checkInTime: record.checkIn
       };
     });
-
-  console.log('🔍 [ON-BREAK] Employees on break:', employeesOnBreak.length);
 
   res.json({
     success: true,

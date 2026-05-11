@@ -121,69 +121,37 @@ export default function EmployeeDashboard() {
   };
 
   // Fetch dashboard data
-  const fetchDashboardData = useCallback(async (forceRefresh = false) => {
+  const fetchDashboardData = useCallback(async (_forceRefresh = false) => {
     if (!user) return;
     
     try {
       setLoading(true);
       setError(null);
-      
-      console.log('📊 [EMPLOYEE-DASHBOARD] fetchDashboardData called with forceRefresh:', forceRefresh);
-      
-      const orgId = user?.orgId || user?.tenantId || 'system';
-      
-      // Fetch employee data
-      let employeeData = null;
-      try {
-        const employeeResult = await apiGet(`/employees/user/${user.id}`);
-        if (employeeResult.data) {
-          employeeData = employeeResult.data;
-        }
-      } catch (err) {
-        console.warn('Failed to fetch employee data:', err);
-      }
-      
-      // Fetch today's attendance data
-      let attendanceData = null;
-      try {
-        const attendanceResult = await apiGet('/attendance/today');
-        console.log('Attendance API response:', attendanceResult);
-        if (attendanceResult.success && attendanceResult.data) {
-          attendanceData = attendanceResult.data;
-        }
-      } catch (err) {
-        console.warn('Attendance API error:', err);
-      }
-      
-      // Fetch dashboard data
-      let data = {};
-      try {
-        const result = await apiGet('/dashboard/employee');
-        if (result.success && result.data) {
-          data = result.data;
-        }
-      } catch (err) {
-        console.warn('Dashboard API error:', err);
-      }
-      
-      // Merge all data
-      if (attendanceData) {
-        data = { ...data, attendance: { today: attendanceData.attendance } };
-      }
-      if (employeeData) {
-        data = { ...data, employee: employeeData };
-      }
+      const [employeeResult, attendanceResult, dashboardResult, holidayResult] = await Promise.allSettled([
+        apiGet(`/employees/user/${user.id}`),
+        apiGet('/attendance/today'),
+        apiGet('/dashboard/employee'),
+        apiGet('/holidays')
+      ]);
+
+      const employeeData =
+        employeeResult.status === 'fulfilled' ? employeeResult.value?.data : null;
+      const attendanceData =
+        attendanceResult.status === 'fulfilled' && attendanceResult.value?.success
+          ? attendanceResult.value.data
+          : null;
+      let data =
+        dashboardResult.status === 'fulfilled' && dashboardResult.value?.success
+          ? (dashboardResult.value.data || {})
+          : {};
+
+      if (attendanceData) data = { ...data, attendance: { today: attendanceData.attendance } };
+      if (employeeData) data = { ...data, employee: employeeData };
       
       setDashboardData(data);
       
-      // Fetch holidays
-      try {
-        const holidayData = await apiGet('/holidays');
-        if (holidayData.success && Array.isArray(holidayData.data)) {
-          setHolidays(holidayData.data);
-        }
-      } catch (err) {
-        console.warn('Failed to fetch holidays:', err);
+      if (holidayResult.status === 'fulfilled' && holidayResult.value?.success && Array.isArray(holidayResult.value.data)) {
+        setHolidays(holidayResult.value.data);
       }
       
       // Update today's attendance
@@ -214,50 +182,16 @@ export default function EmployeeDashboard() {
           }
         }
         
-        console.log('📊 [EMPLOYEE-DASHBOARD] Attendance data received:', {
-          checkIn: attendance.checkIn,
-          checkOut: attendance.checkOut,
-          isCurrentlyCheckedIn,
-          status: attendance.status,
-          breaksCount: attendance.breaks?.length || 0,
-          lastBreak: attendance.breaks?.[attendance.breaks.length - 1],
-          calculatedIsOnBreak,
-          liveStatusIsOnBreak: attendanceData.liveStatus?.isOnBreak,
-          calculatedBreakType,
-          calculatedBreakDuration
-        });
-        
-        // On page load (not during an action), always trust the API data
-        const isPageLoad = !actionInProgress && !disableRefresh && (Date.now() - lastActionTime) >= 3000;
-        
-        console.log('📊 [EMPLOYEE-DASHBOARD] Update decision:', {
-          isPageLoad,
-          actionInProgress,
-          disableRefresh,
-          timeSinceLastAction: Date.now() - lastActionTime
-        });
-        
         setTodayAttendance(prev => {
-          const timeSinceLastAction = Date.now() - lastActionTime;
-          
           // SIMPLIFIED LOGIC: Always trust the API data for break status
           // The API calculates break status from the database, which is the source of truth
           
           // Only preserve state if action is currently in progress (not just recent)
           if (actionInProgress) {
-            console.log('📊 [EMPLOYEE-DASHBOARD] Action in progress - preserving current state');
             return prev;
           }
           
-          // Otherwise, always update with fresh API data
-          console.log('📊 [EMPLOYEE-DASHBOARD] Updating with fresh API data');
-          console.log('📊 [EMPLOYEE-DASHBOARD] Calculated break status:', {
-            isOnBreak: calculatedIsOnBreak,
-            breakType: calculatedBreakType,
-            breakDuration: calculatedBreakDuration
-          });
-          
-          const newState = {
+          return {
             isCheckedIn: isCurrentlyCheckedIn,
             checkInTime: checkInTime,
             checkOutTime: checkOutTime,
@@ -268,15 +202,9 @@ export default function EmployeeDashboard() {
             currentBreakDuration: calculatedBreakDuration,
             breakType: calculatedBreakType
           };
-          
-          console.log('📊 [EMPLOYEE-DASHBOARD] New state:', newState);
-          return newState;
         });
         setIsCheckedIn(isCurrentlyCheckedIn);
-        
-        console.log('📊 [EMPLOYEE-DASHBOARD] State updated - isCheckedIn:', isCurrentlyCheckedIn, 'isOnBreak:', calculatedIsOnBreak);
       } else {
-        console.warn('📊 [EMPLOYEE-DASHBOARD] No attendance data received');
         setIsCheckedIn(false);
         setTodayAttendance(prev => {
           // Preserve break/meeting state if we're in the middle of an action
@@ -346,7 +274,6 @@ export default function EmployeeDashboard() {
 
   // Fetch data on mount with force refresh
   useEffect(() => {
-    console.log('📊 [EMPLOYEE-DASHBOARD] Component mounted - fetching with forceRefresh=true');
     fetchDashboardData(true);  // Force refresh on page load
   }, [fetchDashboardData]);
 
@@ -460,7 +387,7 @@ export default function EmployeeDashboard() {
     fetchAttendanceHistory();
   }, [fetchAttendanceHistory]);
 
-  // Periodic refresh of attendance data every 10 seconds when checked in
+    // Periodic refresh of attendance data every 30 seconds when checked in
   useEffect(() => {
     if (!isCheckedIn || disableRefresh || actionInProgress) return;
     
@@ -469,12 +396,12 @@ export default function EmployeeDashboard() {
     if (timeSinceLastAction < 5000) return;
     
     const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
       // Double check before refreshing
       if (!actionInProgress && (Date.now() - lastActionTime) >= 5000) {
-        console.log('Periodic refresh - fetching attendance data');
         fetchDashboardData();
       }
-    }, 10000); // Refresh every 10 seconds
+    }, 30000); // Refresh every 30 seconds
     
     return () => clearInterval(interval);
   }, [isCheckedIn, disableRefresh, fetchDashboardData, actionInProgress, lastActionTime]);

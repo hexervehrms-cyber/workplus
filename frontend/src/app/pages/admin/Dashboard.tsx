@@ -21,7 +21,7 @@ import {
   Download
 } from 'lucide-react';
 import { useCurrency } from '../../context/CurrencyContext';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -83,106 +83,55 @@ export default function AdminDashboard() {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingLeave, setEditingLeave] = useState(null);
 
-  // Log quickStats changes
-  useEffect(() => {
-    console.log('📊 [STATE] quickStats updated:', quickStats);
-    console.log('📊 [STATE] onBreak value:', quickStats.onBreak);
-    console.log('📊 [STATE] activeUsers value:', quickStats.activeUsers);
-    
-    // Log Socket.IO connection status
-    const isConnected = realTimeSocket.isConnected();
-    console.log('🔌 [SOCKET-STATUS] Connected:', isConnected);
-    if (!isConnected) {
-      console.warn('⚠️ [SOCKET-STATUS] Socket.IO is not connected! Real-time updates will not work.');
+  const refreshDashboardData = useCallback(async () => {
+    const params = new URLSearchParams();
+    params.append('filterType', filterType);
+    if (filterType === 'custom' && customStartDate && customEndDate) {
+      params.append('startDate', customStartDate);
+      params.append('endDate', customEndDate);
     }
-  }, [quickStats]);
+
+    const [statsResponse, quickStatsResponse, expenseTrendsResponse, productivityResponse, leaveResponse, attendanceResponse, onBreakResponse] =
+      await Promise.allSettled([
+        apiClient.get(`/dashboard/stats?${params.toString()}`),
+        apiClient.get(`/dashboard/quick-stats?${params.toString()}&_t=${Date.now()}`),
+        apiClient.get('/dashboard/expense-trends'),
+        apiClient.get('/dashboard/weekly-productivity'),
+        apiClient.get('/dashboard/recent-leave-requests'),
+        apiClient.get('/dashboard/todays-attendance'),
+        apiClient.get('/attendance/on-break')
+      ]);
+
+    if (statsResponse.status === 'fulfilled' && statsResponse.value.data?.success) {
+      setDashboardStats(statsResponse.value.data.data || {});
+    }
+    if (quickStatsResponse.status === 'fulfilled' && quickStatsResponse.value.success && quickStatsResponse.value.data) {
+      setQuickStats(quickStatsResponse.value.data);
+      setLastUpdate(Date.now());
+    }
+    if (expenseTrendsResponse.status === 'fulfilled' && expenseTrendsResponse.value.data?.success) {
+      setExpenseData(expenseTrendsResponse.value.data.data || []);
+    }
+    if (productivityResponse.status === 'fulfilled' && productivityResponse.value.data?.success) {
+      setProductivityData(productivityResponse.value.data.data || []);
+    }
+    if (leaveResponse.status === 'fulfilled' && leaveResponse.value.success && leaveResponse.value.data) {
+      setLeaveRequests(leaveResponse.value.data || []);
+    }
+    if (attendanceResponse.status === 'fulfilled' && attendanceResponse.value.success && attendanceResponse.value.data) {
+      setTodaysAttendance(attendanceResponse.value.data || []);
+    }
+    if (onBreakResponse.status === 'fulfilled' && onBreakResponse.value.data?.success) {
+      setEmployeesOnBreak(onBreakResponse.value.data.data || []);
+    }
+  }, [filterType, customStartDate, customEndDate]);
 
   // Fetch dashboard data
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
-
-        // Build query params for filtering
-        const params = new URLSearchParams();
-        params.append('filterType', filterType);
-        if (filterType === 'custom' && customStartDate && customEndDate) {
-          params.append('startDate', customStartDate);
-          params.append('endDate', customEndDate);
-        }
-
-        console.log('📊 Fetching dashboard data with params:', Object.fromEntries(params));
-
-        // Fetch dashboard statistics
-        const statsResponse = await apiClient.get(`/dashboard/stats?${params.toString()}`);
-        console.log('📊 Stats response:', statsResponse.data);
-        if (statsResponse.data?.success) {
-          setDashboardStats(statsResponse.data.data || {});
-        }
-
-        // Fetch quick stats with cache busting
-        const timestamp = Date.now();
-        console.log('📊 [FETCH] About to fetch quick-stats...');
-        const quickStatsResponse = await apiClient.get(`/dashboard/quick-stats?${params.toString()}&_t=${timestamp}`);
-        console.log('📊 [FETCH] Raw response received:', quickStatsResponse);
-        console.log('📊 [FETCH] Response.data:', quickStatsResponse.data);
-        console.log('📊 [FETCH] Response.success:', quickStatsResponse.success);
-        
-        if (quickStatsResponse.success && quickStatsResponse.data) {
-          console.log('📊 [INIT] Setting quickStats with data:', quickStatsResponse.data);
-          console.log('📊 [INIT] onBreak value from API:', quickStatsResponse.data.onBreak);
-          console.log('📊 [INIT] activeUsers value from API:', quickStatsResponse.data.activeUsers);
-          
-          // Force update with new data - use quickStatsResponse.data directly
-          setQuickStats(quickStatsResponse.data);
-          setLastUpdate(Date.now()); // Force re-render
-          console.log('📊 [INIT] quickStats state updated, lastUpdate:', Date.now());
-        } else {
-          console.error('📊 [ERROR] API response success is false or no data:', quickStatsResponse);
-        }
-
-        // Fetch expense trends
-        const expenseTrendsResponse = await apiClient.get('/dashboard/expense-trends');
-        console.log('📊 Expense trends response:', expenseTrendsResponse.data);
-        if (expenseTrendsResponse.data?.success) {
-          setExpenseData(expenseTrendsResponse.data.data || []);
-        }
-
-        // Fetch weekly productivity data
-        const productivityResponse = await apiClient.get('/dashboard/weekly-productivity');
-        console.log('📊 Productivity response:', productivityResponse.data);
-        if (productivityResponse.data?.success) {
-          setProductivityData(productivityResponse.data.data || []);
-        }
-
-        // Fetch recent leave requests
-        const leaveResponse = await apiClient.get('/dashboard/recent-leave-requests');
-        console.log('📊 Leave response:', leaveResponse);
-        console.log('📊 Leave response.data:', leaveResponse.data);
-        console.log('📊 Leave response.success:', leaveResponse.success);
-        if (leaveResponse.success && leaveResponse.data) {
-          console.log('📊 Setting leaveRequests with:', leaveResponse.data);
-          setLeaveRequests(leaveResponse.data || []);
-        }
-
-        // Fetch today's attendance
-        const attendanceResponse = await apiClient.get('/dashboard/todays-attendance');
-        console.log('📊 Attendance response:', attendanceResponse);
-        console.log('📊 Attendance response.data:', attendanceResponse.data);
-        console.log('📊 Attendance response.success:', attendanceResponse.success);
-        if (attendanceResponse.success && attendanceResponse.data) {
-          console.log('📊 Setting todaysAttendance with:', attendanceResponse.data);
-          setTodaysAttendance(attendanceResponse.data || []);
-        }
-
-        // Fetch employees on break
-        const onBreakResponse = await apiClient.get('/attendance/on-break');
-        console.log('📊 On-break response:', onBreakResponse.data);
-        if (onBreakResponse.data?.success) {
-          setEmployeesOnBreak(onBreakResponse.data.data || []);
-          // Don't update quickStats here - it's already set from quick-stats endpoint
-        }
-
+        await refreshDashboardData();
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
       } finally {
@@ -203,7 +152,7 @@ export default function AdminDashboard() {
     return () => {
       // clearInterval(pollInterval);
     };
-  }, [filterType, customStartDate, customEndDate]);
+  }, [filterType, customStartDate, customEndDate, refreshDashboardData]);
 
   // Socket.IO real-time updates - no polling needed
   // All updates come through Socket.IO events
@@ -220,7 +169,6 @@ export default function AdminDashboard() {
     };
 
     const handleDashboardUpdate = (data: any) => {
-      console.log('📊 Dashboard update event received:', data);
       if (data.type === 'active_users_updated') {
         // Update logged-in employees count in real-time
         setQuickStats(prev => ({
@@ -233,56 +181,12 @@ export default function AdminDashboard() {
           totalEmployees: data.data?.totalEmployees || prev.totalEmployees
         }));
       } else if (data.type === 'dashboard_refresh') {
-        // Refresh all dashboard data when break starts/ends
-        console.log('📊 Dashboard refresh triggered:', data.reason);
-        const fetchUpdatedData = async () => {
-          try {
-            const params = new URLSearchParams();
-            params.append('filterType', filterType);
-            if (filterType === 'custom' && customStartDate && customEndDate) {
-              params.append('startDate', customStartDate);
-              params.append('endDate', customEndDate);
-            }
-            
-            // Fetch all data in parallel
-            const [statsResponse, quickStatsResponse, attendanceResponse, onBreakResponse, leaveResponse] = await Promise.all([
-              apiClient.get(`/dashboard/stats?${params.toString()}`),
-              apiClient.get(`/dashboard/quick-stats?${params.toString()}`),
-              apiClient.get('/dashboard/todays-attendance'),
-              apiClient.get('/attendance/on-break'),
-              apiClient.get('/dashboard/recent-leave-requests')
-            ]);
-            
-            // Update all states
-            if (statsResponse.data?.success) {
-              setDashboardStats(statsResponse.data.data || {});
-            }
-            if (quickStatsResponse.success && quickStatsResponse.data) {
-              setQuickStats(quickStatsResponse.data);
-              setLastUpdate(Date.now());
-            }
-            if (attendanceResponse.success && attendanceResponse.data) {
-              setTodaysAttendance(attendanceResponse.data);
-            }
-            if (onBreakResponse.data?.success) {
-              setEmployeesOnBreak(onBreakResponse.data.data || []);
-            }
-            if (leaveResponse.data?.success) {
-              setLeaveRequests(leaveResponse.data.data || []);
-            }
-          } catch (error) {
-            console.error('Error refreshing dashboard data:', error);
-          }
-        };
-        fetchUpdatedData();
+        refreshDashboardData().catch((error) => {
+          console.error('Error refreshing dashboard data:', error);
+        });
       } else if (data.type === 'kpi_update') {
-        // Handle real-time KPI updates from backend
-        console.log('📊 [ADMIN] KPI update received:', data);
-        console.log('📊 [ADMIN] KPI data structure:', data.data);
-        console.log('📊 [ADMIN] KPI onBreak value:', data.data?.kpis?.onBreak);
         if (data.data?.kpis) {
           const kpis = data.data.kpis;
-          console.log('📊 [ADMIN] Updating state with KPIs:', kpis);
           
           // Update dashboard stats
           setDashboardStats(prev => ({
@@ -296,7 +200,6 @@ export default function AdminDashboard() {
             onLeave: kpis.onLeave ?? prev.onLeave
           }));
           
-          // Update quick stats - FIXED: Don't merge with prev, use direct values
           const newQuickStats = {
             totalEmployees: kpis.totalEmployees ?? 0,
             presentToday: kpis.presentToday ?? 0,
@@ -311,198 +214,32 @@ export default function AdminDashboard() {
             totalBonus: kpis.totalBonus ?? 0,
             totalIncentive: kpis.totalIncentive ?? 0
           };
-          console.log('📊 [ADMIN] New quickStats state:', newQuickStats);
           setQuickStats(newQuickStats);
-          setLastUpdate(Date.now()); // Force re-render
-          console.log('📊 [ADMIN] State updated with new KPI values');
-        } else {
-          console.warn('📊 [ADMIN] KPI update received but no kpis data found');
+          setLastUpdate(Date.now());
         }
-        
-        // Also refresh the data from backend to ensure consistency
-        console.log('📊 [ADMIN] Fetching fresh data from backend after KPI update');
-        const fetchFreshData = async () => {
-          try {
-            const params = new URLSearchParams();
-            params.append('filterType', filterType);
-            if (filterType === 'custom' && customStartDate && customEndDate) {
-              params.append('startDate', customStartDate);
-              params.append('endDate', customEndDate);
-            }
-            
-            const quickStatsResponse = await apiClient.get(`/dashboard/quick-stats?${params.toString()}`);
-            if (quickStatsResponse.success && quickStatsResponse.data) {
-              console.log('📊 [ADMIN] Fresh quick-stats data:', quickStatsResponse.data);
-              console.log('📊 [ADMIN] Fresh onBreak value:', quickStatsResponse.data.onBreak);
-              console.log('📊 [ADMIN] Fresh activeUsers value:', quickStatsResponse.data.activeUsers);
-              
-              // Force update with fresh data
-              setQuickStats(quickStatsResponse.data);
-              setLastUpdate(Date.now()); // Force re-render
-              console.log('📊 [ADMIN] quickStats forcefully updated with fresh data');
-            }
-            
-            const onBreakResponse = await apiClient.get('/attendance/on-break');
-            if (onBreakResponse.data?.success) {
-              setEmployeesOnBreak(onBreakResponse.data.data || []);
-            }
-          } catch (error) {
-            console.error('Error fetching fresh data:', error);
-          }
-        };
-        fetchFreshData();
       }
     };
 
     const handleExpenseUpdate = (type: string, expense: any) => {
-      console.log('💰 Expense update received:', { type, expense });
-      // Refresh dashboard data to update expense KPI
       if (type === 'created' || type === 'updated' || type === 'deleted') {
-        // Fetch updated dashboard stats
-        const fetchUpdatedStats = async () => {
-          try {
-            const params = new URLSearchParams();
-            params.append('filterType', filterType);
-            if (filterType === 'custom' && customStartDate && customEndDate) {
-              params.append('startDate', customStartDate);
-              params.append('endDate', customEndDate);
-            }
-            const statsResponse = await apiClient.get(`/dashboard/stats?${params.toString()}`);
-            if (statsResponse.data?.success) {
-              setDashboardStats(statsResponse.data.data || {});
-            }
-          } catch (error) {
-            console.error('Error fetching updated stats:', error);
-          }
-        };
-        fetchUpdatedStats();
+        refreshDashboardData().catch((error) => {
+          console.error('Error fetching updated dashboard data:', error);
+        });
       }
     };
 
     const handleLeaveUpdate = (type: string, leave: any) => {
-      console.log('📅 [LEAVE-UPDATE] Leave update received:', { type, leave });
-      console.log('📅 [LEAVE-UPDATE] Leave action:', type);
-      console.log('📅 [LEAVE-UPDATE] Leave data:', leave);
-      
-      // Refresh dashboard data to update leave KPI
       if (type === 'created' || type === 'updated' || type === 'approved' || type === 'rejected') {
-        console.log('📅 [LEAVE-UPDATE] Triggering refresh for action:', type);
-        const fetchUpdatedStats = async () => {
-          try {
-            const params = new URLSearchParams();
-            params.append('filterType', filterType);
-            if (filterType === 'custom' && customStartDate && customEndDate) {
-              params.append('startDate', customStartDate);
-              params.append('endDate', customEndDate);
-            }
-            
-            // Refresh quick stats (for pending leaves KPI)
-            const quickStatsResponse = await apiClient.get(`/dashboard/quick-stats?${params.toString()}`);
-            if (quickStatsResponse.success && quickStatsResponse.data) {
-              console.log('📅 [LEAVE-UPDATE] Updated quick stats:', quickStatsResponse.data);
-              setQuickStats(quickStatsResponse.data);
-              setLastUpdate(Date.now());
-            }
-            
-            // Also refresh leave requests table
-            const leaveResponse = await apiClient.get('/dashboard/recent-leave-requests');
-            console.log('📅 [LEAVE-UPDATE] Leave requests response:', leaveResponse);
-            if (leaveResponse.success && leaveResponse.data) {
-              console.log('📅 [LEAVE-UPDATE] Setting leave requests:', leaveResponse.data);
-              console.log('📅 [LEAVE-UPDATE] Number of leave requests:', leaveResponse.data.length);
-              setLeaveRequests(leaveResponse.data || []);
-            }
-          } catch (error) {
-            console.error('📅 [LEAVE-UPDATE] Error fetching updated stats:', error);
-          }
-        };
-        fetchUpdatedStats();
+        refreshDashboardData().catch((error) => {
+          console.error('Error fetching updated dashboard data:', error);
+        });
       }
     };
 
     const handleAttendanceUpdate = (attendance: any) => {
-      console.log('⏰ Attendance update received:', attendance);
-      
-      // If it's a break event, immediately refresh KPI data
-      if (attendance.type === 'break_started' || attendance.type === 'break_ended') {
-        console.log('☕ [BREAK-EVENT] Break event detected, refreshing KPIs immediately');
-        const fetchUpdatedStats = async () => {
-          try {
-            const params = new URLSearchParams();
-            params.append('filterType', filterType);
-            if (filterType === 'custom' && customStartDate && customEndDate) {
-              params.append('startDate', customStartDate);
-              params.append('endDate', customEndDate);
-            }
-            
-            // Fetch quick stats with cache busting
-            const timestamp = Date.now();
-            const quickStatsResponse = await apiClient.get(`/dashboard/quick-stats?${params.toString()}&_t=${timestamp}`);
-            if (quickStatsResponse.success && quickStatsResponse.data) {
-              console.log('☕ [BREAK-EVENT] Updated quick-stats:', quickStatsResponse.data);
-              console.log('☕ [BREAK-EVENT] onBreak value:', quickStatsResponse.data.onBreak);
-              setQuickStats(quickStatsResponse.data);
-              setLastUpdate(Date.now());
-            }
-            
-            // Also update employees on break list
-            const onBreakResponse = await apiClient.get('/attendance/on-break');
-            if (onBreakResponse.data?.success) {
-              setEmployeesOnBreak(onBreakResponse.data.data || []);
-            }
-          } catch (error) {
-            console.error('Error fetching updated stats:', error);
-          }
-        };
-        
-        fetchUpdatedStats();
-        return; // Don't do the full refresh below
-      }
-      
-      // Refresh all dashboard data when attendance changes
-      const fetchUpdatedStats = async () => {
-        try {
-          const params = new URLSearchParams();
-          params.append('filterType', filterType);
-          if (filterType === 'custom' && customStartDate && customEndDate) {
-            params.append('startDate', customStartDate);
-            params.append('endDate', customEndDate);
-          }
-          
-          // Fetch all dashboard data in parallel
-          const [statsResponse, quickStatsResponse, attendanceResponse, onBreakResponse] = await Promise.all([
-            apiClient.get(`/dashboard/stats?${params.toString()}`),
-            apiClient.get(`/dashboard/quick-stats?${params.toString()}`),
-            apiClient.get('/dashboard/todays-attendance'),
-            apiClient.get('/attendance/on-break')
-          ]);
-          
-          // Update dashboard stats
-          if (statsResponse.data?.success) {
-            setDashboardStats(statsResponse.data.data || {});
-          }
-          
-          // Update quick stats (KPI cards)
-          if (quickStatsResponse.success && quickStatsResponse.data) {
-            setQuickStats(quickStatsResponse.data);
-            setLastUpdate(Date.now());
-          }
-          
-          // Update today's attendance
-          if (attendanceResponse.success && attendanceResponse.data) {
-            setTodaysAttendance(attendanceResponse.data);
-          }
-          
-          // Update employees on break
-          if (onBreakResponse.data?.success) {
-            setEmployeesOnBreak(onBreakResponse.data.data || []);
-          }
-        } catch (error) {
-          console.error('Error fetching updated stats:', error);
-        }
-      };
-      
-      fetchUpdatedStats();
+      refreshDashboardData().catch((error) => {
+        console.error('Error fetching updated dashboard data:', error);
+      });
     };
 
     // Subscribe to real-time events using the correct methods
@@ -551,7 +288,7 @@ export default function AdminDashboard() {
         socket.off('kpi:update');
       }
     };
-  }, [filterType, customStartDate, customEndDate]);
+  }, [refreshDashboardData]);
 
   const handleApproveLeave = async (requestId) => {
     try {
@@ -888,14 +625,6 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
             icon={LogIn}
             color="primary"
           />
-          {(() => {
-            console.log('📊 [RENDER] About to render On Break card');
-            console.log('📊 [RENDER] quickStats object:', quickStats);
-            console.log('📊 [RENDER] quickStats.onBreak value:', quickStats.onBreak);
-            console.log('📊 [RENDER] quickStats.onBreak type:', typeof quickStats.onBreak);
-            console.log('📊 [RENDER] Converting to string:', quickStats.onBreak.toString());
-            return null;
-          })()}
           <KPICard
             key={`onBreak-${quickStats.onBreak}-${lastUpdate}`}
             title="On Break"

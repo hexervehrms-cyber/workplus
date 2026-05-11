@@ -326,7 +326,6 @@ export default function Attendance() {
 
       // Refresh from server (source of truth; no fake/local injected records)
       await fetchTodayAttendance(employeeId);
-      await fetchAttendanceHistory();
       
       toast.success('Checked in successfully');
     } catch (error) {
@@ -398,6 +397,7 @@ export default function Attendance() {
 
       // Refresh from server (source of truth)
       await fetchTodayAttendance(employeeId);
+      // History rarely changes; refresh it after check-out only
       await fetchAttendanceHistory();
       
       toast.success('Checked out successfully');
@@ -697,16 +697,17 @@ export default function Attendance() {
     return () => clearInterval(interval);
   }, [checkedIn, todayData]);
 
-  // Refresh attendance history every 10 seconds when checked in
+  // Refresh today's attendance periodically while checked in
   useEffect(() => {
     if (!checkedIn) return;
 
     const interval = setInterval(() => {
-      fetchAttendanceHistory();
-    }, 10000); // Refresh every 10 seconds
+      if (document.visibilityState !== 'visible') return;
+      if (employeeId) fetchTodayAttendance(employeeId);
+    }, 30000); // Refresh every 30 seconds
 
     return () => clearInterval(interval);
-  }, [checkedIn]);
+  }, [checkedIn, employeeId]);
 
   // Initial load only
   useEffect(() => {

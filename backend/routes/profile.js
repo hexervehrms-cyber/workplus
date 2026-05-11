@@ -166,9 +166,6 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
   // Build update object with individual field updates
   const updateData = {};
   
-  console.log('📝 [PROFILE-UPDATE] Received request body:', req.body);
-  console.log('📝 [PROFILE-UPDATE] Profile object:', profile);
-  
   if (profile.firstName) updateData['profile.firstName'] = profile.firstName.trim();
   if (profile.lastName) updateData['profile.lastName'] = profile.lastName.trim();
   if (profile.middleName) updateData['profile.middleName'] = profile.middleName.trim();
@@ -187,8 +184,6 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
   } else if (profile.lastName) {
     updateData.name = profile.lastName.trim();
   }
-  
-  console.log('📝 [PROFILE-UPDATE] User update data:', updateData);
   
   if (contact.phone) updateData['contact.phone'] = contact.phone.trim();
   if (contact.mobile) updateData['contact.mobile'] = contact.mobile.trim();
@@ -271,16 +266,11 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
       if (employeeDetails.bankDetails.accountHolderName) employeeUpdateData['bankDetails.accountHolderName'] = employeeDetails.bankDetails.accountHolderName.trim();
     }
     
-    console.log('📝 [PROFILE-UPDATE] Employee update data:', employeeUpdateData);
-    console.log('📝 [PROFILE-UPDATE] Updating employee with userId:', userId, 'orgId:', userOrgId);
-    
     updatedEmployee = await Employee.findOneAndUpdate(
       { userId, orgId: userOrgId },
       employeeUpdateData,
       { new: true, runValidators: true }
     );
-    
-    console.log('✅ [PROFILE-UPDATE] Employee updated:', updatedEmployee);
   }
 
   // Update sensitive information with lock timestamps

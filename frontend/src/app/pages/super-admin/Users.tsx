@@ -75,9 +75,6 @@ export default function GlobalUsers() {
   };
 
   const handleCreateUser = async () => {
-    console.log('Create user clicked');
-    console.log('Form data:', formData);
-
     if (!formData.name || !formData.email || !formData.password) {
       setError('Name, email, and password are required');
       return;
@@ -92,7 +89,6 @@ export default function GlobalUsers() {
     setError(null);
 
     try {
-      console.log('Sending request to create user');
       const response = await apiClient.post('/api/users', {
         name: formData.name,
         email: formData.email,
@@ -101,8 +97,6 @@ export default function GlobalUsers() {
         organization: formData.organization || 'WorkPlus Inc.',
         isActive: true
       });
-
-      console.log('Response:', response);
 
       if (response.success) {
         const userData = response.data;

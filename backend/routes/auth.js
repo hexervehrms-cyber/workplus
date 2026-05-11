@@ -164,7 +164,6 @@ router.get("/me",
 
       // If no employee record exists, create one
       if (!employee) {
-        console.log('No employee record found for user, creating one...');
         employee = await Employee.create({
           userId,
           orgId: userOrgId,
@@ -173,9 +172,6 @@ router.get("/me",
         employee = employee.toObject();
       }
       
-      console.log('📊 [AUTH-ME] User data:', { firstName: user.profile?.firstName, lastName: user.profile?.lastName, name: user.name });
-      console.log('📊 [AUTH-ME] Employee data:', { firstName: employee?.firstName, lastName: employee?.lastName, phone: employee?.phone, address: employee?.address });
-
       // Combine user and employee data
       const profileData = {
         _id: user._id,
@@ -205,8 +201,6 @@ router.get("/me",
         tenantId: user.tenantId,
         orgId: user.orgId
       };
-
-      console.log('📊 [AUTH-ME] Final profile data being returned:', { firstName: profileData.firstName, lastName: profileData.lastName, phone: profileData.phone, address: profileData.address });
 
       res.json({
         success: true,

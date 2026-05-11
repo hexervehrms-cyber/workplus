@@ -693,21 +693,6 @@ router.delete(
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
       }
 
-      console.log("=== DELETE EXPENSE DEBUG ===");
-      console.log("Params:", { expenseId });
-      console.log("User:", { 
-        userId: req.user.userId, 
-        userIdType: typeof req.user.userId,
-        role: req.user.role 
-      });
-
-      console.log("Expense found:", {
-        _id: expense._id,
-        userId: expense.userId,
-        userIdType: typeof expense.userId,
-        status: expense.status
-      });
-
       // Check authorization - only owner or admin can delete
       const expenseUserIdStr = expense.userId.toString();
       const reqUserIdStr = req.user.userId.toString();

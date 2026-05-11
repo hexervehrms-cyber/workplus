@@ -693,31 +693,8 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     orgId
   } = req.body;
 
-  console.log('POST /leave-requests - Request body:', {
-    userId,
-    employeeId,
-    leaveType,
-    startDate,
-    endDate,
-    reason,
-    isHalfDay,
-    isHourlyLeave,
-    startTime,
-    endTime,
-    orgId
-  });
-
   // Validate required fields
   if (!userId || !employeeId || !leaveType || !startDate || !endDate || !reason || !orgId) {
-    console.error('Missing required fields:', {
-      userId: !!userId,
-      employeeId: !!employeeId,
-      leaveType: !!leaveType,
-      startDate: !!startDate,
-      endDate: !!endDate,
-      reason: !!reason,
-      orgId: !!orgId
-    });
     return res.status(400).json({
       success: false,
       message: 'All fields are required'
@@ -805,21 +782,6 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   const start = new Date(startDate);
   const end = new Date(endDate);
   
-  console.log('Creating leave request:', {
-    userId,
-    employeeId,
-    leaveType,
-    startDate,
-    endDate,
-    start: start.toISOString(),
-    end: end.toISOString(),
-    reason,
-    isHourlyLeave,
-    startTime,
-    endTime,
-    orgId
-  });
-  
   if (end < start) {
     return res.status(400).json({
       success: false,
@@ -828,8 +790,6 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   }
 
   const days = isHalfDay ? 0.5 : Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
-
-  console.log('Days calculated:', days);
 
   // Check for overlapping leave requests - FIXED for half-day leaves
   let overlapQuery = {
@@ -863,13 +823,6 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   }
 
   const overlapping = await LeaveRequest.findOne(overlapQuery).lean();
-
-  console.log('Overlapping check:', {
-    employeeId,
-    isHalfDay,
-    overlappingFound: !!overlapping,
-    overlappingData: overlapping
-  });
 
   if (overlapping) {
     return res.status(400).json({

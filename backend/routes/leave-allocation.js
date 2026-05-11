@@ -95,15 +95,6 @@ router.get('/organization/:orgId', asyncHandler(async (req, res) => {
   const { page, limit, skip } = req.pagination;
   const { year, month, status } = req.query;
 
-  console.log('GET /leave-allocation/organization - Request:', {
-    orgId,
-    page,
-    limit,
-    year,
-    month,
-    status
-  });
-
   const query = { orgId };
 
   if (year && month) {
@@ -114,8 +105,6 @@ router.get('/organization/:orgId', asyncHandler(async (req, res) => {
   if (status) {
     query.status = status;
   }
-
-  console.log('Query:', query);
 
   const total = await LeaveAllocation.countDocuments(query);
 
@@ -133,9 +122,6 @@ router.get('/organization/:orgId', asyncHandler(async (req, res) => {
     .sort({ year: -1, month: -1, createdAt: -1 })
     .skip(skip)
     .limit(limit);
-
-  console.log('Allocations found:', allocations.length);
-  console.log('First allocation:', allocations[0]);
 
   res.paginate(allocations, total);
 }));
@@ -155,26 +141,8 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     notes
   } = req.body;
 
-  console.log('POST /leave-allocation - Request body:', {
-    employeeId,
-    userId,
-    orgId,
-    year,
-    month,
-    allocations,
-    notes
-  });
-
   // Validate required fields
   if (!employeeId || !userId || !orgId || !year || !month || !allocations) {
-    console.error('Missing required fields:', {
-      employeeId: !!employeeId,
-      userId: !!userId,
-      orgId: !!orgId,
-      year: !!year,
-      month: !!month,
-      allocations: !!allocations
-    });
     return res.status(400).json({
       success: false,
       message: 'All fields are required',
@@ -231,13 +199,6 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     status: 'allocated',
     allocatedBy: userId,
     allocatedDate: new Date()
-  });
-
-  console.log('Leave allocation created:', {
-    allocationId: allocation._id,
-    employeeId,
-    year,
-    month
   });
 
   // Emit real-time updates
@@ -371,23 +332,12 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
   let currentYear = year ? parseInt(year) : now.getFullYear();
   let currentMonth = month ? parseInt(month) : now.getMonth() + 1;
 
-  console.log('GET /balance - Request:', {
-    employeeId,
-    year: currentYear,
-    month: currentMonth
-  });
-
   // Get allocation for specified month
   const allocation = await LeaveAllocation.findOne({
     employeeId,
     year: currentYear,
     month: currentMonth
   });
-
-  console.log('GET /balance - Allocation found:', !!allocation);
-
-  if (!allocation) {
-    console.log('GET /balance - No allocation found, returning zeros');
     return res.json({
       success: true,
       data: {
@@ -407,32 +357,6 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
 
   // Calculate remaining balance
   const balance = {};
-  const leaveTypes = [
-    'vacation',
-    'sickLeave',
-    'casualLeave',
-    'maternityLeave',
-    'paternityLeave',
-    'compensatoryOff',
-    'personal',
-    'emergency',
-    'ncns',
-    'sandwichLeave'
-  ];
-
-  leaveTypes.forEach(type => {
-    const allocated = (allocation.allocations[type] || 0) + (allocation.carriedForward[type] || 0);
-    const used = allocation.used[type] || 0;
-    const pending = allocation.pending[type] || 0;
-    balance[type] = {
-      allocated,
-      used,
-      pending,
-      available: allocated - used - pending
-    };
-  });
-
-  console.log('GET /balance - Balance calculated:', balance);
 
   res.json({
     success: true,

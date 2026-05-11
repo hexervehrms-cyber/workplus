@@ -37,7 +37,6 @@ export default function Organizations() {
     setOrganizations(organizations.filter(org => org.id !== deletingOrgId));
     setShowDeleteConfirm(false);
     setDeletingOrgId(null);
-    console.log('Organization deleted:', deletingOrgId);
   };
 
   const handleSaveOrganization = (newOrg: any) => {
@@ -50,7 +49,6 @@ export default function Organizations() {
       ));
       setShowEditForm(false);
       setEditingOrg(null);
-      console.log('Organization updated:', newOrg);
     } else {
       // Add new organization
       const newId = Math.max(...organizations.map(o => o.id)) + 1;
@@ -65,7 +63,6 @@ export default function Organizations() {
         created: new Date().toISOString().split('T')[0]
       }]);
       setShowAddForm(false);
-      console.log('New organization added:', newOrg);
     }
   };
 

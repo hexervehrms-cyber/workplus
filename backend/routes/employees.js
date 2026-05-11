@@ -93,17 +93,6 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
   const userRole = req.user.role;
   const userOrgId = req.user.orgId;
 
-  console.log('GET /employees - Request:', {
-    userRole,
-    userOrgId,
-    page,
-    limit,
-    status,
-    department,
-    search,
-    simple
-  });
-
   // Build query based on role
   let query = {};
   
@@ -152,12 +141,8 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
     ];
   }
 
-  console.log('GET /employees - Query:', query);
-
   // Get total count for pagination
   const total = await Employee.countDocuments(query);
-
-  console.log('GET /employees - Total count:', total);
 
   // Build projection based on role
   let projection = {};
@@ -184,8 +169,6 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
     .lean(); // P0 FIX: Use .lean() for read-only queries
 
   const employees = await employeeQuery;
-
-  console.log('GET /employees - Employees found:', employees.length);
 
   logger.info('Employees listed', { 
     total, 

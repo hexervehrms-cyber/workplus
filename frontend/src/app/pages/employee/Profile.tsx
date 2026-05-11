@@ -145,7 +145,6 @@ export default function Profile() {
       const stored = localStorage.getItem('educationalDocuments');
       if (stored) {
         const parsed = JSON.parse(stored);
-        console.log('Initialized educational documents from localStorage:', parsed);
         return parsed;
       }
     } catch (error) {
@@ -218,7 +217,6 @@ export default function Profile() {
           const data = await apiGet(`/documents/employee/${userId}`);
           const backendDocs = data.data || [];
           
-          console.log('Loaded documents from backend:', backendDocs);
           setDocuments(backendDocs);
         } catch (error) {
           console.error('Error loading documents from backend:', error);
@@ -269,14 +267,12 @@ export default function Profile() {
       const serialized = JSON.stringify(educationalDocuments);
       // Check localStorage size (most browsers have 5-10MB limit)
       const sizeInBytes = new Blob([serialized]).size;
-      console.log(`Educational documents size: ${(sizeInBytes / 1024 / 1024).toFixed(2)}MB`);
       
       if (sizeInBytes > 5 * 1024 * 1024) {
         console.warn('Educational documents exceed 5MB limit, may not persist');
       }
       
       localStorage.setItem('educationalDocuments', serialized);
-      console.log('Saved educational documents to localStorage');
     } catch (error) {
       console.error('Error saving educational documents to storage:', error);
       if (error instanceof Error && error.name === 'QuotaExceededError') {
@@ -289,7 +285,6 @@ export default function Profile() {
   const fetchEducationalDocuments = async () => {
     try {
       const data = await apiGet('/employee-dashboard/documents?type=education');
-      console.log('Educational documents fetched:', data);
       
       if (data.success && data.data && Array.isArray(data.data)) {
         // Parse and organize documents by education level and type
@@ -335,7 +330,6 @@ export default function Profile() {
           }
         });
 
-        console.log('Organized educational documents:', organizedDocs);
         setEducationalDocuments(organizedDocs);
       }
     } catch (error) {

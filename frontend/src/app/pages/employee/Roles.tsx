@@ -170,7 +170,6 @@ export default function EmployeeRoles() {
 
       if (roleInfo) {
         setUserRole(roleInfo);
-        console.log('User role loaded:', roleInfo);
       } else {
         // Fallback for unknown roles
         setUserRole({

@@ -92,14 +92,10 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
   const currentUserId = req.user.userId;
   const userOrgId = req.user.orgId;
 
-  console.log('GET /today - Fetching attendance for:', { currentUserId, userOrgId });
-
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
-
-  console.log('Query date range:', { today, tomorrow });
 
   // Get today's attendance record - try with userId first
   let attendance = await Attendance.findOne({
@@ -111,35 +107,6 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
   .populate('userId', 'name email avatar')
   .populate('employeeId', 'employeeCode department')
   .lean();
-
-  console.log('Attendance query result (by userId):', {
-    found: !!attendance,
-    userId: attendance?.userId,
-    orgId: attendance?.orgId,
-    checkIn: attendance?.checkIn,
-    checkOut: attendance?.checkOut,
-    status: attendance?.status,
-    breaksCount: attendance?.breaks?.length || 0,
-    breaks: attendance?.breaks
-  });
-
-  // If not found by userId, try to find all records for this date to debug
-  if (!attendance) {
-    console.log('No attendance found by userId, checking all records for this date...');
-    const allRecords = await Attendance.find({
-      orgId: userOrgId,
-      date: { $gte: today, $lt: tomorrow }
-    }).lean();
-    console.log('All attendance records for this date:', allRecords.length);
-    allRecords.forEach(record => {
-      console.log('Record:', {
-        userId: record.userId,
-        orgId: record.orgId,
-        checkIn: record.checkIn,
-        status: record.status
-      });
-    });
-  }
 
   // Calculate live status
   let liveStatus = 'not_checked_in';
@@ -162,21 +129,11 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
       // Check if on break
       if (attendance.breaks && attendance.breaks.length > 0) {
         const lastBreak = attendance.breaks[attendance.breaks.length - 1];
-        console.log('📊 [TODAY-ENDPOINT] Checking last break:', {
-          startTime: lastBreak.startTime,
-          endTime: lastBreak.endTime,
-          hasStartTime: !!lastBreak.startTime,
-          hasEndTime: !!lastBreak.endTime,
-          isActive: !!lastBreak.startTime && !lastBreak.endTime
-        });
         
         if (lastBreak.startTime && !lastBreak.endTime) {
           isOnBreak = true;
           currentBreakDuration = (now - lastBreak.startTime) / (1000 * 60);
           liveStatus = 'on_break';
-          console.log('📊 [TODAY-ENDPOINT] Employee is ON BREAK');
-        } else {
-          console.log('📊 [TODAY-ENDPOINT] Employee is NOT on break');
         }
       }
 
@@ -197,14 +154,6 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
       }
     }
   }
-
-  console.log('📊 [TODAY-ENDPOINT] Final response:', {
-    hasAttendance: !!attendance,
-    liveStatus: liveStatus,
-    isOnBreak: isOnBreak,
-    currentBreakDuration: Math.round(currentBreakDuration),
-    breaksCount: attendance?.breaks?.length
-  });
 
   res.json({
     success: true,
@@ -283,14 +232,6 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   const authOrgId = req.user?.orgId;
   const authRole = req.user?.role;
   
-  console.log('CHECK-IN REQUEST:', {
-    bodyUserId: userId,
-    bodyEmployeeId: employeeId,
-    bodyOrgId: orgId,
-    authUserId: req.user?.userId,
-    authOrgId: req.user?.orgId
-  });
-  
   // Enforce tenant/user isolation. Employee check-in is always for authenticated user.
   let effectiveUserId = userId;
   let effectiveEmployeeId = employeeId;
@@ -330,19 +271,11 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
-  console.log('CHECK-IN DATE RANGE:', { today, tomorrow });
-
   // Check if already checked in today
   const existingAttendance = await Attendance.findOne({
     userId: effectiveUserId,
     orgId: effectiveOrgId,
     date: { $gte: today, $lt: tomorrow }
-  });
-
-  console.log('EXISTING ATTENDANCE CHECK:', {
-    found: !!existingAttendance,
-    checkIn: existingAttendance?.checkIn,
-    checkOut: existingAttendance?.checkOut
   });
 
   if (existingAttendance && existingAttendance.checkIn && !existingAttendance.checkOut) {
@@ -365,14 +298,6 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     checkInLocation: location || 'Office',
     checkInIP: req.ip || req.connection.remoteAddress,
     checkInNotes: notes
-  });
-
-  console.log('ATTENDANCE CREATED:', {
-    id: attendance._id,
-    userId: attendance.userId,
-    orgId: attendance.orgId,
-    checkIn: attendance.checkIn,
-    date: attendance.date
   });
 
   // Log activity
@@ -733,14 +658,6 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
     ipAddress: req.ip || req.connection.remoteAddress
   };
 
-  console.log('☕ [BREAK-START] Adding new break:', {
-    attendanceId: attendance._id,
-    employeeId: effectiveEmployeeId,
-    breakType,
-    startTime: newBreak.startTime,
-    currentBreaksCount: attendance.breaks?.length || 0
-  });
-
   const updatedAttendance = await Attendance.findByIdAndUpdate(
     attendance._id,
     {
@@ -749,13 +666,6 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
     { new: true }
   ).populate('userId', 'name email avatar')
    .populate('employeeId', 'employeeCode department');
-
-  console.log('☕ [BREAK-START] Break saved to database:', {
-    attendanceId: updatedAttendance._id,
-    totalBreaks: updatedAttendance.breaks?.length,
-    lastBreak: updatedAttendance.breaks?.[updatedAttendance.breaks.length - 1],
-    hasActiveBreak: updatedAttendance.breaks?.some(b => b.startTime && !b.endTime)
-  });
 
   // Log activity
   await ActivityLog.logActivity({
@@ -834,14 +744,6 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     date: { $gte: today, $lt: tomorrow }
   }).sort({ _id: -1 });
 
-  console.log('☕ [BREAK-END] Found attendance record:', {
-    found: !!attendance,
-    id: attendance?._id,
-    employeeId: attendance?.employeeId,
-    breaksCount: attendance?.breaks?.length,
-    breaks: attendance?.breaks
-  });
-
   if (!attendance) {
     return res.status(400).json({
       success: false,
@@ -851,17 +753,6 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
   // Find active break
   const activeBreakIndex = attendance.breaks?.findIndex(b => b.startTime && !b.endTime);
-  
-  console.log('☕ [BREAK-END] Active break search:', {
-    activeBreakIndex,
-    totalBreaks: attendance.breaks?.length,
-    allBreaks: attendance.breaks?.map((b, idx) => ({
-      index: idx,
-      startTime: b.startTime,
-      endTime: b.endTime,
-      isActive: !!b.startTime && !b.endTime
-    }))
-  });
   
   if (activeBreakIndex === -1 || activeBreakIndex === undefined) {
     return res.status(200).json({
@@ -911,14 +802,6 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     userAgent: req.get('User-Agent'),
     severity: 'low',
     category: 'user'
-  });
-
-  console.log('☕ [BREAK-END] Updated attendance record:', {
-    id: updatedAttendance._id,
-    employeeId: updatedAttendance.employeeId,
-    breaksCount: updatedAttendance.breaks?.length,
-    lastBreak: updatedAttendance.breaks?.[updatedAttendance.breaks.length - 1],
-    hasActiveBreak: updatedAttendance.breaks?.some(b => b.startTime && !b.endTime)
   });
 
   // Emit real-time event to notify admin dashboard (this also emits KPI update internally)
@@ -1000,7 +883,6 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
   const currentBreak = attendance.breaks?.find(b => b.startTime && !b.endTime);
   if (currentBreak) {
     // Try to auto-end the break
-    console.log('Active break found, attempting to auto-end it...');
     const endTime = new Date();
     const breakDuration = (endTime - currentBreak.startTime) / (1000 * 60);
     
@@ -1016,9 +898,7 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
       
       try {
         await Attendance.findByIdAndUpdate(attendance._id, updateQuery);
-        console.log('Break auto-ended successfully');
       } catch (error) {
-        console.error('Failed to auto-end break:', error);
         return res.status(400).json({
           success: false,
           message: 'Cannot start meeting while on break. Failed to auto-end break.'

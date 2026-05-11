@@ -10,20 +10,15 @@ export default function TestAPI() {
   useEffect(() => {
     const testAPIs = async () => {
       try {
-        console.log('Testing APIs...');
-        
         // Test attendance records
         const attendanceResponse = await apiClient.get('/dashboard/todays-attendance');
-        console.log('Attendance response:', attendanceResponse.data);
         setAttendanceData(attendanceResponse.data);
         
         // Test activity logs
         const activityResponse = await apiClient.get('/attendance/activity-logs/today');
-        console.log('Activity response:', activityResponse.data);
         setActivityData(activityResponse.data);
         
       } catch (err) {
-        console.error('API test error:', err);
         setError(err.message);
       } finally {
         setLoading(false);

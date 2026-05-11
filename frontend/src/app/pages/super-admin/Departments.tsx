@@ -48,7 +48,6 @@ export default function Departments() {
     setDepartments(departments.filter(dept => dept.id !== deletingDepartmentId));
     setShowDeleteConfirm(false);
     setDeletingDepartmentId(null);
-    console.log('Department deleted:', deletingDepartmentId);
   };
 
   const handleSaveDepartment = (newDepartment: Department) => {
@@ -61,7 +60,6 @@ export default function Departments() {
       ));
       setShowEditForm(false);
       setEditingDepartment(null);
-      console.log('Department updated:', newDepartment);
     } else {
       // Add new department
       const newId = Math.max(...departments.map(d => d.id)) + 1;
@@ -75,7 +73,6 @@ export default function Departments() {
         created: new Date().toISOString().split('T')[0]
       }]);
       setShowAddForm(false);
-      console.log('New department added:', newDepartment);
     }
   };
 

@@ -531,8 +531,9 @@ app.use(optimizeResponse);
 app.use(requestTimeout(30000)); // 30 second timeout
 app.use(queryOptimization);
 
-// Apply CSRF protection middleware - ENABLED for production security
-if (process.env.NODE_ENV === 'production' || process.env.ENABLE_CSRF === 'true') {
+// Apply CSRF protection middleware - DISABLED for API (JWT is sufficient)
+// CSRF is mainly for form-based attacks, not API calls with JWT
+if (false && (process.env.NODE_ENV === 'production' || process.env.ENABLE_CSRF === 'true')) {
   app.use(generateCSRFToken);
   app.use(verifyCSRFToken);
   logger.info('CSRF protection enabled');

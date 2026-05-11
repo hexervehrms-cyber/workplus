@@ -496,10 +496,11 @@ export default function EmployeeDashboard() {
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
         toast.success('Checked in successfully!');
         
-        // Re-enable refresh after action completes
-        setTimeout(() => {
+        // Fetch fresh data immediately to ensure UI is in sync with database
+        setTimeout(async () => {
+          await fetchDashboardData();
           setDisableRefresh(false);
-        }, 1000);
+        }, 800);
       }
     } catch (err) {
       console.error('Check-in error:', err);
@@ -555,10 +556,11 @@ export default function EmployeeDashboard() {
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
         toast.success('Checked out successfully!');
         
-        // Re-enable refresh after action completes
-        setTimeout(() => {
+        // Fetch fresh data immediately to ensure UI is in sync with database
+        setTimeout(async () => {
+          await fetchDashboardData();
           setDisableRefresh(false);
-        }, 1000);
+        }, 800);
       }
     } catch (err) {
       console.error('Check-out error:', err);

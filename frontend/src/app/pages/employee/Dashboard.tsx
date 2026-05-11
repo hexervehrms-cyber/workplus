@@ -506,10 +506,10 @@ export default function EmployeeDashboard() {
       toast.error(err instanceof Error ? err.message : 'Check-in failed');
       setDisableRefresh(false);
     } finally {
-      // Clear action lock after delay to prevent rapid re-clicks
+      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
-      }, 1500);
+      }, 300);
     }
   };
 
@@ -564,10 +564,10 @@ export default function EmployeeDashboard() {
       toast.error(err instanceof Error ? err.message : 'Check-out failed');
       setDisableRefresh(false);
     } finally {
-      // Clear action lock after delay to prevent rapid re-clicks
+      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
-      }, 1500);
+      }, 300);
     }
   };
 
@@ -642,10 +642,10 @@ export default function EmployeeDashboard() {
       // Re-enable refresh on error
       setDisableRefresh(false);
     } finally {
-      // Always clear action lock after delay
+      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
-      }, 1500);
+      }, 300);
     }
   };
 
@@ -704,10 +704,10 @@ export default function EmployeeDashboard() {
       // Re-enable refresh if error
       setDisableRefresh(false);
     } finally {
-      // Always clear action lock after delay
+      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
-      }, 1500);
+      }, 300);
     }
   };
 
@@ -770,10 +770,10 @@ export default function EmployeeDashboard() {
       // Re-enable refresh on error
       setDisableRefresh(false);
     } finally {
-      // Always clear action lock after delay
+      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
-      }, 1500);
+      }, 300);
     }
   };
 
@@ -829,10 +829,10 @@ export default function EmployeeDashboard() {
       // Re-enable refresh if error
       setDisableRefresh(false);
     } finally {
-      // Always clear action lock after delay
+      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
-      }, 1500);
+      }, 300);
     }
   };
 

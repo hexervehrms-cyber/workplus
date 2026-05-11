@@ -231,9 +231,10 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   });
 
   if (existingAttendance && existingAttendance.checkIn && !existingAttendance.checkOut) {
-    return res.status(400).json({
-      success: false,
-      message: 'Already checked in today. Please check out first.'
+    return res.status(200).json({
+      success: true,
+      message: 'Already checked in today.',
+      data: existingAttendance
     });
   }
 
@@ -433,9 +434,10 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   }
 
   if (attendance.checkOut) {
-    return res.status(400).json({
-      success: false,
-      message: 'Already checked out today.'
+    return res.status(200).json({
+      success: true,
+      message: 'Already checked out today.',
+      data: attendance
     });
   }
 
@@ -680,8 +682,28 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
 router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, breakType = 'regular', notes, orgId, employeeName } = req.body;
   const currentUserId = req.user.userId;
+  const authOrgId = req.user.orgId;
+  const authRole = req.user.role;
 
-  if (!employeeId || !orgId) {
+  let effectiveEmployeeId = employeeId;
+  let effectiveOrgId = orgId;
+  let effectiveEmployeeName = employeeName;
+
+  if (authRole === 'employee') {
+    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId })
+      .select('_id firstName lastName')
+      .lean();
+    if (!employee) {
+      return res.status(403).json({ success: false, message: 'Employee profile not found for authenticated user' });
+    }
+    effectiveEmployeeId = employee._id;
+    effectiveOrgId = authOrgId;
+    effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || effectiveEmployeeName || 'Employee';
+  } else if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
+    return res.status(403).json({ success: false, message: 'Unauthorized org access' });
+  }
+
+  if (!effectiveEmployeeId || !effectiveOrgId) {
     return res.status(400).json({
       success: false,
       message: 'Missing required fields: employeeId, orgId'
@@ -695,8 +717,8 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
 
   // Find today's attendance record
   const attendance = await Attendance.findOne({
-    employeeId,
-    orgId,
+    employeeId: effectiveEmployeeId,
+    orgId: effectiveOrgId,
     date: { $gte: today, $lt: tomorrow }
   }).sort({ _id: -1 });
 
@@ -717,9 +739,10 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
   // Check if already on break
   const currentBreak = attendance.breaks?.find(b => b.startTime && !b.endTime);
   if (currentBreak) {
-    return res.status(400).json({
-      success: false,
-      message: 'Already on break. Please end current break first.'
+    return res.status(200).json({
+      success: true,
+      message: 'Already on break.',
+      data: attendance
     });
   }
 
@@ -741,7 +764,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
 
   console.log('☕ [BREAK-START] Adding new break:', {
     attendanceId: attendance._id,
-    employeeId,
+    employeeId: effectiveEmployeeId,
     breakType,
     startTime: newBreak.startTime,
     currentBreaksCount: attendance.breaks?.length || 0
@@ -766,7 +789,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
   // Log activity
   await ActivityLog.logActivity({
     userId: currentUserId,
-    orgId,
+    orgId: effectiveOrgId,
     action: 'attendance_break_start',
     entity: {
       entityType: 'attendance',
@@ -785,23 +808,23 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
 
   // Emit real-time event to notify admin dashboard
   console.log('☕ [BREAK-START] Emitting attendance update for orgId:', orgId);
-  req.emitAttendanceUpdate(updatedAttendance, orgId);
+  req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
   
   // Emit KPI update for real-time dashboard refresh
-  console.log('☕ [BREAK-START] Calling emitKPIUpdate with:', { orgId, employeeId, employeeName, breakType });
-  await emitKPIUpdate(req.io, orgId, 'break_start', {
-    employeeId,
-    employeeName,
+  console.log('☕ [BREAK-START] Calling emitKPIUpdate with:', { orgId: effectiveOrgId, employeeId: effectiveEmployeeId, employeeName: effectiveEmployeeName, breakType });
+  await emitKPIUpdate(req.io, effectiveOrgId, 'break_start', {
+    employeeId: effectiveEmployeeId,
+    employeeName: effectiveEmployeeName,
     breakType
   });
   console.log('☕ [BREAK-START] emitKPIUpdate completed');
   
   // Also emit a direct Socket.IO event for immediate dashboard refresh
   if (req.io) {
-    console.log('☕ [BREAK-START] Emitting break:started event to tenant_' + orgId);
-    req.io.to(`tenant_${orgId}`).emit('break:started', {
-      employeeId: employeeId,
-      employeeName: employeeName,
+    console.log('☕ [BREAK-START] Emitting break:started event to tenant_' + effectiveOrgId);
+    req.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
+      employeeId: effectiveEmployeeId,
+      employeeName: effectiveEmployeeName,
       breakType: breakType,
       timestamp: new Date()
     });
@@ -822,8 +845,28 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
 router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, notes, orgId, employeeName } = req.body;
   const currentUserId = req.user.userId;
+  const authOrgId = req.user.orgId;
+  const authRole = req.user.role;
 
-  if (!employeeId || !orgId) {
+  let effectiveEmployeeId = employeeId;
+  let effectiveOrgId = orgId;
+  let effectiveEmployeeName = employeeName;
+
+  if (authRole === 'employee') {
+    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId })
+      .select('_id firstName lastName')
+      .lean();
+    if (!employee) {
+      return res.status(403).json({ success: false, message: 'Employee profile not found for authenticated user' });
+    }
+    effectiveEmployeeId = employee._id;
+    effectiveOrgId = authOrgId;
+    effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || effectiveEmployeeName || 'Employee';
+  } else if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
+    return res.status(403).json({ success: false, message: 'Unauthorized org access' });
+  }
+
+  if (!effectiveEmployeeId || !effectiveOrgId) {
     return res.status(400).json({
       success: false,
       message: 'Missing required fields: employeeId, orgId'
@@ -837,8 +880,8 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
   // Find today's attendance record
   const attendance = await Attendance.findOne({
-    employeeId,
-    orgId,
+    employeeId: effectiveEmployeeId,
+    orgId: effectiveOrgId,
     date: { $gte: today, $lt: tomorrow }
   }).sort({ _id: -1 });
 
@@ -872,9 +915,10 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   });
   
   if (activeBreakIndex === -1 || activeBreakIndex === undefined) {
-    return res.status(400).json({
-      success: false,
-      message: 'No active break found to end.'
+    return res.status(200).json({
+      success: true,
+      message: 'No active break found to end.',
+      data: attendance
     });
   }
 
@@ -963,12 +1007,27 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, meetingTitle = 'Meeting', meetingType = 'internal', notes, orgId } = req.body;
   const currentUserId = req.user.userId;
+  const authOrgId = req.user.orgId;
+  const authRole = req.user.role;
 
-  if (!employeeId || !orgId) {
-    return res.status(400).json({
-      success: false,
-      message: 'Missing required fields: employeeId, orgId'
-    });
+  let effectiveEmployeeId = employeeId;
+  let effectiveOrgId = orgId;
+
+  if (authRole === 'employee') {
+    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId })
+      .select('_id')
+      .lean();
+    if (!employee) {
+      return res.status(403).json({ success: false, message: 'Employee profile not found for authenticated user' });
+    }
+    effectiveEmployeeId = employee._id;
+    effectiveOrgId = authOrgId;
+  } else if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
+    return res.status(403).json({ success: false, message: 'Unauthorized org access' });
+  }
+
+  if (!effectiveEmployeeId || !effectiveOrgId) {
+    return res.status(400).json({ success: false, message: 'Missing required fields: employeeId, orgId' });
   }
 
   const today = new Date();
@@ -978,8 +1037,8 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
 
   // Find today's attendance record
   const attendance = await Attendance.findOne({
-    employeeId,
-    orgId,
+    employeeId: effectiveEmployeeId,
+    orgId: effectiveOrgId,
     date: { $gte: today, $lt: tomorrow }
   }).sort({ _id: -1 });
 
@@ -999,9 +1058,10 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
 
   // Check if already in meeting
   if (attendance.meetingMode?.isActive) {
-    return res.status(400).json({
-      success: false,
-      message: 'Already in a meeting. Please end current meeting first.'
+    return res.status(200).json({
+      success: true,
+      message: 'Already in a meeting.',
+      data: attendance
     });
   }
 
@@ -1066,7 +1126,7 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
   // Log activity
   await ActivityLog.logActivity({
     userId: currentUserId,
-    orgId,
+    orgId: effectiveOrgId,
     action: 'attendance_meeting_start',
     entity: {
       entityType: 'attendance',
@@ -1092,7 +1152,7 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
 
   // Emit real-time event to notify admin dashboard
   if (req.emitAttendanceUpdate) {
-    req.emitAttendanceUpdate(updatedAttendance, orgId);
+    req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
   }
 }));
 
@@ -1103,12 +1163,27 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
 router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, notes, orgId } = req.body;
   const currentUserId = req.user.userId;
+  const authOrgId = req.user.orgId;
+  const authRole = req.user.role;
 
-  if (!employeeId || !orgId) {
-    return res.status(400).json({
-      success: false,
-      message: 'Missing required fields: employeeId, orgId'
-    });
+  let effectiveEmployeeId = employeeId;
+  let effectiveOrgId = orgId;
+
+  if (authRole === 'employee') {
+    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId })
+      .select('_id')
+      .lean();
+    if (!employee) {
+      return res.status(403).json({ success: false, message: 'Employee profile not found for authenticated user' });
+    }
+    effectiveEmployeeId = employee._id;
+    effectiveOrgId = authOrgId;
+  } else if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
+    return res.status(403).json({ success: false, message: 'Unauthorized org access' });
+  }
+
+  if (!effectiveEmployeeId || !effectiveOrgId) {
+    return res.status(400).json({ success: false, message: 'Missing required fields: employeeId, orgId' });
   }
 
   const today = new Date();
@@ -1118,15 +1193,16 @@ router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', '
 
   // Find today's attendance record
   const attendance = await Attendance.findOne({
-    employeeId,
-    orgId,
+    employeeId: effectiveEmployeeId,
+    orgId: effectiveOrgId,
     date: { $gte: today, $lt: tomorrow }
   }).sort({ _id: -1 });
 
   if (!attendance || !attendance.meetingMode?.isActive) {
-    return res.status(400).json({
-      success: false,
-      message: 'No active meeting found to end.'
+    return res.status(200).json({
+      success: true,
+      message: 'No active meeting found to end.',
+      data: attendance
     });
   }
 
@@ -1185,7 +1261,7 @@ router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', '
 
   // Emit real-time event to notify admin dashboard
   if (req.emitAttendanceUpdate) {
-    req.emitAttendanceUpdate(updatedAttendance, orgId);
+    req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
   }
 }));
 

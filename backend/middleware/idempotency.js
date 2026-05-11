@@ -43,7 +43,7 @@ const generateIdempotencyKey = (req) => {
     method: req.method,
     path: req.path,
     body: req.body,
-    userId: req.user?._id || req.user?.id
+    userId: req.user?.userId || req.user?._id || req.user?.id
   });
 
   return crypto.createHash('sha256').update(signature).digest('hex');

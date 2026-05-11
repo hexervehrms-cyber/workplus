@@ -98,7 +98,7 @@ echo ""
 echo "Test 5: CORS Configuration"
 echo "-------------------------------------------"
 CORS_RESPONSE=$(curl -s -I -X OPTIONS "$BACKEND_URL/api/auth/login" \
-  -H "Origin: https://workplus-murex.vercel.app" \
+  -H "Origin: https://hexerve.online" \
   -H "Access-Control-Request-Method: POST")
 
 if echo "$CORS_RESPONSE" | grep -q "Access-Control-Allow-Origin"; then

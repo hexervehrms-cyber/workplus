@@ -58,7 +58,7 @@ export default function EmployeeDashboard() {
     hoursThisWeek: "0h",
     performance: "0%"
   });
-  
+
   const [todayAttendance, setTodayAttendance] = useState({
     isCheckedIn: false,
     checkInTime: null,
@@ -70,11 +70,11 @@ export default function EmployeeDashboard() {
     currentBreakDuration: 0,
     breakType: 'regular'
   });
-  
+
   // Add action lock states to prevent UI conflicts
   const [actionInProgress, setActionInProgress] = useState(false);
   const [lastActionTime, setLastActionTime] = useState(0);  // Initialize to 0 so page load is never blocked
-  
+
   const [performanceMetrics, setPerformanceMetrics] = useState({
     taskCompletion: 0,
     attendance: 0,
@@ -95,13 +95,13 @@ export default function EmployeeDashboard() {
   // Helper function to fetch employee ID
   const ensureEmployeeId = async (): Promise<string | null> => {
     if (employeeId) return employeeId;
-    
+
     if (!user?.id) return null;
     if (user?.employeeId) {
       setEmployeeId(user.employeeId);
       return user.employeeId;
     }
-    
+
     try {
       const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
@@ -121,27 +121,27 @@ export default function EmployeeDashboard() {
     } catch (err) {
       console.error('Error fetching employee data:', err);
     }
-    
+
     return null;
   };
 
   // Fetch dashboard data
   const fetchDashboardData = useCallback(async (_forceRefresh = false) => {
     if (!user) return;
-    
+
     try {
       setLoading(true);
       setError(null);
-      
+
       // Set a timeout to prevent infinite loading
       const timeoutId = setTimeout(() => {
         setLoading(false);
       }, 5000); // 5 second timeout
-      
+
       // Fetch only critical data first (attendance), then holidays separately
       const attendanceResult = await apiGet('/attendance/today');
       clearTimeout(timeoutId);
-      
+
       // Fetch holidays in parallel but don't block on it - use cached version first
       const cachedHolidays = localStorage.getItem('cached_holidays');
       if (cachedHolidays) {
@@ -152,7 +152,7 @@ export default function EmployeeDashboard() {
           console.warn('Failed to parse cached holidays');
         }
       }
-      
+
       // Fetch fresh holidays in background
       apiGet('/holidays').then(result => {
         if (result?.success && Array.isArray(result.data)) {
@@ -180,28 +180,28 @@ export default function EmployeeDashboard() {
         attendanceResult?.success
           ? attendanceResult.data
           : null;
-      
+
       let data = { attendance: { today: attendanceData?.attendance } };
-      
+
       setDashboardData(data);
-      
+
       // Update today's attendance
       if (attendanceData?.attendance) {
         const attendance = attendanceData.attendance;
-        const checkInTime = attendance.checkIn 
+        const checkInTime = attendance.checkIn
           ? new Date(attendance.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
           : null;
-        const checkOutTime = attendance.checkOut 
+        const checkOutTime = attendance.checkOut
           ? new Date(attendance.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
           : null;
-        
+
         const isCurrentlyCheckedIn = !!attendance.checkIn && !attendance.checkOut;
-        
+
         // Calculate isOnBreak from actual breaks array (most reliable source)
         let calculatedIsOnBreak = false;
         let calculatedBreakType = 'regular';
         let calculatedBreakDuration = 0;
-        
+
         if (attendance.breaks && attendance.breaks.length > 0) {
           const lastBreak = attendance.breaks[attendance.breaks.length - 1];
           if (lastBreak.startTime && !lastBreak.endTime) {
@@ -212,16 +212,16 @@ export default function EmployeeDashboard() {
             calculatedBreakDuration = Math.round((now - breakStart.getTime()) / (1000 * 60));
           }
         }
-        
+
         setTodayAttendance(prev => {
           // SIMPLIFIED LOGIC: Always trust the API data for break status
           // The API calculates break status from the database, which is the source of truth
-          
+
           // Only preserve state if action is currently in progress (not just recent)
           if (actionInProgress) {
             return prev;
           }
-          
+
           return {
             isCheckedIn: isCurrentlyCheckedIn,
             checkInTime: checkInTime,
@@ -251,7 +251,7 @@ export default function EmployeeDashboard() {
         setTodayAttendance(prev => {
           // Preserve break/meeting state if we're in the middle of an action
           const shouldPreserveState = disableRefresh;
-          
+
           if (shouldPreserveState) {
             return {
               ...prev,
@@ -259,7 +259,7 @@ export default function EmployeeDashboard() {
               status: 'absent'
             };
           }
-          
+
           return {
             isCheckedIn: false,
             checkInTime: null,
@@ -273,14 +273,14 @@ export default function EmployeeDashboard() {
           };
         });
       }
-      
+
       // Update KPI metrics
       setKpiMetrics({
         leaveBalance: "12 days",
         hoursThisWeek: `${attendanceData?.liveStatus?.currentHours || 0}h`,
         performance: "85%"
       });
-      
+
       // Update performance metrics
       setPerformanceMetrics({
         taskCompletion: 85,
@@ -289,7 +289,7 @@ export default function EmployeeDashboard() {
         presentDays: 1,
         totalHours: attendanceData?.liveStatus?.currentHours || 0
       });
-      
+
       // Update recent activities
       const activities: any[] = [];
       if (attendanceData?.attendance?.checkIn) {
@@ -302,7 +302,7 @@ export default function EmployeeDashboard() {
         });
       }
       setRecentActivities(activities);
-      
+
       // Update upcoming events
       const events: any[] = [];
       setUpcomingEvents(events);
@@ -322,7 +322,7 @@ export default function EmployeeDashboard() {
         const parsed = JSON.parse(cachedAttendance);
         setIsCheckedIn(!!parsed.isCheckedIn);
         setTodayAttendance(prev => ({ ...prev, ...parsed }));
-      } catch (_) {}
+      } catch (_) { }
     }
     fetchDashboardData(true);  // Force refresh on page load
   }, [fetchDashboardData, attendanceCacheKey]);
@@ -341,7 +341,7 @@ export default function EmployeeDashboard() {
     // Listen for break started events
     const handleBreakStarted = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] break:started event received:', data);
-      
+
       // Only update if it's for this employee
       if (data.employeeId === employeeId) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Break started for current employee, updating state');
@@ -357,7 +357,7 @@ export default function EmployeeDashboard() {
     // Listen for break ended events
     const handleBreakEnded = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] break:ended event received:', data);
-      
+
       // Only update if it's for this employee
       if (data.employeeId === employeeId) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Break ended for current employee, updating state');
@@ -373,7 +373,7 @@ export default function EmployeeDashboard() {
     // Listen for attendance updates
     const handleAttendanceUpdate = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] attendance:update event received:', data);
-      
+
       // Refresh dashboard data to get latest state
       if (!actionInProgress && !disableRefresh) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Refreshing dashboard data after attendance update');
@@ -396,16 +396,16 @@ export default function EmployeeDashboard() {
   const fetchAttendanceHistory = useCallback(async () => {
     try {
       setAttendanceLoading(true);
-      
+
       // Fetch last 30 days of attendance
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      
+
       const result = await apiGet(`/attendance?limit=30&startDate=${thirtyDaysAgo.toISOString()}`);
-      
+
       if (result.success && Array.isArray(result.data)) {
         setAttendanceHistory(result.data);
-        
+
         // Extract break history from attendance records
         const breaks: any[] = [];
         result.data.forEach((record: any) => {
@@ -416,7 +416,7 @@ export default function EmployeeDashboard() {
                 breakType: breakItem.breakType || 'regular',
                 startTime: breakItem.startTime,
                 endTime: breakItem.endTime,
-                duration: breakItem.endTime && breakItem.startTime 
+                duration: breakItem.endTime && breakItem.startTime
                   ? ((new Date(breakItem.endTime).getTime() - new Date(breakItem.startTime).getTime()) / (1000 * 60)).toFixed(0)
                   : 'In Progress'
               });
@@ -437,14 +437,14 @@ export default function EmployeeDashboard() {
     fetchAttendanceHistory();
   }, [fetchAttendanceHistory]);
 
-    // Periodic refresh of attendance data every 30 seconds when checked in
+  // Periodic refresh of attendance data every 30 seconds when checked in
   useEffect(() => {
     if (!isCheckedIn || disableRefresh || actionInProgress) return;
-    
+
     // Don't refresh if an action was performed recently (within 5 seconds)
     const timeSinceLastAction = Date.now() - lastActionTime;
     if (timeSinceLastAction < 5000) return;
-    
+
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       // Double check before refreshing
@@ -452,7 +452,7 @@ export default function EmployeeDashboard() {
         fetchDashboardData();
       }
     }, 30000); // Refresh every 30 seconds
-    
+
     return () => clearInterval(interval);
   }, [isCheckedIn, disableRefresh, fetchDashboardData, actionInProgress, lastActionTime]);
 
@@ -467,9 +467,31 @@ export default function EmployeeDashboard() {
     try {
       setActionInProgress(true);
       setLastActionTime(Date.now());
-      
+
       // Disable refresh during action
       setDisableRefresh(true);
+
+      // Update UI immediately (optimistic update)
+      const checkInAt = new Date();
+      const checkInTime = checkInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+      const optimisticState = {
+        isCheckedIn: true,
+        checkInTime: checkInTime,
+        checkOutTime: null,
+        hoursWorked: 0,
+        status: 'present',
+        isOnBreak: false,
+        isInMeeting: false,
+        currentBreakDuration: 0,
+        breakType: 'regular'
+      };
+
+      // Update state synchronously
+      setTodayAttendance(optimisticState);
+      setIsCheckedIn(true);
+      localStorage.setItem(attendanceCacheKey, JSON.stringify(optimisticState));
+      toast.success('Check-in initiated...');
 
       const result = await apiPost('/attendance/check-in', {
         location: 'Office',
@@ -477,33 +499,54 @@ export default function EmployeeDashboard() {
       });
 
       if (result.success) {
-        const checkInAt = result?.data?.checkIn ? new Date(result.data.checkIn) : new Date();
-        const checkInTime = checkInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        // Update with actual server data if needed
+        const actualCheckInAt = result?.data?.checkIn ? new Date(result.data.checkIn) : checkInAt;
+        const actualCheckInTime = actualCheckInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
-        const updatedState = {
-          isCheckedIn: true,
-          checkInTime: checkInTime,
+        const serverState = {
+          ...optimisticState,
+          checkInTime: actualCheckInTime
+        };
+
+        setTodayAttendance(serverState);
+        localStorage.setItem(attendanceCacheKey, JSON.stringify(serverState));
+        toast.success('Checked in successfully!');
+      } else {
+        // Revert on failure
+        const revertState = {
+          isCheckedIn: false,
+          checkInTime: null,
           checkOutTime: null,
           hoursWorked: 0,
-          status: 'present',
+          status: 'absent',
           isOnBreak: false,
           isInMeeting: false,
           currentBreakDuration: 0,
           breakType: 'regular'
         };
-        
-        // Update state synchronously
-        setTodayAttendance(updatedState);
-        setIsCheckedIn(true);
-        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
-        toast.success('Checked in successfully!');
-        setDisableRefresh(false);
-      } else {
+        setTodayAttendance(revertState);
+        setIsCheckedIn(false);
+        localStorage.removeItem(attendanceCacheKey);
         toast.error(result?.message || 'Check-in failed');
-        setDisableRefresh(false);
       }
+      setDisableRefresh(false);
     } catch (err) {
       console.error('Check-in error:', err);
+      // Revert on error
+      const revertState = {
+        isCheckedIn: false,
+        checkInTime: null,
+        checkOutTime: null,
+        hoursWorked: 0,
+        status: 'absent',
+        isOnBreak: false,
+        isInMeeting: false,
+        currentBreakDuration: 0,
+        breakType: 'regular'
+      };
+      setTodayAttendance(revertState);
+      setIsCheckedIn(false);
+      localStorage.removeItem(attendanceCacheKey);
       setError(err instanceof Error ? err.message : 'Check-in failed');
       toast.error(err instanceof Error ? err.message : 'Check-in failed');
       setDisableRefresh(false);
@@ -526,44 +569,56 @@ export default function EmployeeDashboard() {
     try {
       setActionInProgress(true);
       setLastActionTime(Date.now());
-
-      // Disable refresh during action
       setDisableRefresh(true);
 
+      // Update UI immediately (optimistic update)
+      const checkOutTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      const optimisticState = {
+        isCheckedIn: false,
+        checkInTime: todayAttendance.checkInTime,
+        checkOutTime: checkOutTime,
+        hoursWorked: 0,
+        status: 'checked_out',
+        isOnBreak: false,
+        isInMeeting: false,
+        currentBreakDuration: 0,
+        breakType: 'regular'
+      };
+
+      setTodayAttendance(optimisticState);
+      setIsCheckedIn(false);
+      localStorage.setItem(attendanceCacheKey, JSON.stringify(optimisticState));
+      toast.success('Checked out successfully!');
+
+      // Then make the API call
       const result = await apiPost('/attendance/check-out', {
         location: 'Office',
         notes: 'Check-out from dashboard'
       });
 
-      if (result.success) {
-        const checkOutAt = result?.data?.checkOut ? new Date(result.data.checkOut) : new Date();
-        const checkOutTime = checkOutAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      if (result?.success && result?.data?.checkOut) {
+        // Update with actual server data if different
+        const actualCheckOutTime = new Date(result.data.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
         const hoursWorked = result.data?.hoursWorked || 0;
-
-        const updatedState = {
-          isCheckedIn: false,
-          checkInTime: todayAttendance.checkInTime,
-          checkOutTime: checkOutTime,
-          hoursWorked: hoursWorked,
-          status: 'checked_out',
-          isOnBreak: false,
-          isInMeeting: false,
-          currentBreakDuration: 0,
-          breakType: 'regular'
+        const serverState = {
+          ...optimisticState,
+          checkOutTime: actualCheckOutTime,
+          hoursWorked: hoursWorked
         };
-        
-        // Update state synchronously
-        setTodayAttendance(updatedState);
-        setIsCheckedIn(false);
-        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
-        toast.success('Checked out successfully!');
-        setDisableRefresh(false);
-      } else {
-        toast.error(result?.message || 'Check-out failed');
-        setDisableRefresh(false);
+        setTodayAttendance(serverState);
+        localStorage.setItem(attendanceCacheKey, JSON.stringify(serverState));
       }
+
+      setDisableRefresh(false);
     } catch (err) {
       console.error('Check-out error:', err);
+      // Revert on error
+      setTodayAttendance(prev => ({
+        ...prev,
+        isCheckedIn: true,
+        checkOutTime: null
+      }));
+      setIsCheckedIn(true);
       setError(err instanceof Error ? err.message : 'Check-out failed');
       toast.error(err instanceof Error ? err.message : 'Check-out failed');
       setDisableRefresh(false);
@@ -586,20 +641,23 @@ export default function EmployeeDashboard() {
     try {
       setActionInProgress(true);
       setLastActionTime(Date.now());
-      
-      // Check if in meeting - show toast to end meeting first
+      setDisableRefresh(true);
+
+      // Prevent start break if currently in a meeting
       if (todayAttendance.isInMeeting) {
         toast.error('You are in a meeting. Please end it first to start a break.');
-        setActionInProgress(false);  // Clear flag before returning
+        setActionInProgress(false);
+        setDisableRefresh(false);
         return;
       }
 
-      // Check if already on a different type of break
+      // Prevent starting a different type of break while already on another break
       if (todayAttendance.isOnBreak && todayAttendance.breakType !== breakType) {
         const currentBreakLabel = todayAttendance.breakType === 'lunch' ? 'Lunch Break' : 'Break';
         const newBreakLabel = breakType === 'lunch' ? 'Lunch Break' : 'Break';
         toast.error(`You are already on ${currentBreakLabel}. Please end it first to start ${newBreakLabel}.`);
-        setActionInProgress(false);  // Clear flag before returning
+        setActionInProgress(false);
+        setDisableRefresh(false);
         return;
       }
 
@@ -608,12 +666,10 @@ export default function EmployeeDashboard() {
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to start break.');
         toast.error('Unable to start break. Please try refreshing the page.');
-        setActionInProgress(false);  // Clear flag before returning
+        setActionInProgress(false);
+        setDisableRefresh(false);
         return;
       }
-
-      // Disable refresh completely during action
-      setDisableRefresh(true);
 
       const result = await apiPost('/attendance/break-start', {
         employeeId: currentEmployeeId,
@@ -630,7 +686,7 @@ export default function EmployeeDashboard() {
           isOnBreak: true,
           breakType: breakType
         }));
-        
+
         const breakLabel = breakType === 'lunch' ? 'Lunch Break' : 'Break';
         toast.success(`${breakLabel} started!`);
         setDisableRefresh(false);
@@ -661,18 +717,17 @@ export default function EmployeeDashboard() {
     try {
       setActionInProgress(true);
       setLastActionTime(Date.now());
-      
+      setDisableRefresh(true);
+
       const currentEmployeeId = await ensureEmployeeId();
 
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to end break.');
         toast.error('Unable to end break. Please try refreshing the page.');
-        setActionInProgress(false);  // Clear flag before returning
+        setActionInProgress(false);
+        setDisableRefresh(false);
         return;
       }
-
-      // Disable refresh completely during action
-      setDisableRefresh(true);
 
       const result = await apiPost('/attendance/break-end', {
         employeeId: currentEmployeeId,
@@ -689,7 +744,7 @@ export default function EmployeeDashboard() {
           currentBreakDuration: 0,
           breakType: 'regular' // Reset break type
         }));
-        
+
         toast.success('Break ended!');
         setDisableRefresh(false);
       } else {
@@ -720,24 +775,26 @@ export default function EmployeeDashboard() {
     try {
       setActionInProgress(true);
       setLastActionTime(Date.now());
-      
+      setDisableRefresh(true);
+
       // Check if on break - show toast to end break first
       if (todayAttendance.isOnBreak) {
         toast.error(`You are on a ${todayAttendance.breakType === 'lunch' ? 'lunch break' : 'break'}. Please end it first to start a meeting.`);
+        setActionInProgress(false);
+        setDisableRefresh(false);
         return;
       }
 
       const currentEmployeeId = await ensureEmployeeId();
 
+      // Ensure employee exists
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to start meeting.');
         toast.error('Unable to start meeting. Please try refreshing the page.');
-        setActionInProgress(false);  // Clear flag before returning
+        setActionInProgress(false);
+        setDisableRefresh(false);
         return;
       }
-
-      // Disable refresh completely during action
-      setDisableRefresh(true);
 
       const result = await apiPost('/attendance/meeting-start', {
         employeeId: currentEmployeeId,
@@ -753,7 +810,7 @@ export default function EmployeeDashboard() {
           ...prev,
           isInMeeting: true
         }));
-        
+
         toast.success('Meeting started!');
         setDisableRefresh(false);
       } else {
@@ -783,7 +840,7 @@ export default function EmployeeDashboard() {
     try {
       setActionInProgress(true);
       setLastActionTime(Date.now());
-      
+
       const currentEmployeeId = await ensureEmployeeId();
 
       if (!currentEmployeeId) {
@@ -808,7 +865,7 @@ export default function EmployeeDashboard() {
           ...prev,
           isInMeeting: false
         }));
-        
+
         toast.success('Meeting ended!');
         setDisableRefresh(false);
       } else {
@@ -838,49 +895,13 @@ export default function EmployeeDashboard() {
           </h1>
           <p className="text-muted-foreground">Here's what's happening with your work today</p>
         </div>
-        <div className="flex gap-3">
-          {/* Break Button */}
-          <Button 
-            variant={todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? "destructive" : "outline"} 
-            className="rounded-xl"
-            onClick={todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? handleBreakEnd : () => handleBreakStart('regular')}
             disabled={!todayAttendance.isCheckedIn || todayAttendance.isInMeeting || (todayAttendance.isOnBreak && todayAttendance.breakType !== 'regular') || actionInProgress}
           >
             {todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? 'End Break' : 'Break'}
           </Button>
 
           {/* Meeting Button */}
-          <Button 
-            variant={todayAttendance.isInMeeting ? "destructive" : "outline"} 
-            className="rounded-xl"
-            onClick={todayAttendance.isInMeeting ? handleMeetingEnd : handleMeetingStart}
-            disabled={!todayAttendance.isCheckedIn || todayAttendance.isOnBreak || actionInProgress}
-          >
-            {todayAttendance.isInMeeting ? 'End Meeting' : 'Meeting'}
-          </Button>
 
-          {/* Check In/Out Button */}
-          {!todayAttendance.isCheckedIn ? (
-            <Button 
-              className="rounded-xl bg-green-600 hover:bg-green-700" 
-              onClick={handleCheckIn}
-              disabled={actionInProgress}
-            >
-              <Clock className="w-4 h-4 mr-2" />
-              Check In
-            </Button>
-          ) : (
-            <Button 
-              className="rounded-xl bg-red-600 hover:bg-red-700" 
-              onClick={handleCheckOut}
-              disabled={actionInProgress}
-            >
-              <LogOut className="w-4 h-4 mr-2" />
-              Check Out
-            </Button>
-          )}
-        </div>
-      </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -911,14 +932,14 @@ export default function EmployeeDashboard() {
         <div className="lg:col-span-2">
           <InteractiveCalendar />
         </div>
-        
+
         {/* Holidays List */}
         <Card className="rounded-2xl overflow-hidden flex flex-col">
           <div className="p-6 border-b border-border flex-shrink-0">
             <div>
               <h3 className="font-semibold text-lg">Holidays</h3>
               <p className="text-sm text-muted-foreground">
-                {holidays.length > 0 
+                {holidays.length > 0
                   ? `${holidays.filter(h => new Date(h.date) >= new Date()).length} upcoming, ${holidays.length} total`
                   : 'Company holidays'
                 }
@@ -934,15 +955,14 @@ export default function EmployeeDashboard() {
                     const holidayDate = new Date(holiday.date);
                     const today = new Date();
                     const isUpcoming = holidayDate >= today;
-                    
+
                     return (
-                      <div 
-                        key={holiday._id || holiday.id} 
-                        className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d ${
-                          isUpcoming 
-                            ? 'bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300' 
+                      <div
+                        key={holiday._id || holiday.id}
+                        className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d ${isUpcoming
+                            ? 'bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300'
                             : 'bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
-                        }`}
+                          }`}
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
@@ -955,11 +975,11 @@ export default function EmployeeDashboard() {
                               )}
                             </div>
                             <p className="text-xs text-muted-foreground mt-1">
-                              {holidayDate.toLocaleDateString('en-US', { 
-                                weekday: 'long', 
-                                month: 'long', 
-                                day: 'numeric', 
-                                year: 'numeric' 
+                              {holidayDate.toLocaleDateString('en-US', {
+                                weekday: 'long',
+                                month: 'long',
+                                day: 'numeric',
+                                year: 'numeric'
                               })}
                             </p>
                           </div>
@@ -999,55 +1019,7 @@ export default function EmployeeDashboard() {
                 <p className="text-2xl font-bold text-foreground">
                   {todayAttendance.hoursWorked.toFixed(1)}h
                 </p>
-              </div>
-            </div>
-
-            {/* Check In Button */}
-            <div className="mb-4">
-              <Button 
-                size="lg"
-                className={`w-full font-semibold ${todayAttendance.isCheckedIn ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}`}
-                onClick={todayAttendance.isCheckedIn ? handleCheckOut : handleCheckIn}
-              >
-                {todayAttendance.isCheckedIn ? 'Check Out' : 'Check In'}
-              </Button>
-            </div>
-
-            {/* Break and Meeting Buttons - Always visible */}
-            <div className="space-y-3">
-              <div className="grid grid-cols-3 gap-2">
-                {/* Break Button */}
-                <Button 
-                  variant={todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? "destructive" : "outline"} 
-                  size="sm"
-                  onClick={todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? handleBreakEnd : () => handleBreakStart('regular')}
-                  disabled={!todayAttendance.isCheckedIn || todayAttendance.isInMeeting || (todayAttendance.isOnBreak && todayAttendance.breakType !== 'regular') || actionInProgress}
-                  className="rounded-lg"
-                >
-                  {todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? 'End Break' : 'Break'}
-                </Button>
-
-                {/* Meeting Button */}
-                <Button 
-                  variant={todayAttendance.isInMeeting ? "destructive" : "outline"} 
-                  size="sm"
-                  onClick={todayAttendance.isInMeeting ? handleMeetingEnd : handleMeetingStart}
-                  disabled={!todayAttendance.isCheckedIn || todayAttendance.isOnBreak || actionInProgress}
-                  className="rounded-lg"
-                >
-                  {todayAttendance.isInMeeting ? 'End Meeting' : 'Meeting'}
-                </Button>
-              </div>
-              
-              {/* Break Info */}
-              {todayAttendance.isOnBreak && (
-                <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
-                  <p className="text-sm text-blue-900">
-                    <strong>{todayAttendance.breakType === 'lunch' ? 'Lunch Break' : 'Break'}</strong> - {todayAttendance.currentBreakDuration} minutes
-                  </p>
-                </div>
-              )}
-            </div>
+                   </div>
           </Card>
 
           {/* Performance Overview */}
@@ -1129,26 +1101,26 @@ export default function EmployeeDashboard() {
                   {attendanceHistory.slice(0, 10).map((record: any, index: number) => (
                     <TableRow key={index}>
                       <TableCell className="font-medium">
-                        {new Date(record.date).toLocaleDateString('en-US', { 
-                          weekday: 'short', 
-                          month: 'short', 
-                          day: 'numeric' 
+                        {new Date(record.date).toLocaleDateString('en-US', {
+                          weekday: 'short',
+                          month: 'short',
+                          day: 'numeric'
                         })}
                       </TableCell>
                       <TableCell>
-                        {record.checkIn 
-                          ? new Date(record.checkIn).toLocaleTimeString('en-US', { 
-                              hour: '2-digit', 
-                              minute: '2-digit' 
-                            })
+                        {record.checkIn
+                          ? new Date(record.checkIn).toLocaleTimeString('en-US', {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })
                           : '-'}
                       </TableCell>
                       <TableCell>
-                        {record.checkOut 
-                          ? new Date(record.checkOut).toLocaleTimeString('en-US', { 
-                              hour: '2-digit', 
-                              minute: '2-digit' 
-                            })
+                        {record.checkOut
+                          ? new Date(record.checkOut).toLocaleTimeString('en-US', {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })
                           : '-'}
                       </TableCell>
                       <TableCell>
@@ -1157,7 +1129,7 @@ export default function EmployeeDashboard() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Badge 
+                        <Badge
                           variant={record.status === 'present' ? 'default' : 'secondary'}
                           className="text-xs capitalize"
                         >
@@ -1165,7 +1137,7 @@ export default function EmployeeDashboard() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        {record.breaks && record.breaks.length > 0 
+                        {record.breaks && record.breaks.length > 0
                           ? `${record.breaks.length} break(s)`
                           : '-'}
                       </TableCell>
@@ -1219,14 +1191,14 @@ export default function EmployeeDashboard() {
                   {breakHistory.slice(0, 10).map((breakRecord: any, index: number) => (
                     <TableRow key={index}>
                       <TableCell className="font-medium">
-                        {new Date(breakRecord.date).toLocaleDateString('en-US', { 
-                          weekday: 'short', 
-                          month: 'short', 
-                          day: 'numeric' 
+                        {new Date(breakRecord.date).toLocaleDateString('en-US', {
+                          weekday: 'short',
+                          month: 'short',
+                          day: 'numeric'
                         })}
                       </TableCell>
                       <TableCell>
-                        <Badge 
+                        <Badge
                           variant={breakRecord.breakType === 'lunch' ? 'default' : 'secondary'}
                           className="text-xs capitalize"
                         >
@@ -1234,19 +1206,19 @@ export default function EmployeeDashboard() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        {breakRecord.startTime 
-                          ? new Date(breakRecord.startTime).toLocaleTimeString('en-US', { 
-                              hour: '2-digit', 
-                              minute: '2-digit' 
-                            })
+                        {breakRecord.startTime
+                          ? new Date(breakRecord.startTime).toLocaleTimeString('en-US', {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })
                           : '-'}
                       </TableCell>
                       <TableCell>
-                        {breakRecord.endTime 
-                          ? new Date(breakRecord.endTime).toLocaleTimeString('en-US', { 
-                              hour: '2-digit', 
-                              minute: '2-digit' 
-                            })
+                        {breakRecord.endTime
+                          ? new Date(breakRecord.endTime).toLocaleTimeString('en-US', {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })
                           : '-'}
                       </TableCell>
                       <TableCell>

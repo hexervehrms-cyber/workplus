@@ -119,7 +119,7 @@ node scripts/verify-production-login.js
    ```
 
 4. **Login to Frontend**:
-   - Go to: https://workplus-murex.vercel.app/login
+   - Go to: https://hexerve.online/login
    - Email: `admin@workpluspro.com`
    - Password: `Jadu@123`
    - Click "Sign In"

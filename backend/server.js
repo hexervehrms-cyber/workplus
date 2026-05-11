@@ -179,14 +179,10 @@ const parseCorsOrigins = () => {
   const baseOrigins = [
     'http://localhost:5173',
     'http://localhost:3000',
-    'https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app',
-    'https://workplus-seven.vercel.app',
-    'https://workplus.vercel.app',
     'https://hexerve.online',
     'https://www.hexerve.online',
     'http://hexerve.online',
-    'http://www.hexerve.online',
-    'https://workplus-murex.vercel.app'
+    'http://www.hexerve.online'
   ];
   
   // Combine environment origins with base origins

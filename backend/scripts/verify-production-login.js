@@ -265,7 +265,7 @@ async function runTests() {
       console.log('   Password:', SUPER_ADMIN_PASSWORD);
       console.log('   Role: super_admin');
       console.log('\n🚀 READY TO USE:');
-      console.log('   1. Go to: https://workplus-murex.vercel.app/login');
+      console.log('   1. Go to: https://hexerve.online/login');
       console.log('   2. Enter email:', SUPER_ADMIN_EMAIL);
       console.log('   3. Enter password:', SUPER_ADMIN_PASSWORD);
       console.log('   4. Click "Sign In"');

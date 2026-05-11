@@ -480,7 +480,6 @@ export default function EmployeeDashboard() {
         const checkInAt = result?.data?.checkIn ? new Date(result.data.checkIn) : new Date();
         const checkInTime = checkInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
-        setIsCheckedIn(true);
         const updatedState = {
           isCheckedIn: true,
           checkInTime: checkInTime,
@@ -493,12 +492,10 @@ export default function EmployeeDashboard() {
           breakType: 'regular'
         };
         setTodayAttendance(updatedState);
+        setIsCheckedIn(true);
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
         toast.success('Checked in successfully!');
-        
-        // Fetch fresh data immediately to ensure UI is in sync with database
         setDisableRefresh(false);
-        await fetchDashboardData();
       }
     } catch (err) {
       console.error('Check-in error:', err);
@@ -538,7 +535,6 @@ export default function EmployeeDashboard() {
         const checkOutTime = checkOutAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
         const hoursWorked = result.data?.hoursWorked || 0;
 
-        setIsCheckedIn(false);
         const updatedState = {
           isCheckedIn: false,
           checkInTime: todayAttendance.checkInTime,
@@ -551,12 +547,10 @@ export default function EmployeeDashboard() {
           breakType: 'regular'
         };
         setTodayAttendance(updatedState);
+        setIsCheckedIn(false);
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
         toast.success('Checked out successfully!');
-        
-        // Fetch fresh data immediately to ensure UI is in sync with database
         setDisableRefresh(false);
-        await fetchDashboardData();
       }
     } catch (err) {
       console.error('Check-out error:', err);
@@ -629,10 +623,7 @@ export default function EmployeeDashboard() {
         
         const breakLabel = breakType === 'lunch' ? 'Lunch Break' : 'Break';
         toast.success(`${breakLabel} started!`);
-        
-        // Immediately fetch fresh data to ensure state is in sync with database
         setDisableRefresh(false);
-        await fetchDashboardData();
       } else {
         setDisableRefresh(false);
       }
@@ -690,10 +681,7 @@ export default function EmployeeDashboard() {
         }));
         
         toast.success('Break ended!');
-        
-        // Immediately fetch fresh data to ensure state is in sync with database
         setDisableRefresh(false);
-        await fetchDashboardData();
       } else {
         // Re-enable refresh if failed
         setDisableRefresh(false);
@@ -757,10 +745,7 @@ export default function EmployeeDashboard() {
         }));
         
         toast.success('Meeting started!');
-        
-        // Fetch fresh data after meeting start
         setDisableRefresh(false);
-        await fetchDashboardData();
       } else {
         setDisableRefresh(false);
       }
@@ -815,10 +800,7 @@ export default function EmployeeDashboard() {
         }));
         
         toast.success('Meeting ended!');
-        
-        // Fetch fresh data after meeting end
         setDisableRefresh(false);
-        await fetchDashboardData();
       } else {
         // Re-enable refresh if failed
         setDisableRefresh(false);

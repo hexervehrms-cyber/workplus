@@ -96,7 +96,10 @@ export default function EmployeeDashboard() {
   const [attendanceHistory, setAttendanceHistory] = useState<any[]>([]);
   const [breakHistory, setBreakHistory] = useState<any[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
-  const attendanceCacheKey = `employee_dashboard_attendance_${user?.id || 'unknown'}`;
+  const attendanceCacheKey = `employee_attendance_state_${user?.id || 'unknown'}`;
+  
+  // Get today's date string for localStorage key (same format as Attendance page)
+  const getTodayKey = () => new Date().toDateString();
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -258,17 +261,24 @@ export default function EmployeeDashboard() {
           };
         });
         setIsCheckedIn(isCurrentlyCheckedIn);
-        localStorage.setItem(attendanceCacheKey, JSON.stringify({
+        
+        // Save to BOTH localStorage keys (same as Attendance page)
+        const today = getTodayKey();
+        const stateToSave = {
           isCheckedIn: isCurrentlyCheckedIn,
+          checkedIn: isCurrentlyCheckedIn,
           checkInTime,
           checkOutTime,
           hoursWorked: attendance.hoursWorked || 0,
+          currentHours: attendance.hoursWorked || 0,
           status: attendance.status || 'absent',
           isOnBreak: calculatedIsOnBreak,
           isInMeeting: attendanceData.liveStatus?.isInMeeting || false,
           currentBreakDuration: calculatedBreakDuration,
           breakType: calculatedBreakType
-        }));
+        };
+        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(stateToSave));
+        localStorage.setItem(attendanceCacheKey, JSON.stringify(stateToSave));
       } else {
         // NO attendance data from API
         // DON'T reset if we just checked in (preserve optimistic state)
@@ -331,8 +341,20 @@ export default function EmployeeDashboard() {
 
   // Fetch data on mount with force refresh
   useEffect(() => {
+    // Load from BOTH localStorage keys (same as Attendance page)
+    const today = getTodayKey();
+    const storedCheckedIn = localStorage.getItem(`checkedIn_${today}`);
     const cachedAttendance = localStorage.getItem(attendanceCacheKey);
-    if (cachedAttendance) {
+    
+    // Prefer the checkedIn_${today} key (same as Attendance page)
+    if (storedCheckedIn) {
+      try {
+        const parsed = JSON.parse(storedCheckedIn);
+        console.log('Loaded checked-in state from localStorage:', parsed);
+        setIsCheckedIn(!!parsed.checkedIn);
+        setTodayAttendance(prev => ({ ...prev, ...parsed }));
+      } catch (_) { }
+    } else if (cachedAttendance) {
       try {
         const parsed = JSON.parse(cachedAttendance);
         setIsCheckedIn(!!parsed.isCheckedIn);
@@ -511,6 +533,10 @@ export default function EmployeeDashboard() {
       console.log('🔄 Setting state to:', optimisticState);
       setTodayAttendance(optimisticState);
       setIsCheckedIn(true);
+      
+      // Save to BOTH localStorage keys (same as Attendance page)
+      const today = getTodayKey();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify(optimisticState));
       localStorage.setItem(attendanceCacheKey, JSON.stringify(optimisticState));
       
       // Force a small delay to ensure state is updated
@@ -538,7 +564,12 @@ export default function EmployeeDashboard() {
         };
 
         setTodayAttendance(serverState);
+        
+        // Save to BOTH localStorage keys (same as Attendance page)
+        const today = getTodayKey();
+        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(serverState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(serverState));
+        
         toast.success('Checked in successfully!');
         
         // Keep refresh disabled for 5 more seconds to ensure state stability
@@ -595,7 +626,12 @@ export default function EmployeeDashboard() {
 
       setTodayAttendance(optimisticState);
       setIsCheckedIn(false);
+      
+      // Save to BOTH localStorage keys (same as Attendance page)
+      const today = getTodayKey();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify(optimisticState));
       localStorage.setItem(attendanceCacheKey, JSON.stringify(optimisticState));
+      
       toast.success('Checked out successfully!');
 
       // Then make the API call
@@ -614,6 +650,10 @@ export default function EmployeeDashboard() {
           hoursWorked: hoursWorked
         };
         setTodayAttendance(serverState);
+        
+        // Save to BOTH localStorage keys (same as Attendance page)
+        const today = getTodayKey();
+        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(serverState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(serverState));
       }
 
@@ -678,6 +718,18 @@ export default function EmployeeDashboard() {
           isOnBreak: true,
           breakType: breakType
         }));
+        
+        // Save to BOTH localStorage keys (same as Attendance page)
+        const today = getTodayKey();
+        const updatedState = {
+          checkedIn: true,
+          currentHours,
+          isOnBreak: true,
+          breakType,
+          isInMeeting: false
+        };
+        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
+        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
         const breakLabel = breakType === 'lunch' ? 'Lunch Break' : 'Break';
         toast.success(`${breakLabel} started!`);
@@ -737,6 +789,18 @@ export default function EmployeeDashboard() {
           currentBreakDuration: 0,
           breakType: 'regular' // Reset break type
         }));
+        
+        // Save to BOTH localStorage keys (same as Attendance page)
+        const today = getTodayKey();
+        const updatedState = {
+          checkedIn: true,
+          currentHours,
+          isOnBreak: false,
+          breakType: null,
+          isInMeeting: false
+        };
+        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
+        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
         toast.success('Break ended!');
         setDisableRefresh(false);
@@ -797,6 +861,18 @@ export default function EmployeeDashboard() {
           ...prev,
           isInMeeting: true
         }));
+        
+        // Save to BOTH localStorage keys (same as Attendance page)
+        const today = getTodayKey();
+        const updatedState = {
+          checkedIn: true,
+          currentHours,
+          isOnBreak: false,
+          breakType: null,
+          isInMeeting: true
+        };
+        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
+        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
         toast.success('Meeting started!');
         setDisableRefresh(false);
@@ -853,6 +929,18 @@ export default function EmployeeDashboard() {
           ...prev,
           isInMeeting: false
         }));
+        
+        // Save to BOTH localStorage keys (same as Attendance page)
+        const today = getTodayKey();
+        const updatedState = {
+          checkedIn: true,
+          currentHours,
+          isOnBreak: false,
+          breakType: null,
+          isInMeeting: false
+        };
+        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
+        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
         toast.success('Meeting ended!');
         setDisableRefresh(false);
@@ -875,13 +963,99 @@ export default function EmployeeDashboard() {
 
   return (
     <div className="p-8 space-y-8">
-      {/* Welcome Header */}
+      {/* Welcome Header with Attendance Buttons */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground mb-2">
             Welcome back, {user?.name || 'Employee'}! 👋
           </h1>
           <p className="text-muted-foreground">Here's what's happening with your work today</p>
+        </div>
+        
+        {/* Attendance Action Buttons - Synced with Attendance Page */}
+        <div className="flex items-center gap-2">
+          {!todayAttendance.isCheckedIn ? (
+            <Button
+              onClick={handleCheckIn}
+              disabled={actionInProgress}
+              size="sm"
+              className="gap-2 bg-green-600 hover:bg-green-700"
+            >
+              <Clock className="w-4 h-4" />
+              Check In
+            </Button>
+          ) : (
+            <>
+              {/* Break Button */}
+              {!todayAttendance.isOnBreak ? (
+                <Button
+                  onClick={() => handleBreakStart('regular')}
+                  disabled={actionInProgress || todayAttendance.isInMeeting}
+                  size="sm"
+                  variant="outline"
+                  className="gap-2"
+                >
+                  <Clock className="w-4 h-4" />
+                  Break
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleBreakEnd}
+                  disabled={actionInProgress}
+                  size="sm"
+                  variant="outline"
+                  className="gap-2"
+                >
+                  <Clock className="w-4 h-4" />
+                  End Break
+                </Button>
+              )}
+
+              {/* Meeting Button */}
+              {!todayAttendance.isInMeeting ? (
+                <Button
+                  onClick={handleMeetingStart}
+                  disabled={actionInProgress}
+                  size="sm"
+                  variant="outline"
+                  className="gap-2"
+                >
+                  <FileText className="w-4 h-4" />
+                  Meeting
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleMeetingEnd}
+                  disabled={actionInProgress}
+                  size="sm"
+                  variant="outline"
+                  className="gap-2"
+                >
+                  <FileText className="w-4 h-4" />
+                  End Meeting
+                </Button>
+              )}
+
+              {/* Check Out Button */}
+              <Button
+                onClick={handleCheckOut}
+                disabled={actionInProgress}
+                size="sm"
+                variant="destructive"
+                className="gap-2"
+              >
+                <LogOut className="w-4 h-4" />
+                Check Out
+              </Button>
+            </>
+          )}
+
+          {/* Status Badge */}
+          {todayAttendance.isCheckedIn && (
+            <Badge variant="default" className="ml-2">
+              {todayAttendance.isOnBreak ? 'On Break' : todayAttendance.isInMeeting ? 'In Meeting' : 'Working'}
+            </Badge>
+          )}
         </div>
       </div>
 

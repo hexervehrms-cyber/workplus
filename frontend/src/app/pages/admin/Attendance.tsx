@@ -49,7 +49,7 @@ export default function AttendanceAdmin() {
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [logsLoading, setLogsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'attendance' | 'activity'>('activity');
+  const [activeTab] = useState<'activity'>('activity');
   const [importLoading, setImportLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [stats, setStats] = useState({
@@ -67,137 +67,23 @@ export default function AttendanceAdmin() {
   const [lateEmployeesLoading, setLateEmployeesLoading] = useState(false);
 
   useEffect(() => {
-    const fetchAttendance = async () => {
-      try {
-        setLoading(true);
-        
-        // Debug authentication
-        const token = localStorage.getItem('authToken');
-        console.log('Current token:', token ? token.substring(0, 50) + '...' : 'No token');
-        console.log('User data:', localStorage.getItem('user'));
-        
-        // Fetch today's attendance
-        console.log('Fetching attendance records...');
-        const response = await apiClient.get(`/dashboard/todays-attendance?t=${Date.now()}`);
-        console.log('Attendance response:', response);
-        if (response?.success) {
-          const records = response.data || [];
-          console.log('Setting attendance records:', records);
-          setAttendance(records);
-          
-          // Calculate stats
-          const present = records.filter((r: AttendanceRecord) => r.status === 'present').length;
-          const late = records.filter((r: AttendanceRecord) => r.status === 'late').length;
-          const absent = records.filter((r: AttendanceRecord) => r.status === 'absent').length;
-          const total = records.length || 1;
-          
-          setStats({
-            present,
-            late,
-            absent,
-            rate: Math.round((present / total) * 100)
-          });
-        }
-      } catch (error) {
-        console.error('Error fetching attendance:', error);
-        toast.error('Failed to load attendance data');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    const fetchActivityLogs = async () => {
-      try {
-        setLogsLoading(true);
-        
-        // Fetch today's attendance records (which includes activity)
-        console.log('Fetching activity logs...');
-        const response = await apiClient.get(`/attendance/today?t=${Date.now()}`);
-        console.log('Activity logs response:', response);
-        if (response?.success && response.data?.attendance) {
-          // Transform attendance data into activity logs format
-          const attendance = response.data.attendance;
-          const logs: ActivityLog[] = [];
-          
-          if (attendance.checkIn) {
-            logs.push({
-              _id: `checkin_${attendance._id}`,
-              userId: attendance.userId || '',
-              employeeName: attendance.employeeName || 'Unknown',
-              action: 'Check In',
-              timestamp: attendance.checkIn,
-              details: { location: attendance.location || 'Office' }
-            });
-          }
-          
-          if (attendance.breaks && Array.isArray(attendance.breaks)) {
-            attendance.breaks.forEach((breakItem: any, index: number) => {
-              logs.push({
-                _id: `break_${attendance._id}_${index}`,
-                userId: attendance.userId || '',
-                employeeName: attendance.employeeName || 'Unknown',
-                action: `${breakItem.breakType || 'Break'} Started`,
-                timestamp: breakItem.startTime,
-                details: { breakType: breakItem.breakType || 'regular' }
-              });
-              
-              if (breakItem.endTime) {
-                logs.push({
-                  _id: `break_end_${attendance._id}_${index}`,
-                  userId: attendance.userId || '',
-                  employeeName: attendance.employeeName || 'Unknown',
-                  action: `${breakItem.breakType || 'Break'} Ended`,
-                  timestamp: breakItem.endTime,
-                  details: { breakType: breakItem.breakType || 'regular' }
-                });
-              }
-            });
-          }
-          
-          if (attendance.checkOut) {
-            logs.push({
-              _id: `checkout_${attendance._id}`,
-              userId: attendance.userId || '',
-              employeeName: attendance.employeeName || 'Unknown',
-              action: 'Check Out',
-              timestamp: attendance.checkOut,
-              details: { location: attendance.location || 'Office' }
-            });
-          }
-          
-          console.log('Setting activity logs:', logs);
-          setActivityLogs(logs);
-        }
-      } catch (error) {
-        console.error('Error fetching activity logs:', error);
-        toast.error('Failed to load activity logs');
-      } finally {
-        setLogsLoading(false);
-      }
-    };
-
     fetchAttendance();
     fetchActivityLogs();
 
-    // Set up real-time updates via Socket.IO
-    const handleAttendanceUpdate = (data: any) => {
-      console.log('📡 [ADMIN-ATTENDANCE] Real-time attendance update received:', data);
+    const handleAttendanceUpdate = () => {
       fetchAttendance();
       fetchActivityLogs();
     };
 
     realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
 
-    // Periodic fallback refresh
     const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
       fetchAttendance();
       fetchActivityLogs();
-    }, 60000); // Refresh every 60 seconds as fallback
+    }, 60000);
 
-    return () => {
-      clearInterval(interval);
-      // Note: realTimeSocket doesn't expose removeListener, but we can prevent duplicate logic
-    };
+    return () => clearInterval(interval);
   }, []);
 
   // Separate function declarations for reuse
@@ -243,68 +129,15 @@ export default function AttendanceAdmin() {
   const fetchActivityLogs = async () => {
     try {
       setLogsLoading(true);
-      
-      // Fetch today's attendance records (which includes activity)
-      console.log('Fetching activity logs...');
-      const response = await apiClient.get(`/attendance/today?t=${Date.now()}`);
-      console.log('Activity logs response:', response);
-      if (response?.success && response.data?.attendance) {
-        // Transform attendance data into activity logs format
-        const attendance = response.data.attendance;
-        const logs: ActivityLog[] = [];
-        
-        if (attendance.checkIn) {
-          logs.push({
-            _id: `checkin_${attendance._id}`,
-            userId: attendance.userId || '',
-            employeeName: attendance.employeeName || 'Unknown',
-            action: 'Check In',
-            timestamp: attendance.checkIn,
-            details: { location: attendance.location || 'Office' }
-          });
-        }
-        
-        if (attendance.breaks && Array.isArray(attendance.breaks)) {
-          attendance.breaks.forEach((breakItem: any, index: number) => {
-            logs.push({
-              _id: `break_${attendance._id}_${index}`,
-              userId: attendance.userId || '',
-              employeeName: attendance.employeeName || 'Unknown',
-              action: `${breakItem.breakType || 'Break'} Started`,
-              timestamp: breakItem.startTime,
-              details: { breakType: breakItem.breakType || 'regular' }
-            });
-            
-            if (breakItem.endTime) {
-              logs.push({
-                _id: `break_end_${attendance._id}_${index}`,
-                userId: attendance.userId || '',
-                employeeName: attendance.employeeName || 'Unknown',
-                action: `${breakItem.breakType || 'Break'} Ended`,
-                timestamp: breakItem.endTime,
-                details: { breakType: breakItem.breakType || 'regular' }
-              });
-            }
-          });
-        }
-        
-        if (attendance.checkOut) {
-          logs.push({
-            _id: `checkout_${attendance._id}`,
-            userId: attendance.userId || '',
-            employeeName: attendance.employeeName || 'Unknown',
-            action: 'Check Out',
-            timestamp: attendance.checkOut,
-            details: { location: attendance.location || 'Office' }
-          });
-        }
-        
-        console.log('Setting activity logs:', logs);
-        setActivityLogs(logs);
+      const response = await apiClient.get(`/attendance/activity-logs?limit=300&t=${Date.now()}`);
+      if (response?.success) {
+        setActivityLogs(response.data || []);
+      } else {
+        setActivityLogs([]);
       }
     } catch (error) {
       console.error('Error fetching activity logs:', error);
-      toast.error('Failed to load activity logs');
+      setActivityLogs([]);
     } finally {
       setLogsLoading(false);
     }
@@ -499,9 +332,6 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
     toast.success('Template downloaded successfully');
   };
 
-  // Debug log
-  console.log('Rendering with activityLogs:', activityLogs, 'logsLoading:', logsLoading, 'activeTab:', activeTab);
-
   return (
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center">
@@ -569,21 +399,7 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
 
       <div className="flex gap-4 items-center">
         <div className="flex bg-muted rounded-xl p-1">
-          <Button
-            variant={activeTab === 'attendance' ? 'default' : 'ghost'}
-            size="sm"
-            className="rounded-lg"
-            onClick={() => setActiveTab('attendance')}
-          >
-            <Calendar className="w-4 h-4 mr-2" />
-            Attendance Records
-          </Button>
-          <Button
-            variant={activeTab === 'activity' ? 'default' : 'ghost'}
-            size="sm"
-            className="rounded-lg"
-            onClick={() => setActiveTab('activity')}
-          >
+          <Button variant="default" size="sm" className="rounded-lg">
             <Activity className="w-4 h-4 mr-2" />
             Live Activity
           </Button>
@@ -592,7 +408,7 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <input
             type="text"
-            placeholder={activeTab === 'attendance' ? "Search attendance records..." : "Search activity logs..."}
+            placeholder="Search activity logs..."
             className="w-full pl-10 pr-4 py-2 border rounded-xl bg-background"
           />
         </div>
@@ -689,116 +505,13 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
         </Card>
       )}
 
-      {/* Attendance/Activity Tabs */}
-      {activeTab === 'attendance' ? (
-        <Card className="rounded-xl">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left p-4">Employee</th>
-                  <th className="text-left p-4">Date</th>
-                  <th className="text-left p-4">Check In</th>
-                  <th className="text-left p-4">Check Out</th>
-                  <th className="text-left p-4">Hours</th>
-                  <th className="text-left p-4">Breaks</th>
-                  <th className="text-left p-4">Status</th>
-                  <th className="text-left p-4">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr>
-                    <td colSpan={8} className="p-4 text-center text-muted-foreground">
-                      Loading attendance records...
-                    </td>
-                  </tr>
-                ) : filteredAttendance.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="p-4 text-center text-muted-foreground">
-                      No attendance records found
-                    </td>
-                  </tr>
-                ) : (
-                  filteredAttendance.map((record) => (
-                    <tr key={record._id} className="border-b hover:bg-accent/50">
-                      <td className="p-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
-                            <span className="text-sm font-medium">{record.employeeName.charAt(0)}</span>
-                          </div>
-                          <div>
-                            <p className="font-medium">{record.employeeName}</p>
-                            <p className="text-sm text-muted-foreground">{record.employeeName.toLowerCase().replace(/\s+/g, '')}@company.com</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <p className="font-medium">{new Date(record.date).toLocaleDateString()}</p>
-                        <p className="text-sm text-muted-foreground">{new Date(record.date).toLocaleDateString('en-US', { weekday: 'long' })}</p>
-                      </td>
-                      <td className="p-4">
-                        <p className="font-medium">{record.checkIn ? new Date(record.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '-'}</p>
-                      </td>
-                      <td className="p-4">
-                        <p className="font-medium">{record.checkOut ? new Date(record.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '-'}</p>
-                      </td>
-                      <td className="p-4">
-                        <p className="font-medium">{record.hoursWorked ? record.hoursWorked.toFixed(1) : '0.0'}h</p>
-                      </td>
-                      <td className="p-4">
-                        <div className="flex flex-col gap-1">
-                          {record.breaks && record.breaks.length > 0 ? (
-                            record.breaks.map((breakItem, index) => (
-                              <div key={index} className="flex items-center gap-1 text-xs">
-                                <Coffee className="w-3 h-3 text-orange-500" />
-                                <span>{breakItem.duration ? `${breakItem.duration}m` : 'Active'}</span>
-                              </div>
-                            ))
-                          ) : (
-                            <span className="text-xs text-muted-foreground">No breaks</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <span className={`px-2 py-1 text-xs rounded-full ${
-                          record.status === 'present' ? 'bg-green-100 text-green-800' :
-                          record.status === 'late' ? 'bg-yellow-100 text-yellow-800' :
-                          record.status === 'absent' ? 'bg-red-100 text-red-800' :
-                          'bg-green-100 text-green-800'
-                        }`}>
-                          {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        <Button variant="ghost" size="sm">
-                          Edit
-                        </Button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      ) : (
-        <Card className="rounded-xl">
+      <Card className="rounded-xl">
           <div className="p-4 border-b">
             <h3 className="font-semibold flex items-center gap-2">
               <Activity className="w-4 h-4" />
               Live Attendance Activity ({activityLogs.length} logs)
             </h3>
             <p className="text-sm text-muted-foreground">Real-time employee check-ins, breaks, and check-outs</p>
-            {process.env.NODE_ENV === 'development' && (
-              <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
-                <strong>Debug:</strong> loading: {loading.toString()}, 
-                attendance.length: {attendance.length},
-                logsLoading: {logsLoading.toString()}, 
-                activityLogs.length: {activityLogs.length},
-                activeTab: {activeTab}
-              </div>
-            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -812,19 +525,7 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
                 </tr>
               </thead>
               <tbody>
-                {logsLoading ? (
-                  <tr>
-                    <td colSpan={5} className="p-4 text-center text-muted-foreground">
-                      Loading activity logs...
-                    </td>
-                  </tr>
-                ) : activityLogs.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="p-4 text-center text-muted-foreground">
-                      No activity logs for today
-                    </td>
-                  </tr>
-                ) : (
+                {activityLogs.length > 0 ? (
                   activityLogs.map((log) => (
                     <tr key={log._id} className="border-b hover:bg-accent/50">
                       <td className="p-4">
@@ -887,12 +588,11 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
                       </td>
                     </tr>
                   ))
-                )}
+                ) : null}
               </tbody>
             </table>
           </div>
-        </Card>
-      )}
+      </Card>
     </div>
   );
 }

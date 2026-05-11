@@ -70,7 +70,6 @@ const navigationItems: NavItem[] = [
     ]
   },
   { icon: Clock, label: 'Attendance', path: '/admin/attendance', roles: ['admin'] },
-  { icon: Calendar, label: 'Attendance History', path: '/admin/attendance-history', roles: ['admin'] },
   { 
     icon: Zap, 
     label: 'Sales', 

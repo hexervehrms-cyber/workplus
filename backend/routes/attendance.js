@@ -159,6 +159,56 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
 }));
 
 /**
+ * GET /api/attendance/activity-logs
+ * Get today's attendance activity logs for admin live view
+ */
+router.get('/activity-logs', authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+  const orgId = req.user.orgId;
+  const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  const attendanceActions = [
+    'attendance_checkin',
+    'attendance_checkout',
+    'attendance_break_start',
+    'attendance_break_end',
+    'attendance_meeting_start',
+    'attendance_meeting_end'
+  ];
+
+  const logs = await ActivityLog.find({
+    orgId,
+    action: { $in: attendanceActions },
+    createdAt: { $gte: today, $lt: tomorrow }
+  })
+    .select('userId action details ipAddress deviceInfo createdAt')
+    .populate('userId', 'name email')
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean();
+
+  const mapped = logs.map((log) => ({
+    _id: log._id,
+    userId: log.userId?._id || log.userId || null,
+    employeeName: log.details?.employeeName || log.userId?.name || 'Employee',
+    action: log.action,
+    timestamp: log.createdAt,
+    details: log.details || {},
+    ipAddress: log.ipAddress,
+    deviceInfo: log.deviceInfo
+  }));
+
+  res.json({
+    success: true,
+    data: mapped
+  });
+}));
+
+/**
  * POST /api/attendance/check-in
  * Check in for the day
  */

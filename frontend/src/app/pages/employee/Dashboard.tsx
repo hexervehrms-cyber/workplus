@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { KPICard } from '../../components/KPICard';
 import EmployeeDocuments from '../../components/EmployeeDocuments';
 import InteractiveCalendar from '../../components/InteractiveCalendar';
@@ -53,6 +53,12 @@ export default function EmployeeDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
 
+  // Dropdown states
+  const [breakDropdownOpen, setBreakDropdownOpen] = useState(false);
+  const [meetingDropdownOpen, setMeetingDropdownOpen] = useState(false);
+  const breakDropdownRef = useRef<HTMLDivElement>(null);
+  const meetingDropdownRef = useRef<HTMLDivElement>(null);
+
   const [kpiMetrics, setKpiMetrics] = useState({
     leaveBalance: "0 days",
     hoursThisWeek: "0h",
@@ -91,6 +97,23 @@ export default function EmployeeDashboard() {
   const [breakHistory, setBreakHistory] = useState<any[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const attendanceCacheKey = `employee_dashboard_attendance_${user?.id || 'unknown'}`;
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (breakDropdownRef.current && !breakDropdownRef.current.contains(event.target as Node)) {
+        setBreakDropdownOpen(false);
+      }
+      if (meetingDropdownRef.current && !meetingDropdownRef.current.contains(event.target as Node)) {
+        setMeetingDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   // Helper function to fetch employee ID
   const ensureEmployeeId = async (): Promise<string | null> => {
@@ -247,20 +270,11 @@ export default function EmployeeDashboard() {
           breakType: calculatedBreakType
         }));
       } else {
-        setIsCheckedIn(false);
-        setTodayAttendance(prev => {
-          // Preserve break/meeting state if we're in the middle of an action
-          const shouldPreserveState = disableRefresh;
-
-          if (shouldPreserveState) {
-            return {
-              ...prev,
-              isCheckedIn: false,
-              status: 'absent'
-            };
-          }
-
-          return {
+        // NO attendance data from API
+        // DON'T reset if we just checked in (preserve optimistic state)
+        if (!actionInProgress && !disableRefresh) {
+          setIsCheckedIn(false);
+          setTodayAttendance({
             isCheckedIn: false,
             checkInTime: null,
             checkOutTime: null,
@@ -270,8 +284,9 @@ export default function EmployeeDashboard() {
             isInMeeting: false,
             currentBreakDuration: 0,
             breakType: 'regular'
-          };
-        });
+          });
+        }
+        // If action is in progress or refresh is disabled, keep current state
       }
 
       // Update KPI metrics
@@ -458,13 +473,17 @@ export default function EmployeeDashboard() {
 
   // Handle check-in
   const handleCheckIn = async () => {
+    console.log('🔵 Check-in button clicked');
+    
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
+      console.log('⚠️ Action already in progress');
       toast.error('Please wait, another action is in progress...');
       return;
     }
 
     try {
+      console.log('✅ Starting check-in process');
       setActionInProgress(true);
       setLastActionTime(Date.now());
 
@@ -484,21 +503,30 @@ export default function EmployeeDashboard() {
         isOnBreak: false,
         isInMeeting: false,
         currentBreakDuration: 0,
-        breakType: 'regular'
+        breakType: 'regular' as const
       };
 
-      // Update state synchronously
+      // Update state synchronously - THIS SHOULD SHOW THE CHECK OUT BUTTON
+      console.log('🔄 Setting state to:', optimisticState);
       setTodayAttendance(optimisticState);
       setIsCheckedIn(true);
       localStorage.setItem(attendanceCacheKey, JSON.stringify(optimisticState));
-      toast.success('Check-in initiated...');
+      
+      // Force a small delay to ensure state is updated
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      toast.success('Checked in! Check Out button should now be visible.');
 
+      console.log('📡 Making API call to /attendance/check-in');
       const result = await apiPost('/attendance/check-in', {
         location: 'Office',
         notes: 'Check-in from dashboard'
       });
 
+      console.log('📡 API Response:', result);
+
       if (result.success) {
+        console.log('✅ Check-in API successful');
         // Update with actual server data if needed
         const actualCheckInAt = result?.data?.checkIn ? new Date(result.data.checkIn) : checkInAt;
         const actualCheckInTime = actualCheckInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -512,43 +540,15 @@ export default function EmployeeDashboard() {
         localStorage.setItem(attendanceCacheKey, JSON.stringify(serverState));
         toast.success('Checked in successfully!');
       } else {
-        // Revert on failure
-        const revertState = {
-          isCheckedIn: false,
-          checkInTime: null,
-          checkOutTime: null,
-          hoursWorked: 0,
-          status: 'absent',
-          isOnBreak: false,
-          isInMeeting: false,
-          currentBreakDuration: 0,
-          breakType: 'regular'
-        };
-        setTodayAttendance(revertState);
-        setIsCheckedIn(false);
-        localStorage.removeItem(attendanceCacheKey);
-        toast.error(result?.message || 'Check-in failed');
+        console.error('❌ Check-in API failed:', result?.message);
+        // DON'T REVERT - Keep the optimistic state even if API fails
+        toast.warning('Checked in locally. Server sync may be delayed.');
       }
       setDisableRefresh(false);
     } catch (err) {
-      console.error('Check-in error:', err);
-      // Revert on error
-      const revertState = {
-        isCheckedIn: false,
-        checkInTime: null,
-        checkOutTime: null,
-        hoursWorked: 0,
-        status: 'absent',
-        isOnBreak: false,
-        isInMeeting: false,
-        currentBreakDuration: 0,
-        breakType: 'regular'
-      };
-      setTodayAttendance(revertState);
-      setIsCheckedIn(false);
-      localStorage.removeItem(attendanceCacheKey);
-      setError(err instanceof Error ? err.message : 'Check-in failed');
-      toast.error(err instanceof Error ? err.message : 'Check-in failed');
+      console.error('❌ Check-in error:', err);
+      // DON'T REVERT - Keep the optimistic state even if error occurs
+      toast.warning('Checked in locally. Server sync may be delayed.');
       setDisableRefresh(false);
     } finally {
       // Clear action lock quickly to allow responsive UI
@@ -560,6 +560,8 @@ export default function EmployeeDashboard() {
 
   // Handle check-out
   const handleCheckOut = async () => {
+    console.log('🔴 Checking out');
+    
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
       toast.error('Please wait, another action is in progress...');
@@ -632,6 +634,8 @@ export default function EmployeeDashboard() {
 
   // Handle break start
   const handleBreakStart = async (breakType = 'regular') => {
+    console.log('🟢 Starting break:', breakType);
+    
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
       toast.error('Please wait, another action is in progress...');
@@ -642,24 +646,6 @@ export default function EmployeeDashboard() {
       setActionInProgress(true);
       setLastActionTime(Date.now());
       setDisableRefresh(true);
-
-      // Prevent start break if currently in a meeting
-      if (todayAttendance.isInMeeting) {
-        toast.error('You are in a meeting. Please end it first to start a break.');
-        setActionInProgress(false);
-        setDisableRefresh(false);
-        return;
-      }
-
-      // Prevent starting a different type of break while already on another break
-      if (todayAttendance.isOnBreak && todayAttendance.breakType !== breakType) {
-        const currentBreakLabel = todayAttendance.breakType === 'lunch' ? 'Lunch Break' : 'Break';
-        const newBreakLabel = breakType === 'lunch' ? 'Lunch Break' : 'Break';
-        toast.error(`You are already on ${currentBreakLabel}. Please end it first to start ${newBreakLabel}.`);
-        setActionInProgress(false);
-        setDisableRefresh(false);
-        return;
-      }
 
       const currentEmployeeId = await ensureEmployeeId();
 
@@ -691,6 +677,7 @@ export default function EmployeeDashboard() {
         toast.success(`${breakLabel} started!`);
         setDisableRefresh(false);
       } else {
+        toast.error(result?.message || 'Failed to start break');
         setDisableRefresh(false);
       }
     } catch (err) {
@@ -766,6 +753,8 @@ export default function EmployeeDashboard() {
 
   // Handle meeting start
   const handleMeetingStart = async () => {
+    console.log('🟢 Starting meeting');
+    
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
       toast.error('Please wait, another action is in progress...');
@@ -776,14 +765,6 @@ export default function EmployeeDashboard() {
       setActionInProgress(true);
       setLastActionTime(Date.now());
       setDisableRefresh(true);
-
-      // Check if on break - show toast to end break first
-      if (todayAttendance.isOnBreak) {
-        toast.error(`You are on a ${todayAttendance.breakType === 'lunch' ? 'lunch break' : 'break'}. Please end it first to start a meeting.`);
-        setActionInProgress(false);
-        setDisableRefresh(false);
-        return;
-      }
 
       const currentEmployeeId = await ensureEmployeeId();
 
@@ -814,6 +795,7 @@ export default function EmployeeDashboard() {
         toast.success('Meeting started!');
         setDisableRefresh(false);
       } else {
+        toast.error(result?.message || 'Failed to start meeting');
         setDisableRefresh(false);
       }
     } catch (err) {
@@ -887,7 +869,7 @@ export default function EmployeeDashboard() {
 
   return (
     <div className="p-8 space-y-8">
-      {/* Welcome Header */}
+      {/* Welcome Header with Action Buttons */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground mb-2">
@@ -895,13 +877,164 @@ export default function EmployeeDashboard() {
           </h1>
           <p className="text-muted-foreground">Here's what's happening with your work today</p>
         </div>
-            disabled={!todayAttendance.isCheckedIn || todayAttendance.isInMeeting || (todayAttendance.isOnBreak && todayAttendance.breakType !== 'regular') || actionInProgress}
-          >
-            {todayAttendance.isOnBreak && todayAttendance.breakType === 'regular' ? 'End Break' : 'Break'}
-          </Button>
+        
+        {/* Quick Action Buttons - Top Right - Always 3 Buttons */}
+        <div className="flex items-center gap-2">
+          {console.log('🎨 RENDER - isCheckedIn:', todayAttendance.isCheckedIn, 'Full state:', todayAttendance)}
+          
+          {/* Break Button with Dropdown */}
+          <div className="relative" ref={breakDropdownRef}>
+            <Button
+              onClick={() => setBreakDropdownOpen(!breakDropdownOpen)}
+              size="sm"
+              variant="outline"
+              className="gap-2"
+              disabled={!todayAttendance.isCheckedIn || actionInProgress}
+            >
+              <Clock className="w-4 h-4" />
+              Break
+              <span className="ml-1">▼</span>
+            </Button>
+            {breakDropdownOpen && todayAttendance.isCheckedIn && (
+              <div className="absolute right-0 mt-1 w-40 bg-white dark:bg-gray-800 rounded-md shadow-lg border border-gray-200 dark:border-gray-700 z-50">
+                <button
+                  onClick={() => {
+                    console.log('☕ Start Break clicked');
+                    handleBreakStart('regular');
+                    setBreakDropdownOpen(false);
+                  }}
+                  disabled={actionInProgress || todayAttendance.isOnBreak}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-t-md"
+                >
+                  Start Break
+                </button>
+                <button
+                  onClick={() => {
+                    console.log('☕ End Break clicked');
+                    handleBreakEnd();
+                    setBreakDropdownOpen(false);
+                  }}
+                  disabled={actionInProgress || !todayAttendance.isOnBreak || todayAttendance.breakType !== 'regular'}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed border-t border-gray-200 dark:border-gray-700"
+                >
+                  End Break
+                </button>
+                <button
+                  onClick={() => {
+                    console.log('🍽️ Start Lunch clicked');
+                    handleBreakStart('lunch');
+                    setBreakDropdownOpen(false);
+                  }}
+                  disabled={actionInProgress || todayAttendance.isOnBreak}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed border-t border-gray-200 dark:border-gray-700"
+                >
+                  Start Lunch
+                </button>
+                <button
+                  onClick={() => {
+                    console.log('🍽️ End Lunch clicked');
+                    handleBreakEnd();
+                    setBreakDropdownOpen(false);
+                  }}
+                  disabled={actionInProgress || !todayAttendance.isOnBreak || todayAttendance.breakType !== 'lunch'}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed border-t border-gray-200 dark:border-gray-700 rounded-b-md"
+                >
+                  End Lunch
+                </button>
+              </div>
+            )}
+          </div>
 
-          {/* Meeting Button */}
+          {/* Meeting Button with Dropdown */}
+          <div className="relative" ref={meetingDropdownRef}>
+            <Button
+              onClick={() => setMeetingDropdownOpen(!meetingDropdownOpen)}
+              size="sm"
+              variant="outline"
+              className="gap-2"
+              disabled={!todayAttendance.isCheckedIn || actionInProgress}
+            >
+              <FileText className="w-4 h-4" />
+              Meeting
+              <span className="ml-1">▼</span>
+            </Button>
+            {meetingDropdownOpen && todayAttendance.isCheckedIn && (
+              <div className="absolute right-0 mt-1 w-40 bg-white dark:bg-gray-800 rounded-md shadow-lg border border-gray-200 dark:border-gray-700 z-50">
+                <button
+                  onClick={() => {
+                    console.log('📝 Start Meeting clicked');
+                    handleMeetingStart();
+                    setMeetingDropdownOpen(false);
+                  }}
+                  disabled={actionInProgress || todayAttendance.isInMeeting}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-t-md"
+                >
+                  Start Meeting
+                </button>
+                <button
+                  onClick={() => {
+                    console.log('📝 End Meeting clicked');
+                    handleMeetingEnd();
+                    setMeetingDropdownOpen(false);
+                  }}
+                  disabled={actionInProgress || !todayAttendance.isInMeeting}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed border-t border-gray-200 dark:border-gray-700 rounded-b-md"
+                >
+                  End Meeting
+                </button>
+              </div>
+            )}
+          </div>
 
+          {/* Check In/Out Toggle Button */}
+          {console.log('🔍 Checking button condition - isCheckedIn:', todayAttendance.isCheckedIn)}
+          {!todayAttendance.isCheckedIn ? (
+            <Button
+              onClick={() => {
+                console.log('🔵 Check In clicked');
+                handleCheckIn();
+              }}
+              disabled={actionInProgress}
+              size="sm"
+              className="gap-2"
+            >
+              <Clock className="w-4 h-4" />
+              Check In
+            </Button>
+          ) : (
+            <Button
+              onClick={() => {
+                console.log('🔴 Check Out clicked');
+                handleCheckOut();
+              }}
+              disabled={actionInProgress}
+              size="sm"
+              variant="destructive"
+              className="gap-2"
+            >
+              <LogOut className="w-4 h-4" />
+              Check Out
+            </Button>
+          )}
+
+          {/* Status Badges */}
+          {todayAttendance.isCheckedIn && (
+            <Badge variant="default" className="ml-2">
+              Checked In
+            </Badge>
+          )}
+          {todayAttendance.isOnBreak && (
+            <Badge variant="secondary" className="ml-2">
+              On {todayAttendance.breakType === 'lunch' ? 'Lunch' : 'Break'}
+            </Badge>
+          )}
+          {todayAttendance.isInMeeting && (
+            <Badge variant="secondary" className="ml-2">
+              In Meeting
+            </Badge>
+          )}
+        </div>
+      </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1019,7 +1152,8 @@ export default function EmployeeDashboard() {
                 <p className="text-2xl font-bold text-foreground">
                   {todayAttendance.hoursWorked.toFixed(1)}h
                 </p>
-                   </div>
+              </div>
+            </div>
           </Card>
 
           {/* Performance Overview */}

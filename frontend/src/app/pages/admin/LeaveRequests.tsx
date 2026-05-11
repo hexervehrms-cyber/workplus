@@ -88,12 +88,14 @@ export default function LeaveRequests() {
   };
 
   const handleApprove = async () => {
-    if (!selectedRequest || !user?.userId) return;
+    if (!selectedRequest || !user) return;
+    const approverId = user.userId || user.id;
+    if (!approverId) return;
 
     try {
       setActionLoading(true);
       await LeaveRequestService.approveLeaveRequest(selectedRequest._id, {
-        approvedBy: user.userId
+        approvedBy: approverId
       });
       toast.success('Leave request approved successfully');
       setShowApproveDialog(false);
@@ -108,7 +110,9 @@ export default function LeaveRequests() {
   };
 
   const handleReject = async () => {
-    if (!selectedRequest || !user?.userId) return;
+    if (!selectedRequest || !user) return;
+    const rejectorId = user.userId || user.id;
+    if (!rejectorId) return;
 
     if (!rejectionReason.trim()) {
       toast.error('Please provide a rejection reason');
@@ -118,7 +122,7 @@ export default function LeaveRequests() {
     try {
       setActionLoading(true);
       await LeaveRequestService.rejectLeaveRequest(selectedRequest._id, {
-        rejectedBy: user.userId,
+        rejectedBy: rejectorId,
         rejectionReason
       });
       toast.success('Leave request rejected successfully');

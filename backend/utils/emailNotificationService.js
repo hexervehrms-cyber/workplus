@@ -70,8 +70,17 @@ class EmailNotificationService {
   /**
    * Send email using nodemailer with Microsoft 365 SMTP
    * Supports sending from employee email addresses
+   * Automatically retries with exponential backoff on failure
    */
   static async sendEmail(emailData) {
+    return this.sendEmailWithRetry(emailData, 3);
+  }
+
+  /**
+   * Internal method to send email using nodemailer with Microsoft 365 SMTP
+   * Supports sending from employee email addresses
+   */
+  static async _sendEmailInternal(emailData) {
     try {
       if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
         logger.warn('Email service not configured', { 
@@ -133,6 +142,51 @@ class EmailNotificationService {
       });
       return false;
     }
+  }
+
+  /**
+   * Send email with retry logic and exponential backoff
+   * Retries up to 3 times with exponential backoff (1s, 2s, 4s)
+   */
+  static async sendEmailWithRetry(emailData, maxRetries = 3) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const success = await this._sendEmailInternal(emailData);
+        if (success) {
+          return true;
+        }
+        
+        // If not the last attempt, wait before retrying
+        if (attempt < maxRetries - 1) {
+          const delayMs = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+          logger.info(`Email send failed, retrying in ${delayMs}ms`, {
+            to: emailData.to,
+            attempt: attempt + 1,
+            maxRetries
+          });
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      } catch (error) {
+        logger.error(`Email send attempt ${attempt + 1} failed`, {
+          error: error.message,
+          to: emailData.to,
+          attempt: attempt + 1,
+          maxRetries
+        });
+        
+        // If not the last attempt, wait before retrying
+        if (attempt < maxRetries - 1) {
+          const delayMs = Math.pow(2, attempt) * 1000;
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
+    }
+    
+    logger.error('Email send failed after all retries', {
+      to: emailData.to,
+      maxRetries
+    });
+    return false;
   }
 
   /**

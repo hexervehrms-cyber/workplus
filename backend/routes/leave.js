@@ -255,6 +255,39 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
     });
   }
 
+  // CRITICAL: Validate leave balance before approval
+  const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
+  const allocation = await LeaveAllocation.findOne({
+    employeeId: leaveRequest.employeeId,
+    leaveType: leaveRequest.type,
+    orgId: leaveRequest.orgId
+  }).lean();
+
+  if (!allocation) {
+    return res.status(400).json({
+      success: false,
+      message: `No leave allocation found for ${leaveRequest.type} leave type`
+    });
+  }
+
+  // Calculate days for this leave request
+  const start = new Date(leaveRequest.startDate);
+  const end = new Date(leaveRequest.endDate);
+  const days = leaveRequest.isHalfDay ? 0.5 : Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+  const availableBalance = allocation.balance || 0;
+
+  if (availableBalance < days) {
+    return res.status(400).json({
+      success: false,
+      message: `Insufficient leave balance. Available: ${availableBalance} days, Requested: ${days} days`,
+      data: {
+        availableBalance,
+        requestedDays: days,
+        leaveType: leaveRequest.type
+      }
+    });
+  }
+
   const updated = await LeaveRequest.findOneAndUpdate(
     {
       _id: id,
@@ -798,21 +831,42 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
 
   console.log('Days calculated:', days);
 
-  // Check for overlapping leave requests
-  const overlapping = await LeaveRequest.findOne({
+  // Check for overlapping leave requests - FIXED for half-day leaves
+  let overlapQuery = {
     employeeId,
     orgId,
-    status: { $in: ['pending', 'approved'] },
-    $or: [
+    status: { $in: ['pending', 'approved'] }
+  };
+
+  if (isHalfDay) {
+    // For half-day leaves, only check for overlaps on the same date
+    overlapQuery.$or = [
+      {
+        startDate: { $lte: end },
+        endDate: { $gte: start },
+        isHalfDay: true  // Only conflict with other half-day leaves on same date
+      },
+      {
+        startDate: { $lte: end },
+        endDate: { $gte: start },
+        isHalfDay: false  // Or any full-day leave that overlaps
+      }
+    ];
+  } else {
+    // For full-day leaves, check for any overlap
+    overlapQuery.$or = [
       {
         startDate: { $lte: end },
         endDate: { $gte: start }
       }
-    ]
-  }).lean();
+    ];
+  }
+
+  const overlapping = await LeaveRequest.findOne(overlapQuery).lean();
 
   console.log('Overlapping check:', {
     employeeId,
+    isHalfDay,
     overlappingFound: !!overlapping,
     overlappingData: overlapping
   });
@@ -822,6 +876,34 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
       success: false,
       message: 'You already have a leave request for this period',
       data: overlapping
+    });
+  }
+
+  // CRITICAL: Check leave balance before creating request
+  const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
+  const allocation = await LeaveAllocation.findOne({
+    employeeId,
+    leaveType: leaveType,
+    orgId
+  }).lean();
+
+  if (!allocation) {
+    return res.status(400).json({
+      success: false,
+      message: `No leave allocation found for ${leaveType} leave type`
+    });
+  }
+
+  const availableBalance = allocation.balance || 0;
+  if (availableBalance < days) {
+    return res.status(400).json({
+      success: false,
+      message: `Insufficient leave balance. Available: ${availableBalance} days, Requested: ${days} days`,
+      data: {
+        availableBalance,
+        requestedDays: days,
+        leaveType
+      }
     });
   }
 

@@ -12,7 +12,6 @@ import { authorize } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import logger from '../utils/logger.js';
-import { emitKPIUpdate } from '../utils/kpiUpdater.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
 
 const router = express.Router();
@@ -397,16 +396,10 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     category: 'user'
   });
 
-  // Emit real-time update
+  // Emit real-time update (this also emits KPI update internally)
   if (req.emitAttendanceUpdate) {
     req.emitAttendanceUpdate(attendance, effectiveOrgId);
   }
-
-  // Emit KPI update for real-time dashboard refresh
-  await emitKPIUpdate(req.io, effectiveOrgId, 'check_in', {
-    employeeId: effectiveEmployeeId,
-    employeeName: effectiveEmployeeName
-  });
 
   // Send response first to confirm check-in
   res.status(201).json({
@@ -549,17 +542,10 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     category: 'user'
   });
 
-  // Emit real-time update
+  // Emit real-time update (this also emits KPI update internally)
   if (req.emitAttendanceUpdate) {
     req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
   }
-
-  // Emit KPI update for real-time dashboard refresh
-  await emitKPIUpdate(req.io, effectiveOrgId, 'check_out', {
-    employeeId: effectiveEmployeeId,
-    employeeName: effectiveEmployeeName,
-    hoursWorked: Math.round(hoursWorked * 100) / 100
-  });
 
   // Send response first to confirm check-out
   res.json({
@@ -791,30 +777,8 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
     category: 'user'
   });
 
-  // Emit real-time event to notify admin dashboard
-  console.log('☕ [BREAK-START] Emitting attendance update for orgId:', orgId);
+  // Emit real-time event to notify admin dashboard (this also emits KPI update internally)
   req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
-  
-  // Emit KPI update for real-time dashboard refresh
-  console.log('☕ [BREAK-START] Calling emitKPIUpdate with:', { orgId: effectiveOrgId, employeeId: effectiveEmployeeId, employeeName: effectiveEmployeeName, breakType });
-  await emitKPIUpdate(req.io, effectiveOrgId, 'break_start', {
-    employeeId: effectiveEmployeeId,
-    employeeName: effectiveEmployeeName,
-    breakType
-  });
-  console.log('☕ [BREAK-START] emitKPIUpdate completed');
-  
-  // Also emit a direct Socket.IO event for immediate dashboard refresh
-  if (req.io) {
-    console.log('☕ [BREAK-START] Emitting break:started event to tenant_' + effectiveOrgId);
-    req.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
-      employeeId: effectiveEmployeeId,
-      employeeName: effectiveEmployeeName,
-      breakType: breakType,
-      timestamp: new Date()
-    });
-    console.log('☕ [BREAK-START] break:started event emitted');
-  }
 
   res.status(201).json({
     success: true,
@@ -957,26 +921,8 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     hasActiveBreak: updatedAttendance.breaks?.some(b => b.startTime && !b.endTime)
   });
 
-  // Emit real-time event to notify admin dashboard
+  // Emit real-time event to notify admin dashboard (this also emits KPI update internally)
   req.emitAttendanceUpdate(updatedAttendance, orgId);
-  
-  // Emit KPI update for real-time dashboard refresh
-  await emitKPIUpdate(req.io, orgId, 'break_end', {
-    employeeId,
-    employeeName,
-    breakDuration: Math.round(breakDuration)
-  });
-  
-  // Also emit a direct Socket.IO event for immediate dashboard refresh
-  if (req.io) {
-    console.log('☕ [BREAK-END] Emitting break:ended event');
-    req.io.to(`tenant_${orgId}`).emit('break:ended', {
-      employeeId: employeeId,
-      employeeName: employeeName,
-      breakDuration: Math.round(breakDuration),
-      timestamp: new Date()
-    });
-  }
 
   res.json({
     success: true,

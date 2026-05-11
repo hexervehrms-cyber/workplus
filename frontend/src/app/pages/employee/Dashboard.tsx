@@ -1158,54 +1158,7 @@ export default function EmployeeDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column - Quick Stats */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Attendance Card */}
-          <Card className="p-6 rounded-2xl">
-            <h3 className="font-semibold text-lg mb-4">Today's Attendance</h3>
-            <div className="grid grid-cols-2 gap-4 mb-4">
-              <div className="p-4 rounded-xl bg-secondary/10 border border-secondary/20">
-                <Clock className="w-8 h-8 text-secondary mb-2" />
-                <p className="text-sm text-muted-foreground">Check-in Time</p>
-                <p className="text-2xl font-bold text-foreground">
-                  {todayAttendance.checkInTime || 'Not checked in'}
-                </p>
-              </div>
-              <div className="p-4 rounded-xl bg-primary/10 border border-primary/20">
-                <Target className="w-8 h-8 text-primary mb-2" />
-                <p className="text-sm text-muted-foreground">Hours Today</p>
-                <p className="text-2xl font-bold text-foreground">
-                  {todayAttendance.hoursWorked.toFixed(1)}h
-                </p>
-              </div>
-            </div>
-          </Card>
-
-          {/* Performance Overview */}
-          <Card className="p-6 rounded-2xl">
-            <h3 className="font-semibold text-lg mb-4">Performance Overview</h3>
-            <div className="space-y-4">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-muted-foreground">Task Completion</span>
-                  <span className="text-sm font-medium">{performanceMetrics.taskCompletion}%</span>
-                </div>
-                <Progress value={performanceMetrics.taskCompletion} className="h-2" />
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-muted-foreground">Attendance</span>
-                  <span className="text-sm font-medium">{performanceMetrics.attendance}%</span>
-                </div>
-                <Progress value={performanceMetrics.attendance} className="h-2 [&>div]:bg-secondary" />
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-muted-foreground">Quality Score</span>
-                  <span className="text-sm font-medium">{performanceMetrics.qualityScore}%</span>
-                </div>
-                <Progress value={performanceMetrics.qualityScore} className="h-2 [&>div]:bg-accent" />
-              </div>
-            </div>
-          </Card>
+          {/* Sections removed as per user request */}
         </div>
 
         {/* Right Column - Events & Notifications */}

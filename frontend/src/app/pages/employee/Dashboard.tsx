@@ -456,14 +456,15 @@ export default function EmployeeDashboard() {
   useEffect(() => {
     if (!isCheckedIn || disableRefresh || actionInProgress) return;
 
-    // Don't refresh if an action was performed recently (within 5 seconds)
+    // Don't refresh if an action was performed recently (within 10 seconds instead of 5)
     const timeSinceLastAction = Date.now() - lastActionTime;
-    if (timeSinceLastAction < 5000) return;
+    if (timeSinceLastAction < 10000) return;
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      // Double check before refreshing
-      if (!actionInProgress && (Date.now() - lastActionTime) >= 5000) {
+      // Double check before refreshing - increase time to 10 seconds
+      if (!actionInProgress && (Date.now() - lastActionTime) >= 10000) {
+        console.log('⏰ Periodic refresh triggered');
         fetchDashboardData();
       }
     }, 30000); // Refresh every 30 seconds
@@ -539,12 +540,17 @@ export default function EmployeeDashboard() {
         setTodayAttendance(serverState);
         localStorage.setItem(attendanceCacheKey, JSON.stringify(serverState));
         toast.success('Checked in successfully!');
+        
+        // Keep refresh disabled for 5 more seconds to ensure state stability
+        setTimeout(() => {
+          setDisableRefresh(false);
+        }, 5000);
       } else {
         console.error('❌ Check-in API failed:', result?.message);
         // DON'T REVERT - Keep the optimistic state even if API fails
         toast.warning('Checked in locally. Server sync may be delayed.');
+        setDisableRefresh(false);
       }
-      setDisableRefresh(false);
     } catch (err) {
       console.error('❌ Check-in error:', err);
       // DON'T REVERT - Keep the optimistic state even if error occurs

@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
 } from '../../components/ui/alert-dialog';
 import { useAuth } from '../../context/AuthContext';
+import { useAttendance } from '../../context/AttendanceContext';
 
 interface AttendanceRecord {
   _id: string;
@@ -1341,6 +1342,7 @@ export default function Attendance() {
     </div>
   );
 }
+
 
 
 

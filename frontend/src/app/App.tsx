@@ -3,6 +3,7 @@ import { router } from './routes';
 import { ThemeProvider } from './context/ThemeContext';
 import { AuthProvider } from './context/AuthContext';
 import { CurrencyProvider } from './context/CurrencyContext';
+import { AttendanceProvider } from '../context/AttendanceContext';
 import { Toaster } from './components/ui/sonner';
 import './styles/animations.css';
 
@@ -12,8 +13,10 @@ export default function App() {
     <ThemeProvider>
       <AuthProvider>
         <CurrencyProvider>
-          <RouterProvider router={router} />
-          <Toaster />
+          <AttendanceProvider>
+            <RouterProvider router={router} />
+            <Toaster />
+          </AttendanceProvider>
         </CurrencyProvider>
       </AuthProvider>
     </ThemeProvider>

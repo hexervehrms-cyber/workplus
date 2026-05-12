@@ -9,6 +9,7 @@ import { useAuth } from '../../context/AuthContext';
 import { ExpenseService, LeaveRequestService } from '../../utils/api';
 import { apiGet, apiPost, buildApiUrl } from '../../utils/apiHelper';
 import realTimeSocket from '../../utils/realTimeSocket';
+import { useAttendance } from '../../../context/AttendanceContext';
 import {
   Calendar,
   Clock,
@@ -257,7 +258,7 @@ export default function EmployeeDashboard() {
           }
         }
 
-        setTodayAttendance(prev => {
+        updateAttendance(prev => {
           // CRITICAL: If an action just completed, ALWAYS trust the optimistic state
           // Don't overwrite it with API data for at least 5 seconds
           const timeSinceLastAction = Date.now() - lastActionTime;
@@ -326,8 +327,8 @@ export default function EmployeeDashboard() {
         
         // Only update state if not in the middle of an action
         if (!actionInProgress) {
-          setIsCheckedIn(false);
-          setTodayAttendance({
+          updateAttendance({ isCheckedIn: false });
+          updateAttendance({
             isCheckedIn: false,
             checkInTime: null,
             checkOutTime: null,
@@ -415,7 +416,7 @@ export default function EmployeeDashboard() {
       // Only update if it's for this employee
       if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Break started for current employee, updating state');
-        setTodayAttendance(prev => ({
+        updateAttendance(prev => ({
           ...prev,
           isOnBreak: true,
           breakType: data.breakType || 'regular',
@@ -437,7 +438,7 @@ export default function EmployeeDashboard() {
       // Only update if it's for this employee
       if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Break ended for current employee, updating state');
-        setTodayAttendance(prev => ({
+        updateAttendance(prev => ({
           ...prev,
           isOnBreak: false,
           currentBreakDuration: 0,
@@ -458,7 +459,7 @@ export default function EmployeeDashboard() {
       // Only update if it's for this employee
       if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Meeting started for current employee, updating state');
-        setTodayAttendance(prev => ({
+        updateAttendance(prev => ({
           ...prev,
           isInMeeting: true
         }));
@@ -475,7 +476,7 @@ export default function EmployeeDashboard() {
       // Only update if it's for this employee
       if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Meeting ended for current employee, updating state');
-        setTodayAttendance(prev => ({
+        updateAttendance(prev => ({
           ...prev,
           isInMeeting: false
         }));
@@ -501,12 +502,12 @@ export default function EmployeeDashboard() {
       // Only update if it's for this employee
       if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Check-in for current employee, updating state');
-        setTodayAttendance(prev => ({
+        updateAttendance(prev => ({
           ...prev,
           isCheckedIn: true,
           checkInTime: data.checkInTime ? new Date(data.checkInTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : prev.checkInTime
         }));
-        setIsCheckedIn(true);
+        updateAttendance({ isCheckedIn: true });
         setLastSocketEventTime(Date.now());
       }
     };
@@ -520,7 +521,7 @@ export default function EmployeeDashboard() {
       // Only update if it's for this employee
       if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Check-out for current employee, updating state');
-        setTodayAttendance(prev => ({
+        updateAttendance(prev => ({
           ...prev,
           isCheckedIn: false,
           checkOutTime: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
@@ -528,7 +529,7 @@ export default function EmployeeDashboard() {
           isOnBreak: false,
           isInMeeting: false
         }));
-        setIsCheckedIn(false);
+        updateAttendance({ isCheckedIn: false });
         setLastSocketEventTime(Date.now());
       }
     };
@@ -639,8 +640,8 @@ export default function EmployeeDashboard() {
       };
 
       console.log('🔄 Setting state to:', optimisticState);
-      setTodayAttendance(optimisticState);
-      setIsCheckedIn(true);
+      updateAttendance(optimisticState);
+      updateAttendance({ isCheckedIn: true });
       
       // Save to localStorage
       const today = getTodayKey();
@@ -668,7 +669,7 @@ export default function EmployeeDashboard() {
           checkInTime: actualCheckInTime
         };
         console.log('🔄 Updating with server state:', serverState);
-        setTodayAttendance(serverState);
+        updateAttendance(serverState);
         
         // Save to localStorage
         const today = getTodayKey();
@@ -750,7 +751,7 @@ export default function EmployeeDashboard() {
       });
 
       if (result.success) {
-        setTodayAttendance(prev => ({
+        updateAttendance(prev => ({
           ...prev,
           isOnBreak: true,
           breakType: breakType
@@ -848,7 +849,7 @@ export default function EmployeeDashboard() {
       });
 
       if (result.success) {
-        setTodayAttendance(prev => ({
+        updateAttendance(prev => ({
           ...prev,
           isInMeeting: true
         }));
@@ -1306,6 +1307,9 @@ export default function EmployeeDashboard() {
     </>
   );
 }
+
+
+
 
 
 

@@ -175,9 +175,9 @@ export default function TeamsMessenger() {
         if (response.data && Array.isArray(response.data)) {
           const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
           
-          // Filter out Super Admin users
+          // Filter out Super Admin users and current user
           const formattedUsers: User[] = response.data
-            .filter((user: any) => user.role !== 'super_admin')
+            .filter((user: any) => user.role !== 'super_admin' && user._id !== currentUser.id)
             .map((user: any) => ({
               id: user._id,
               name: user.name,
@@ -206,7 +206,8 @@ export default function TeamsMessenger() {
   // Load messages when user is selected
   useEffect(() => {
     if (selectedUser && socketService.current) {
-      const conversationId = [localStorage.getItem('userId'), selectedUser.id].sort().join('_');
+      const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+      const conversationId = [currentUser.id, selectedUser.id].sort().join('_');
       
       // Remove old listener before adding new one
       socketService.current.off('chat:history');
@@ -227,7 +228,7 @@ export default function TeamsMessenger() {
           senderAvatar: msg.sender?.avatar,
           content: msg.content?.text || '',
           timestamp: new Date(msg.createdAt),
-          isOwn: msg.senderId === localStorage.getItem('userId'),
+          isOwn: msg.senderId === currentUser.id,
           status: msg.status,
           teamsIntegration: msg.metadata?.teamsIntegration
         }));

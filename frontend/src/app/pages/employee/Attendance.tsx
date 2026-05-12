@@ -816,8 +816,20 @@ export default function Attendance() {
       }
     };
 
+    // Listen for all attendance updates (check-in, check-out, meeting, etc.)
+    const handleAttendanceUpdate = (data: any) => {
+      console.log('📡 [ATTENDANCE] Attendance update event received:', data);
+      
+      // Refresh attendance data to get latest state
+      console.log('📡 [ATTENDANCE] Refreshing attendance data after update');
+      if (employeeId) {
+        fetchTodayAttendance(employeeId);
+      }
+    };
+
     realTimeSocket.onBreakStarted(handleBreakStarted);
     realTimeSocket.onBreakEnded(handleBreakEnded);
+    realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
 
     return () => {
       // Note: realTimeSocket doesn't expose removeListener methods

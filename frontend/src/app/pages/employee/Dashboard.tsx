@@ -881,11 +881,11 @@ export default function EmployeeDashboard() {
         // Socket event will update state, periodic refresh will respect the window
       } else {
         console.error('❌ [DASHBOARD] Break end API failed:', result);
-        setDisableRefresh(false);
+        // Don't re-enable refresh - keep state as is
       }
     } catch (err) {
       console.error('Break end error:', err);
-      setDisableRefresh(false);
+      // Don't re-enable refresh - keep state as is
     } finally {
       // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
@@ -1013,11 +1013,11 @@ export default function EmployeeDashboard() {
         // KEEP REFRESH DISABLED - don't re-enable it
         // Socket event will update state, periodic refresh will respect the window
       } else {
-        setDisableRefresh(false);
+        // Don't re-enable refresh - keep state as is
       }
     } catch (err) {
       console.error('Meeting end error:', err);
-      setDisableRefresh(false);
+      // Don't re-enable refresh - keep state as is
     } finally {
       // Clear action lock quickly to allow responsive UI
       setTimeout(() => {

@@ -492,11 +492,54 @@ export default function EmployeeDashboard() {
       }
     };
 
+    // Listen for check-in events
+    const handleCheckedIn = (data: any) => {
+      console.log('📡 [EMPLOYEE-DASHBOARD] attendance:checked_in event received:', data);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
+
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+        console.log('📡 [EMPLOYEE-DASHBOARD] Check-in for current employee, updating state');
+        setTodayAttendance(prev => ({
+          ...prev,
+          isCheckedIn: true,
+          checkInTime: data.checkInTime ? new Date(data.checkInTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : prev.checkInTime
+        }));
+        setIsCheckedIn(true);
+        setLastSocketEventTime(Date.now());
+      }
+    };
+
+    // Listen for check-out events
+    const handleCheckedOut = (data: any) => {
+      console.log('📡 [EMPLOYEE-DASHBOARD] attendance:checked_out event received:', data);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
+
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+        console.log('📡 [EMPLOYEE-DASHBOARD] Check-out for current employee, updating state');
+        setTodayAttendance(prev => ({
+          ...prev,
+          isCheckedIn: false,
+          checkOutTime: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+          hoursWorked: data.hoursWorked || prev.hoursWorked,
+          isOnBreak: false,
+          isInMeeting: false
+        }));
+        setIsCheckedIn(false);
+        setLastSocketEventTime(Date.now());
+      }
+    };
+
     realTimeSocket.onBreakStarted(handleBreakStarted);
     realTimeSocket.onBreakEnded(handleBreakEnded);
     realTimeSocket.onMeetingStarted(handleMeetingStarted);
     realTimeSocket.onMeetingEnded(handleMeetingEnded);
     realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
+    realTimeSocket.on('attendance:checked_in', handleCheckedIn);
+    realTimeSocket.on('attendance:checked_out', handleCheckedOut);
 
     return () => {
       console.log('📡 [EMPLOYEE-DASHBOARD] Cleaning up Socket.IO listeners');

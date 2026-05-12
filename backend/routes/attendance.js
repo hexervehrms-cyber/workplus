@@ -376,6 +376,16 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   dashboardCache.invalidateEndpoint('/dashboard/quick-stats', effectiveOrgId);
   dashboardCache.invalidateEndpoint('/dashboard/stats', effectiveOrgId);
 
+  // Emit specific check-in event for page synchronization (like break:started and meeting:started)
+  if (global.io) {
+    global.io.to(`tenant_${effectiveOrgId}`).emit('attendance:checked_in', {
+      employeeId: effectiveEmployeeId,
+      userId: effectiveUserId,
+      timestamp: new Date().toISOString(),
+      checkInTime: attendance.checkIn
+    });
+  }
+
   // Emit KPI update to admin dashboard
   if (global.io) {
     emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
@@ -534,6 +544,16 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   // Invalidate dashboard cache for this organization
   dashboardCache.invalidateEndpoint('/dashboard/quick-stats', effectiveOrgId);
   dashboardCache.invalidateEndpoint('/dashboard/stats', effectiveOrgId);
+
+  // Emit specific check-out event for page synchronization (like break:ended and meeting:ended)
+  if (global.io) {
+    global.io.to(`tenant_${effectiveOrgId}`).emit('attendance:checked_out', {
+      employeeId: effectiveEmployeeId,
+      userId: effectiveUserId,
+      timestamp: new Date().toISOString(),
+      hoursWorked: Math.round(hoursWorked * 100) / 100
+    });
+  }
 
   // Emit KPI update to admin dashboard
   if (global.io) {

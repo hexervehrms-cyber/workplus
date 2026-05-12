@@ -190,6 +190,14 @@ class RealTimeSocket {
       this.notifyAttendanceUpdate(data.attendance || data);
     });
 
+    // Check-in updates
+    this.socket.on('attendance:checked_in', (data) => {
+      console.log('🔓 [SOCKET] Employee checked in:', data);
+      this.notifyAttendanceUpdate({ type: 'checked_in', ...data });
+      // Trigger dashboard refresh
+      this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'checked_in', data });
+    });
+
     // System notifications
     this.socket.on('notification', (notification) => {
       console.log('🔔 Notification received:', notification);
@@ -228,6 +236,14 @@ class RealTimeSocket {
       this.notifyAttendanceUpdate({ type: 'meeting_ended', ...data });
       // Trigger dashboard refresh
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'meeting_ended', data });
+    });
+
+    // Check-out updates
+    this.socket.on('attendance:checked_out', (data) => {
+      console.log('🚪 [SOCKET] Employee checked out:', data);
+      this.notifyAttendanceUpdate({ type: 'checked_out', ...data });
+      // Trigger dashboard refresh
+      this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'checked_out', data });
     });
 
     // KPI updates

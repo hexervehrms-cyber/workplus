@@ -891,11 +891,82 @@ export default function Attendance() {
       }
     };
 
+    // Listen for check-in events
+    const handleCheckedIn = (data: any) => {
+      console.log('📡 [ATTENDANCE] attendance:checked_in event received:', data);
+      console.log('📡 [ATTENDANCE] Current employeeId:', employeeId);
+      console.log('📡 [ATTENDANCE] Event employeeId:', data.employeeId);
+
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+        console.log('📡 [ATTENDANCE] Check-in for current employee, updating state');
+        setCheckedIn(true);
+        setLastSocketEventTime(Date.now());
+        
+        // Update localStorage
+        const today = new Date().toDateString();
+        const currentState = localStorage.getItem(`checkedIn_${today}`);
+        if (currentState) {
+          try {
+            const parsed = JSON.parse(currentState);
+            const updated = {
+              ...parsed,
+              checkedIn: true
+            };
+            localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updated));
+            localStorage.setItem(attendanceCacheKey, JSON.stringify(updated));
+          } catch (e) {
+            console.warn('Failed to update localStorage');
+          }
+        }
+      }
+    };
+
+    // Listen for check-out events
+    const handleCheckedOut = (data: any) => {
+      console.log('📡 [ATTENDANCE] attendance:checked_out event received:', data);
+      console.log('📡 [ATTENDANCE] Current employeeId:', employeeId);
+      console.log('📡 [ATTENDANCE] Event employeeId:', data.employeeId);
+
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+        console.log('📡 [ATTENDANCE] Check-out for current employee, updating state');
+        setCheckedIn(false);
+        setIsOnBreak(false);
+        setBreakType(null);
+        setIsInMeeting(false);
+        setLastSocketEventTime(Date.now());
+        
+        // Update localStorage
+        const today = new Date().toDateString();
+        const currentState = localStorage.getItem(`checkedIn_${today}`);
+        if (currentState) {
+          try {
+            const parsed = JSON.parse(currentState);
+            const updated = {
+              ...parsed,
+              checkedIn: false,
+              isOnBreak: false,
+              breakType: null,
+              isInMeeting: false,
+              currentHours: data.hoursWorked || parsed.currentHours || 0
+            };
+            localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updated));
+            localStorage.setItem(attendanceCacheKey, JSON.stringify(updated));
+          } catch (e) {
+            console.warn('Failed to update localStorage');
+          }
+        }
+      }
+    };
+
     realTimeSocket.onBreakStarted(handleBreakStarted);
     realTimeSocket.onBreakEnded(handleBreakEnded);
     realTimeSocket.onMeetingStarted(handleMeetingStarted);
     realTimeSocket.onMeetingEnded(handleMeetingEnded);
     realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
+    realTimeSocket.on('attendance:checked_in', handleCheckedIn);
+    realTimeSocket.on('attendance:checked_out', handleCheckedOut);
 
     return () => {
       // Note: realTimeSocket doesn't expose removeListener methods

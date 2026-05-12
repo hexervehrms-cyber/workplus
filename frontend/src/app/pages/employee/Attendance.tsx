@@ -536,12 +536,6 @@ export default function Attendance() {
         breakType: null,
         isInMeeting: false
       }));
-      
-      // Wait 1 second for database to update, then fetch fresh data
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      if (employeeId) {
-        await fetchTodayAttendance();
-      }
     } catch (error) {
       console.error('Break end error:', error);
     } finally {

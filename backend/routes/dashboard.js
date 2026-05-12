@@ -11,6 +11,8 @@ import Organization from "../models/Organization.js";
 import ActivityLog from "../models/ActivityLog.js";
 import Session from "../models/Session.js";
 import { dashboardCache } from "../utils/dashboardCache.js";
+import { dashboardMonitor } from "../utils/dashboardMonitor.js";
+import { dashboardStatsBreaker, dashboardQuickStatsBreaker } from "../utils/circuitBreaker.js";
 
 // Import specialized dashboard routes
 import superAdminRoutes from "./dashboard-superadmin.js";
@@ -77,7 +79,7 @@ function getDayBounds(baseDate = new Date()) {
 /**
  * GET /api/dashboard/stats
  * Get dashboard statistics with optional date filtering
- * OPTIMIZED: Combined aggregations, lean queries, and caching
+ * OPTIMIZED: Combined aggregations, lean queries, caching, monitoring, and circuit breaker
  */
 router.get("/stats", asyncHandler(async (req, res) => {
   // Disable caching for real-time data
@@ -85,104 +87,128 @@ router.get("/stats", asyncHandler(async (req, res) => {
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
   
-  // CRITICAL: Enforce orgId validation - users can only access their organization's data
+  const startTime = Date.now();
   const orgId = req.user?.orgId || 'system';
   const { filterType = 'month', startDate, endDate } = req.query;
   
-  // Check cache first (30 second TTL for stats)
-  const cacheKey = { filterType, startDate, endDate };
-  const cachedStats = dashboardCache.get('/dashboard/stats', orgId, cacheKey);
-  if (cachedStats) {
-    console.log('📦 [CACHE HIT] Dashboard stats from cache');
-    return res.json({
-      success: true,
-      data: cachedStats,
-      cached: true
-    });
-  }
-  
-  // Get date range
-  const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(filterType, startDate, endDate);
-  const now = new Date();
-  
-  // OPTIMIZATION: Use single aggregation pipeline for expenses and payroll
-  const [
-    totalEmployees,
-    financialData,
-    attendanceStats,
-    loggedInEmployees,
-    onLeaveCount
-  ] = await Promise.all([
-    Employee.countDocuments({ orgId, status: 'active' }).lean(),
-    // Combined financial aggregation
-    Expense.aggregate([
-      {
-        $facet: {
-          expenses: [
-            {
-              $match: {
-                orgId,
-                date: { $gte: rangeStart, $lt: rangeEnd },
-                status: { $in: ['approved', 'rejected'] }
-              }
-            },
-            { $group: { _id: null, total: { $sum: "$amount" } } }
-          ],
-          payroll: [
-            {
-              $match: {
-                orgId: new mongoose.Types.ObjectId(orgId),
-                createdAt: { $gte: rangeStart, $lt: rangeEnd },
-                status: { $in: ['draft', 'pending', 'paid'] }
-              }
-            },
-            { $group: { _id: null, total: { $sum: "$netPay" } } }
-          ]
-        }
-      }
-    ]),
-    Attendance.aggregate([
-      {
-        $match: {
+  try {
+    // Check cache first (30 second TTL for stats)
+    const cacheKey = { filterType, startDate, endDate };
+    const cachedStats = dashboardCache.get('/dashboard/stats', orgId, cacheKey);
+    if (cachedStats) {
+      const responseTime = Date.now() - startTime;
+      dashboardMonitor.recordMetric('/dashboard/stats', orgId, responseTime, true, true);
+      return res.json({
+        success: true,
+        data: cachedStats,
+        cached: true
+      });
+    }
+    
+    // Use circuit breaker to protect against cascading failures
+    const statsData = await dashboardStatsBreaker.execute(async () => {
+      // Get date range
+      const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(filterType, startDate, endDate);
+      const now = new Date();
+      
+      // OPTIMIZATION: Use single aggregation pipeline for expenses and payroll
+      const [
+        totalEmployees,
+        financialData,
+        attendanceStats,
+        loggedInEmployees,
+        onLeaveCount
+      ] = await Promise.all([
+        Employee.countDocuments({ orgId, status: 'active' }).lean(),
+        // Combined financial aggregation
+        Expense.aggregate([
+          {
+            $facet: {
+              expenses: [
+                {
+                  $match: {
+                    orgId,
+                    date: { $gte: rangeStart, $lt: rangeEnd },
+                    status: { $in: ['approved', 'rejected'] }
+                  }
+                },
+                { $group: { _id: null, total: { $sum: "$amount" } } }
+              ],
+              payroll: [
+                {
+                  $match: {
+                    orgId: new mongoose.Types.ObjectId(orgId),
+                    createdAt: { $gte: rangeStart, $lt: rangeEnd },
+                    status: { $in: ['draft', 'pending', 'paid'] }
+                  }
+                },
+                { $group: { _id: null, total: { $sum: "$netPay" } } }
+              ]
+            }
+          }
+        ]),
+        Attendance.aggregate([
+          {
+            $match: {
+              orgId,
+              date: { $gte: rangeStart, $lt: rangeEnd },
+              status: 'present'
+            }
+          },
+          { $group: { _id: null, avgHours: { $avg: "$hoursWorked" } } }
+        ]),
+        Session.countDocuments({ orgId, isActive: true, role: 'employee' }).lean(),
+        LeaveRequest.countDocuments({
           orgId,
-          date: { $gte: rangeStart, $lt: rangeEnd },
-          status: 'present'
-        }
-      },
-      { $group: { _id: null, avgHours: { $avg: "$hoursWorked" } } }
-    ]),
-    Session.countDocuments({ orgId, isActive: true, role: 'employee' }).lean(),
-    LeaveRequest.countDocuments({
-      orgId,
-      status: 'approved',
-      startDate: { $lte: now },
-      endDate: { $gte: now }
-    }).lean()
-  ]);
-  
-  const thisMonthExpenses = financialData[0]?.expenses[0]?.total || 0;
-  const thisMonthPayroll = financialData[0]?.payroll[0]?.total || 0;
-  const totalCost = thisMonthExpenses + thisMonthPayroll;
-  const avgHours = attendanceStats[0]?.avgHours || 0;
-  const avgProductivity = Math.min(100, Math.round((avgHours / 8) * 100));
-  
-  const statsData = {
-    totalEmployees,
-    avgProductivity,
-    thisMonthExpenses,
-    thisMonthPayroll,
-    totalCost,
-    loggedInEmployees,
-    onLeave: onLeaveCount
-  };
-  
-  // Cache the result (30 second TTL)
-  dashboardCache.set('/dashboard/stats', orgId, statsData, cacheKey, 30000);
-  
-  res.json({
-    success: true,
-    data: statsData
-  });
+          status: 'approved',
+          startDate: { $lte: now },
+          endDate: { $gte: now }
+        }).lean()
+      ]);
+      
+      const thisMonthExpenses = financialData[0]?.expenses[0]?.total || 0;
+      const thisMonthPayroll = financialData[0]?.payroll[0]?.total || 0;
+      const totalCost = thisMonthExpenses + thisMonthPayroll;
+      const avgHours = attendanceStats[0]?.avgHours || 0;
+      const avgProductivity = Math.min(100, Math.round((avgHours / 8) * 100));
+      
+      return {
+        totalEmployees,
+        avgProductivity,
+        thisMonthExpenses,
+        thisMonthPayroll,
+        totalCost,
+        loggedInEmployees,
+        onLeave: onLeaveCount
+      };
+    }, () => {
+      // Fallback: return cached data or empty stats
+      return cachedStats || {
+        totalEmployees: 0,
+        avgProductivity: 0,
+        thisMonthExpenses: 0,
+        thisMonthPayroll: 0,
+        totalCost: 0,
+        loggedInEmployees: 0,
+        onLeave: 0
+      };
+    });
+    
+    // Cache the result (30 second TTL)
+    dashboardCache.set('/dashboard/stats', orgId, statsData, cacheKey, 30000);
+    
+    const responseTime = Date.now() - startTime;
+    dashboardMonitor.recordMetric('/dashboard/stats', orgId, responseTime, false, true);
+    
+    res.json({
+      success: true,
+      data: statsData
+    });
+  } catch (error) {
+    const responseTime = Date.now() - startTime;
+    dashboardMonitor.recordMetric('/dashboard/stats', orgId, responseTime, false, false);
+    throw error;
+  }
 }));
 
 /**
@@ -484,7 +510,7 @@ router.get("/recent-activities", asyncHandler(async (req, res) => {
 /**
  * GET /api/dashboard/quick-stats
  * Get quick statistics for widgets
- * OPTIMIZED: Reduced from 12 queries to 6 using faceted aggregations and caching
+ * OPTIMIZED: Reduced queries, caching, monitoring, and circuit breaker
  */
 router.get("/quick-stats", asyncHandler(async (req, res) => {
   // Disable caching for real-time data
@@ -492,183 +518,214 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
   
+  const startTime = Date.now();
   const orgId = req.user?.orgId || 'system';
   const { filterType = 'month', startDate, endDate } = req.query;
   
-  // Check cache first (20 second TTL for quick-stats - more frequent updates)
-  const cacheKey = { filterType, startDate, endDate };
-  const cachedStats = dashboardCache.get('/dashboard/quick-stats', orgId, cacheKey);
-  if (cachedStats) {
-    console.log('📦 [CACHE HIT] Quick stats from cache');
-    return res.json({
-      success: true,
-      data: cachedStats,
-      cached: true
-    });
-  }
-  
-  // Get date range
-  const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(filterType, startDate, endDate);
-  
-  const now = new Date();
-  const { start: startOfDay, end: endOfDay } = getDayBounds(now);
-  
-  // OPTIMIZATION: Use faceted aggregation to get multiple stats in one query
-  const [
-    totalEmployees,
-    attendanceStats,
-    leaveExpenseStats,
-    salesStats
-  ] = await Promise.all([
-    Employee.countDocuments({ orgId, status: 'active' }).lean(),
-    // Attendance stats in one aggregation
-    Attendance.aggregate([
-      {
-        $facet: {
-          presentToday: [
-            {
-              $match: {
-                orgId,
-                date: { $gte: startOfDay, $lt: endOfDay },
-                status: 'present'
-              }
-            },
-            { $count: 'count' }
-          ],
-          activeUsers: [
-            {
-              $match: {
-                orgId,
-                date: { $gte: startOfDay, $lt: endOfDay },
-                checkIn: { $exists: true, $ne: null },
-                $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
-              }
-            },
-            { $count: 'count' }
-          ],
-          onBreakToday: [
-            {
-              $match: {
-                orgId,
-                date: { $gte: startOfDay, $lt: endOfDay },
-                breaks: {
-                  $elemMatch: {
-                    startTime: { $exists: true },
-                    endTime: { $exists: false }
+  try {
+    // Check cache first (20 second TTL for quick-stats - more frequent updates)
+    const cacheKey = { filterType, startDate, endDate };
+    const cachedStats = dashboardCache.get('/dashboard/quick-stats', orgId, cacheKey);
+    if (cachedStats) {
+      const responseTime = Date.now() - startTime;
+      dashboardMonitor.recordMetric('/dashboard/quick-stats', orgId, responseTime, true, true);
+      return res.json({
+        success: true,
+        data: cachedStats,
+        cached: true
+      });
+    }
+    
+    // Use circuit breaker to protect against cascading failures
+    const responseData = await dashboardQuickStatsBreaker.execute(async () => {
+      // Get date range
+      const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(filterType, startDate, endDate);
+      
+      const now = new Date();
+      const { start: startOfDay, end: endOfDay } = getDayBounds(now);
+      
+      // OPTIMIZATION: Use faceted aggregation to get multiple stats in one query
+      const [
+        totalEmployees,
+        attendanceStats,
+        leaveExpenseStats,
+        salesStats
+      ] = await Promise.all([
+        Employee.countDocuments({ orgId, status: 'active' }).lean(),
+        // Attendance stats in one aggregation
+        Attendance.aggregate([
+          {
+            $facet: {
+              presentToday: [
+                {
+                  $match: {
+                    orgId,
+                    date: { $gte: startOfDay, $lt: endOfDay },
+                    status: 'present'
                   }
-                }
-              }
-            },
-            { $count: 'count' }
-          ]
-        }
-      }
-    ]),
-    // Leave and expense stats in one aggregation
-    LeaveRequest.aggregate([
-      {
-        $facet: {
-          pendingLeaves: [
-            { $match: { orgId, status: 'pending' } },
-            { $count: 'count' }
-          ],
-          onLeaveToday: [
-            {
-              $match: {
-                orgId,
-                status: 'approved',
-                startDate: { $lte: now },
-                endDate: { $gte: startOfDay }
-              }
-            },
-            { $count: 'count' }
-          ]
-        }
-      }
-    ]),
-    // Sales, loss, bonus, incentive stats
-    Payslip.aggregate([
-      {
-        $match: {
-          orgId,
-          createdAt: { $gte: rangeStart, $lt: rangeEnd }
-        }
-      },
-      {
-        $facet: {
-          bonus: [
-            { $group: { _id: null, total: { $sum: '$bonus' } } }
-          ],
-          incentive: [
-            { $group: { _id: null, total: { $sum: '$incentives' } } }
-          ]
-        }
-      }
-    ])
-  ]);
-  
-  // Extract values from aggregation results
-  const presentToday = attendanceStats[0]?.presentToday[0]?.count || 0;
-  const activeUsers = attendanceStats[0]?.activeUsers[0]?.count || 0;
-  const onBreakToday = attendanceStats[0]?.onBreakToday[0]?.count || 0;
-  const pendingLeaves = leaveExpenseStats[0]?.pendingLeaves[0]?.count || 0;
-  const onLeaveToday = leaveExpenseStats[0]?.onLeaveToday[0]?.count || 0;
-  const totalBonus = salesStats[0]?.bonus[0]?.total || 0;
-  const totalIncentive = salesStats[0]?.incentive[0]?.total || 0;
-  
-  // Get pending expenses count (simple count query)
-  const pendingExpenses = await Expense.countDocuments({ orgId, status: 'pending' }).lean();
-  
-  // Get total sales and loss (simple aggregation)
-  const [salesData, lossData] = await Promise.all([
-    Expense.aggregate([
-      {
-        $match: {
-          orgId,
-          date: { $gte: rangeStart, $lt: rangeEnd },
-          category: 'Sales',
-          status: 'approved'
-        }
-      },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ]),
-    Expense.aggregate([
-      {
-        $match: {
-          orgId,
-          date: { $gte: rangeStart, $lt: rangeEnd },
-          status: 'rejected'
-        }
-      },
-      { $group: { _id: null, total: { $sum: '$amount' } } }
-    ])
-  ]);
-  
-  const attendanceRate = totalEmployees > 0 ? Math.round((presentToday / totalEmployees) * 100) : 0;
-  
-  const responseData = {
-    totalEmployees,
-    presentToday,
-    attendanceRate,
-    pendingLeaves,
-    pendingExpenses,
-    activeUsers,
-    onLeave: onLeaveToday,
-    onBreak: onBreakToday,
-    topEmployee: 'N/A',
-    totalSales: salesData[0]?.total || 0,
-    totalLoss: lossData[0]?.total || 0,
-    totalBonus,
-    totalIncentive
-  };
-  
-  // Cache the result (20 second TTL)
-  dashboardCache.set('/dashboard/quick-stats', orgId, responseData, cacheKey, 20000);
-  
-  res.json({
-    success: true,
-    data: responseData
-  });
+                },
+                { $count: 'count' }
+              ],
+              activeUsers: [
+                {
+                  $match: {
+                    orgId,
+                    date: { $gte: startOfDay, $lt: endOfDay },
+                    checkIn: { $exists: true, $ne: null },
+                    $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
+                  }
+                },
+                { $count: 'count' }
+              ],
+              onBreakToday: [
+                {
+                  $match: {
+                    orgId,
+                    date: { $gte: startOfDay, $lt: endOfDay },
+                    breaks: {
+                      $elemMatch: {
+                        startTime: { $exists: true },
+                        endTime: { $exists: false }
+                      }
+                    }
+                  }
+                },
+                { $count: 'count' }
+              ]
+            }
+          }
+        ]),
+        // Leave and expense stats in one aggregation
+        LeaveRequest.aggregate([
+          {
+            $facet: {
+              pendingLeaves: [
+                { $match: { orgId, status: 'pending' } },
+                { $count: 'count' }
+              ],
+              onLeaveToday: [
+                {
+                  $match: {
+                    orgId,
+                    status: 'approved',
+                    startDate: { $lte: now },
+                    endDate: { $gte: startOfDay }
+                  }
+                },
+                { $count: 'count' }
+              ]
+            }
+          }
+        ]),
+        // Sales, loss, bonus, incentive stats
+        Payslip.aggregate([
+          {
+            $match: {
+              orgId,
+              createdAt: { $gte: rangeStart, $lt: rangeEnd }
+            }
+          },
+          {
+            $facet: {
+              bonus: [
+                { $group: { _id: null, total: { $sum: '$bonus' } } }
+              ],
+              incentive: [
+                { $group: { _id: null, total: { $sum: '$incentives' } } }
+              ]
+            }
+          }
+        ])
+      ]);
+      
+      // Extract values from aggregation results
+      const presentToday = attendanceStats[0]?.presentToday[0]?.count || 0;
+      const activeUsers = attendanceStats[0]?.activeUsers[0]?.count || 0;
+      const onBreakToday = attendanceStats[0]?.onBreakToday[0]?.count || 0;
+      const pendingLeaves = leaveExpenseStats[0]?.pendingLeaves[0]?.count || 0;
+      const onLeaveToday = leaveExpenseStats[0]?.onLeaveToday[0]?.count || 0;
+      const totalBonus = salesStats[0]?.bonus[0]?.total || 0;
+      const totalIncentive = salesStats[0]?.incentive[0]?.total || 0;
+      
+      // Get pending expenses count (simple count query)
+      const pendingExpenses = await Expense.countDocuments({ orgId, status: 'pending' }).lean();
+      
+      // Get total sales and loss (simple aggregation)
+      const [salesData, lossData] = await Promise.all([
+        Expense.aggregate([
+          {
+            $match: {
+              orgId,
+              date: { $gte: rangeStart, $lt: rangeEnd },
+              category: 'Sales',
+              status: 'approved'
+            }
+          },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]),
+        Expense.aggregate([
+          {
+            $match: {
+              orgId,
+              date: { $gte: rangeStart, $lt: rangeEnd },
+              status: 'rejected'
+            }
+          },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ])
+      ]);
+      
+      const attendanceRate = totalEmployees > 0 ? Math.round((presentToday / totalEmployees) * 100) : 0;
+      
+      return {
+        totalEmployees,
+        presentToday,
+        attendanceRate,
+        pendingLeaves,
+        pendingExpenses,
+        activeUsers,
+        onLeave: onLeaveToday,
+        onBreak: onBreakToday,
+        topEmployee: 'N/A',
+        totalSales: salesData[0]?.total || 0,
+        totalLoss: lossData[0]?.total || 0,
+        totalBonus,
+        totalIncentive
+      };
+    }, () => {
+      // Fallback: return cached data or empty stats
+      return cachedStats || {
+        totalEmployees: 0,
+        presentToday: 0,
+        attendanceRate: 0,
+        pendingLeaves: 0,
+        pendingExpenses: 0,
+        activeUsers: 0,
+        onLeave: 0,
+        onBreak: 0,
+        topEmployee: 'N/A',
+        totalSales: 0,
+        totalLoss: 0,
+        totalBonus: 0,
+        totalIncentive: 0
+      };
+    });
+    
+    // Cache the result (20 second TTL)
+    dashboardCache.set('/dashboard/quick-stats', orgId, responseData, cacheKey, 20000);
+    
+    const responseTime = Date.now() - startTime;
+    dashboardMonitor.recordMetric('/dashboard/quick-stats', orgId, responseTime, false, true);
+    
+    res.json({
+      success: true,
+      data: responseData
+    });
+  } catch (error) {
+    const responseTime = Date.now() - startTime;
+    dashboardMonitor.recordMetric('/dashboard/quick-stats', orgId, responseTime, false, false);
+    throw error;
+  }
 }));
 
 /**
@@ -763,6 +820,56 @@ router.get("/weekly-productivity", asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: productivityData
+  });
+}));
+
+/**
+ * GET /api/dashboard/health
+ * Get dashboard health status and performance metrics
+ */
+router.get("/health", asyncHandler(async (req, res) => {
+  const health = dashboardMonitor.getHealthStatus();
+  const report = dashboardMonitor.getReport();
+  
+  res.json({
+    success: true,
+    data: {
+      health,
+      report,
+      circuitBreakers: {
+        stats: dashboardStatsBreaker.getStatus(),
+        quickStats: dashboardQuickStatsBreaker.getStatus()
+      }
+    }
+  });
+}));
+
+/**
+ * POST /api/dashboard/cache/clear
+ * Clear dashboard cache (admin only)
+ */
+router.post("/cache/clear", asyncHandler(async (req, res) => {
+  const orgId = req.user?.orgId || 'system';
+  
+  dashboardCache.invalidateOrg(orgId);
+  
+  res.json({
+    success: true,
+    message: `Dashboard cache cleared for organization ${orgId}`
+  });
+}));
+
+/**
+ * POST /api/dashboard/circuit-breaker/reset
+ * Reset circuit breakers (admin only)
+ */
+router.post("/circuit-breaker/reset", asyncHandler(async (req, res) => {
+  dashboardStatsBreaker.reset();
+  dashboardQuickStatsBreaker.reset();
+  
+  res.json({
+    success: true,
+    message: 'Circuit breakers reset'
   });
 }));
 

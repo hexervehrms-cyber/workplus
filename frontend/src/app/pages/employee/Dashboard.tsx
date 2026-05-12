@@ -570,20 +570,14 @@ export default function EmployeeDashboard() {
   const handleCheckIn = async () => {
     console.log('🔵 Check-in button clicked');
     
-    // Prevent multiple simultaneous actions
     if (actionInProgress) {
       console.log('⚠️ Action already in progress');
-      // // toast removed
       return;
     }
 
     try {
       console.log('✅ Starting check-in process');
       setActionInProgress(true);
-      setLastActionTime(Date.now());
-
-      // Disable refresh during action
-      setDisableRefresh(true);
 
       // Update UI immediately (optimistic update)
       const checkInAt = new Date();
@@ -601,24 +595,18 @@ export default function EmployeeDashboard() {
         breakType: 'regular' as const
       };
 
-      // Update state synchronously - THIS SHOULD SHOW THE CHECK OUT BUTTON
       console.log('🔄 Setting state to:', optimisticState);
       setTodayAttendance(optimisticState);
       setIsCheckedIn(true);
       
-      // Save to BOTH localStorage keys (same as Attendance page)
+      // Save to localStorage
       const today = getTodayKey();
       localStorage.setItem(`checkedIn_${today}`, JSON.stringify(optimisticState));
       localStorage.setItem(attendanceCacheKey, JSON.stringify(optimisticState));
       
       console.log('✅ State updated and saved to localStorage');
-      console.log('📊 Current todayAttendance state:', optimisticState);
-      
-      // Force a small delay to ensure state is updated
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // toast removed
 
+      // Make API call
       console.log('📡 Making API call to /attendance/check-in');
       const result = await apiPost('/attendance/check-in', {
         location: 'Office',
@@ -632,39 +620,23 @@ export default function EmployeeDashboard() {
         // Update with actual server data if needed
         const actualCheckInAt = result?.data?.checkIn ? new Date(result.data.checkIn) : checkInAt;
         const actualCheckInTime = actualCheckInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-
         const serverState = {
           ...optimisticState,
           checkInTime: actualCheckInTime
         };
-
         console.log('🔄 Updating with server state:', serverState);
         setTodayAttendance(serverState);
         
-        // Save to BOTH localStorage keys (same as Attendance page)
+        // Save to localStorage
         const today = getTodayKey();
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(serverState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(serverState));
-        
-        // toast removed
-        
-        // Keep refresh disabled for 5 more seconds to ensure state stability
-        setTimeout(() => {
-          setDisableRefresh(false);
-        }, 5000);
       } else {
         console.error('❌ Check-in API failed:', result?.message);
-        // DON'T REVERT - Keep the optimistic state even if API fails
-        // toast removed
-        setDisableRefresh(false);
       }
     } catch (err) {
       console.error('❌ Check-in error:', err);
-      // DON'T REVERT - Keep the optimistic state even if error occurs
-      // toast removed
-      setDisableRefresh(false);
     } finally {
-      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
       }, 300);
@@ -711,24 +683,18 @@ export default function EmployeeDashboard() {
   const handleBreakStart = async (breakType = 'regular') => {
     console.log('🟢 Starting break:', breakType);
     
-    // Prevent multiple simultaneous actions
     if (actionInProgress) {
-      // toast removed
       return;
     }
 
     try {
       setActionInProgress(true);
-      setLastActionTime(Date.now());
-      setDisableRefresh(true);
 
       const currentEmployeeId = await ensureEmployeeId();
 
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to start break.');
-        // toast removed
         setActionInProgress(false);
-        setDisableRefresh(false);
         return;
       }
 
@@ -741,14 +707,12 @@ export default function EmployeeDashboard() {
       });
 
       if (result.success) {
-        // Immediately update state - this will persist until manually changed
         setTodayAttendance(prev => ({
           ...prev,
           isOnBreak: true,
           breakType: breakType
         }));
         
-        // Save to BOTH localStorage keys (same as Attendance page)
         const today = getTodayKey();
         const updatedState = {
           checkedIn: true,
@@ -760,23 +724,11 @@ export default function EmployeeDashboard() {
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
-        // Backend already emits socket event, no need to emit from client
         console.log('📡 [DASHBOARD] Break started successfully, backend will broadcast socket event');
-
-        const breakLabel = breakType === 'lunch' ? 'Lunch Break' : 'Break';
-        // toast removed
-        setDisableRefresh(false);
-      } else {
-        // toast removed
-        setDisableRefresh(false);
       }
     } catch (err) {
       console.error('Break start error:', err);
-      // toast removed
-      // Re-enable refresh on error
-      setDisableRefresh(false);
     } finally {
-      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
       }, 300);
@@ -829,25 +781,18 @@ export default function EmployeeDashboard() {
   const handleMeetingStart = async () => {
     console.log('🟢 Starting meeting');
     
-    // Prevent multiple simultaneous actions
     if (actionInProgress) {
-      // toast removed
       return;
     }
 
     try {
       setActionInProgress(true);
-      setLastActionTime(Date.now());
-      setDisableRefresh(true);
 
       const currentEmployeeId = await ensureEmployeeId();
 
-      // Ensure employee exists
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to start meeting.');
-        // toast removed
         setActionInProgress(false);
-        setDisableRefresh(false);
         return;
       }
 
@@ -860,13 +805,11 @@ export default function EmployeeDashboard() {
       });
 
       if (result.success) {
-        // Immediately update state - this will persist until manually changed
         setTodayAttendance(prev => ({
           ...prev,
           isInMeeting: true
         }));
         
-        // Save to BOTH localStorage keys (same as Attendance page)
         const today = getTodayKey();
         const updatedState = {
           checkedIn: true,
@@ -877,20 +820,10 @@ export default function EmployeeDashboard() {
         };
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
-
-        // toast removed
-        setDisableRefresh(false);
-      } else {
-        // toast removed
-        setDisableRefresh(false);
       }
     } catch (err) {
       console.error('Meeting start error:', err);
-      // toast removed
-      // Re-enable refresh on error
-      setDisableRefresh(false);
     } finally {
-      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
       }, 300);

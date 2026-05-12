@@ -747,6 +747,17 @@ export default function EmployeeDashboard() {
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
+        // Emit socket event to notify Attendance page
+        console.log('📡 [DASHBOARD] Emitting break:started event');
+        const socket = realTimeSocket.getSocket();
+        if (socket) {
+          socket.emit('break:started', {
+            employeeId: currentEmployeeId,
+            breakType: breakType,
+            timestamp: new Date().toISOString()
+          });
+        }
+
         const breakLabel = breakType === 'lunch' ? 'Lunch Break' : 'Break';
         // toast removed
         setDisableRefresh(false);
@@ -817,6 +828,17 @@ export default function EmployeeDashboard() {
         };
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
+
+        // Emit socket event to notify Attendance page
+        console.log('📡 [DASHBOARD] Emitting break:ended event');
+        const currentEmployeeId = await ensureEmployeeId();
+        const socket = realTimeSocket.getSocket();
+        if (socket && currentEmployeeId) {
+          socket.emit('break:ended', {
+            employeeId: currentEmployeeId,
+            timestamp: new Date().toISOString()
+          });
+        }
 
         // toast removed
         setDisableRefresh(false);

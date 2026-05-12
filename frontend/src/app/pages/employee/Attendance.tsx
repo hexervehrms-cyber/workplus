@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Clock, LogIn, LogOut, Pause, MessageSquare, Moon, Calendar, Loader } from 'lucide-react';
 import { buildApiUrl } from '../../utils/apiHelper';
+import realTimeSocket from '../../utils/realTimeSocket';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -741,6 +742,75 @@ export default function Attendance() {
 
     return () => clearInterval(interval);
   }, [checkedIn, todayData]);
+
+  // Listen to break events from Dashboard and sync state
+  useEffect(() => {
+    const handleBreakStarted = (data: any) => {
+      console.log('📡 [ATTENDANCE] Break started event received:', data);
+      
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId) {
+        console.log('📡 [ATTENDANCE] Break started for current employee, updating state');
+        setIsOnBreak(true);
+        setBreakType(data.breakType || 'regular');
+        
+        // Update localStorage to keep in sync
+        const today = new Date().toDateString();
+        const currentState = localStorage.getItem(`checkedIn_${today}`);
+        if (currentState) {
+          try {
+            const parsed = JSON.parse(currentState);
+            const updated = {
+              ...parsed,
+              isOnBreak: true,
+              breakType: data.breakType || 'regular'
+            };
+            localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updated));
+            localStorage.setItem(attendanceCacheKey, JSON.stringify(updated));
+          } catch (e) {
+            console.warn('Failed to update localStorage');
+          }
+        }
+      }
+    };
+
+    const handleBreakEnded = (data: any) => {
+      console.log('📡 [ATTENDANCE] Break ended event received:', data);
+      
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId) {
+        console.log('📡 [ATTENDANCE] Break ended for current employee, updating state');
+        setIsOnBreak(false);
+        setBreakType(null);
+        
+        // Update localStorage to keep in sync
+        const today = new Date().toDateString();
+        const currentState = localStorage.getItem(`checkedIn_${today}`);
+        if (currentState) {
+          try {
+            const parsed = JSON.parse(currentState);
+            const updated = {
+              ...parsed,
+              isOnBreak: false,
+              breakType: null
+            };
+            localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updated));
+            localStorage.setItem(attendanceCacheKey, JSON.stringify(updated));
+          } catch (e) {
+            console.warn('Failed to update localStorage');
+          }
+        }
+      }
+    };
+
+    realTimeSocket.onBreakStarted(handleBreakStarted);
+    realTimeSocket.onBreakEnded(handleBreakEnded);
+
+    return () => {
+      // Note: realTimeSocket doesn't expose removeListener methods
+      // The listeners will be cleaned up when the component unmounts
+    };
+  }, [employeeId, attendanceCacheKey]);
 
   // Refresh today's attendance periodically while checked in
   useEffect(() => {

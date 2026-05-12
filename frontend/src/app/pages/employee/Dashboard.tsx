@@ -162,13 +162,19 @@ export default function EmployeeDashboard() {
       // Set a timeout to prevent infinite loading
       const timeoutId = setTimeout(() => {
         setLoading(false);
-      }, 5000); // 5 second timeout
+      }, 8000); // 8 second timeout
 
-      // Fetch only critical data first (attendance), then holidays separately
-      const attendanceResult = await apiGet('/attendance/today');
+      // Fetch all data in parallel using Promise.allSettled for resilience
+      console.log('⚡ Fetching all dashboard data in parallel...');
+      const [attendanceResult, holidaysResult, activitiesResult] = await Promise.allSettled([
+        apiGet('/attendance/today'),
+        apiGet('/holidays'),
+        apiGet('/activity-logs?limit=5')
+      ]);
+
       clearTimeout(timeoutId);
 
-      // Fetch holidays in parallel but don't block on it - use cached version first
+      // Use cached holidays as fallback
       const cachedHolidays = localStorage.getItem('cached_holidays');
       if (cachedHolidays) {
         try {
@@ -179,33 +185,26 @@ export default function EmployeeDashboard() {
         }
       }
 
-      // Fetch fresh holidays in background
-      apiGet('/holidays').then(result => {
-        if (result?.success && Array.isArray(result.data)) {
-          console.log('✅ Dashboard: Loaded', result.data.length, 'holidays');
-          setHolidays(result.data);
-          // Cache holidays for offline access
-          localStorage.setItem('cached_holidays', JSON.stringify(result.data));
+      // Process holidays result
+      if (holidaysResult.status === 'fulfilled' && holidaysResult.value?.success && Array.isArray(holidaysResult.value.data)) {
+        console.log('✅ Dashboard: Loaded', holidaysResult.value.data.length, 'holidays');
+        setHolidays(holidaysResult.value.data);
+        // Cache holidays for offline access
+        localStorage.setItem('cached_holidays', JSON.stringify(holidaysResult.value.data));
+      } else if (cachedHolidays) {
+        try {
+          const parsed = JSON.parse(cachedHolidays);
+          console.log('📦 Using cached holidays:', parsed.length);
+          setHolidays(parsed);
+        } catch (e) {
+          console.warn('Failed to parse cached holidays');
         }
-      }).catch(err => {
-        console.warn('⚠️ Holiday fetch failed:', err);
-        // Try to fetch from localStorage as fallback
-        const cachedHolidays = localStorage.getItem('cached_holidays');
-        if (cachedHolidays) {
-          try {
-            const parsed = JSON.parse(cachedHolidays);
-            console.log('📦 Using cached holidays:', parsed.length);
-            setHolidays(parsed);
-          } catch (e) {
-            console.warn('Failed to parse cached holidays');
-          }
-        }
-      });
+      }
 
-      const attendanceData =
-        attendanceResult?.success
-          ? attendanceResult.data
-          : null;
+      // Process attendance result
+      const attendanceData = attendanceResult.status === 'fulfilled' && attendanceResult.value?.success
+        ? attendanceResult.value.data
+        : null;
 
       let data = { attendance: { today: attendanceData?.attendance } };
 
@@ -280,30 +279,30 @@ export default function EmployeeDashboard() {
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(stateToSave));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(stateToSave));
       } else {
-        // NO attendance data from API
-        // DON'T reset if we just checked in (preserve optimistic state)
-        if (!actionInProgress && !disableRefresh) {
-          // Only reset if enough time has passed since last action (more than 15 seconds)
-          const timeSinceLastAction = Date.now() - lastActionTime;
-          if (timeSinceLastAction > 15000) {
-            console.log('⏰ Resetting attendance state - no API data and enough time has passed');
-            setIsCheckedIn(false);
-            setTodayAttendance({
-              isCheckedIn: false,
-              checkInTime: null,
-              checkOutTime: null,
-              hoursWorked: 0,
-              status: 'absent',
-              isOnBreak: false,
-              isInMeeting: false,
-              currentBreakDuration: 0,
-              breakType: 'regular'
-            });
-          } else {
-            console.log('⏰ Keeping current state - recent action detected');
-          }
+        // NO attendance data from API - employee hasn't checked in yet today
+        // ALWAYS show the "Log In" button - this is the normal state
+        console.log('ℹ️ No attendance record for today - showing Log In button');
+        
+        // Only update state if not in the middle of an action
+        if (!actionInProgress) {
+          setIsCheckedIn(false);
+          setTodayAttendance({
+            isCheckedIn: false,
+            checkInTime: null,
+            checkOutTime: null,
+            hoursWorked: 0,
+            status: 'absent',
+            isOnBreak: false,
+            isInMeeting: false,
+            currentBreakDuration: 0,
+            breakType: 'regular'
+          });
+          
+          // Clear localStorage to ensure clean state
+          const today = getTodayKey();
+          localStorage.removeItem(`checkedIn_${today}`);
+          localStorage.removeItem(attendanceCacheKey);
         }
-        // If action is in progress or refresh is disabled, keep current state
       }
 
       // Update KPI metrics

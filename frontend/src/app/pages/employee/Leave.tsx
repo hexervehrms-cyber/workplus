@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Calendar as CalendarIcon, CheckCircle, XCircle, Clock, Plus, Edit2, Download, Trash2 } from 'lucide-react';
+import { Calendar as CalendarIcon, CheckCircle, XCircle, Clock, Plus, Edit2, Download, Trash2, AlertCircle } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -53,6 +53,14 @@ export default function Leave() {
     isShortLeave: false
   });
 
+  // Clear any stale state on mount
+  useEffect(() => {
+    console.log('🔄 [LEAVE] Component mounted, clearing stale state');
+    setLeaveBalance(null);
+    setLeaveHistory([]);
+    setEnabledLeaveTypes(null);
+  }, []);
+
   // Fetch leave requests and balance
   useEffect(() => {
     const fetchData = async () => {
@@ -61,14 +69,18 @@ export default function Leave() {
       try {
         setLoading(true);
         
+        // Clear any cached data to force fresh fetch
+        console.log('🔄 [LEAVE] Fetching fresh leave data...');
+        
         // Fetch leave requests
         const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
-        console.log('Leave requests response:', leaveResponse);
+        console.log('📊 [LEAVE] Leave requests response:', leaveResponse);
         
         if (leaveResponse.success && leaveResponse.data) {
           // Handle both array and paginated response
           const leaveData = Array.isArray(leaveResponse.data) ? leaveResponse.data : leaveResponse.data.data || [];
           setLeaveHistory(leaveData);
+          console.log('✅ [LEAVE] Loaded', leaveData.length, 'leave requests');
         }
 
         // Fetch leave balance from allocation
@@ -76,16 +88,18 @@ export default function Leave() {
         
         // If employeeId is not set, try to fetch it from the employee service
         if (!employeeId) {
-          console.log('employeeId not found in user context, fetching from backend...');
+          console.log('⚠️ [LEAVE] employeeId not found in user context, fetching from backend...');
           try {
             const employeeResponse = await EmployeeService.getEmployeeByUserId(user.id);
             if (employeeResponse && employeeResponse._id) {
               employeeId = employeeResponse._id;
-              console.log('Employee ID fetched:', employeeId);
+              console.log('✅ [LEAVE] Employee ID fetched:', employeeId);
             }
           } catch (error) {
-            console.error('Error fetching employee:', error);
+            console.error('❌ [LEAVE] Error fetching employee:', error);
           }
+        } else {
+          console.log('✅ [LEAVE] Using employeeId from user context:', employeeId);
         }
         
         if (employeeId) {
@@ -93,20 +107,25 @@ export default function Leave() {
           const year = now.getFullYear();
           const month = now.getMonth() + 1;
           
-          console.log('Fetching balance for:', {
+          console.log('📊 [LEAVE] Fetching balance for:', {
             employeeId,
             year,
             month
           });
           
           const balanceResponse = await LeaveAllocationService.getEmployeeBalance(employeeId, year, month);
-          console.log('Balance response:', balanceResponse);
+          console.log('📊 [LEAVE] Balance response:', balanceResponse);
           
           if (balanceResponse.success && balanceResponse.data) {
             setLeaveBalance(balanceResponse.data);
+            console.log('✅ [LEAVE] Leave balance loaded:', balanceResponse.data);
+          } else {
+            console.warn('⚠️ [LEAVE] No balance data returned from API');
+            console.warn('⚠️ [LEAVE] This employee may not have leave allocations set up');
           }
         } else {
-          console.warn('No employeeId available to fetch balance');
+          console.error('❌ [LEAVE] No employeeId available to fetch balance');
+          console.error('❌ [LEAVE] User object:', user);
         }
 
         // Fetch enabled leave types
@@ -500,7 +519,36 @@ export default function Leave() {
       </div>
 
       {/* Leave Balance KPI Cards - Optimized for mobile */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+          {[1, 2, 3, 4].map((i) => (
+            <Card key={i} className="p-4 sm:p-6 rounded-2xl animate-pulse">
+              <div className="h-4 bg-muted rounded w-3/4 mb-4"></div>
+              <div className="space-y-2">
+                <div className="h-3 bg-muted rounded"></div>
+                <div className="h-3 bg-muted rounded"></div>
+                <div className="h-3 bg-muted rounded"></div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      ) : (
+        <>
+          {leaveBalanceCards.length > 0 && leaveBalanceCards.every(card => card.total === 0) && (
+            <Card className="p-4 sm:p-6 rounded-xl bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="font-semibold text-sm text-yellow-900 dark:text-yellow-100">No Leave Allocations Found</h3>
+                  <p className="text-xs text-yellow-800 dark:text-yellow-200 mt-1">
+                    Your leave balances haven't been set up yet. Please contact your HR administrator to allocate your leave days.
+                  </p>
+                </div>
+              </div>
+            </Card>
+          )}
+          
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
         {leaveBalanceCards.map((leave, index) => (
           <Card key={index} className="p-4 sm:p-6 rounded-2xl">
             <div className="flex items-center justify-between mb-3 sm:mb-4">
@@ -528,6 +576,8 @@ export default function Leave() {
           </Card>
         ))}
       </div>
+        </>
+      )}
 
       {/* Leave History */}
       <Card className="rounded-2xl overflow-hidden shadow-lg border-0 bg-gradient-to-br from-background to-muted/20">

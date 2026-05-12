@@ -752,6 +752,8 @@ export default function Attendance() {
 
   // Listen to break events from Dashboard and sync state
   useEffect(() => {
+    const today = new Date().toDateString();
+    
     const handleBreakStarted = (data: any) => {
       console.log('📡 [ATTENDANCE] Break started event received:', data);
       console.log('📡 [ATTENDANCE] Current employeeId:', employeeId);
@@ -766,7 +768,6 @@ export default function Attendance() {
         setLastSocketEventTime(Date.now()); // Mark socket event time to prevent refresh overwrite
         
         // Update localStorage to keep in sync
-        const today = new Date().toDateString();
         const currentState = localStorage.getItem(`checkedIn_${today}`);
         if (currentState) {
           try {
@@ -801,7 +802,6 @@ export default function Attendance() {
         setLastSocketEventTime(Date.now()); // Mark socket event time to prevent refresh overwrite
         
         // Update localStorage to keep in sync
-        const today = new Date().toDateString();
         const currentState = localStorage.getItem(`checkedIn_${today}`);
         if (currentState) {
           try {
@@ -835,7 +835,6 @@ export default function Attendance() {
         setLastSocketEventTime(Date.now()); // Mark socket event time
 
         // Update localStorage
-        const today = new Date().toDateString();
         const currentState = localStorage.getItem(`checkedIn_${today}`);
         if (currentState) {
           try {
@@ -866,7 +865,6 @@ export default function Attendance() {
         setLastSocketEventTime(Date.now()); // Mark socket event time
 
         // Update localStorage
-        const today = new Date().toDateString();
         const currentState = localStorage.getItem(`checkedIn_${today}`);
         if (currentState) {
           try {

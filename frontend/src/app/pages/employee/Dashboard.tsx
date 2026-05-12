@@ -81,6 +81,7 @@ export default function EmployeeDashboard() {
   // Add action lock states to prevent UI conflicts
   const [actionInProgress, setActionInProgress] = useState(false);
   const [lastActionTime, setLastActionTime] = useState(0);  // Initialize to 0 so page load is never blocked
+  const [lastSocketEventTime, setLastSocketEventTime] = useState(0); // Track last socket event to prevent refresh overwrite
 
   const [performanceMetrics, setPerformanceMetrics] = useState({
     taskCompletion: 0,
@@ -397,6 +398,7 @@ export default function EmployeeDashboard() {
           breakType: data.breakType || 'regular',
           currentBreakDuration: 0
         }));
+        setLastSocketEventTime(Date.now()); // Mark socket event time
       }
     };
 
@@ -413,6 +415,7 @@ export default function EmployeeDashboard() {
           currentBreakDuration: 0,
           breakType: 'regular'
         }));
+        setLastSocketEventTime(Date.now()); // Mark socket event time
       }
     };
 
@@ -496,6 +499,15 @@ export default function EmployeeDashboard() {
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
+      
+      // Don't refresh if a socket event happened within the last 15 seconds
+      // This prevents the periodic refresh from overwriting socket event updates
+      const timeSinceLastSocketEvent = Date.now() - lastSocketEventTime;
+      if (timeSinceLastSocketEvent < 15000) {
+        console.log('⏰ [DASHBOARD] Skipping refresh - socket event too recent');
+        return;
+      }
+      
       // Double check before refreshing - increase time to 10 seconds
       if (!actionInProgress && (Date.now() - lastActionTime) >= 10000) {
         console.log('⏰ Periodic refresh triggered (checked in)');
@@ -504,7 +516,7 @@ export default function EmployeeDashboard() {
     }, 30000); // Refresh every 30 seconds
 
     return () => clearInterval(interval);
-  }, [isCheckedIn, disableRefresh, fetchDashboardData, actionInProgress, lastActionTime]);
+  }, [isCheckedIn, disableRefresh, fetchDashboardData, actionInProgress, lastActionTime, lastSocketEventTime]);
 
   // Handle check-in
   const handleCheckIn = async () => {

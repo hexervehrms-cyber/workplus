@@ -50,6 +50,7 @@ export default function Attendance() {
   const [filterEndDate, setFilterEndDate] = useState<string>('');
   const [filterLoading, setFilterLoading] = useState(false);
   const attendanceCacheKey = `employee_attendance_state_${user?.id || 'unknown'}`;
+  const [lastSocketEventTime, setLastSocketEventTime] = useState(0); // Track last socket event to prevent refresh overwrite
 
   // Load activity logs from localStorage on mount
   useEffect(() => {
@@ -753,6 +754,7 @@ export default function Attendance() {
         console.log('📡 [ATTENDANCE] Break started for current employee, updating state');
         setIsOnBreak(true);
         setBreakType(data.breakType || 'regular');
+        setLastSocketEventTime(Date.now()); // Mark socket event time to prevent refresh overwrite
         
         // Update localStorage to keep in sync
         const today = new Date().toDateString();
@@ -782,6 +784,7 @@ export default function Attendance() {
         console.log('📡 [ATTENDANCE] Break ended for current employee, updating state');
         setIsOnBreak(false);
         setBreakType(null);
+        setLastSocketEventTime(Date.now()); // Mark socket event time to prevent refresh overwrite
         
         // Update localStorage to keep in sync
         const today = new Date().toDateString();
@@ -818,11 +821,20 @@ export default function Attendance() {
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
+      
+      // Don't refresh if a socket event happened within the last 15 seconds
+      // This prevents the periodic refresh from overwriting socket event updates
+      const timeSinceLastSocketEvent = Date.now() - lastSocketEventTime;
+      if (timeSinceLastSocketEvent < 15000) {
+        console.log('⏰ [ATTENDANCE] Skipping refresh - socket event too recent');
+        return;
+      }
+      
       if (employeeId) fetchTodayAttendance(employeeId);
     }, 30000); // Refresh every 30 seconds
 
     return () => clearInterval(interval);
-  }, [checkedIn, employeeId]);
+  }, [checkedIn, employeeId, lastSocketEventTime]);
 
   // Initial load only
   useEffect(() => {

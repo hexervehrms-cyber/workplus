@@ -762,8 +762,9 @@ export default function Attendance() {
         const parsed = JSON.parse(cached);
         setCheckedIn(!!parsed.checkedIn);
         setCurrentHours(parsed.currentHours || 0);
-        setIsOnBreak(!!parsed.isOnBreak);
-        setBreakType(parsed.breakType || null);
+        // NEVER load breakType from localStorage - it's stale data
+        // setIsOnBreak(!!parsed.isOnBreak);
+        // setBreakType(parsed.breakType || null);
         setIsInMeeting(!!parsed.isInMeeting);
         setLoading(false);
       } catch (_) {}

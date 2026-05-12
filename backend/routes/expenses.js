@@ -18,6 +18,7 @@ import logger from "../utils/logger.js";
 import EmailNotificationService from "../utils/emailNotificationService.js";
 import User from "../models/User.js";
 import { emitExpenseKPIUpdate } from "../utils/kpiUpdater.js";
+import { dashboardCache } from "../utils/dashboardCache.js";
 
 // Setup __dirname for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -528,6 +529,10 @@ router.put(
       // Send response immediately
       sendSuccess(res, expense, "Expense approved successfully");
 
+      // Invalidate dashboard cache for this organization
+      dashboardCache.invalidateEndpoint('/dashboard/quick-stats', expense.orgId);
+      dashboardCache.invalidateEndpoint('/dashboard/stats', expense.orgId);
+
       // Emit KPI update to admin dashboard
       if (global.io) {
         emitExpenseKPIUpdate(global.io, expense.orgId, {
@@ -649,6 +654,10 @@ router.put(
           status: 'rejected'
         }).catch(err => logger.error('Failed to emit KPI update on expense rejection', { error: err.message }));
       }
+
+      // Invalidate dashboard cache for this organization
+      dashboardCache.invalidateEndpoint('/dashboard/quick-stats', expense.orgId);
+      dashboardCache.invalidateEndpoint('/dashboard/stats', expense.orgId);
 
       // Send email notification in background (don't wait for it)
       setImmediate(async () => {

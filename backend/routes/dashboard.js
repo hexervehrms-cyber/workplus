@@ -10,6 +10,7 @@ import Payslip from "../models/Payroll.js";
 import Organization from "../models/Organization.js";
 import ActivityLog from "../models/ActivityLog.js";
 import Session from "../models/Session.js";
+import { dashboardCache } from "../utils/dashboardCache.js";
 
 // Import specialized dashboard routes
 import superAdminRoutes from "./dashboard-superadmin.js";
@@ -76,7 +77,7 @@ function getDayBounds(baseDate = new Date()) {
 /**
  * GET /api/dashboard/stats
  * Get dashboard statistics with optional date filtering
- * OPTIMIZED: Combined aggregations and lean queries
+ * OPTIMIZED: Combined aggregations, lean queries, and caching
  */
 router.get("/stats", asyncHandler(async (req, res) => {
   // Disable caching for real-time data
@@ -87,6 +88,18 @@ router.get("/stats", asyncHandler(async (req, res) => {
   // CRITICAL: Enforce orgId validation - users can only access their organization's data
   const orgId = req.user?.orgId || 'system';
   const { filterType = 'month', startDate, endDate } = req.query;
+  
+  // Check cache first (30 second TTL for stats)
+  const cacheKey = { filterType, startDate, endDate };
+  const cachedStats = dashboardCache.get('/dashboard/stats', orgId, cacheKey);
+  if (cachedStats) {
+    console.log('📦 [CACHE HIT] Dashboard stats from cache');
+    return res.json({
+      success: true,
+      data: cachedStats,
+      cached: true
+    });
+  }
   
   // Get date range
   const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(filterType, startDate, endDate);
@@ -162,6 +175,9 @@ router.get("/stats", asyncHandler(async (req, res) => {
     loggedInEmployees,
     onLeave: onLeaveCount
   };
+  
+  // Cache the result (30 second TTL)
+  dashboardCache.set('/dashboard/stats', orgId, statsData, cacheKey, 30000);
   
   res.json({
     success: true,
@@ -468,7 +484,7 @@ router.get("/recent-activities", asyncHandler(async (req, res) => {
 /**
  * GET /api/dashboard/quick-stats
  * Get quick statistics for widgets
- * OPTIMIZED: Reduced from 12 queries to 6 using faceted aggregations
+ * OPTIMIZED: Reduced from 12 queries to 6 using faceted aggregations and caching
  */
 router.get("/quick-stats", asyncHandler(async (req, res) => {
   // Disable caching for real-time data
@@ -478,6 +494,18 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
   
   const orgId = req.user?.orgId || 'system';
   const { filterType = 'month', startDate, endDate } = req.query;
+  
+  // Check cache first (20 second TTL for quick-stats - more frequent updates)
+  const cacheKey = { filterType, startDate, endDate };
+  const cachedStats = dashboardCache.get('/dashboard/quick-stats', orgId, cacheKey);
+  if (cachedStats) {
+    console.log('📦 [CACHE HIT] Quick stats from cache');
+    return res.json({
+      success: true,
+      data: cachedStats,
+      cached: true
+    });
+  }
   
   // Get date range
   const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(filterType, startDate, endDate);
@@ -633,6 +661,9 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
     totalBonus,
     totalIncentive
   };
+  
+  // Cache the result (20 second TTL)
+  dashboardCache.set('/dashboard/quick-stats', orgId, responseData, cacheKey, 20000);
   
   res.json({
     success: true,

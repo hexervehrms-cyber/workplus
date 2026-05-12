@@ -14,6 +14,7 @@ import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
 import { emitAttendanceKPIUpdate } from '../utils/kpiUpdater.js';
+import { dashboardCache } from '../utils/dashboardCache.js';
 
 const router = express.Router();
 
@@ -334,6 +335,10 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     data: attendance
   });
 
+  // Invalidate dashboard cache for this organization
+  dashboardCache.invalidateEndpoint('/dashboard/quick-stats', effectiveOrgId);
+  dashboardCache.invalidateEndpoint('/dashboard/stats', effectiveOrgId);
+
   // Emit KPI update to admin dashboard
   if (global.io) {
     emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
@@ -488,6 +493,10 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     message: 'Checked out successfully',
     data: updatedAttendance
   });
+
+  // Invalidate dashboard cache for this organization
+  dashboardCache.invalidateEndpoint('/dashboard/quick-stats', effectiveOrgId);
+  dashboardCache.invalidateEndpoint('/dashboard/stats', effectiveOrgId);
 
   // Emit KPI update to admin dashboard
   if (global.io) {

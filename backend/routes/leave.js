@@ -17,6 +17,7 @@ import idempotencyMiddleware from '../middleware/idempotency.js';
 import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
 import { emitLeaveKPIUpdate } from '../utils/kpiUpdater.js';
+import { dashboardCache } from '../utils/dashboardCache.js';
 
 const router = express.Router();
 
@@ -395,6 +396,10 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
     data: updated
   });
 
+  // Invalidate dashboard cache for this organization
+  dashboardCache.invalidateEndpoint('/dashboard/quick-stats', updated.orgId);
+  dashboardCache.invalidateEndpoint('/dashboard/stats', updated.orgId);
+
   // Emit KPI update to admin dashboard
   if (global.io) {
     emitLeaveKPIUpdate(global.io, updated.orgId, {
@@ -573,6 +578,10 @@ router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res)
     message: 'Leave request rejected successfully',
     data: updated
   });
+
+  // Invalidate dashboard cache for this organization
+  dashboardCache.invalidateEndpoint('/dashboard/quick-stats', updated.orgId);
+  dashboardCache.invalidateEndpoint('/dashboard/stats', updated.orgId);
 
   // Emit KPI update to admin dashboard
   if (global.io) {

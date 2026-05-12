@@ -478,12 +478,12 @@ export default function Leave() {
   };
 
   return (
-    <div className="p-8 space-y-8">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 md:p-8 space-y-6 sm:space-y-8">
+      {/* Page Header - Mobile optimized */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-foreground mb-2">Leave History</h1>
-          <p className="text-muted-foreground">View and manage your leave requests</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-foreground mb-1 sm:mb-2">Leave History</h1>
+          <p className="text-sm sm:text-base text-muted-foreground">View and manage your leave requests</p>
         </div>
         <Button 
           onClick={() => {
@@ -492,35 +492,35 @@ export default function Leave() {
             setShowLeaveForm(true);
             console.log('✅ showLeaveForm set to true');
           }}
-          className="rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl"
+          className="w-full sm:w-auto rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl"
         >
           <Plus className="w-4 h-4 mr-2" />
           Request Leave
         </Button>
       </div>
 
-      {/* Leave Balance KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* Leave Balance KPI Cards - Optimized for mobile */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
         {leaveBalanceCards.map((leave, index) => (
-          <Card key={index} className="p-6 rounded-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold">{leave.type}</h3>
+          <Card key={index} className="p-4 sm:p-6 rounded-2xl">
+            <div className="flex items-center justify-between mb-3 sm:mb-4">
+              <h3 className="font-semibold text-sm sm:text-base">{leave.type}</h3>
               <div className={`w-3 h-3 rounded-full ${leave.color}`} />
             </div>
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
+            <div className="space-y-2 text-xs sm:text-sm">
+              <div className="flex justify-between">
                 <span className="text-muted-foreground">Total</span>
                 <span className="font-medium">{leave.total} days</span>
               </div>
-              <div className="flex justify-between text-sm">
+              <div className="flex justify-between">
                 <span className="text-muted-foreground">Used</span>
                 <span className="font-medium">{leave.used} days</span>
               </div>
-              <div className="flex justify-between text-sm">
+              <div className="flex justify-between">
                 <span className="text-muted-foreground">Pending</span>
                 <span className="font-medium text-yellow-600">{leave.pending} days</span>
               </div>
-              <div className="flex justify-between text-sm pt-2 border-t border-border">
+              <div className="flex justify-between pt-2 border-t border-border">
                 <span className="font-semibold">Remaining</span>
                 <span className="font-bold text-primary">{leave.remaining} days</span>
               </div>
@@ -531,20 +531,20 @@ export default function Leave() {
 
       {/* Leave History */}
       <Card className="rounded-2xl overflow-hidden shadow-lg border-0 bg-gradient-to-br from-background to-muted/20">
-        <div className="p-6 border-b border-foreground/10 bg-muted/30">
-          <h3 className="font-semibold text-lg text-foreground">Your Leave Requests</h3>
-          <p className="text-sm text-muted-foreground mt-1">All your leave requests and their status</p>
+        <div className="p-4 sm:p-6 border-b border-foreground/10 bg-muted/30">
+          <h3 className="font-semibold text-base sm:text-lg text-foreground">Your Leave Requests</h3>
+          <p className="text-xs sm:text-sm text-muted-foreground mt-1">All your leave requests and their status</p>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-6 space-y-3 sm:space-y-4">
           {leaveHistory && leaveHistory.length > 0 ? (
             leaveHistory.map((leave) => (
-              <div key={leave._id} className="p-4 rounded-xl bg-gradient-to-r from-muted/40 to-muted/20 border border-foreground/10 hover:border-foreground/20 hover:shadow-md transition-all duration-200">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-2">
-                      <h4 className="font-semibold text-foreground">{leave.leaveType || leave.type || 'Leave'}</h4>
+              <div key={leave._id} className="p-3 sm:p-4 rounded-xl bg-gradient-to-r from-muted/40 to-muted/20 border border-foreground/10 hover:border-foreground/20 hover:shadow-md transition-all duration-200">
+                <div className="flex flex-col sm:flex-row items-start sm:items-start justify-between gap-2 sm:gap-3 mb-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <h4 className="font-semibold text-sm sm:text-base text-foreground truncate">{leave.leaveType || leave.type || 'Leave'}</h4>
                       {(leave as any).isShortLeave && (
-                        <Badge variant="outline" className="rounded-lg text-xs">
+                        <Badge variant="outline" className="rounded-lg text-xs flex-shrink-0">
                           <Clock className="w-3 h-3 mr-1" />
                           Short Leave
                         </Badge>
@@ -555,7 +555,7 @@ export default function Leave() {
                           leave.status === 'pending' ? 'secondary' :
                           'destructive'
                         }
-                        className="rounded-lg"
+                        className="rounded-lg text-xs flex-shrink-0"
                       >
                         {leave.status === 'approved' && <CheckCircle className="w-3 h-3 mr-1" />}
                         {leave.status === 'pending' && <Clock className="w-3 h-3 mr-1" />}
@@ -563,42 +563,42 @@ export default function Leave() {
                         {leave.status?.charAt(0).toUpperCase() + leave.status?.slice(1)}
                       </Badge>
                     </div>
-                    <p className="text-sm text-muted-foreground">{leave.reason}</p>
+                    <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2">{leave.reason}</p>
                   </div>
-                  <span className="text-sm font-bold text-primary ml-4">
+                  <span className="text-xs sm:text-sm font-bold text-primary flex-shrink-0">
                     {(leave as any).isShortLeave && (leave as any).hours 
                       ? `${(leave as any).hours.toFixed(1)} hrs` 
                       : `${leave.days || 1} days`}
                   </span>
                 </div>
-                <div className="flex items-center gap-4 text-sm text-muted-foreground pt-3 border-t border-foreground/10 mb-3">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4 text-xs sm:text-sm text-muted-foreground pt-3 border-t border-foreground/10 mb-3">
                   <div className="flex items-center gap-1">
-                    <CalendarIcon className="w-4 h-4 text-primary/60" />
+                    <CalendarIcon className="w-4 h-4 text-primary/60 flex-shrink-0" />
                     <span>{new Date(leave.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
                   </div>
                   {(leave as any).isShortLeave && (leave as any).startTime && (leave as any).endTime ? (
                     <>
-                      <span className="text-foreground/40">•</span>
+                      <span className="text-foreground/40 hidden sm:inline">•</span>
                       <div className="flex items-center gap-1">
-                        <Clock className="w-4 h-4 text-primary/60" />
+                        <Clock className="w-4 h-4 text-primary/60 flex-shrink-0" />
                         <span>{(leave as any).startTime} - {(leave as any).endTime}</span>
                       </div>
                     </>
                   ) : (
                     <>
-                      <span className="text-foreground/40">→</span>
+                      <span className="text-foreground/40 hidden sm:inline">→</span>
                       <div className="flex items-center gap-1">
-                        <CalendarIcon className="w-4 h-4 text-primary/60" />
+                        <CalendarIcon className="w-4 h-4 text-primary/60 flex-shrink-0" />
                         <span>{new Date(leave.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
                       </div>
                     </>
                   )}
                 </div>
-                <div className="flex gap-2 pt-3 border-t border-foreground/10">
+                <div className="flex flex-col sm:flex-row gap-2 pt-3 border-t border-foreground/10">
                   <Button
                     size="sm"
                     variant="outline"
-                    className="rounded-lg flex-1"
+                    className="rounded-lg flex-1 text-xs sm:text-sm"
                     onClick={() => {
                       // Edit functionality - populate form with leave data
                       setEditingLeaveId(leave._id);
@@ -615,13 +615,13 @@ export default function Leave() {
                     }}
                     disabled={leave.status !== 'pending'}
                   >
-                    <Edit2 className="w-4 h-4 mr-2" />
+                    <Edit2 className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
                     Edit
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    className="rounded-lg flex-1"
+                    className="rounded-lg flex-1 text-xs sm:text-sm"
                     onClick={() => {
                       // Download functionality - generate PDF or download as file
                       const leaveData = `
@@ -641,16 +641,16 @@ Reason: ${leave.reason}
                       document.body.appendChild(element);
                       element.click();
                       document.body.removeChild(element);
-                      toast.success('Leave request downloaded');
+                      // toast.success('Leave request downloaded');
                     }}
                   >
-                    <Download className="w-4 h-4 mr-2" />
+                    <Download className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
                     Download
                   </Button>
                   <Button
                     size="sm"
                     variant="destructive"
-                    className="rounded-lg flex-1"
+                    className="rounded-lg flex-1 text-xs sm:text-sm"
                     onClick={async () => {
                       if (confirm('Are you sure you want to delete this leave request?')) {
                         try {
@@ -676,7 +676,7 @@ Reason: ${leave.reason}
                             await LeaveAllocationService.restoreLeaves(employeeId, leave.leaveType || leave.type, daysToRestore, leave._id);
                           }
                           
-                          toast.success('Leave request deleted and leaves restored');
+                          // toast.success('Leave request deleted and leaves restored');
                           
                           // Refresh leave history
                           const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
@@ -698,38 +698,38 @@ Reason: ${leave.reason}
                           }
                         } catch (error) {
                           console.error('Error deleting leave request:', error);
-                          toast.error('Failed to delete leave request');
+                          // toast.error('Failed to delete leave request');
                         }
                       }
                     }}
                     disabled={leave.status !== 'pending'}
                   >
-                    <Trash2 className="w-4 h-4 mr-2" />
+                    <Trash2 className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
                     Delete
                   </Button>
                 </div>
               </div>
             ))
           ) : (
-            <div className="text-center py-12">
-              <CalendarIcon className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
-              <p className="text-muted-foreground font-medium">No leave requests yet</p>
-              <p className="text-xs text-muted-foreground/70 mt-1">Click the "Request Leave" button to submit your first leave request</p>
+            <div className="text-center py-8 sm:py-12">
+              <CalendarIcon className="w-10 h-10 sm:w-12 sm:h-12 text-muted-foreground/30 mx-auto mb-2 sm:mb-3" />
+              <p className="text-muted-foreground font-medium text-sm sm:text-base">No leave requests yet</p>
+              <p className="text-xs sm:text-sm text-muted-foreground/70 mt-1">Click the "Request Leave" button to submit your first leave request</p>
             </div>
           )}
         </div>
       </Card>
 
-      {/* Leave Form Dialog */}
+      {/* Leave Form Dialog - Mobile optimized */}
       <Dialog open={showLeaveForm} onOpenChange={setShowLeaveForm}>
-        <DialogContent className="max-w-md rounded-2xl border-0 shadow-2xl">
-          <DialogHeader className="pb-4">
-            <DialogTitle className="text-xl font-bold">Request Leave</DialogTitle>
-            <DialogDescription className="text-muted-foreground">
+        <DialogContent className="max-w-md sm:max-w-lg rounded-2xl border-0 shadow-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader className="pb-3 sm:pb-4">
+            <DialogTitle className="text-lg sm:text-xl font-bold">Request Leave</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm text-muted-foreground">
               Submit a new leave request
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-5">
+          <div className="space-y-4 sm:space-y-5">
             <div>
               <Label className="text-sm font-medium text-foreground">Leave Type</Label>
               <Select value={formData.type} onValueChange={(value) => setFormData({...formData, type: value})}>

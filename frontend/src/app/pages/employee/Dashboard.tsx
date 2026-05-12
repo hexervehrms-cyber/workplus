@@ -739,7 +739,7 @@ export default function EmployeeDashboard() {
         const today = getTodayKey();
         const updatedState = {
           checkedIn: true,
-          currentHours,
+          currentHours: todayAttendance.hoursWorked,
           isOnBreak: true,
           breakType,
           isInMeeting: false
@@ -810,7 +810,7 @@ export default function EmployeeDashboard() {
         const today = getTodayKey();
         const updatedState = {
           checkedIn: true,
-          currentHours,
+          currentHours: todayAttendance.hoursWorked,
           isOnBreak: false,
           breakType: null,
           isInMeeting: false
@@ -882,7 +882,7 @@ export default function EmployeeDashboard() {
         const today = getTodayKey();
         const updatedState = {
           checkedIn: true,
-          currentHours,
+          currentHours: todayAttendance.hoursWorked,
           isOnBreak: false,
           breakType: null,
           isInMeeting: true
@@ -950,7 +950,7 @@ export default function EmployeeDashboard() {
         const today = getTodayKey();
         const updatedState = {
           checkedIn: true,
-          currentHours,
+          currentHours: todayAttendance.hoursWorked,
           isOnBreak: false,
           breakType: null,
           isInMeeting: false

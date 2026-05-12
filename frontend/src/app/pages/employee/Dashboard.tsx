@@ -202,6 +202,13 @@ export default function EmployeeDashboard() {
       }
 
       // Process attendance result
+      console.log('📊 Attendance API Result:', {
+        status: attendanceResult.status,
+        success: attendanceResult.value?.success,
+        hasData: !!attendanceResult.value?.data,
+        error: attendanceResult.reason?.message
+      });
+
       const attendanceData = attendanceResult.status === 'fulfilled' && attendanceResult.value?.success
         ? attendanceResult.value.data
         : null;
@@ -244,6 +251,14 @@ export default function EmployeeDashboard() {
 
           // Only preserve state if action is currently in progress (not just recent)
           if (actionInProgress) {
+            console.log('🔒 Action in progress - preserving state');
+            return prev;
+          }
+
+          // If we're currently checked in but API returns no data, keep the checked-in state
+          // This prevents race conditions where check-in hasn't synced to DB yet
+          if (prev.isCheckedIn && !isCurrentlyCheckedIn) {
+            console.log('⚠️ API returned no check-in but we are checked in - preserving state');
             return prev;
           }
 
@@ -282,6 +297,10 @@ export default function EmployeeDashboard() {
         // NO attendance data from API - employee hasn't checked in yet today
         // ALWAYS show the "Log In" button - this is the normal state
         console.log('ℹ️ No attendance record for today - showing Log In button');
+        console.log('📊 Attendance API Status:', attendanceResult.status);
+        if (attendanceResult.status === 'rejected') {
+          console.error('❌ Attendance API Error:', attendanceResult.reason);
+        }
         
         // Only update state if not in the middle of an action
         if (!actionInProgress) {
@@ -469,13 +488,16 @@ export default function EmployeeDashboard() {
 
     // Don't refresh if an action was performed recently (within 10 seconds instead of 5)
     const timeSinceLastAction = Date.now() - lastActionTime;
-    if (timeSinceLastAction < 10000) return;
+    if (timeSinceLastAction < 10000) {
+      console.log('⏰ Skipping refresh - action too recent');
+      return;
+    }
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       // Double check before refreshing - increase time to 10 seconds
       if (!actionInProgress && (Date.now() - lastActionTime) >= 10000) {
-        console.log('⏰ Periodic refresh triggered');
+        console.log('⏰ Periodic refresh triggered (checked in)');
         fetchDashboardData();
       }
     }, 30000); // Refresh every 30 seconds

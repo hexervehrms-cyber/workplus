@@ -242,7 +242,6 @@ export default function Attendance() {
       }
     } catch (error) {
       console.error('Error filtering records:', error);
-      toast.error('Failed to filter records');
     } finally {
       setFilterLoading(false);
     }
@@ -357,11 +356,8 @@ export default function Attendance() {
       if (employeeId) {
         void fetchTodayAttendance(employeeId);
       }
-      
-      toast.success('Checked in successfully');
     } catch (error) {
       console.error('Check-in error:', error);
-      toast.error(error instanceof Error ? error.message : 'Check-in failed');
     } finally {
       setActionLoading(false);
     }
@@ -435,11 +431,8 @@ export default function Attendance() {
       }
       // History rarely changes; refresh it after check-out only
       await fetchAttendanceHistory();
-      
-      toast.success('Checked out successfully');
     } catch (error) {
       console.error('Check-out error:', error);
-      toast.error(error instanceof Error ? error.message : 'Check-out failed');
     } finally {
       setActionLoading(false);
     }
@@ -492,11 +485,8 @@ export default function Attendance() {
         breakType,
         isInMeeting: false
       }));
-      
-      toast.success(`${breakLabel} started`);
     } catch (error) {
       console.error('Break start error:', error);
-      toast.error(error instanceof Error ? error.message : 'Break start failed');
     } finally {
       setActionLoading(false);
     }
@@ -547,11 +537,8 @@ export default function Attendance() {
         breakType: null,
         isInMeeting: false
       }));
-      
-      toast.success('Break ended');
     } catch (error) {
       console.error('Break end error:', error);
-      toast.error(error instanceof Error ? error.message : 'Break end failed');
     } finally {
       setActionLoading(false);
     }
@@ -562,7 +549,7 @@ export default function Attendance() {
     console.log('Meeting start clicked - isOnBreak:', isOnBreak);
     
     if (!checkedIn) {
-      toast.error('Please check in first before starting a meeting');
+      console.error('Please check in first before starting a meeting');
       return;
     }
 
@@ -664,13 +651,10 @@ export default function Attendance() {
         breakType: null,
         isInMeeting: true
       }));
-      
-      toast.success('Meeting started');
     } catch (error) {
       console.error('Meeting start error:', error);
       const errorMsg = error instanceof Error ? error.message : 'Meeting start failed';
       console.error('Full error:', errorMsg);
-      toast.error(errorMsg);
     } finally {
       setActionLoading(false);
     }
@@ -720,11 +704,8 @@ export default function Attendance() {
         breakType: null,
         isInMeeting: false
       }));
-      
-      toast.success('Meeting ended');
     } catch (error) {
       console.error('Meeting end error:', error);
-      toast.error(error instanceof Error ? error.message : 'Meeting end failed');
     } finally {
       setActionLoading(false);
     }

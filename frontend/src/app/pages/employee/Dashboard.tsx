@@ -513,7 +513,7 @@ export default function EmployeeDashboard() {
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
       console.log('⚠️ Action already in progress');
-      toast.error('Please wait, another action is in progress...');
+      // // toast removed
       return;
     }
 
@@ -557,7 +557,7 @@ export default function EmployeeDashboard() {
       // Force a small delay to ensure state is updated
       await new Promise(resolve => setTimeout(resolve, 100));
       
-      toast.success('Checked in! Log Out button should now be visible.');
+      // toast removed
 
       console.log('📡 Making API call to /attendance/check-in');
       const result = await apiPost('/attendance/check-in', {
@@ -586,7 +586,7 @@ export default function EmployeeDashboard() {
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(serverState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(serverState));
         
-        toast.success('Checked in successfully!');
+        // toast removed
         
         // Keep refresh disabled for 5 more seconds to ensure state stability
         setTimeout(() => {
@@ -595,13 +595,13 @@ export default function EmployeeDashboard() {
       } else {
         console.error('❌ Check-in API failed:', result?.message);
         // DON'T REVERT - Keep the optimistic state even if API fails
-        toast.warning('Checked in locally. Server sync may be delayed.');
+        // toast removed
         setDisableRefresh(false);
       }
     } catch (err) {
       console.error('❌ Check-in error:', err);
       // DON'T REVERT - Keep the optimistic state even if error occurs
-      toast.warning('Checked in locally. Server sync may be delayed.');
+      // toast removed
       setDisableRefresh(false);
     } finally {
       // Clear action lock quickly to allow responsive UI
@@ -617,7 +617,7 @@ export default function EmployeeDashboard() {
     
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
-      toast.error('Please wait, another action is in progress...');
+      // toast removed
       return;
     }
 
@@ -648,7 +648,7 @@ export default function EmployeeDashboard() {
       localStorage.setItem(`checkedIn_${today}`, JSON.stringify(optimisticState));
       localStorage.setItem(attendanceCacheKey, JSON.stringify(optimisticState));
       
-      toast.success('Checked out successfully!');
+      // toast removed
 
       // Then make the API call
       const result = await apiPost('/attendance/check-out', {
@@ -684,7 +684,7 @@ export default function EmployeeDashboard() {
       }));
       setIsCheckedIn(true);
       setError(err instanceof Error ? err.message : 'Check-out failed');
-      toast.error(err instanceof Error ? err.message : 'Check-out failed');
+      // toast removed
       setDisableRefresh(false);
     } finally {
       // Clear action lock quickly to allow responsive UI
@@ -700,7 +700,7 @@ export default function EmployeeDashboard() {
     
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
-      toast.error('Please wait, another action is in progress...');
+      // toast removed
       return;
     }
 
@@ -713,7 +713,7 @@ export default function EmployeeDashboard() {
 
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to start break.');
-        toast.error('Unable to start break. Please try refreshing the page.');
+        // toast removed
         setActionInProgress(false);
         setDisableRefresh(false);
         return;
@@ -748,15 +748,15 @@ export default function EmployeeDashboard() {
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
         const breakLabel = breakType === 'lunch' ? 'Lunch Break' : 'Break';
-        toast.success(`${breakLabel} started!`);
+        // toast removed
         setDisableRefresh(false);
       } else {
-        toast.error(result?.message || 'Failed to start break');
+        // toast removed
         setDisableRefresh(false);
       }
     } catch (err) {
       console.error('Break start error:', err);
-      toast.error(err instanceof Error ? err.message : 'Break start failed');
+      // toast removed
       // Re-enable refresh on error
       setDisableRefresh(false);
     } finally {
@@ -771,7 +771,7 @@ export default function EmployeeDashboard() {
   const handleBreakEnd = async () => {
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
-      toast.error('Please wait, another action is in progress...');
+      // toast removed
       return;
     }
 
@@ -784,7 +784,7 @@ export default function EmployeeDashboard() {
 
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to end break.');
-        toast.error('Unable to end break. Please try refreshing the page.');
+        // toast removed
         setActionInProgress(false);
         setDisableRefresh(false);
         return;
@@ -818,7 +818,7 @@ export default function EmployeeDashboard() {
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
-        toast.success('Break ended!');
+        // toast removed
         setDisableRefresh(false);
       } else {
         // Re-enable refresh if failed
@@ -826,7 +826,7 @@ export default function EmployeeDashboard() {
       }
     } catch (err) {
       console.error('Break end error:', err);
-      toast.error(err instanceof Error ? err.message : 'Break end failed');
+      // toast removed
       // Re-enable refresh if error
       setDisableRefresh(false);
     } finally {
@@ -843,7 +843,7 @@ export default function EmployeeDashboard() {
     
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
-      toast.error('Please wait, another action is in progress...');
+      // toast removed
       return;
     }
 
@@ -857,7 +857,7 @@ export default function EmployeeDashboard() {
       // Ensure employee exists
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to start meeting.');
-        toast.error('Unable to start meeting. Please try refreshing the page.');
+        // toast removed
         setActionInProgress(false);
         setDisableRefresh(false);
         return;
@@ -890,15 +890,15 @@ export default function EmployeeDashboard() {
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
-        toast.success('Meeting started!');
+        // toast removed
         setDisableRefresh(false);
       } else {
-        toast.error(result?.message || 'Failed to start meeting');
+        // toast removed
         setDisableRefresh(false);
       }
     } catch (err) {
       console.error('Meeting start error:', err);
-      toast.error(err instanceof Error ? err.message : 'Meeting start failed');
+      // toast removed
       // Re-enable refresh on error
       setDisableRefresh(false);
     } finally {
@@ -913,7 +913,7 @@ export default function EmployeeDashboard() {
   const handleMeetingEnd = async () => {
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
-      toast.error('Please wait, another action is in progress...');
+      // toast removed
       return;
     }
 
@@ -925,7 +925,7 @@ export default function EmployeeDashboard() {
 
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to end meeting.');
-        toast.error('Unable to end meeting. Please try refreshing the page.');
+        // toast removed
         setActionInProgress(false);  // Clear flag before returning
         return;
       }
@@ -958,7 +958,7 @@ export default function EmployeeDashboard() {
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
-        toast.success('Meeting ended!');
+        // toast removed
         setDisableRefresh(false);
       } else {
         // Re-enable refresh if failed
@@ -966,7 +966,7 @@ export default function EmployeeDashboard() {
       }
     } catch (err) {
       console.error('Meeting end error:', err);
-      toast.error(err instanceof Error ? err.message : 'Meeting end failed');
+      // toast removed
       // Re-enable refresh if error
       setDisableRefresh(false);
     } finally {

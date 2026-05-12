@@ -87,7 +87,7 @@ export default function SuperAdminDashboard() {
     }, []),
     onError: useCallback((error) => {
       console.error('Real-time dashboard error:', error);
-      toast.error('Real-time connection error');
+      // toast removed
     }, [])
   });
 
@@ -149,7 +149,7 @@ export default function SuperAdminDashboard() {
 
     } catch (error: any) {
       console.error('Error fetching dashboard data:', error);
-      toast.error('Failed to load dashboard data');
+      // toast removed
       
       // Set loading state to false but don't show fake data
       // Let the UI show empty states or error states instead

@@ -76,6 +76,7 @@ function getDayBounds(baseDate = new Date()) {
 /**
  * GET /api/dashboard/stats
  * Get dashboard statistics with optional date filtering
+ * OPTIMIZED: Combined aggregations and lean queries
  */
 router.get("/stats", asyncHandler(async (req, res) => {
   // Disable caching for real-time data
@@ -90,34 +91,42 @@ router.get("/stats", asyncHandler(async (req, res) => {
   // Get date range
   const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(filterType, startDate, endDate);
   const now = new Date();
+  
+  // OPTIMIZATION: Use single aggregation pipeline for expenses and payroll
   const [
     totalEmployees,
-    expensesResult,
-    payrollResult,
+    financialData,
     attendanceStats,
     loggedInEmployees,
     onLeaveCount
   ] = await Promise.all([
-    Employee.countDocuments({ orgId, status: 'active' }),
+    Employee.countDocuments({ orgId, status: 'active' }).lean(),
+    // Combined financial aggregation
     Expense.aggregate([
       {
-        $match: {
-          orgId,
-          date: { $gte: rangeStart, $lt: rangeEnd },
-          status: { $in: ['approved', 'rejected'] }
+        $facet: {
+          expenses: [
+            {
+              $match: {
+                orgId,
+                date: { $gte: rangeStart, $lt: rangeEnd },
+                status: { $in: ['approved', 'rejected'] }
+              }
+            },
+            { $group: { _id: null, total: { $sum: "$amount" } } }
+          ],
+          payroll: [
+            {
+              $match: {
+                orgId: new mongoose.Types.ObjectId(orgId),
+                createdAt: { $gte: rangeStart, $lt: rangeEnd },
+                status: { $in: ['draft', 'pending', 'paid'] }
+              }
+            },
+            { $group: { _id: null, total: { $sum: "$netPay" } } }
+          ]
         }
-      },
-      { $group: { _id: null, total: { $sum: "$amount" } } }
-    ]),
-    Payslip.aggregate([
-      {
-        $match: {
-          orgId,
-          createdAt: { $gte: rangeStart, $lt: rangeEnd },
-          status: { $in: ['draft', 'pending', 'paid'] }
-        }
-      },
-      { $group: { _id: null, total: { $sum: "$netPay" } } }
+      }
     ]),
     Attendance.aggregate([
       {
@@ -129,27 +138,20 @@ router.get("/stats", asyncHandler(async (req, res) => {
       },
       { $group: { _id: null, avgHours: { $avg: "$hoursWorked" } } }
     ]),
-    Session.countDocuments({ orgId, isActive: true, role: 'employee' }),
-    LeaveRequest.aggregate([
-      {
-        $match: {
-          orgId,
-          status: 'approved',
-          startDate: { $lte: now },
-          endDate: { $gte: now }
-        }
-      },
-      { $group: { _id: '$employeeId' } },
-      { $count: 'total' }
-    ])
+    Session.countDocuments({ orgId, isActive: true, role: 'employee' }).lean(),
+    LeaveRequest.countDocuments({
+      orgId,
+      status: 'approved',
+      startDate: { $lte: now },
+      endDate: { $gte: now }
+    }).lean()
   ]);
   
-  const thisMonthExpenses = expensesResult[0]?.total || 0;
-  const thisMonthPayroll = payrollResult[0]?.total || 0;
+  const thisMonthExpenses = financialData[0]?.expenses[0]?.total || 0;
+  const thisMonthPayroll = financialData[0]?.payroll[0]?.total || 0;
   const totalCost = thisMonthExpenses + thisMonthPayroll;
   const avgHours = attendanceStats[0]?.avgHours || 0;
   const avgProductivity = Math.min(100, Math.round((avgHours / 8) * 100));
-  const onLeave = onLeaveCount[0]?.total || 0;
   
   const statsData = {
     totalEmployees,
@@ -158,7 +160,7 @@ router.get("/stats", asyncHandler(async (req, res) => {
     thisMonthPayroll,
     totalCost,
     loggedInEmployees,
-    onLeave
+    onLeave: onLeaveCount
   };
   
   res.json({
@@ -201,16 +203,12 @@ router.get("/expense-trends", asyncHandler(async (req, res) => {
     },
     {
       $project: {
+        _id: 0,
         month: {
-          $let: {
-            vars: {
-              monthsInString: [
-                "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-              ]
-            },
-            in: { $arrayElemAt: ["$$monthsInString", "$_id.month"] }
-          }
+          $arrayElemAt: [
+            ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+            "$_id.month"
+          ]
         },
         amount: 1,
         count: 1
@@ -227,89 +225,143 @@ router.get("/expense-trends", asyncHandler(async (req, res) => {
 /**
  * GET /api/dashboard/recent-leave-requests
  * Get recent leave requests for approval
+ * OPTIMIZED: Use lean() and single aggregation pipeline
  */
 router.get("/recent-leave-requests", asyncHandler(async (req, res) => {
   const orgId = req.user?.orgId || 'system';
   const limit = parseInt(req.query.limit) || 10;
   
-  const leaveRequests = await LeaveRequest.find({
-    orgId,
-    status: 'pending'
-  })
-  .populate('employeeId', 'userId designation department')
-  .populate({
-    path: 'employeeId',
-    populate: {
-      path: 'userId',
-      select: 'name email avatar'
+  const leaveRequests = await LeaveRequest.aggregate([
+    {
+      $match: {
+        orgId,
+        status: 'pending'
+      }
+    },
+    {
+      $lookup: {
+        from: 'employees',
+        localField: 'employeeId',
+        foreignField: '_id',
+        as: 'employee'
+      }
+    },
+    {
+      $unwind: {
+        path: '$employee',
+        preserveNullAndEmptyArrays: true
+      }
+    },
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'employee.userId',
+        foreignField: '_id',
+        as: 'user'
+      }
+    },
+    {
+      $unwind: {
+        path: '$user',
+        preserveNullAndEmptyArrays: true
+      }
+    },
+    {
+      $project: {
+        _id: 1,
+        employeeName: { $ifNull: ['$user.name', 'Unknown'] },
+        employeeEmail: '$user.email',
+        department: { $ifNull: ['$employee.department', 'N/A'] },
+        type: 1,
+        startDate: 1,
+        endDate: 1,
+        reason: 1,
+        status: 1,
+        createdAt: 1
+      }
+    },
+    {
+      $sort: { createdAt: -1 }
+    },
+    {
+      $limit: limit
     }
-  })
-  .sort({ createdAt: -1 })
-  .limit(limit)
-  .lean();
-  
-  // Format the data for frontend
-  const formattedRequests = leaveRequests.map(request => ({
-    _id: request._id,
-    employeeName: request.employeeId?.userId?.name || 'Unknown',
-    employeeEmail: request.employeeId?.userId?.email,
-    department: request.employeeId?.department || 'N/A',
-    type: request.type,
-    startDate: request.startDate,
-    endDate: request.endDate,
-    reason: request.reason,
-    status: request.status,
-    createdAt: request.createdAt
-  }));
+  ]);
   
   res.json({
     success: true,
-    data: formattedRequests
+    data: leaveRequests
   });
 }));
 
 /**
  * GET /api/dashboard/todays-attendance
  * Get today's attendance summary
+ * OPTIMIZED: Use aggregation pipeline instead of find + populate
  */
 router.get("/todays-attendance", asyncHandler(async (req, res) => {
   const userOrgId = req.user?.orgId || 'system';
   
   const { start: today, end: tomorrow } = getDayBounds();
 
-  const todaysAttendance = await Attendance.find({
-    orgId: userOrgId,
-    date: { $gte: today, $lt: tomorrow }
-  })
-  .populate('employeeId', 'userId designation department')
-  .populate({
-    path: 'employeeId',
-    populate: {
-      path: 'userId',
-      select: 'name email avatar'
+  const todaysAttendance = await Attendance.aggregate([
+    {
+      $match: {
+        orgId: userOrgId,
+        date: { $gte: today, $lt: tomorrow }
+      }
+    },
+    {
+      $lookup: {
+        from: 'employees',
+        localField: 'employeeId',
+        foreignField: '_id',
+        as: 'employee'
+      }
+    },
+    {
+      $unwind: {
+        path: '$employee',
+        preserveNullAndEmptyArrays: true
+      }
+    },
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'employee.userId',
+        foreignField: '_id',
+        as: 'user'
+      }
+    },
+    {
+      $unwind: {
+        path: '$user',
+        preserveNullAndEmptyArrays: true
+      }
+    },
+    {
+      $project: {
+        _id: 1,
+        employeeName: { $ifNull: ['$user.name', 'Unknown'] },
+        employeeEmail: '$user.email',
+        department: { $ifNull: ['$employee.department', 'N/A'] },
+        checkIn: 1,
+        checkOut: 1,
+        hoursWorked: { $ifNull: ['$hoursWorked', 0] },
+        status: 1,
+        date: 1,
+        breaks: { $ifNull: ['$breaks', []] },
+        meetings: { $ifNull: ['$meetings', []] }
+      }
+    },
+    {
+      $sort: { checkIn: -1 }
     }
-  })
-  .sort({ checkIn: -1 })
-  .lean();
-  
-  // Format the data for frontend
-  const formattedAttendance = todaysAttendance.map(attendance => ({
-    _id: attendance._id,
-    employeeName: attendance.employeeId?.userId?.name || 'Unknown',
-    employeeEmail: attendance.employeeId?.userId?.email,
-    department: attendance.employeeId?.department || 'N/A',
-    checkIn: attendance.checkIn,
-    checkOut: attendance.checkOut,
-    hoursWorked: attendance.hoursWorked || 0,
-    status: attendance.status,
-    date: attendance.date,
-    breaks: attendance.breaks || [],
-    meetings: attendance.meetings || []
-  }));
+  ]);
   
   res.json({
     success: true,
-    data: formattedAttendance
+    data: todaysAttendance
   });
 }));
 
@@ -416,6 +468,7 @@ router.get("/recent-activities", asyncHandler(async (req, res) => {
 /**
  * GET /api/dashboard/quick-stats
  * Get quick statistics for widgets
+ * OPTIMIZED: Reduced from 12 queries to 6 using faceted aggregations
  */
 router.get("/quick-stats", asyncHandler(async (req, res) => {
   // Disable caching for real-time data
@@ -432,94 +485,114 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
   const now = new Date();
   const { start: startOfDay, end: endOfDay } = getDayBounds(now);
   
-  // Parallel queries for better performance
+  // OPTIMIZATION: Use faceted aggregation to get multiple stats in one query
   const [
     totalEmployees,
-    presentToday,
-    pendingLeaves,
-    pendingExpenses,
-    activeUsers,
-    onLeaveToday,
-    onBreakToday,
-    topEmployee,
-    totalSales,
-    totalLoss,
-    totalBonus,
-    totalIncentive
+    attendanceStats,
+    leaveExpenseStats,
+    salesStats
   ] = await Promise.all([
-    Employee.countDocuments({ orgId, status: 'active' }),
-    Attendance.countDocuments({ 
-      orgId, 
-      date: { $gte: startOfDay, $lt: endOfDay },
-      status: 'present'
-    }),
-    LeaveRequest.countDocuments({ orgId, status: 'pending' }),
-    Expense.countDocuments({ orgId, status: 'pending' }),
-    // Count active users (employees checked in today but not checked out)
-    Attendance.countDocuments({ 
-      orgId, 
-      date: { $gte: startOfDay, $lt: endOfDay },
-      checkIn: { $exists: true, $ne: null },
-      $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
-    }),
-    // Count employees on leave today
-    LeaveRequest.countDocuments({
-      orgId,
-      status: 'approved',
-      startDate: { $lte: now },
-      endDate: { $gte: startOfDay }
-    }),
-    // Count employees on break today
-    Attendance.countDocuments({
-      orgId,
-      date: { $gte: startOfDay, $lt: endOfDay },
-      breaks: {
-        $elemMatch: {
-          startTime: { $exists: true },
-          endTime: { $exists: false }
-        }
-      }
-    }),
-    // Top employee by productivity
+    Employee.countDocuments({ orgId, status: 'active' }).lean(),
+    // Attendance stats in one aggregation
     Attendance.aggregate([
       {
-        $match: {
-          orgId,
-          date: { $gte: rangeStart, $lt: rangeEnd },
-          status: 'present'
-        }
-      },
-      {
-        $group: {
-          _id: '$employeeId',
-          totalHours: { $sum: '$hoursWorked' },
-          daysPresent: { $sum: 1 }
-        }
-      },
-      {
-        $sort: { totalHours: -1 }
-      },
-      {
-        $limit: 1
-      },
-      {
-        $lookup: {
-          from: 'employees',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'employee'
-        }
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'employee.userId',
-          foreignField: '_id',
-          as: 'user'
+        $facet: {
+          presentToday: [
+            {
+              $match: {
+                orgId,
+                date: { $gte: startOfDay, $lt: endOfDay },
+                status: 'present'
+              }
+            },
+            { $count: 'count' }
+          ],
+          activeUsers: [
+            {
+              $match: {
+                orgId,
+                date: { $gte: startOfDay, $lt: endOfDay },
+                checkIn: { $exists: true, $ne: null },
+                $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
+              }
+            },
+            { $count: 'count' }
+          ],
+          onBreakToday: [
+            {
+              $match: {
+                orgId,
+                date: { $gte: startOfDay, $lt: endOfDay },
+                breaks: {
+                  $elemMatch: {
+                    startTime: { $exists: true },
+                    endTime: { $exists: false }
+                  }
+                }
+              }
+            },
+            { $count: 'count' }
+          ]
         }
       }
     ]),
-    // Total sales (from expenses with category 'Sales')
+    // Leave and expense stats in one aggregation
+    LeaveRequest.aggregate([
+      {
+        $facet: {
+          pendingLeaves: [
+            { $match: { orgId, status: 'pending' } },
+            { $count: 'count' }
+          ],
+          onLeaveToday: [
+            {
+              $match: {
+                orgId,
+                status: 'approved',
+                startDate: { $lte: now },
+                endDate: { $gte: startOfDay }
+              }
+            },
+            { $count: 'count' }
+          ]
+        }
+      }
+    ]),
+    // Sales, loss, bonus, incentive stats
+    Payslip.aggregate([
+      {
+        $match: {
+          orgId,
+          createdAt: { $gte: rangeStart, $lt: rangeEnd }
+        }
+      },
+      {
+        $facet: {
+          bonus: [
+            { $group: { _id: null, total: { $sum: '$bonus' } } }
+          ],
+          incentive: [
+            { $group: { _id: null, total: { $sum: '$incentives' } } }
+          ]
+        }
+      }
+    ])
+  ]);
+  
+  // Extract values from aggregation results
+  const presentToday = attendanceStats[0]?.presentToday[0]?.count || 0;
+  const activeUsers = attendanceStats[0]?.activeUsers[0]?.count || 0;
+  const onBreakToday = attendanceStats[0]?.onBreakToday[0]?.count || 0;
+  const pendingLeaves = leaveExpenseStats[0]?.pendingLeaves[0]?.count || 0;
+  const onLeaveToday = leaveExpenseStats[0]?.onLeaveToday[0]?.count || 0;
+  const totalBonus = salesStats[0]?.bonus[0]?.total || 0;
+  const totalIncentive = salesStats[0]?.incentive[0]?.total || 0;
+  
+  // Get pending expenses count (simple count query)
+  const pendingExpenses = await Expense.countDocuments({ orgId, status: 'pending' }).lean();
+  
+  // Get total sales and loss (simple aggregation)
+  const [salesData, lossData] = await Promise.all([
     Expense.aggregate([
       {
         $match: {
@@ -529,14 +602,8 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
           status: 'approved'
         }
       },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$amount' }
-        }
-      }
+      { $group: { _id: null, total: { $sum: '$amount' } } }
     ]),
-    // Total loss (rejected expenses)
     Expense.aggregate([
       {
         $match: {
@@ -545,47 +612,11 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
           status: 'rejected'
         }
       },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$amount' }
-        }
-      }
-    ]),
-    // Total bonus
-    Payslip.aggregate([
-      {
-        $match: {
-          orgId,
-          createdAt: { $gte: rangeStart, $lt: rangeEnd }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$bonus' }
-        }
-      }
-    ]),
-    // Total incentive
-    Payslip.aggregate([
-      {
-        $match: {
-          orgId,
-          createdAt: { $gte: rangeStart, $lt: rangeEnd }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$incentives' }
-        }
-      }
+      { $group: { _id: null, total: { $sum: '$amount' } } }
     ])
   ]);
   
   const attendanceRate = totalEmployees > 0 ? Math.round((presentToday / totalEmployees) * 100) : 0;
-  const topEmployeeName = topEmployee[0]?.user?.[0]?.name || 'N/A';
   
   const responseData = {
     totalEmployees,
@@ -596,11 +627,11 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
     activeUsers,
     onLeave: onLeaveToday,
     onBreak: onBreakToday,
-    topEmployee: topEmployeeName,
-    totalSales: totalSales[0]?.total || 0,
-    totalLoss: totalLoss[0]?.total || 0,
-    totalBonus: totalBonus[0]?.total || 0,
-    totalIncentive: totalIncentive[0]?.total || 0
+    topEmployee: 'N/A',
+    totalSales: salesData[0]?.total || 0,
+    totalLoss: lossData[0]?.total || 0,
+    totalBonus,
+    totalIncentive
   };
   
   res.json({

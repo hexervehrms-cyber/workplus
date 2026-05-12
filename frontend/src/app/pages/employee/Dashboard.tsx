@@ -267,11 +267,12 @@ export default function EmployeeDashboard() {
             return prev;
           }
 
-          // Don't overwrite if a socket event happened recently (within 40 seconds)
-          // This covers the entire periodic refresh cycle (30s) plus buffer for DB write
+          // Don't overwrite if a socket event happened recently (within 15 seconds)
+          // This prevents the periodic refresh from overwriting socket event updates
+          // 15 seconds is enough to cover the socket event delivery + small buffer
           const timeSinceSocketEvent = Date.now() - lastSocketEventTime;
-          if (timeSinceSocketEvent < 40000) {
-            console.log('🔒 [DASHBOARD] Socket event too recent (within 40s) - preserving state');
+          if (timeSinceSocketEvent < 15000) {
+            console.log('🔒 [DASHBOARD] Socket event too recent (within 15s) - preserving state');
             return prev;
           }
 

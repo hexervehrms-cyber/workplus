@@ -283,18 +283,25 @@ export default function EmployeeDashboard() {
         // NO attendance data from API
         // DON'T reset if we just checked in (preserve optimistic state)
         if (!actionInProgress && !disableRefresh) {
-          setIsCheckedIn(false);
-          setTodayAttendance({
-            isCheckedIn: false,
-            checkInTime: null,
-            checkOutTime: null,
-            hoursWorked: 0,
-            status: 'absent',
-            isOnBreak: false,
-            isInMeeting: false,
-            currentBreakDuration: 0,
-            breakType: 'regular'
-          });
+          // Only reset if enough time has passed since last action (more than 15 seconds)
+          const timeSinceLastAction = Date.now() - lastActionTime;
+          if (timeSinceLastAction > 15000) {
+            console.log('⏰ Resetting attendance state - no API data and enough time has passed');
+            setIsCheckedIn(false);
+            setTodayAttendance({
+              isCheckedIn: false,
+              checkInTime: null,
+              checkOutTime: null,
+              hoursWorked: 0,
+              status: 'absent',
+              isOnBreak: false,
+              isInMeeting: false,
+              currentBreakDuration: 0,
+              breakType: 'regular'
+            });
+          } else {
+            console.log('⏰ Keeping current state - recent action detected');
+          }
         }
         // If action is in progress or refresh is disabled, keep current state
       }
@@ -539,6 +546,9 @@ export default function EmployeeDashboard() {
       localStorage.setItem(`checkedIn_${today}`, JSON.stringify(optimisticState));
       localStorage.setItem(attendanceCacheKey, JSON.stringify(optimisticState));
       
+      console.log('✅ State updated and saved to localStorage');
+      console.log('📊 Current todayAttendance state:', optimisticState);
+      
       // Force a small delay to ensure state is updated
       await new Promise(resolve => setTimeout(resolve, 100));
       
@@ -563,6 +573,7 @@ export default function EmployeeDashboard() {
           checkInTime: actualCheckInTime
         };
 
+        console.log('🔄 Updating with server state:', serverState);
         setTodayAttendance(serverState);
         
         // Save to BOTH localStorage keys (same as Attendance page)

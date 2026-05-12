@@ -231,6 +231,27 @@ export default function Profile() {
     // fetchEducationalDocuments();
   }, []);
 
+  // Update form when employee data changes
+  useEffect(() => {
+    if (employee) {
+      setPersonalForm({
+        firstName: employee.firstName || '',
+        lastName: employee.lastName || '',
+        phone: employee.phone || '',
+        dateOfBirth: employee.dateOfBirth || '',
+        gender: employee.gender || '',
+        address: employee.address || ''
+      });
+
+      setOfficialForm({
+        employeeId: employee.employeeId || '',
+        joiningDate: employee.joiningDate ? (typeof employee.joiningDate === 'string' ? employee.joiningDate.split('T')[0] : new Date(employee.joiningDate).toISOString().split('T')[0]) : '',
+        department: employee.department || '',
+        designation: employee.designation || ''
+      });
+    }
+  }, [employee]);
+
 
 
   // Documents are now persisted on the backend, no need to save to IndexedDB
@@ -368,24 +389,8 @@ export default function Profile() {
         sensitiveInfoLocks: employeeProfile?.sensitiveInfoLocks || {}
       };
       
+      console.log('✅ Employee data fetched:', employeeData);
       setEmployee(employeeData);
-      
-      // Directly update form states
-      setPersonalForm({
-        firstName: employeeData.firstName,
-        lastName: employeeData.lastName,
-        phone: employeeData.phone,
-        dateOfBirth: '',
-        gender: '',
-        address: employeeData.address
-      });
-
-      setOfficialForm({
-        employeeId: employeeData.employeeId,
-        joiningDate: employeeData.joiningDate ? (typeof employeeData.joiningDate === 'string' ? employeeData.joiningDate.split('T')[0] : new Date(employeeData.joiningDate).toISOString().split('T')[0]) : '',
-        department: employeeData.department,
-        designation: employeeData.designation
-      });
     } catch (error) {
       console.error('❌ Error fetching employee data:', error);
     } finally {
@@ -498,36 +503,55 @@ export default function Profile() {
     try {
       console.log('📝 Updating personal information:', personalForm);
       
+      // Validate form data
+      if (!personalForm.firstName.trim() || !personalForm.lastName.trim()) {
+        toast.error('First name and last name are required');
+        return;
+      }
+
       const response = await apiPut('/profile', {
         profile: {
-          firstName: personalForm.firstName,
-          lastName: personalForm.lastName
+          firstName: personalForm.firstName.trim(),
+          lastName: personalForm.lastName.trim()
         },
         contact: {
-          phone: personalForm.phone,
+          phone: personalForm.phone.trim(),
           address: {
-            street: personalForm.address
+            street: personalForm.address.trim()
           }
         },
         employeeDetails: {
-          phone: personalForm.phone,
-          address: personalForm.address
+          phone: personalForm.phone.trim(),
+          address: personalForm.address.trim()
         }
       });
 
       console.log('✅ Profile update response:', response);
 
-      // Add a small delay to ensure database is updated
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (response && response.success) {
+        // Update local state immediately for instant UI feedback
+        setEmployee(prev => prev ? {
+          ...prev,
+          firstName: personalForm.firstName.trim(),
+          lastName: personalForm.lastName.trim(),
+          phone: personalForm.phone.trim(),
+          address: personalForm.address.trim()
+        } : null);
 
-      // Refresh employee data from backend to ensure consistency
-      await fetchEmployeeData();
-
-      setIsEditingPersonal(false);
-      toast.success('Personal information updated successfully');
+        setIsEditingPersonal(false);
+        toast.success('Personal information updated successfully');
+        
+        // Refresh data from backend after a short delay to ensure consistency
+        setTimeout(() => {
+          fetchEmployeeData().catch(err => console.error('Error refreshing employee data:', err));
+        }, 500);
+      } else {
+        toast.error(response?.message || 'Failed to update personal information');
+      }
     } catch (error) {
       console.error('❌ Error updating profile:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update personal information');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to update personal information';
+      toast.error(errorMessage);
     }
   };
 
@@ -543,6 +567,11 @@ export default function Profile() {
       setUploadingFile(true);
       console.log('📤 Starting document upload:', { fileName: file.name, fileSize: file.size, category: selectedCategory });
       
+      // Validate file size (max 50MB)
+      if (file.size > 50 * 1024 * 1024) {
+        throw new Error('File size exceeds 50MB limit');
+      }
+
       // Create FormData for file upload
       const formData = new FormData();
       formData.append('document', file);
@@ -551,8 +580,13 @@ export default function Profile() {
 
       console.log('📤 FormData prepared, sending to backend...');
 
-      // Upload to backend
-      const data = await apiUpload('/documents/upload', formData);
+      // Upload to backend with timeout
+      const uploadPromise = apiUpload('/documents/upload', formData);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Upload timeout - please try again')), 30000)
+      );
+
+      const data = await Promise.race([uploadPromise, timeoutPromise]) as any;
       console.log('✅ Upload response:', data);
       
       const uploadedDoc = data.data;

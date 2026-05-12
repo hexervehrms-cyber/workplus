@@ -12,7 +12,7 @@ import Employee from '../models/Employee.js';
 import User from '../models/User.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { paginationMiddleware, applyPagination } from '../middleware/pagination.js';
-import { authorize, requirePermission } from '../middleware/auth.js';
+import { authenticate, authorize, requirePermission } from '../middleware/auth.js';
 import bcrypt from 'bcrypt';
 import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
@@ -304,7 +304,7 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
  * Creates both User and Employee records with lifecycle management
  * RBAC: Only admin and hr can create employees
  */
-router.post('/', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+router.post('/', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   const {
     name,
     email,
@@ -626,7 +626,7 @@ router.post('/', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (re
  * P0 FIX: Uses version field to prevent race conditions
  * RBAC: Admin/HR can update all fields, Employees can only update limited fields
  */
-router.put('/:id', authorize('super_admin', 'admin', 'hr', 'employee'), asyncHandler(async (req, res) => {
+router.put('/:id', authenticate, authorize('super_admin', 'admin', 'hr', 'employee'), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const updateData = req.body;
   const userRole = req.user.role;
@@ -749,7 +749,7 @@ router.put('/:id', authorize('super_admin', 'admin', 'hr', 'employee'), asyncHan
  * Soft delete employee (set status to terminated)
  * RBAC: Only admin and hr can delete employees
  */
-router.delete('/:id', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+router.delete('/:id', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const userOrgId = req.user.orgId;
 
@@ -1047,7 +1047,7 @@ router.get('/:id/lifecycle', asyncHandler(async (req, res) => {
  * Reset employee password (Admin/HR only)
  * RBAC: Only admin and hr can reset passwords
  */
-router.post('/:id/reset-password', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+router.post('/:id/reset-password', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { newPassword } = req.body;
   const userOrgId = req.user.orgId;

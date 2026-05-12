@@ -258,21 +258,21 @@ export default function EmployeeDashboard() {
         }
 
         setTodayAttendance(prev => {
-          // SIMPLIFIED LOGIC: Always trust the API data for break status
-          // The API calculates break status from the database, which is the source of truth
-
-          // Only preserve state if action is currently in progress (not just recent)
-          if (actionInProgress) {
-            console.log('🔒 [DASHBOARD] Action in progress - preserving state');
+          // CRITICAL: If an action just completed, ALWAYS trust the optimistic state
+          // Don't overwrite it with API data for at least 5 seconds
+          const timeSinceLastAction = Date.now() - lastActionTime;
+          if (timeSinceLastAction < 5000) {
+            console.log('🔒 [DASHBOARD] Action just completed - preserving optimistic state for 5 seconds');
             return prev;
           }
 
-          // Don't overwrite if a socket event happened recently (within 15 seconds)
+          // Don't overwrite if a socket event happened recently (within 30 seconds)
           // This prevents the periodic refresh from overwriting socket event updates
-          // 15 seconds is enough to cover the socket event delivery + small buffer
           const timeSinceSocketEvent = Date.now() - lastSocketEventTime;
-          if (timeSinceSocketEvent < 15000) {
-            console.log('🔒 [DASHBOARD] Socket event too recent (within 15s) - preserving state');
+          if (timeSinceSocketEvent < 30000 && prev.isCheckedIn) {
+            // Only skip if we're still checked in
+            // If we're checked out, always allow refresh to confirm the state
+            console.log('🔒 [DASHBOARD] Socket event too recent (within 30s) - preserving state');
             return prev;
           }
 
@@ -487,12 +487,22 @@ export default function EmployeeDashboard() {
     const handleAttendanceUpdate = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] attendance:update event received:', data);
 
+      // CRITICAL: Don't refresh if an action just completed (within 5 seconds)
+      // This prevents the attendance:update from overwriting the optimistic state
+      const timeSinceLastAction = Date.now() - lastActionTime;
+      if (timeSinceLastAction < 5000) {
+        console.log('📡 [EMPLOYEE-DASHBOARD] Action just completed - skipping refresh to preserve optimistic state');
+        return;
+      }
+
       // CRITICAL: Don't refresh if a socket event happened recently (within 30 seconds)
       // This prevents the attendance:update event from overwriting socket event updates
       // The socket event (break:ended, meeting:ended, etc.) is more reliable than the attendance:update
       // 30 seconds gives the database time to write changes before we query it
       const timeSinceSocketEvent = Date.now() - lastSocketEventTime;
-      if (timeSinceSocketEvent < 30000) {
+      if (timeSinceSocketEvent < 30000 && todayAttendance.isCheckedIn) {
+        // Only skip if we're still checked in
+        // If we're checked out, always allow refresh to confirm the state
         console.log('📡 [EMPLOYEE-DASHBOARD] Socket event too recent (within 30s) - skipping refresh to preserve socket update');
         return;
       }
@@ -566,34 +576,36 @@ export default function EmployeeDashboard() {
   useEffect(() => {
     if (!isCheckedIn || disableRefresh || actionInProgress) return;
 
-    // Don't refresh if an action was performed recently (within 10 seconds instead of 5)
-    const timeSinceLastAction = Date.now() - lastActionTime;
-    if (timeSinceLastAction < 10000) {
-      console.log('⏰ Skipping refresh - action too recent');
-      return;
-    }
-
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       
+      // CRITICAL: Don't refresh if an action just completed (within 5 seconds)
+      // This prevents the periodic refresh from overwriting the optimistic state
+      const timeSinceLastAction = Date.now() - lastActionTime;
+      if (timeSinceLastAction < 5000) {
+        console.log('⏰ [DASHBOARD] Action just completed - skipping refresh');
+        return;
+      }
+
       // CRITICAL: Don't refresh if a socket event happened within the last 30 seconds
-      // This gives the database time to write the changes before we query it
-      // Socket events are more reliable than API queries during the write window
+      // BUT: Only apply this protection if we're still checked in
+      // If we're checked out, always allow refresh to confirm the state
       const timeSinceLastSocketEvent = Date.now() - lastSocketEventTime;
-      if (timeSinceLastSocketEvent < 30000) {
+      if (timeSinceLastSocketEvent < 30000 && todayAttendance.isCheckedIn) {
+        // Only skip if we're still checked in
         console.log('⏰ [DASHBOARD] Skipping refresh - socket event too recent (within 30s)');
         return;
       }
       
-      // Double check before refreshing - increase time to 10 seconds
-      if (!actionInProgress && (Date.now() - lastActionTime) >= 10000) {
+      // Double check before refreshing
+      if (!actionInProgress && (Date.now() - lastActionTime) >= 5000) {
         console.log('⏰ Periodic refresh triggered (checked in)');
         fetchDashboardData();
       }
     }, 30000); // Refresh every 30 seconds
 
     return () => clearInterval(interval);
-  }, [isCheckedIn, disableRefresh, fetchDashboardData, actionInProgress, lastActionTime, lastSocketEventTime]);
+  }, [isCheckedIn, disableRefresh, fetchDashboardData, actionInProgress, lastActionTime, lastSocketEventTime, todayAttendance.isCheckedIn]);
 
   // Handle check-in
   const handleCheckIn = async () => {

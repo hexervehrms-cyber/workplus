@@ -51,6 +51,7 @@ export default function Attendance() {
   const [filterLoading, setFilterLoading] = useState(false);
   const attendanceCacheKey = `employee_attendance_state_${user?.id || 'unknown'}`;
   const [lastSocketEventTime, setLastSocketEventTime] = useState(0); // Track last socket event to prevent refresh overwrite
+  const [lastActionTime, setLastActionTime] = useState(0); // Track last action time to prevent refresh overwrite
 
   // Load activity logs from localStorage on mount
   useEffect(() => {
@@ -297,6 +298,7 @@ export default function Attendance() {
   const handleCheckIn = async () => {
     try {
       setActionLoading(true);
+      setLastActionTime(Date.now()); // Track action time
       const token = localStorage.getItem('authToken');
       const payload: any = {
         location: 'Office',
@@ -367,6 +369,7 @@ export default function Attendance() {
   const handleCheckOut = async () => {
     try {
       setActionLoading(true);
+      setLastActionTime(Date.now()); // Track action time
       const token = localStorage.getItem('authToken');
       const payload: any = {
         location: 'Office',
@@ -442,6 +445,7 @@ export default function Attendance() {
   const handleBreakStart = async (breakType = 'regular') => {
     try {
       setActionLoading(true);
+      setLastActionTime(Date.now()); // Track action time
       const token = localStorage.getItem('authToken');
       const payload: any = {
         breakType,
@@ -496,6 +500,7 @@ export default function Attendance() {
   const handleBreakEnd = async () => {
     try {
       setActionLoading(true);
+      setLastActionTime(Date.now()); // Track action time
       const token = localStorage.getItem('authToken');
       const payload: any = {
         notes: 'Break ended'
@@ -547,6 +552,7 @@ export default function Attendance() {
   // Meeting Start
   const handleMeetingStart = async () => {
     console.log('Meeting start clicked - isOnBreak:', isOnBreak);
+    setLastActionTime(Date.now()); // Track action time
     
     if (!checkedIn) {
       console.error('Please check in first before starting a meeting');
@@ -664,6 +670,7 @@ export default function Attendance() {
   const handleMeetingEnd = async () => {
     try {
       setActionLoading(true);
+      setLastActionTime(Date.now()); // Track action time
       const token = localStorage.getItem('authToken');
       const payload: any = {
         notes: 'Meeting ended'
@@ -863,12 +870,22 @@ export default function Attendance() {
     const handleAttendanceUpdate = (data: any) => {
       console.log('📡 [ATTENDANCE] Attendance update event received:', data);
       
+      // CRITICAL: Don't refresh if an action just completed (within 5 seconds)
+      // This prevents the attendance:update from overwriting the optimistic state
+      const timeSinceLastAction = Date.now() - lastActionTime;
+      if (timeSinceLastAction < 5000) {
+        console.log('📡 [ATTENDANCE] Action just completed - skipping refresh to preserve optimistic state');
+        return;
+      }
+
       // CRITICAL: Don't refresh if a socket event happened recently (within 30 seconds)
       // This prevents the attendance:update event from overwriting socket event updates
       // The socket event (break:ended, meeting:ended, etc.) is more reliable than the attendance:update
       // 30 seconds gives the database time to write changes before we query it
       const timeSinceSocketEvent = Date.now() - lastSocketEventTime;
-      if (timeSinceSocketEvent < 30000) {
+      if (timeSinceSocketEvent < 30000 && checkedIn) {
+        // Only skip if we're still checked in
+        // If we're checked out, always allow refresh to confirm the state
         console.log('📡 [ATTENDANCE] Socket event too recent (within 30s) - skipping refresh to preserve socket update');
         return;
       }
@@ -899,11 +916,20 @@ export default function Attendance() {
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       
+      // CRITICAL: Don't refresh if an action just completed (within 5 seconds)
+      // This prevents the periodic refresh from overwriting the optimistic state
+      const timeSinceLastAction = Date.now() - lastActionTime;
+      if (timeSinceLastAction < 5000) {
+        console.log('⏰ [ATTENDANCE] Action just completed - skipping refresh');
+        return;
+      }
+
       // CRITICAL: Don't refresh if a socket event happened within the last 30 seconds
-      // This gives the database time to write the changes before we query it
-      // Socket events are more reliable than API queries during the write window
+      // BUT: Only apply this protection if we're still checked in
+      // If we're checked out, always allow refresh to confirm the state
       const timeSinceLastSocketEvent = Date.now() - lastSocketEventTime;
-      if (timeSinceLastSocketEvent < 30000) {
+      if (timeSinceLastSocketEvent < 30000 && checkedIn) {
+        // Only skip if we're still checked in
         console.log('⏰ [ATTENDANCE] Skipping refresh - socket event too recent (within 30s)');
         return;
       }
@@ -912,7 +938,7 @@ export default function Attendance() {
     }, 30000); // Refresh every 30 seconds
 
     return () => clearInterval(interval);
-  }, [checkedIn, employeeId, lastSocketEventTime]);
+  }, [checkedIn, employeeId, lastSocketEventTime, lastActionTime]);
 
   // Initial load only
   useEffect(() => {

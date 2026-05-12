@@ -8,7 +8,7 @@ import express from 'express';
 import Attendance from '../models/Attendance.js';
 import Employee from '../models/Employee.js';
 import ActivityLog from '../models/ActivityLog.js';
-import { authorize } from '../middleware/auth.js';
+import { authorize, authenticate } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import logger from '../utils/logger.js';
@@ -89,7 +89,7 @@ const queueHrAttendanceEmail = (type, payload) => {
  * Get today's attendance for the current user
  * Returns: { attendance, liveStatus }
  */
-router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), asyncHandler(async (req, res) => {
+router.get('/today', authenticate, authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), asyncHandler(async (req, res) => {
   const userRole = req.user.role;
   const currentUserId = req.user.userId;
   const userOrgId = req.user.orgId;
@@ -178,7 +178,7 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
  * GET /api/attendance/activity-logs
  * Get today's attendance activity logs for admin live view
  */
-router.get('/activity-logs', authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+router.get('/activity-logs', authenticate, authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   const orgId = req.user.orgId;
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
 
@@ -228,7 +228,7 @@ router.get('/activity-logs', authorize('super_admin', 'admin', 'hr', 'manager'),
  * POST /api/attendance/check-in
  * Check in for the day
  */
-router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/check-in', authenticate, authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { userId, employeeId, employeeName, orgId, location, notes } = req.body;
   const authUserId = req.user?.userId;
   const authOrgId = req.user?.orgId;
@@ -360,7 +360,7 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
  * POST /api/attendance/check-out
  * Check out for the day
  */
-router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/check-out', authenticate, authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { userId, employeeId, employeeName, orgId, location, notes } = req.body;
   const authUserId = req.user?.userId;
   const authOrgId = req.user?.orgId;
@@ -520,7 +520,7 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
  * GET /api/attendance
  * List all attendance records with pagination
  */
-router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), asyncHandler(async (req, res) => {
+router.get('/', authenticate, authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, orgId, userId, startDate, endDate } = req.query;
   const userOrgId = req.user.orgId;
   const currentUserId = req.user.userId;
@@ -603,7 +603,7 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
  * POST /api/attendance/break-start
  * Start a break
  */
-router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/break-start', authenticate, authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, breakType = 'regular', notes, orgId, employeeName } = req.body;
   const currentUserId = req.user.userId;
   const authOrgId = req.user.orgId;
@@ -738,7 +738,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
  * POST /api/attendance/break-end
  * End a break
  */
-router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/break-end', authenticate, authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, notes, orgId, employeeName } = req.body;
   const currentUserId = req.user.userId;
   const authOrgId = req.user.orgId;
@@ -864,7 +864,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
  * POST /api/attendance/meeting-start
  * Start a meeting
  */
-router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/meeting-start', authenticate, authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, meetingTitle = 'Meeting', meetingType = 'internal', notes, orgId } = req.body;
   const currentUserId = req.user.userId;
   const authOrgId = req.user.orgId;
@@ -1017,7 +1017,7 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
  * POST /api/attendance/meeting-end
  * End a meeting
  */
-router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/meeting-end', authenticate, authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, notes, orgId } = req.body;
   const currentUserId = req.user.userId;
   const authOrgId = req.user.orgId;
@@ -1126,7 +1126,7 @@ router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', '
  * GET /api/attendance/stats/summary
  * Get attendance statistics
  */
-router.get('/stats/summary', authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+router.get('/stats/summary', authenticate, authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   const { orgId, startDate, endDate } = req.query;
   const userOrgId = req.user.orgId;
 
@@ -1182,7 +1182,7 @@ router.get('/stats/summary', authorize('super_admin', 'admin', 'hr', 'manager'),
  * Get employees who were late today
  * Returns: Array of late employees with details
  */
-router.get('/late-today', authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+router.get('/late-today', authenticate, authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   const userOrgId = req.user.orgId;
   
   const today = new Date();
@@ -1261,7 +1261,7 @@ router.get('/late-today', authorize('super_admin', 'admin', 'hr', 'manager'), as
  * GET /api/attendance/on-break
  * Get employees currently on break
  */
-router.get('/on-break', authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+router.get('/on-break', authenticate, authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   // Disable caching for real-time data
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
@@ -1335,7 +1335,7 @@ router.get('/on-break', authorize('super_admin', 'admin', 'hr', 'manager'), asyn
  * Import attendance records in bulk from CSV
  * CSV format: employeeId/email, date (YYYY-MM-DD), checkIn (HH:MM), checkOut (HH:MM), status
  */
-router.post('/bulk-import', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+router.post('/bulk-import', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   try {
     const { records } = req.body;
     const userOrgId = req.user.orgId;
@@ -1513,7 +1513,7 @@ router.post('/bulk-import', authorize('super_admin', 'admin', 'hr'), asyncHandle
  * Export attendance records as CSV
  * Query params: startDate, endDate, employeeId, status
  */
-router.get('/bulk-export', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+router.get('/bulk-export', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   try {
     const { startDate, endDate, employeeId, status } = req.query;
     const userOrgId = req.user.orgId;

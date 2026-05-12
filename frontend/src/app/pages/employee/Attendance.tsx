@@ -869,32 +869,8 @@ export default function Attendance() {
     // Listen for all attendance updates (check-in, check-out, meeting, etc.)
     const handleAttendanceUpdate = (data: any) => {
       console.log('📡 [ATTENDANCE] Attendance update event received:', data);
-      
-      // CRITICAL: Don't refresh if an action just completed (within 5 seconds)
-      // This prevents the attendance:update from overwriting the optimistic state
-      const timeSinceLastAction = Date.now() - lastActionTime;
-      if (timeSinceLastAction < 5000) {
-        console.log('📡 [ATTENDANCE] Action just completed - skipping refresh to preserve optimistic state');
-        return;
-      }
-
-      // CRITICAL: Don't refresh if a socket event happened recently (within 30 seconds)
-      // This prevents the attendance:update event from overwriting socket event updates
-      // The socket event (break:ended, meeting:ended, etc.) is more reliable than the attendance:update
-      // 30 seconds gives the database time to write changes before we query it
-      const timeSinceSocketEvent = Date.now() - lastSocketEventTime;
-      if (timeSinceSocketEvent < 30000 && checkedIn) {
-        // Only skip if we're still checked in
-        // If we're checked out, always allow refresh to confirm the state
-        console.log('📡 [ATTENDANCE] Socket event too recent (within 30s) - skipping refresh to preserve socket update');
-        return;
-      }
-      
-      // Refresh attendance data to get latest state
-      console.log('📡 [ATTENDANCE] Refreshing attendance data after update');
-      if (employeeId) {
-        fetchTodayAttendance(employeeId);
-      }
+      // DO NOT REFRESH - Let socket events and periodic refresh handle updates
+      // This prevents race conditions where refresh overwrites socket updates
     };
 
     realTimeSocket.onBreakStarted(handleBreakStarted);
@@ -916,29 +892,15 @@ export default function Attendance() {
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       
-      // CRITICAL: Don't refresh if an action just completed (within 5 seconds)
-      // This prevents the periodic refresh from overwriting the optimistic state
-      const timeSinceLastAction = Date.now() - lastActionTime;
-      if (timeSinceLastAction < 5000) {
-        console.log('⏰ [ATTENDANCE] Action just completed - skipping refresh');
-        return;
+      // SIMPLE RULE: Only refresh if we're still checked in
+      if (checkedIn && employeeId) {
+        console.log('⏰ [ATTENDANCE] Periodic refresh triggered');
+        fetchTodayAttendance(employeeId);
       }
-
-      // CRITICAL: Don't refresh if a socket event happened within the last 30 seconds
-      // BUT: Only apply this protection if we're still checked in
-      // If we're checked out, always allow refresh to confirm the state
-      const timeSinceLastSocketEvent = Date.now() - lastSocketEventTime;
-      if (timeSinceLastSocketEvent < 30000 && checkedIn) {
-        // Only skip if we're still checked in
-        console.log('⏰ [ATTENDANCE] Skipping refresh - socket event too recent (within 30s)');
-        return;
-      }
-      
-      if (employeeId) fetchTodayAttendance(employeeId);
     }, 30000); // Refresh every 30 seconds
 
     return () => clearInterval(interval);
-  }, [checkedIn, employeeId, lastSocketEventTime, lastActionTime]);
+  }, [checkedIn, employeeId]);
 
   // Initial load only
   useEffect(() => {

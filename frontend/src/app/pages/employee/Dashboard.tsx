@@ -486,32 +486,8 @@ export default function EmployeeDashboard() {
     // Listen for attendance updates
     const handleAttendanceUpdate = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] attendance:update event received:', data);
-
-      // CRITICAL: Don't refresh if an action just completed (within 5 seconds)
-      // This prevents the attendance:update from overwriting the optimistic state
-      const timeSinceLastAction = Date.now() - lastActionTime;
-      if (timeSinceLastAction < 5000) {
-        console.log('📡 [EMPLOYEE-DASHBOARD] Action just completed - skipping refresh to preserve optimistic state');
-        return;
-      }
-
-      // CRITICAL: Don't refresh if a socket event happened recently (within 30 seconds)
-      // This prevents the attendance:update event from overwriting socket event updates
-      // The socket event (break:ended, meeting:ended, etc.) is more reliable than the attendance:update
-      // 30 seconds gives the database time to write changes before we query it
-      const timeSinceSocketEvent = Date.now() - lastSocketEventTime;
-      if (timeSinceSocketEvent < 30000 && todayAttendance.isCheckedIn) {
-        // Only skip if we're still checked in
-        // If we're checked out, always allow refresh to confirm the state
-        console.log('📡 [EMPLOYEE-DASHBOARD] Socket event too recent (within 30s) - skipping refresh to preserve socket update');
-        return;
-      }
-
-      // Refresh dashboard data to get latest state
-      if (!actionInProgress && !disableRefresh) {
-        console.log('📡 [EMPLOYEE-DASHBOARD] Refreshing dashboard data after attendance update');
-        fetchDashboardData();
-      }
+      // DO NOT REFRESH - Let socket events and periodic refresh handle updates
+      // This prevents race conditions where refresh overwrites socket updates
     };
 
     realTimeSocket.onBreakStarted(handleBreakStarted);
@@ -579,33 +555,17 @@ export default function EmployeeDashboard() {
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       
-      // CRITICAL: Don't refresh if an action just completed (within 5 seconds)
-      // This prevents the periodic refresh from overwriting the optimistic state
-      const timeSinceLastAction = Date.now() - lastActionTime;
-      if (timeSinceLastAction < 5000) {
-        console.log('⏰ [DASHBOARD] Action just completed - skipping refresh');
-        return;
-      }
-
-      // CRITICAL: Don't refresh if a socket event happened within the last 30 seconds
-      // BUT: Only apply this protection if we're still checked in
-      // If we're checked out, always allow refresh to confirm the state
-      const timeSinceLastSocketEvent = Date.now() - lastSocketEventTime;
-      if (timeSinceLastSocketEvent < 30000 && todayAttendance.isCheckedIn) {
-        // Only skip if we're still checked in
-        console.log('⏰ [DASHBOARD] Skipping refresh - socket event too recent (within 30s)');
+      // SIMPLE RULE: Never refresh if an action is in progress or refresh is disabled
+      if (actionInProgress || disableRefresh) {
         return;
       }
       
-      // Double check before refreshing
-      if (!actionInProgress && (Date.now() - lastActionTime) >= 5000) {
-        console.log('⏰ Periodic refresh triggered (checked in)');
-        fetchDashboardData();
-      }
+      console.log('⏰ Periodic refresh triggered (checked in)');
+      fetchDashboardData();
     }, 30000); // Refresh every 30 seconds
 
     return () => clearInterval(interval);
-  }, [isCheckedIn, disableRefresh, fetchDashboardData, actionInProgress, lastActionTime, lastSocketEventTime, todayAttendance.isCheckedIn]);
+  }, [isCheckedIn, disableRefresh, fetchDashboardData, actionInProgress]);
 
   // Handle check-in
   const handleCheckIn = async () => {
@@ -718,14 +678,12 @@ export default function EmployeeDashboard() {
     
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
-      // toast removed
       return;
     }
 
     try {
       setActionInProgress(true);
-      setLastActionTime(Date.now());
-      setDisableRefresh(true);
+      setDisableRefresh(true); // DISABLE ALL REFRESH IMMEDIATELY
 
       // Update UI immediately (optimistic update)
       const checkOutTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -744,12 +702,12 @@ export default function EmployeeDashboard() {
       setTodayAttendance(optimisticState);
       setIsCheckedIn(false);
       
-      // Save to BOTH localStorage keys (same as Attendance page)
+      // Save to BOTH localStorage keys
       const today = getTodayKey();
       localStorage.setItem(`checkedIn_${today}`, JSON.stringify(optimisticState));
       localStorage.setItem(attendanceCacheKey, JSON.stringify(optimisticState));
       
-      // toast removed
+      console.log('✅ State updated to checked out');
 
       // Then make the API call
       const result = await apiPost('/attendance/check-out', {
@@ -758,6 +716,7 @@ export default function EmployeeDashboard() {
       });
 
       if (result?.success && result?.data?.checkOut) {
+        console.log('✅ Check-out API successful');
         // Update with actual server data if different
         const actualCheckOutTime = new Date(result.data.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
         const hoursWorked = result.data?.hoursWorked || 0;
@@ -768,25 +727,17 @@ export default function EmployeeDashboard() {
         };
         setTodayAttendance(serverState);
         
-        // Save to BOTH localStorage keys (same as Attendance page)
+        // Save to BOTH localStorage keys
         const today = getTodayKey();
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(serverState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(serverState));
       }
 
-      setDisableRefresh(false);
+      // KEEP REFRESH DISABLED - don't re-enable it
+      // The user is checked out, so periodic refresh won't run anyway
     } catch (err) {
       console.error('Check-out error:', err);
-      // Revert on error
-      setTodayAttendance(prev => ({
-        ...prev,
-        isCheckedIn: true,
-        checkOutTime: null
-      }));
-      setIsCheckedIn(true);
       setError(err instanceof Error ? err.message : 'Check-out failed');
-      // toast removed
-      setDisableRefresh(false);
     } finally {
       // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
@@ -875,20 +826,17 @@ export default function EmployeeDashboard() {
   const handleBreakEnd = async () => {
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
-      // toast removed
       return;
     }
 
     try {
       setActionInProgress(true);
-      setLastActionTime(Date.now());
-      setDisableRefresh(true);
+      setDisableRefresh(true); // DISABLE ALL REFRESH IMMEDIATELY
 
       const currentEmployeeId = await ensureEmployeeId();
 
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to end break.');
-        // toast removed
         setActionInProgress(false);
         setDisableRefresh(false);
         return;
@@ -903,7 +851,6 @@ export default function EmployeeDashboard() {
 
       if (result.success) {
         console.log('✅ [DASHBOARD] Break end API succeeded');
-        console.log('📊 [DASHBOARD] Current todayAttendance before update:', todayAttendance);
         
         // Immediately update state - this will persist until manually changed
         setTodayAttendance(prev => {
@@ -917,7 +864,7 @@ export default function EmployeeDashboard() {
           return updated;
         });
         
-        // Save to BOTH localStorage keys (same as Attendance page)
+        // Save to BOTH localStorage keys
         const today = getTodayKey();
         const updatedState = {
           checkedIn: true,
@@ -930,20 +877,14 @@ export default function EmployeeDashboard() {
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
         console.log('💾 [DASHBOARD] Saved to localStorage:', updatedState);
 
-        // Backend already emits socket event, no need to emit from client
-        console.log('📡 [DASHBOARD] Break ended successfully, backend will broadcast socket event');
-
-        // toast removed
-        setDisableRefresh(false);
+        // KEEP REFRESH DISABLED - don't re-enable it
+        // Socket event will update state, periodic refresh will respect the window
       } else {
         console.error('❌ [DASHBOARD] Break end API failed:', result);
-        // Re-enable refresh if failed
         setDisableRefresh(false);
       }
     } catch (err) {
       console.error('Break end error:', err);
-      // toast removed
-      // Re-enable refresh if error
       setDisableRefresh(false);
     } finally {
       // Clear action lock quickly to allow responsive UI
@@ -1029,25 +970,20 @@ export default function EmployeeDashboard() {
   const handleMeetingEnd = async () => {
     // Prevent multiple simultaneous actions
     if (actionInProgress) {
-      // toast removed
       return;
     }
 
     try {
       setActionInProgress(true);
-      setLastActionTime(Date.now());
+      setDisableRefresh(true); // DISABLE ALL REFRESH IMMEDIATELY
 
       const currentEmployeeId = await ensureEmployeeId();
 
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to end meeting.');
-        // toast removed
-        setActionInProgress(false);  // Clear flag before returning
+        setActionInProgress(false);
         return;
       }
-
-      // Disable refresh completely during action
-      setDisableRefresh(true);
 
       const result = await apiPost('/attendance/meeting-end', {
         employeeId: currentEmployeeId,
@@ -1062,7 +998,7 @@ export default function EmployeeDashboard() {
           isInMeeting: false
         }));
         
-        // Save to BOTH localStorage keys (same as Attendance page)
+        // Save to BOTH localStorage keys
         const today = getTodayKey();
         const updatedState = {
           checkedIn: true,
@@ -1074,16 +1010,13 @@ export default function EmployeeDashboard() {
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
-        // toast removed
-        setDisableRefresh(false);
+        // KEEP REFRESH DISABLED - don't re-enable it
+        // Socket event will update state, periodic refresh will respect the window
       } else {
-        // Re-enable refresh if failed
         setDisableRefresh(false);
       }
     } catch (err) {
       console.error('Meeting end error:', err);
-      // toast removed
-      // Re-enable refresh if error
       setDisableRefresh(false);
     } finally {
       // Clear action lock quickly to allow responsive UI

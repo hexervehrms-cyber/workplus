@@ -525,7 +525,15 @@ export default function TeamsMessenger() {
                       >
                         <p className="text-sm">{message.content}</p>
                         <div className="flex items-center gap-1 mt-1 text-xs opacity-90">
-                          <span>{new Date(message.timestamp).toLocaleTimeString()}</span>
+                          <span>
+                            {new Date(message.timestamp).toLocaleDateString('en-US', { 
+                              month: 'short', 
+                              day: 'numeric' 
+                            })} {new Date(message.timestamp).toLocaleTimeString('en-US', { 
+                              hour: '2-digit', 
+                              minute: '2-digit' 
+                            })}
+                          </span>
                           {message.isOwn && (
                             message.status === 'read' ? (
                               <CheckCheck className="w-3 h-3" />

@@ -109,14 +109,14 @@ router.get('/overview',
     
     try {
       // Get employee profile
-      const employee = await Employee.findOne({ userId, orgId })
+      const employee = await Employee.findOne({ userId, orgId, status: 'active' })
         .populate('userId', 'name email avatar role')
         .lean();
       
       if (!employee) {
         return res.status(404).json({
           success: false,
-          message: 'Employee profile not found'
+          message: 'Employee profile not found or inactive'
         });
       }
 
@@ -298,12 +298,12 @@ router.get('/profile',
 
     try {
       const user = await User.findById(userId).select('-password').lean();
-      const employee = await Employee.findOne({ userId, orgId }).lean();
+      const employee = await Employee.findOne({ userId, orgId, status: 'active' }).lean();
 
       if (!user || !employee) {
         return res.status(404).json({
           success: false,
-          message: 'Profile not found'
+          message: 'Profile not found or inactive'
         });
       }
 
@@ -606,8 +606,15 @@ router.post('/attendance/checkin',
       }
 
       const checkInTime = new Date();
-      const employee = await Employee.findOne({ userId, orgId })
+      const employee = await Employee.findOne({ userId, orgId, status: 'active' })
         .populate('userId', 'name');
+
+      if (!employee) {
+        return res.status(403).json({
+          success: false,
+          message: 'Employee profile not found or inactive'
+        });
+      }
 
       // Determine status based on check-in time (9 AM standard)
       const standardTime = new Date(today);
@@ -953,8 +960,15 @@ router.post('/leaves',
         });
       }
 
-      const employee = await Employee.findOne({ userId, orgId })
+      const employee = await Employee.findOne({ userId, orgId, status: 'active' })
         .populate('userId', 'name');
+
+      if (!employee) {
+        return res.status(403).json({
+          success: false,
+          message: 'Employee profile not found or inactive'
+        });
+      }
 
       const leaveRequest = await LeaveRequest.create({
         userId,
@@ -1225,8 +1239,15 @@ router.post('/expenses',
         });
       }
 
-      const employee = await Employee.findOne({ userId, orgId })
+      const employee = await Employee.findOne({ userId, orgId, status: 'active' })
         .populate('userId', 'name');
+
+      if (!employee) {
+        return res.status(403).json({
+          success: false,
+          message: 'Employee profile not found or inactive'
+        });
+      }
 
       const expenseData = {
         userId,
@@ -1447,12 +1468,12 @@ router.get('/payroll',
     const { year, month, page = 1, limit = 12 } = req.query;
 
     try {
-      const employee = await Employee.findOne({ userId, orgId }).lean();
+      const employee = await Employee.findOne({ userId, orgId, status: 'active' }).lean();
       
       if (!employee) {
         return res.status(404).json({
           success: false,
-          message: 'Employee record not found'
+          message: 'Employee record not found or inactive'
         });
       }
 
@@ -1585,12 +1606,12 @@ router.get('/payroll/payslip/:id',
     const { id } = req.params;
 
     try {
-      const employee = await Employee.findOne({ userId, orgId }).lean();
+      const employee = await Employee.findOne({ userId, orgId, status: 'active' }).lean();
       
       if (!employee) {
         return res.status(404).json({
           success: false,
-          message: 'Employee record not found'
+          message: 'Employee record not found or inactive'
         });
       }
 

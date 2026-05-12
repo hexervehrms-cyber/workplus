@@ -542,7 +542,7 @@ export default function EmployeeDashboard() {
       // Force a small delay to ensure state is updated
       await new Promise(resolve => setTimeout(resolve, 100));
       
-      toast.success('Checked in! Check Out button should now be visible.');
+      toast.success('Checked in! Log Out button should now be visible.');
 
       console.log('📡 Making API call to /attendance/check-in');
       const result = await apiPost('/attendance/check-in', {
@@ -982,7 +982,7 @@ export default function EmployeeDashboard() {
               className="gap-2 bg-green-600 hover:bg-green-700"
             >
               <Clock className="w-4 h-4" />
-              Check In
+              Log In
             </Button>
           ) : (
             <>
@@ -1036,7 +1036,7 @@ export default function EmployeeDashboard() {
                 </Button>
               )}
 
-              {/* Check Out Button */}
+              {/* Log Out Button */}
               <Button
                 onClick={handleCheckOut}
                 disabled={actionInProgress}
@@ -1045,7 +1045,7 @@ export default function EmployeeDashboard() {
                 className="gap-2"
               >
                 <LogOut className="w-4 h-4" />
-                Check Out
+                Log Out
               </Button>
             </>
           )}

@@ -239,11 +239,11 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId }).select('_id firstName lastName userId').lean();
+    const employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId, status: 'active' }).select('_id firstName lastName userId').lean();
     if (!employee) {
       return res.status(403).json({
         success: false,
-        message: 'Employee profile not found for authenticated user'
+        message: 'Employee profile not found or inactive for authenticated user'
       });
     }
     effectiveUserId = authUserId;
@@ -357,11 +357,11 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId }).select('_id firstName lastName').lean();
+    const employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId, status: 'active' }).select('_id firstName lastName').lean();
     if (!employee) {
       return res.status(403).json({
         success: false,
-        message: 'Employee profile not found for authenticated user'
+        message: 'Employee profile not found or inactive for authenticated user'
       });
     }
     effectiveUserId = authUserId;
@@ -586,11 +586,11 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId })
+    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId, status: 'active' })
       .select('_id firstName lastName')
       .lean();
     if (!employee) {
-      return res.status(403).json({ success: false, message: 'Employee profile not found for authenticated user' });
+      return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
     }
     effectiveEmployeeId = employee._id;
     effectiveOrgId = authOrgId;
@@ -712,11 +712,11 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId })
+    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId, status: 'active' })
       .select('_id firstName lastName')
       .lean();
     if (!employee) {
-      return res.status(403).json({ success: false, message: 'Employee profile not found for authenticated user' });
+      return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
     }
     effectiveEmployeeId = employee._id;
     effectiveOrgId = authOrgId;
@@ -782,12 +782,12 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
    .populate('employeeId', 'employeeCode department');
 
   // Emit real-time event to notify admin dashboard
-  req.emitAttendanceUpdate(updatedAttendance, orgId);
+  req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
 
   // Log activity
   await ActivityLog.logActivity({
     userId: currentUserId,
-    orgId,
+    orgId: effectiveOrgId,
     action: 'attendance_break_end',
     entity: {
       entityType: 'attendance',
@@ -805,7 +805,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   });
 
   // Emit real-time event to notify admin dashboard (this also emits KPI update internally)
-  req.emitAttendanceUpdate(updatedAttendance, orgId);
+  req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
 
   res.json({
     success: true,
@@ -828,11 +828,11 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
   let effectiveOrgId = orgId;
 
   if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId })
+    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId, status: 'active' })
       .select('_id')
       .lean();
     if (!employee) {
-      return res.status(403).json({ success: false, message: 'Employee profile not found for authenticated user' });
+      return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
     }
     effectiveEmployeeId = employee._id;
     effectiveOrgId = authOrgId;
@@ -981,11 +981,11 @@ router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', '
   let effectiveOrgId = orgId;
 
   if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId })
+    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId, status: 'active' })
       .select('_id')
       .lean();
     if (!employee) {
-      return res.status(403).json({ success: false, message: 'Employee profile not found for authenticated user' });
+      return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
     }
     effectiveEmployeeId = employee._id;
     effectiveOrgId = authOrgId;

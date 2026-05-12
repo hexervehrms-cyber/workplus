@@ -347,28 +347,11 @@ export default function EmployeeDashboard() {
 
   // Fetch data on mount with force refresh
   useEffect(() => {
-    // Load from BOTH localStorage keys (same as Attendance page)
-    const today = getTodayKey();
-    const storedCheckedIn = localStorage.getItem(`checkedIn_${today}`);
-    const cachedAttendance = localStorage.getItem(attendanceCacheKey);
-    
-    // Prefer the checkedIn_${today} key (same as Attendance page)
-    if (storedCheckedIn) {
-      try {
-        const parsed = JSON.parse(storedCheckedIn);
-        console.log('Loaded checked-in state from localStorage:', parsed);
-        setIsCheckedIn(!!parsed.checkedIn);
-        setTodayAttendance(prev => ({ ...prev, ...parsed }));
-      } catch (_) { }
-    } else if (cachedAttendance) {
-      try {
-        const parsed = JSON.parse(cachedAttendance);
-        setIsCheckedIn(!!parsed.isCheckedIn);
-        setTodayAttendance(prev => ({ ...prev, ...parsed }));
-      } catch (_) { }
-    }
+    // DON'T load from localStorage on initial mount
+    // Always fetch fresh data from API to ensure accuracy
+    // localStorage is only used for optimistic updates during actions
     fetchDashboardData(true);  // Force refresh on page load
-  }, [fetchDashboardData, attendanceCacheKey]);
+  }, [fetchDashboardData]);
 
   // Fetch employee ID on mount
   useEffect(() => {

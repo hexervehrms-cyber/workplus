@@ -213,6 +213,23 @@ class RealTimeSocket {
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'break_ended', data });
     });
 
+    // Meeting updates
+    this.socket.on('meeting:started', (data) => {
+      console.log('📞 [SOCKET] Meeting started:', data);
+      this.notifyMeetingStarted(data);
+      this.notifyAttendanceUpdate({ type: 'meeting_started', ...data });
+      // Trigger dashboard refresh
+      this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'meeting_started', data });
+    });
+
+    this.socket.on('meeting:ended', (data) => {
+      console.log('📞 [SOCKET] Meeting ended:', data);
+      this.notifyMeetingEnded(data);
+      this.notifyAttendanceUpdate({ type: 'meeting_ended', ...data });
+      // Trigger dashboard refresh
+      this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'meeting_ended', data });
+    });
+
     // KPI updates
     this.socket.on('kpi:update', (data) => {
       console.log('📊 [SOCKET] KPI update event received from server:', data);
@@ -237,6 +254,8 @@ class RealTimeSocket {
   private notificationCallbacks: ((notification: any) => void)[] = [];
   private breakStartedCallbacks: ((data: any) => void)[] = [];
   private breakEndedCallbacks: ((data: any) => void)[] = [];
+  private meetingStartedCallbacks: ((data: any) => void)[] = [];
+  private meetingEndedCallbacks: ((data: any) => void)[] = [];
 
   // Public methods to subscribe to updates
   onDashboardUpdate(callback: (data: any) => void) {
@@ -329,6 +348,26 @@ class RealTimeSocket {
     };
   }
 
+  onMeetingStarted(callback: (data: any) => void) {
+    this.meetingStartedCallbacks.push(callback);
+    return () => {
+      const index = this.meetingStartedCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.meetingStartedCallbacks.splice(index, 1);
+      }
+    };
+  }
+
+  onMeetingEnded(callback: (data: any) => void) {
+    this.meetingEndedCallbacks.push(callback);
+    return () => {
+      const index = this.meetingEndedCallbacks.indexOf(callback);
+      if (index > -1) {
+        this.meetingEndedCallbacks.splice(index, 1);
+      }
+    };
+  }
+
   // Notification methods
   private notifyDashboardUpdate(data: any) {
     this.dashboardUpdateCallbacks.forEach(callback => callback(data));
@@ -364,6 +403,14 @@ class RealTimeSocket {
 
   private notifyBreakEnded(data: any) {
     this.breakEndedCallbacks.forEach(callback => callback(data));
+  }
+
+  private notifyMeetingStarted(data: any) {
+    this.meetingStartedCallbacks.forEach(callback => callback(data));
+  }
+
+  private notifyMeetingEnded(data: any) {
+    this.meetingEndedCallbacks.forEach(callback => callback(data));
   }
 
   // Emit events to server

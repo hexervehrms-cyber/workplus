@@ -1069,6 +1069,18 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
   if (req.emitAttendanceUpdate) {
     req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
   }
+
+  // Emit specific meeting:started event for page synchronization
+  if (global.io) {
+    global.io.to(`tenant_${effectiveOrgId}`).emit('meeting:started', {
+      employeeId: effectiveEmployeeId,
+      meetingTitle: meetingMode.meetingTitle,
+      meetingType: meetingMode.meetingType,
+      timestamp: new Date().toISOString(),
+      attendance: updatedAttendance
+    });
+    logger.info('Meeting started event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
+  }
 }));
 
 /**
@@ -1177,6 +1189,18 @@ router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', '
   // Emit real-time event to notify admin dashboard
   if (req.emitAttendanceUpdate) {
     req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
+  }
+
+  // Emit specific meeting:ended event for page synchronization
+  if (global.io) {
+    global.io.to(`tenant_${effectiveOrgId}`).emit('meeting:ended', {
+      employeeId: effectiveEmployeeId,
+      meetingTitle: attendance.meetingMode.meetingTitle,
+      duration: Math.round(meetingDuration),
+      timestamp: new Date().toISOString(),
+      attendance: updatedAttendance
+    });
+    logger.info('Meeting ended event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
   }
 }));
 

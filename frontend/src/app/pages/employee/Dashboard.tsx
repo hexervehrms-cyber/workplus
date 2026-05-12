@@ -448,6 +448,40 @@ export default function EmployeeDashboard() {
       }
     };
 
+    // Listen for meeting started events
+    const handleMeetingStarted = (data: any) => {
+      console.log('📡 [EMPLOYEE-DASHBOARD] meeting:started event received:', data);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
+
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+        console.log('📡 [EMPLOYEE-DASHBOARD] Meeting started for current employee, updating state');
+        setTodayAttendance(prev => ({
+          ...prev,
+          isInMeeting: true
+        }));
+        setLastSocketEventTime(Date.now()); // Mark socket event time
+      }
+    };
+
+    // Listen for meeting ended events
+    const handleMeetingEnded = (data: any) => {
+      console.log('📡 [EMPLOYEE-DASHBOARD] meeting:ended event received:', data);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
+
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+        console.log('📡 [EMPLOYEE-DASHBOARD] Meeting ended for current employee, updating state');
+        setTodayAttendance(prev => ({
+          ...prev,
+          isInMeeting: false
+        }));
+        setLastSocketEventTime(Date.now()); // Mark socket event time
+      }
+    };
+
     // Listen for attendance updates
     const handleAttendanceUpdate = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] attendance:update event received:', data);
@@ -461,6 +495,8 @@ export default function EmployeeDashboard() {
 
     realTimeSocket.onBreakStarted(handleBreakStarted);
     realTimeSocket.onBreakEnded(handleBreakEnded);
+    realTimeSocket.onMeetingStarted(handleMeetingStarted);
+    realTimeSocket.onMeetingEnded(handleMeetingEnded);
     realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
 
     return () => {

@@ -797,6 +797,68 @@ export default function Attendance() {
       }
     };
 
+    // Listen for meeting started events
+    const handleMeetingStarted = (data: any) => {
+      console.log('📡 [ATTENDANCE] Meeting started event received:', data);
+      console.log('📡 [ATTENDANCE] Current employeeId:', employeeId);
+      console.log('📡 [ATTENDANCE] Event employeeId:', data.employeeId);
+
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+        console.log('📡 [ATTENDANCE] Meeting started for current employee, updating state');
+        setIsInMeeting(true);
+        setLastSocketEventTime(Date.now()); // Mark socket event time
+
+        // Update localStorage
+        const today = new Date().toDateString();
+        const currentState = localStorage.getItem(`checkedIn_${today}`);
+        if (currentState) {
+          try {
+            const parsed = JSON.parse(currentState);
+            const updated = {
+              ...parsed,
+              isInMeeting: true
+            };
+            localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updated));
+            localStorage.setItem(attendanceCacheKey, JSON.stringify(updated));
+          } catch (e) {
+            console.warn('Failed to update localStorage');
+          }
+        }
+      }
+    };
+
+    // Listen for meeting ended events
+    const handleMeetingEnded = (data: any) => {
+      console.log('📡 [ATTENDANCE] Meeting ended event received:', data);
+      console.log('📡 [ATTENDANCE] Current employeeId:', employeeId);
+      console.log('📡 [ATTENDANCE] Event employeeId:', data.employeeId);
+
+      // Only update if it's for this employee
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+        console.log('📡 [ATTENDANCE] Meeting ended for current employee, updating state');
+        setIsInMeeting(false);
+        setLastSocketEventTime(Date.now()); // Mark socket event time
+
+        // Update localStorage
+        const today = new Date().toDateString();
+        const currentState = localStorage.getItem(`checkedIn_${today}`);
+        if (currentState) {
+          try {
+            const parsed = JSON.parse(currentState);
+            const updated = {
+              ...parsed,
+              isInMeeting: false
+            };
+            localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updated));
+            localStorage.setItem(attendanceCacheKey, JSON.stringify(updated));
+          } catch (e) {
+            console.warn('Failed to update localStorage');
+          }
+        }
+      }
+    };
+
     // Listen for all attendance updates (check-in, check-out, meeting, etc.)
     const handleAttendanceUpdate = (data: any) => {
       console.log('📡 [ATTENDANCE] Attendance update event received:', data);
@@ -810,6 +872,8 @@ export default function Attendance() {
 
     realTimeSocket.onBreakStarted(handleBreakStarted);
     realTimeSocket.onBreakEnded(handleBreakEnded);
+    realTimeSocket.onMeetingStarted(handleMeetingStarted);
+    realTimeSocket.onMeetingEnded(handleMeetingEnded);
     realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
 
     return () => {

@@ -429,7 +429,7 @@ export default function Attendance() {
       }
       
       // Wait 1 second for database to update, then fetch fresh data
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       if (employeeId) {
         await fetchTodayAttendance(employeeId);
       }
@@ -550,7 +550,7 @@ export default function Attendance() {
       }));
       
       // Wait 1 second for database to update, then fetch fresh data
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       if (employeeId) {
         await fetchTodayAttendance(employeeId);
       }
@@ -725,7 +725,7 @@ export default function Attendance() {
       }));
       
       // Wait 1 second for database to update, then fetch fresh data
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       if (employeeId) {
         await fetchTodayAttendance(employeeId);
       }
@@ -1274,4 +1274,5 @@ export default function Attendance() {
     </div>
   );
 }
+
 

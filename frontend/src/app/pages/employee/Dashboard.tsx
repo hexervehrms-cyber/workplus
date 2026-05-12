@@ -690,8 +690,8 @@ export default function EmployeeDashboard() {
 
       if (result?.success) {
         console.log('✅ Check-out successful');
-        // Wait 1 second for database to update, then fetch fresh data
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Wait 2 seconds for database to update AND socket event to propagate
+        await new Promise(resolve => setTimeout(resolve, 2000));
         // Fetch fresh data from API
         await fetchDashboardData(true);
       } else {
@@ -809,8 +809,8 @@ export default function EmployeeDashboard() {
 
       if (result.success) {
         console.log('✅ Break end successful');
-        // Wait 1 second for database to update, then fetch fresh data
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Wait 2 seconds for database to update AND socket event to propagate
+        await new Promise(resolve => setTimeout(resolve, 2000));
         // Fetch fresh data from API
         await fetchDashboardData(true);
       } else {
@@ -922,8 +922,8 @@ export default function EmployeeDashboard() {
 
       if (result.success) {
         console.log('✅ Meeting end successful');
-        // Wait 1 second for database to update, then fetch fresh data
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Wait 2 seconds for database to update AND socket event to propagate
+        await new Promise(resolve => setTimeout(resolve, 2000));
         // Fetch fresh data from API
         await fetchDashboardData(true);
       } else {

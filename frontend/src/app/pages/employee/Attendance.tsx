@@ -748,9 +748,12 @@ export default function Attendance() {
   useEffect(() => {
     const handleBreakStarted = (data: any) => {
       console.log('📡 [ATTENDANCE] Break started event received:', data);
+      console.log('📡 [ATTENDANCE] Current employeeId:', employeeId);
+      console.log('📡 [ATTENDANCE] Event employeeId:', data.employeeId);
+      console.log('📡 [ATTENDANCE] Match:', data.employeeId === employeeId);
       
       // Only update if it's for this employee
-      if (data.employeeId === employeeId) {
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
         console.log('📡 [ATTENDANCE] Break started for current employee, updating state');
         setIsOnBreak(true);
         setBreakType(data.breakType || 'regular');
@@ -773,14 +776,19 @@ export default function Attendance() {
             console.warn('Failed to update localStorage');
           }
         }
+      } else {
+        console.log('📡 [ATTENDANCE] Break started for different employee, ignoring');
       }
     };
 
     const handleBreakEnded = (data: any) => {
       console.log('📡 [ATTENDANCE] Break ended event received:', data);
+      console.log('📡 [ATTENDANCE] Current employeeId:', employeeId);
+      console.log('📡 [ATTENDANCE] Event employeeId:', data.employeeId);
+      console.log('📡 [ATTENDANCE] Match:', data.employeeId === employeeId);
       
       // Only update if it's for this employee
-      if (data.employeeId === employeeId) {
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
         console.log('📡 [ATTENDANCE] Break ended for current employee, updating state');
         setIsOnBreak(false);
         setBreakType(null);
@@ -803,6 +811,8 @@ export default function Attendance() {
             console.warn('Failed to update localStorage');
           }
         }
+      } else {
+        console.log('📡 [ATTENDANCE] Break ended for different employee, ignoring');
       }
     };
 

@@ -388,9 +388,12 @@ export default function EmployeeDashboard() {
     // Listen for break started events
     const handleBreakStarted = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] break:started event received:', data);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Match:', data.employeeId === employeeId);
 
       // Only update if it's for this employee
-      if (data.employeeId === employeeId) {
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Break started for current employee, updating state');
         setTodayAttendance(prev => ({
           ...prev,
@@ -399,15 +402,20 @@ export default function EmployeeDashboard() {
           currentBreakDuration: 0
         }));
         setLastSocketEventTime(Date.now()); // Mark socket event time
+      } else {
+        console.log('📡 [EMPLOYEE-DASHBOARD] Break started for different employee, ignoring');
       }
     };
 
     // Listen for break ended events
     const handleBreakEnded = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] break:ended event received:', data);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
+      console.log('📡 [EMPLOYEE-DASHBOARD] Match:', data.employeeId === employeeId);
 
       // Only update if it's for this employee
-      if (data.employeeId === employeeId) {
+      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Break ended for current employee, updating state');
         setTodayAttendance(prev => ({
           ...prev,
@@ -416,6 +424,8 @@ export default function EmployeeDashboard() {
           breakType: 'regular'
         }));
         setLastSocketEventTime(Date.now()); // Mark socket event time
+      } else {
+        console.log('📡 [EMPLOYEE-DASHBOARD] Break ended for different employee, ignoring');
       }
     };
 
@@ -759,16 +769,8 @@ export default function EmployeeDashboard() {
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
-        // Emit socket event to notify Attendance page
-        console.log('📡 [DASHBOARD] Emitting break:started event');
-        const socket = realTimeSocket.getSocket();
-        if (socket) {
-          socket.emit('break:started', {
-            employeeId: currentEmployeeId,
-            breakType: breakType,
-            timestamp: new Date().toISOString()
-          });
-        }
+        // Backend already emits socket event, no need to emit from client
+        console.log('📡 [DASHBOARD] Break started successfully, backend will broadcast socket event');
 
         const breakLabel = breakType === 'lunch' ? 'Lunch Break' : 'Break';
         // toast removed
@@ -841,16 +843,8 @@ export default function EmployeeDashboard() {
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
 
-        // Emit socket event to notify Attendance page
-        console.log('📡 [DASHBOARD] Emitting break:ended event');
-        const currentEmployeeId = await ensureEmployeeId();
-        const socket = realTimeSocket.getSocket();
-        if (socket && currentEmployeeId) {
-          socket.emit('break:ended', {
-            employeeId: currentEmployeeId,
-            timestamp: new Date().toISOString()
-          });
-        }
+        // Backend already emits socket event, no need to emit from client
+        console.log('📡 [DASHBOARD] Break ended successfully, backend will broadcast socket event');
 
         // toast removed
         setDisableRefresh(false);

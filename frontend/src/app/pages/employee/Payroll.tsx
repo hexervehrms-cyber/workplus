@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { toast } from 'sonner';
 import { apiGet, buildFileUrl } from '../../utils/apiHelper';
+import { useAuth } from '../../context/AuthContext';
 
 interface SalarySlip {
   _id: string;
@@ -44,6 +45,7 @@ interface SalarySlip {
 }
 
 export default function Payroll() {
+  const { user } = useAuth();
   const [salarySlips, setSalarySlips] = useState<SalarySlip[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
@@ -53,15 +55,19 @@ export default function Payroll() {
 
   useEffect(() => {
     fetchEmployeeAndSlips();
-  }, []);
+  }, [user?.id]);
 
   const fetchEmployeeAndSlips = async () => {
     try {
       setLoading(true);
-      const userId = localStorage.getItem('userId');
+      
+      if (!user?.id) {
+        toast.error('User not authenticated');
+        return;
+      }
 
       // First, get the employee record to get employeeId
-      const employeeData = await apiGet(`/employees/user/${userId}`);
+      const employeeData = await apiGet(`/employees/user/${user.id}`);
       const empId = employeeData.data._id;
       setEmployeeId(empId);
 
@@ -69,6 +75,7 @@ export default function Payroll() {
       await fetchSalarySlips(empId);
     } catch (error) {
       console.error('Error fetching employee and slips:', error);
+      toast.error('Failed to load payroll data');
     } finally {
       setLoading(false);
     }

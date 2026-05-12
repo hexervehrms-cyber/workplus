@@ -276,7 +276,12 @@ router.get('/:id', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'
  * Get employee by user ID
  */
 router.get('/user/:userId', asyncHandler(async (req, res) => {
-  const employee = await Employee.findOne({ userId: req.params.userId })
+  const orgId = req.user.orgId || 'system';
+  
+  const employee = await Employee.findOne({ 
+    userId: req.params.userId,
+    orgId: orgId
+  })
     .populate('userId', 'name email avatar role isActive organization')
     .lean(); // P0 FIX: Use .lean() for read-only queries
 

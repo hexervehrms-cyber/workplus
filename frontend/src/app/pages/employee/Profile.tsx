@@ -496,7 +496,9 @@ export default function Profile() {
   // Handle personal information update
   const handleUpdatePersonal = async () => {
     try {
-      await apiPut('/profile', {
+      console.log('📝 Updating personal information:', personalForm);
+      
+      const response = await apiPut('/profile', {
         profile: {
           firstName: personalForm.firstName,
           lastName: personalForm.lastName
@@ -512,6 +514,8 @@ export default function Profile() {
           address: personalForm.address
         }
       });
+
+      console.log('✅ Profile update response:', response);
 
       // Add a small delay to ensure database is updated
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -530,11 +534,14 @@ export default function Profile() {
   // Handle document upload
   const handleDocumentUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file) {
+      console.warn('⚠️ No file selected');
+      return;
+    }
 
     try {
       setUploadingFile(true);
-      const token = localStorage.getItem('authToken');
+      console.log('📤 Starting document upload:', { fileName: file.name, fileSize: file.size, category: selectedCategory });
       
       // Create FormData for file upload
       const formData = new FormData();
@@ -542,9 +549,17 @@ export default function Profile() {
       formData.append('name', selectedCategory);
       formData.append('type', documentType);
 
+      console.log('📤 FormData prepared, sending to backend...');
+
       // Upload to backend
       const data = await apiUpload('/documents/upload', formData);
+      console.log('✅ Upload response:', data);
+      
       const uploadedDoc = data.data;
+
+      if (!uploadedDoc || !uploadedDoc._id) {
+        throw new Error('Invalid response from server - missing document ID');
+      }
 
       // Create document object with backend data
       const newDoc: Document = {
@@ -557,6 +572,8 @@ export default function Profile() {
         category: uploadedDoc.type
       };
 
+      console.log('✅ Document object created:', newDoc);
+
       // Update state
       setDocuments([newDoc, ...documents]);
 
@@ -567,8 +584,10 @@ export default function Profile() {
         e.target.value = '';
       }
     } catch (error) {
-      console.error('Error uploading document:', error);
-      toast.error(error instanceof Error ? error.message : 'An unexpected error occurred. Please try again later.');
+      console.error('❌ Error uploading document:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred. Please try again later.';
+      console.error('❌ Error details:', { errorMessage, error });
+      toast.error(errorMessage);
       
       // Reset file input on error
       if (e.target) {

@@ -263,7 +263,17 @@ export default function Leave() {
 
   // Submit or update leave request
   const handleSubmitLeave = async () => {
+    console.log('🔵 handleSubmitLeave called');
+    console.log('📊 Form data:', formData);
+    console.log('👤 User:', user);
+    
     if (!user?.id || !formData.type || !formData.startDate || !formData.reason) {
+      console.error('❌ Validation failed:', {
+        userId: !!user?.id,
+        type: !!formData.type,
+        startDate: !!formData.startDate,
+        reason: !!formData.reason
+      });
       toast.error('Please fill in all required fields');
       return;
     }
@@ -476,7 +486,12 @@ export default function Leave() {
           <p className="text-muted-foreground">View and manage your leave requests</p>
         </div>
         <Button 
-          onClick={() => setShowLeaveForm(true)}
+          onClick={() => {
+            console.log('🔵 Request Leave button clicked');
+            console.log('📊 Current showLeaveForm state:', showLeaveForm);
+            setShowLeaveForm(true);
+            console.log('✅ showLeaveForm set to true');
+          }}
           className="rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl"
         >
           <Plus className="w-4 h-4 mr-2" />

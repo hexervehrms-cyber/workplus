@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Download, Loader, FileText, Calendar } from 'lucide-react';
+import { Download, Loader, FileText, Calendar, RefreshCw } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -62,19 +62,31 @@ export default function Payroll() {
       setLoading(true);
       
       if (!user?.id) {
+        console.error('❌ User not authenticated');
         toast.error('User not authenticated');
         return;
       }
 
+      console.log('👤 Fetching employee for user:', user.id);
+
       // First, get the employee record to get employeeId
       const employeeData = await apiGet(`/employees/user/${user.id}`);
+      console.log('✅ Employee data fetched:', employeeData);
+      
+      if (!employeeData.data || !employeeData.data._id) {
+        console.error('❌ No employee ID found in response');
+        toast.error('Employee record not found');
+        return;
+      }
+
       const empId = employeeData.data._id;
+      console.log('📝 Employee ID:', empId);
       setEmployeeId(empId);
 
       // Now fetch salary slips using employeeId
       await fetchSalarySlips(empId);
     } catch (error) {
-      console.error('Error fetching employee and slips:', error);
+      console.error('❌ Error fetching employee and slips:', error);
       toast.error('Failed to load payroll data');
     } finally {
       setLoading(false);
@@ -83,11 +95,21 @@ export default function Payroll() {
 
   const fetchSalarySlips = async (empId: string) => {
     try {
+      console.log('📊 Fetching salary slips for employee:', empId);
       const data = await apiGet(`/salary/slips/${empId}`);
-      console.log('📊 [PAYROLL] Salary slips fetched:', data);
-      setSalarySlips(data.data || []);
+      console.log('✅ Salary slips response:', data);
+      
+      if (data.data && Array.isArray(data.data)) {
+        console.log(`📊 Found ${data.data.length} salary slips`);
+        setSalarySlips(data.data);
+      } else {
+        console.warn('⚠️ No salary slips data in response');
+        setSalarySlips([]);
+      }
     } catch (error) {
-      console.error('Error fetching salary slips:', error);
+      console.error('❌ Error fetching salary slips:', error);
+      toast.error('Failed to load salary slips');
+      setSalarySlips([]);
     }
   };
 
@@ -130,9 +152,19 @@ export default function Payroll() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold">My Salary Slips</h1>
-        <p className="text-muted-foreground">View and download your salary slips</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">My Salary Slips</h1>
+          <p className="text-muted-foreground">View and download your salary slips</p>
+        </div>
+        <Button
+          onClick={() => fetchEmployeeAndSlips()}
+          variant="outline"
+          className="rounded-lg"
+        >
+          <RefreshCw className="w-4 h-4 mr-2" />
+          Refresh
+        </Button>
       </div>
 
       {/* Month/Year Selector */}

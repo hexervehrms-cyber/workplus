@@ -179,11 +179,8 @@ export default function SuperAdminDashboard() {
   };
 
   if (loading) {
-    return (
-      <div className="p-8 flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    );
+    // Don't show loading spinner - let content load in background
+    return null;
   }
 
   return (

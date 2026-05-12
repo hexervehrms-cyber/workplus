@@ -91,17 +91,22 @@ export default function AdminDashboard() {
       params.append('endDate', customEndDate);
     }
 
-    const [statsResponse, quickStatsResponse, expenseTrendsResponse, productivityResponse, leaveResponse, attendanceResponse, onBreakResponse] =
+    console.log('⚡ [ADMIN-DASHBOARD] Fetching all data in parallel...');
+    
+    // Fetch all data in parallel using Promise.allSettled for resilience
+    const [statsResponse, quickStatsResponse, expenseTrendsResponse, leaveResponse, attendanceResponse, onBreakResponse] =
       await Promise.allSettled([
         apiClient.get(`/dashboard/stats?${params.toString()}`),
         apiClient.get(`/dashboard/quick-stats?${params.toString()}&_t=${Date.now()}`),
         apiClient.get('/dashboard/expense-trends'),
-        apiClient.get('/dashboard/weekly-productivity'),
         apiClient.get('/dashboard/recent-leave-requests'),
         apiClient.get('/dashboard/todays-attendance'),
         apiClient.get('/attendance/on-break')
       ]);
 
+    console.log('✅ [ADMIN-DASHBOARD] All requests completed');
+
+    // Process results with fallbacks
     if (statsResponse.status === 'fulfilled' && statsResponse.value.data?.success) {
       setDashboardStats(statsResponse.value.data.data || {});
     }
@@ -111,9 +116,6 @@ export default function AdminDashboard() {
     }
     if (expenseTrendsResponse.status === 'fulfilled' && expenseTrendsResponse.value.data?.success) {
       setExpenseData(expenseTrendsResponse.value.data.data || []);
-    }
-    if (productivityResponse.status === 'fulfilled' && productivityResponse.value.data?.success) {
-      setProductivityData(productivityResponse.value.data.data || []);
     }
     if (leaveResponse.status === 'fulfilled' && leaveResponse.value.success && leaveResponse.value.data) {
       setLeaveRequests(leaveResponse.value.data || []);
@@ -506,14 +508,8 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
   };
 
   if (loading) {
-    return (
-      <div className="p-8 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground"></p>
-        </div>
-      </div>
-    );
+    // Don't show loading spinner - let content load in background
+    return null;
   }
 
   return (

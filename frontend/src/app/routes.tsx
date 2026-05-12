@@ -5,12 +5,8 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import Login from './pages/Login';
 
-// Loading component for lazy routes
-const LazyLoader = () => (
-  <div className="flex items-center justify-center min-h-screen">
-    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-  </div>
-);
+// Minimal loading fallback - no visible spinner for faster perceived performance
+const LazyLoader = () => null;
 
 // Lazy load pages for better performance
 const SuperAdminDashboard = lazy(() => import('./pages/super-admin/Dashboard'));

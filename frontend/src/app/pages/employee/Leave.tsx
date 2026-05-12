@@ -53,12 +53,13 @@ export default function Leave() {
     isShortLeave: false
   });
 
-  // Clear any stale state on mount
+  // Clear any stale state on mount and ensure loading skeleton is shown
   useEffect(() => {
-    console.log('🔄 [LEAVE] Component mounted, clearing stale state');
-    setLeaveBalance(null);
-    setLeaveHistory([]);
-    setEnabledLeaveTypes(null);
+    console.log('🔄 [LEAVE] Component mounted, clearing stale state and showing loading skeleton');
+    setLoading(true); // Ensure loading is true
+    setLeaveBalance(null); // Clear stale balance data
+    setLeaveHistory([]); // Clear stale history
+    setEnabledLeaveTypes(null); // Clear stale leave types
   }, []);
 
   // Fetch leave requests and balance

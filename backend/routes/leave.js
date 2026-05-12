@@ -16,6 +16,7 @@ import { paginationMiddleware } from '../middleware/pagination.js';
 import idempotencyMiddleware from '../middleware/idempotency.js';
 import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
+import { emitLeaveKPIUpdate } from '../utils/kpiUpdater.js';
 
 const router = express.Router();
 
@@ -393,6 +394,16 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
     message: 'Leave request approved successfully',
     data: updated
   });
+
+  // Emit KPI update to admin dashboard
+  if (global.io) {
+    emitLeaveKPIUpdate(global.io, updated.orgId, {
+      action: 'approve',
+      _id: updated._id,
+      status: 'approved',
+      employeeId: updated.employeeId
+    }).catch(err => logger.error('Failed to emit KPI update on leave approval', { error: err.message }));
+  }
 }));
 
 /**
@@ -562,6 +573,16 @@ router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res)
     message: 'Leave request rejected successfully',
     data: updated
   });
+
+  // Emit KPI update to admin dashboard
+  if (global.io) {
+    emitLeaveKPIUpdate(global.io, updated.orgId, {
+      action: 'reject',
+      _id: updated._id,
+      status: 'rejected',
+      employeeId: updated.employeeId
+    }).catch(err => logger.error('Failed to emit KPI update on leave rejection', { error: err.message }));
+  }
 }));
 
 /**

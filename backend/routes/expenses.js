@@ -17,6 +17,7 @@ import { sendSuccess, sendError, sendPaginated } from "../utils/apiResponse.js";
 import logger from "../utils/logger.js";
 import EmailNotificationService from "../utils/emailNotificationService.js";
 import User from "../models/User.js";
+import { emitExpenseKPIUpdate } from "../utils/kpiUpdater.js";
 
 // Setup __dirname for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -527,6 +528,16 @@ router.put(
       // Send response immediately
       sendSuccess(res, expense, "Expense approved successfully");
 
+      // Emit KPI update to admin dashboard
+      if (global.io) {
+        emitExpenseKPIUpdate(global.io, expense.orgId, {
+          action: 'approve',
+          _id: expense._id,
+          amount: expense.amount,
+          status: 'approved'
+        }).catch(err => logger.error('Failed to emit KPI update on expense approval', { error: err.message }));
+      }
+
       // Send email notification in background (don't wait for it)
       setImmediate(async () => {
         try {
@@ -628,6 +639,16 @@ router.put(
         expenseId,
         rejectedBy: req.user.userId
       });
+
+      // Emit KPI update to admin dashboard
+      if (global.io) {
+        emitExpenseKPIUpdate(global.io, expense.orgId, {
+          action: 'reject',
+          _id: expense._id,
+          amount: expense.amount,
+          status: 'rejected'
+        }).catch(err => logger.error('Failed to emit KPI update on expense rejection', { error: err.message }));
+      }
 
       // Send email notification in background (don't wait for it)
       setImmediate(async () => {

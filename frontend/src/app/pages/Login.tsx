@@ -66,8 +66,10 @@ export default function Login() {
 
       if (result.success) {
         // Navigation will be handled by useEffect when user state updates
+        // Keep loading state true to prevent button interaction during redirect
       } else {
         setError(result.error || 'Invalid email or password');
+        setLoading(false);
       }
     } catch (err: any) {
       console.error('Login submission error:', err);
@@ -77,7 +79,6 @@ export default function Login() {
       } else {
         setError('An unexpected error occurred. Please try again.');
       }
-    } finally {
       setLoading(false);
     }
   };

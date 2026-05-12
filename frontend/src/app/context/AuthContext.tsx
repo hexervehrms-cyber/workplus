@@ -191,17 +191,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(result.user);
         toast.success(`Welcome back, ${result.user.name}!`);
         
-        // Redirect based on role
+        // Redirect based on role - use setTimeout to ensure state updates are processed
         const redirectPath = result.user.role === 'super_admin' 
           ? '/super-admin' 
           : result.user.role === 'admin'
           ? '/admin'
           : '/employee';
         
-        window.location.href = redirectPath;
+        // Use a small delay to ensure the UI updates before redirect
+        setTimeout(() => {
+          window.location.href = redirectPath;
+        }, 100);
+        
         return { success: true };
       }
 
+      setLoading(false);
       return { success: false, error: 'Login failed' };
     } catch (error: any) {
       console.error('Login error:', error);
@@ -215,9 +220,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       toast.error(errorMessage);
-      return { success: false, error: errorMessage };
-    } finally {
       setLoading(false);
+      return { success: false, error: errorMessage };
     }
   }, []);
 

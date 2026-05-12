@@ -13,6 +13,7 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
+import { emitAttendanceKPIUpdate } from '../utils/kpiUpdater.js';
 
 const router = express.Router();
 
@@ -333,6 +334,15 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     data: attendance
   });
 
+  // Emit KPI update to admin dashboard
+  if (global.io) {
+    emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
+      action: 'check_in',
+      employeeId: effectiveEmployeeId,
+      status: 'checked_in'
+    }).catch(err => logger.error('Failed to emit KPI update on check-in', { error: err.message }));
+  }
+
   queueHrAttendanceEmail('check-in', {
     effectiveEmployeeId,
     effectiveOrgId,
@@ -478,6 +488,15 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     message: 'Checked out successfully',
     data: updatedAttendance
   });
+
+  // Emit KPI update to admin dashboard
+  if (global.io) {
+    emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
+      action: 'check_out',
+      employeeId: effectiveEmployeeId,
+      status: 'checked_out'
+    }).catch(err => logger.error('Failed to emit KPI update on check-out', { error: err.message }));
+  }
 
   queueHrAttendanceEmail('check-out', {
     effectiveEmployeeId,
@@ -695,6 +714,15 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
     message: 'Break started successfully',
     data: updatedAttendance
   });
+
+  // Emit KPI update to admin dashboard
+  if (global.io) {
+    emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
+      action: 'break_start',
+      employeeId: effectiveEmployeeId,
+      status: 'on_break'
+    }).catch(err => logger.error('Failed to emit KPI update on break start', { error: err.message }));
+  }
 }));
 
 /**
@@ -812,6 +840,15 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     message: 'Break ended successfully',
     data: updatedAttendance
   });
+
+  // Emit KPI update to admin dashboard
+  if (global.io) {
+    emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
+      action: 'break_end',
+      employeeId: effectiveEmployeeId,
+      status: 'checked_in'
+    }).catch(err => logger.error('Failed to emit KPI update on break end', { error: err.message }));
+  }
 }));
 
 /**

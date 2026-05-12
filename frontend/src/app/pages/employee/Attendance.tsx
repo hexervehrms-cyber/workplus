@@ -70,8 +70,9 @@ export default function Attendance() {
         console.log('Loaded checked-in state from localStorage:', state);
         setCheckedIn(state.checkedIn);
         setCurrentHours(state.currentHours || 0);
-        setIsOnBreak(state.isOnBreak || false);
-        setBreakType(state.breakType || null);
+        // Don't load from localStorage - fetch from API instead
+        // setIsOnBreak(state.isOnBreak || false);
+        // setBreakType(state.breakType || null);
         setIsInMeeting(state.isInMeeting || false);
       } catch (e) {
         console.warn('Failed to parse stored checked-in state');
@@ -140,17 +141,19 @@ export default function Attendance() {
           const state = JSON.parse(storedState);
           setCheckedIn(state.checkedIn);
           setCurrentHours(state.currentHours || 0);
-          setIsOnBreak(state.isOnBreak || false);
-          setBreakType(state.breakType || null);
+          // Don't load from localStorage - fetch from API instead
+        // setIsOnBreak(state.isOnBreak || false);
+          // setBreakType(state.breakType || null);
           setIsInMeeting(state.isInMeeting || false);
           localStorage.setItem(attendanceCacheKey, JSON.stringify(state));
         } catch (e) {
           console.warn('Failed to parse stored state, using server state');
-          // Fallback to server state
+          // Fallback to server state - ALWAYS get break status from API
           const liveStatus = data.data?.liveStatus?.status;
           const isCheckedInNow = liveStatus === 'checked_in' || liveStatus === 'on_break' || liveStatus === 'in_meeting';
           setCheckedIn(isCheckedInNow);
           setCurrentHours(data.data?.liveStatus?.currentHours || 0);
+          // ALWAYS get break status from API, never from localStorage
           setIsOnBreak(data.data?.liveStatus?.isOnBreak || false);
           setBreakType(null);
           setIsInMeeting(data.data?.liveStatus?.isInMeeting || false);
@@ -169,6 +172,7 @@ export default function Attendance() {
         const isCheckedInNow = liveStatus === 'checked_in' || liveStatus === 'on_break' || liveStatus === 'in_meeting';
         setCheckedIn(isCheckedInNow);
         setCurrentHours(data.data?.liveStatus?.currentHours || 0);
+        // ALWAYS get break status from API, never from localStorage
         setIsOnBreak(data.data?.liveStatus?.isOnBreak || false);
         setBreakType(null);
         setIsInMeeting(data.data?.liveStatus?.isInMeeting || false);
@@ -1101,3 +1105,4 @@ export default function Attendance() {
     </div>
   );
 }
+

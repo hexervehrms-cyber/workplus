@@ -288,6 +288,43 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     });
   }
 
+  // IMPORTANT: Close any open breaks from previous days to prevent stale break status
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayEnd = new Date(today);
+  
+  const previousAttendance = await Attendance.findOne({
+    userId: effectiveUserId,
+    orgId: effectiveOrgId,
+    date: { $gte: yesterday, $lt: today }
+  });
+
+  if (previousAttendance && previousAttendance.breaks && previousAttendance.breaks.length > 0) {
+    const lastBreak = previousAttendance.breaks[previousAttendance.breaks.length - 1];
+    if (lastBreak.startTime && !lastBreak.endTime) {
+      // Close the open break from yesterday
+      const breakEndTime = new Date(today);
+      breakEndTime.setHours(0, 0, 0, 0); // Set to midnight (end of previous day)
+      const breakDuration = (breakEndTime - lastBreak.startTime) / (1000 * 60);
+      
+      await Attendance.updateOne(
+        { _id: previousAttendance._id },
+        {
+          $set: {
+            [`breaks.${previousAttendance.breaks.length - 1}.endTime`]: breakEndTime,
+            [`breaks.${previousAttendance.breaks.length - 1}.duration`]: Math.round(breakDuration),
+            [`breaks.${previousAttendance.breaks.length - 1}.endNotes`]: 'Auto-closed at end of day'
+          }
+        }
+      );
+      logger.info('Auto-closed open break from previous day', {
+        employeeId: effectiveEmployeeId,
+        orgId: effectiveOrgId,
+        breakDuration: Math.round(breakDuration)
+      });
+    }
+  }
+
   // Create new attendance record
   const attendance = await Attendance.create({
     userId: effectiveUserId,

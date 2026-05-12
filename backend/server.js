@@ -997,6 +997,41 @@ io.on('connection', (socket) => {
       }
     });
 
+    // Break events - broadcast to tenant so all pages stay in sync
+    socket.on('break:started', (data) => {
+      try {
+        const tenantId = socket.tenantId || data?.tenantId;
+        const employeeId = data?.employeeId;
+        
+        if (tenantId && employeeId) {
+          // Broadcast to all users in the tenant
+          io.to(`tenant_${tenantId}`).emit('break:started', data);
+          // Also broadcast to the specific employee
+          io.to(`employee_${employeeId}`).emit('break:started', data);
+          logger.info('Break started event broadcast', { tenantId, employeeId });
+        }
+      } catch (error) {
+        logger.error(`Socket break:started error: ${error.message}`);
+      }
+    });
+
+    socket.on('break:ended', (data) => {
+      try {
+        const tenantId = socket.tenantId || data?.tenantId;
+        const employeeId = data?.employeeId;
+        
+        if (tenantId && employeeId) {
+          // Broadcast to all users in the tenant
+          io.to(`tenant_${tenantId}`).emit('break:ended', data);
+          // Also broadcast to the specific employee
+          io.to(`employee_${employeeId}`).emit('break:ended', data);
+          logger.info('Break ended event broadcast', { tenantId, employeeId });
+        }
+      } catch (error) {
+        logger.error(`Socket break:ended error: ${error.message}`);
+      }
+    });
+
     // Notification events
     socket.on('notification:send', (data) => {
       try {

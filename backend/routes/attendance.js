@@ -755,6 +755,17 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
   // Emit real-time event to notify admin dashboard (this also emits KPI update internally)
   req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
 
+  // Emit specific break:started event for page synchronization
+  if (global.io) {
+    global.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
+      employeeId: effectiveEmployeeId,
+      breakType: breakType,
+      timestamp: new Date().toISOString(),
+      attendance: updatedAttendance
+    });
+    logger.info('Break started event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
+  }
+
   res.status(201).json({
     success: true,
     message: 'Break started successfully',
@@ -880,6 +891,16 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
   // Emit real-time event to notify admin dashboard (this also emits KPI update internally)
   req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
+
+  // Emit specific break:ended event for page synchronization
+  if (global.io) {
+    global.io.to(`tenant_${effectiveOrgId}`).emit('break:ended', {
+      employeeId: effectiveEmployeeId,
+      timestamp: new Date().toISOString(),
+      attendance: updatedAttendance
+    });
+    logger.info('Break ended event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
+  }
 
   res.json({
     success: true,

@@ -486,8 +486,10 @@ export default function EmployeeDashboard() {
     // Listen for attendance updates
     const handleAttendanceUpdate = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] attendance:update event received:', data);
-      // DO NOT REFRESH - Let socket events and periodic refresh handle updates
-      // This prevents race conditions where refresh overwrites socket updates
+      // Refresh data when attendance updates
+      if (!actionInProgress) {
+        fetchDashboardData();
+      }
     };
 
     realTimeSocket.onBreakStarted(handleBreakStarted);
@@ -550,22 +552,19 @@ export default function EmployeeDashboard() {
 
   // Periodic refresh of attendance data every 30 seconds when checked in
   useEffect(() => {
-    if (!isCheckedIn || disableRefresh || actionInProgress) return;
+    if (!isCheckedIn || actionInProgress) return;
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       
-      // SIMPLE RULE: Never refresh if an action is in progress or refresh is disabled
-      if (actionInProgress || disableRefresh) {
-        return;
+      if (!actionInProgress) {
+        console.log('⏰ Periodic refresh triggered');
+        fetchDashboardData();
       }
-      
-      console.log('⏰ Periodic refresh triggered (checked in)');
-      fetchDashboardData();
     }, 30000); // Refresh every 30 seconds
 
     return () => clearInterval(interval);
-  }, [isCheckedIn, disableRefresh, fetchDashboardData, actionInProgress]);
+  }, [isCheckedIn, fetchDashboardData, actionInProgress]);
 
   // Handle check-in
   const handleCheckIn = async () => {
@@ -676,70 +675,32 @@ export default function EmployeeDashboard() {
   const handleCheckOut = async () => {
     console.log('🔴 Checking out');
     
-    // Prevent multiple simultaneous actions
     if (actionInProgress) {
       return;
     }
 
     try {
       setActionInProgress(true);
-      setDisableRefresh(true); // DISABLE ALL REFRESH IMMEDIATELY
 
-      // Update UI immediately (optimistic update)
-      const checkOutTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      const optimisticState = {
-        isCheckedIn: false,
-        checkInTime: todayAttendance.checkInTime,
-        checkOutTime: checkOutTime,
-        hoursWorked: 0,
-        status: 'checked_out',
-        isOnBreak: false,
-        isInMeeting: false,
-        currentBreakDuration: 0,
-        breakType: 'regular'
-      };
-
-      setTodayAttendance(optimisticState);
-      setIsCheckedIn(false);
-      
-      // Save to BOTH localStorage keys
-      const today = getTodayKey();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify(optimisticState));
-      localStorage.setItem(attendanceCacheKey, JSON.stringify(optimisticState));
-      
-      console.log('✅ State updated to checked out');
-
-      // Then make the API call
+      // Make the API call
       const result = await apiPost('/attendance/check-out', {
         location: 'Office',
         notes: 'Check-out from dashboard'
       });
 
-      if (result?.success && result?.data?.checkOut) {
-        console.log('✅ Check-out API successful');
-        // Update with actual server data if different
-        const actualCheckOutTime = new Date(result.data.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-        const hoursWorked = result.data?.hoursWorked || 0;
-        const serverState = {
-          ...optimisticState,
-          checkOutTime: actualCheckOutTime,
-          hoursWorked: hoursWorked
-        };
-        setTodayAttendance(serverState);
-        
-        // Save to BOTH localStorage keys
-        const today = getTodayKey();
-        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(serverState));
-        localStorage.setItem(attendanceCacheKey, JSON.stringify(serverState));
+      if (result?.success) {
+        console.log('✅ Check-out successful');
+        // Wait 1 second for database to update, then fetch fresh data
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Fetch fresh data from API
+        await fetchDashboardData(true);
+      } else {
+        console.error('❌ Check-out failed:', result?.message);
       }
-
-      // KEEP REFRESH DISABLED - don't re-enable it
-      // The user is checked out, so periodic refresh won't run anyway
     } catch (err) {
       console.error('Check-out error:', err);
       setError(err instanceof Error ? err.message : 'Check-out failed');
     } finally {
-      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
       }, 300);
@@ -824,21 +785,18 @@ export default function EmployeeDashboard() {
 
   // Handle break end
   const handleBreakEnd = async () => {
-    // Prevent multiple simultaneous actions
     if (actionInProgress) {
       return;
     }
 
     try {
       setActionInProgress(true);
-      setDisableRefresh(true); // DISABLE ALL REFRESH IMMEDIATELY
 
       const currentEmployeeId = await ensureEmployeeId();
 
       if (!currentEmployeeId) {
         setError('Employee ID not found. Unable to end break.');
         setActionInProgress(false);
-        setDisableRefresh(false);
         return;
       }
 
@@ -850,44 +808,17 @@ export default function EmployeeDashboard() {
       });
 
       if (result.success) {
-        console.log('✅ [DASHBOARD] Break end API succeeded');
-        
-        // Immediately update state - this will persist until manually changed
-        setTodayAttendance(prev => {
-          const updated = {
-            ...prev,
-            isOnBreak: false,
-            currentBreakDuration: 0,
-            breakType: 'regular' // Reset break type
-          };
-          console.log('📊 [DASHBOARD] Updated todayAttendance:', updated);
-          return updated;
-        });
-        
-        // Save to BOTH localStorage keys
-        const today = getTodayKey();
-        const updatedState = {
-          checkedIn: true,
-          currentHours: todayAttendance.hoursWorked,
-          isOnBreak: false,
-          breakType: null,
-          isInMeeting: false
-        };
-        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
-        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
-        console.log('💾 [DASHBOARD] Saved to localStorage:', updatedState);
-
-        // KEEP REFRESH DISABLED - don't re-enable it
-        // Socket event will update state, periodic refresh will respect the window
+        console.log('✅ Break end successful');
+        // Wait 1 second for database to update, then fetch fresh data
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Fetch fresh data from API
+        await fetchDashboardData(true);
       } else {
-        console.error('❌ [DASHBOARD] Break end API failed:', result);
-        // Don't re-enable refresh - keep state as is
+        console.error('❌ Break end failed:', result);
       }
     } catch (err) {
       console.error('Break end error:', err);
-      // Don't re-enable refresh - keep state as is
     } finally {
-      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
       }, 300);
@@ -968,14 +899,12 @@ export default function EmployeeDashboard() {
 
   // Handle meeting end
   const handleMeetingEnd = async () => {
-    // Prevent multiple simultaneous actions
     if (actionInProgress) {
       return;
     }
 
     try {
       setActionInProgress(true);
-      setDisableRefresh(true); // DISABLE ALL REFRESH IMMEDIATELY
 
       const currentEmployeeId = await ensureEmployeeId();
 
@@ -992,34 +921,17 @@ export default function EmployeeDashboard() {
       });
 
       if (result.success) {
-        // Immediately update state - this will persist until manually changed
-        setTodayAttendance(prev => ({
-          ...prev,
-          isInMeeting: false
-        }));
-        
-        // Save to BOTH localStorage keys
-        const today = getTodayKey();
-        const updatedState = {
-          checkedIn: true,
-          currentHours: todayAttendance.hoursWorked,
-          isOnBreak: false,
-          breakType: null,
-          isInMeeting: false
-        };
-        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
-        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
-
-        // KEEP REFRESH DISABLED - don't re-enable it
-        // Socket event will update state, periodic refresh will respect the window
+        console.log('✅ Meeting end successful');
+        // Wait 1 second for database to update, then fetch fresh data
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Fetch fresh data from API
+        await fetchDashboardData(true);
       } else {
-        // Don't re-enable refresh - keep state as is
+        console.error('❌ Meeting end failed:', result);
       }
     } catch (err) {
       console.error('Meeting end error:', err);
-      // Don't re-enable refresh - keep state as is
     } finally {
-      // Clear action lock quickly to allow responsive UI
       setTimeout(() => {
         setActionInProgress(false);
       }, 300);

@@ -427,6 +427,12 @@ export default function Attendance() {
       if (result.data?.hoursWorked) {
         setCurrentHours(result.data.hoursWorked);
       }
+      
+      // Wait 1 second for database to update, then fetch fresh data
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (employeeId) {
+        await fetchTodayAttendance(employeeId);
+      }
 
       // Refresh from server in background (source of truth)
       if (employeeId) {
@@ -542,6 +548,12 @@ export default function Attendance() {
         breakType: null,
         isInMeeting: false
       }));
+      
+      // Wait 1 second for database to update, then fetch fresh data
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (employeeId) {
+        await fetchTodayAttendance(employeeId);
+      }
     } catch (error) {
       console.error('Break end error:', error);
     } finally {
@@ -696,6 +708,27 @@ export default function Attendance() {
       addActivityLog('Ended Meeting', 'working');
       
       // Save state to localStorage
+      const today = new Date().toDateString();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        currentHours,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: false
+      }));
+      localStorage.setItem(attendanceCacheKey, JSON.stringify({
+        checkedIn: true,
+        currentHours,
+        isOnBreak: false,
+        breakType: null,
+        isInMeeting: false
+      }));
+      
+      // Wait 1 second for database to update, then fetch fresh data
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (employeeId) {
+        await fetchTodayAttendance(employeeId);
+      }
       const today = new Date().toDateString();
       localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
         checkedIn: true,
@@ -869,8 +902,10 @@ export default function Attendance() {
     // Listen for all attendance updates (check-in, check-out, meeting, etc.)
     const handleAttendanceUpdate = (data: any) => {
       console.log('📡 [ATTENDANCE] Attendance update event received:', data);
-      // DO NOT REFRESH - Let socket events and periodic refresh handle updates
-      // This prevents race conditions where refresh overwrites socket updates
+      // Refresh data when attendance updates
+      if (employeeId) {
+        fetchTodayAttendance(employeeId);
+      }
     };
 
     realTimeSocket.onBreakStarted(handleBreakStarted);

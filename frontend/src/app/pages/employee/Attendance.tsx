@@ -729,21 +729,6 @@ export default function Attendance() {
       if (employeeId) {
         await fetchTodayAttendance(employeeId);
       }
-      const today = new Date().toDateString();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-        checkedIn: true,
-        currentHours,
-        isOnBreak: false,
-        breakType: null,
-        isInMeeting: false
-      }));
-      localStorage.setItem(attendanceCacheKey, JSON.stringify({
-        checkedIn: true,
-        currentHours,
-        isOnBreak: false,
-        breakType: null,
-        isInMeeting: false
-      }));
     } catch (error) {
       console.error('Meeting end error:', error);
     } finally {

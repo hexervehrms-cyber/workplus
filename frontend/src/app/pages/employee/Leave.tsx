@@ -719,8 +719,6 @@ Reason: ${leave.reason}
           )}
         </div>
       </Card>
-        </>
-      )}
 
       {/* Leave Form Dialog - Mobile optimized */}
       <Dialog open={showLeaveForm} onOpenChange={setShowLeaveForm}>

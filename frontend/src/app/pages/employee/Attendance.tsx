@@ -832,11 +832,12 @@ export default function Attendance() {
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       
-      // Don't refresh if a socket event happened within the last 15 seconds
+      // Don't refresh if a socket event happened within the last 40 seconds
       // This prevents the periodic refresh from overwriting socket event updates
+      // 40 seconds covers the 30s periodic refresh cycle plus buffer for DB write
       const timeSinceLastSocketEvent = Date.now() - lastSocketEventTime;
-      if (timeSinceLastSocketEvent < 15000) {
-        console.log('⏰ [ATTENDANCE] Skipping refresh - socket event too recent');
+      if (timeSinceLastSocketEvent < 40000) {
+        console.log('⏰ [ATTENDANCE] Skipping refresh - socket event too recent (within 40s)');
         return;
       }
       

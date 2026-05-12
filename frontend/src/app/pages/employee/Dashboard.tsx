@@ -103,6 +103,16 @@ export default function EmployeeDashboard() {
   // Get today's date string for localStorage key (same format as Attendance page)
   const getTodayKey = () => new Date().toDateString();
 
+  // Debug: Log todayAttendance changes
+  useEffect(() => {
+    console.log('🔍 [DASHBOARD] todayAttendance changed:', {
+      isOnBreak: todayAttendance.isOnBreak,
+      isInMeeting: todayAttendance.isInMeeting,
+      isCheckedIn: todayAttendance.isCheckedIn,
+      breakType: todayAttendance.breakType
+    });
+  }, [todayAttendance]);
+
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -253,17 +263,25 @@ export default function EmployeeDashboard() {
 
           // Only preserve state if action is currently in progress (not just recent)
           if (actionInProgress) {
-            console.log('🔒 Action in progress - preserving state');
+            console.log('🔒 [DASHBOARD] Action in progress - preserving state');
+            return prev;
+          }
+
+          // Don't overwrite if a socket event happened recently (within 15 seconds)
+          const timeSinceSocketEvent = Date.now() - lastSocketEventTime;
+          if (timeSinceSocketEvent < 15000) {
+            console.log('🔒 [DASHBOARD] Socket event too recent - preserving state');
             return prev;
           }
 
           // If we're currently checked in but API returns no data, keep the checked-in state
           // This prevents race conditions where check-in hasn't synced to DB yet
           if (prev.isCheckedIn && !isCurrentlyCheckedIn) {
-            console.log('⚠️ API returned no check-in but we are checked in - preserving state');
+            console.log('⚠️ [DASHBOARD] API returned no check-in but we are checked in - preserving state');
             return prev;
           }
 
+          console.log('✅ [DASHBOARD] Updating state from API data');
           return {
             isCheckedIn: isCurrentlyCheckedIn,
             checkInTime: checkInTime,
@@ -823,13 +841,20 @@ export default function EmployeeDashboard() {
       });
 
       if (result.success) {
+        console.log('✅ [DASHBOARD] Break end API succeeded');
+        console.log('📊 [DASHBOARD] Current todayAttendance before update:', todayAttendance);
+        
         // Immediately update state - this will persist until manually changed
-        setTodayAttendance(prev => ({
-          ...prev,
-          isOnBreak: false,
-          currentBreakDuration: 0,
-          breakType: 'regular' // Reset break type
-        }));
+        setTodayAttendance(prev => {
+          const updated = {
+            ...prev,
+            isOnBreak: false,
+            currentBreakDuration: 0,
+            breakType: 'regular' // Reset break type
+          };
+          console.log('📊 [DASHBOARD] Updated todayAttendance:', updated);
+          return updated;
+        });
         
         // Save to BOTH localStorage keys (same as Attendance page)
         const today = getTodayKey();
@@ -842,6 +867,7 @@ export default function EmployeeDashboard() {
         };
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
+        console.log('💾 [DASHBOARD] Saved to localStorage:', updatedState);
 
         // Backend already emits socket event, no need to emit from client
         console.log('📡 [DASHBOARD] Break ended successfully, backend will broadcast socket event');
@@ -849,6 +875,7 @@ export default function EmployeeDashboard() {
         // toast removed
         setDisableRefresh(false);
       } else {
+        console.error('❌ [DASHBOARD] Break end API failed:', result);
         // Re-enable refresh if failed
         setDisableRefresh(false);
       }

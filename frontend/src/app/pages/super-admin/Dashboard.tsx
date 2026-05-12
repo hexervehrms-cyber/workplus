@@ -4,6 +4,7 @@ import { FeatureShowcase } from '../../components/FeatureShowcase';
 import OnboardingLinkGenerator from '../../components/OnboardingLinkGenerator';
 import DocumentGenerator from '../../components/DocumentGenerator';
 import ChatWidget from '../../components/ChatWidget';
+import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useCurrency } from '../../context/CurrencyContext';
 import { useRealTimeDashboard } from '../../hooks/useRealTimeDashboard';
 import { useState, useEffect, useCallback } from 'react';
@@ -184,7 +185,9 @@ export default function SuperAdminDashboard() {
   }
 
   return (
-    <div className="p-8 space-y-8">
+    <>
+      <LoadingProgressBar isLoading={loading} color="bg-purple-500" />
+      <div className="p-8 space-y-8">
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -448,6 +451,7 @@ export default function SuperAdminDashboard() {
 
       {/* Chat Widget */}
       <ChatWidget />
-    </div>
+      </div>
+    </>
   );
 }

@@ -27,8 +27,8 @@ export function KPICard({ title, value, change, icon: Icon, color = 'primary', o
 
   return (
     <Card
-      className={`p-6 rounded-2xl border border-border/50 backdrop-blur-sm transition-all duration-300 ${
-        onClick ? 'cursor-pointer hover:shadow-xl hover:scale-105 hover:border-primary/50' : ''
+      className={`p-6 rounded-2xl border border-border/50 backdrop-blur-sm transition-all duration-300 kpi-card card-hover frame-motion ${
+        onClick ? 'cursor-pointer' : ''
       }`}
       onClick={onClick}
     >

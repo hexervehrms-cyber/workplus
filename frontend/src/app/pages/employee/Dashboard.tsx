@@ -3,6 +3,7 @@ import { KPICard } from '../../components/KPICard';
 import EmployeeDocuments from '../../components/EmployeeDocuments';
 import InteractiveCalendar from '../../components/InteractiveCalendar';
 import ChatWidget from '../../components/ChatWidget';
+import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useCurrency } from '../../context/CurrencyContext';
 import { useAuth } from '../../context/AuthContext';
 import { ExpenseService, LeaveRequestService } from '../../utils/api';
@@ -977,7 +978,9 @@ export default function EmployeeDashboard() {
   };
 
   return (
-    <div className="p-8 space-y-8">
+    <>
+      <LoadingProgressBar isLoading={loading} color="bg-blue-500" />
+      <div className="p-8 space-y-8">
       {/* Welcome Header with Attendance Buttons */}
       <div className="flex items-center justify-between">
         <div>
@@ -1362,6 +1365,7 @@ export default function EmployeeDashboard() {
 
       {/* Chat Widget */}
       <ChatWidget />
-    </div>
+      </div>
+    </>
   );
 }

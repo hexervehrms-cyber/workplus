@@ -1,5 +1,6 @@
 import { KPICard } from '../../components/KPICard';
 import ChatWidget from '../../components/ChatWidget';
+import LoadingProgressBar from '../../components/LoadingProgressBar';
 import {
   Users,
   TrendingUp,
@@ -513,7 +514,9 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
   }
 
   return (
-    <div className="p-8 space-y-8">
+    <>
+      <LoadingProgressBar isLoading={loading} color="bg-green-500" />
+      <div className="p-8 space-y-8">
       {/* Page Header */}
       <div>
         <h1 className="text-3xl font-bold text-foreground mb-2">Admin Dashboard</h1>
@@ -992,6 +995,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+      </div>
+    </>
   );
 }

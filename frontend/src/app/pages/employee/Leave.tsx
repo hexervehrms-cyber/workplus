@@ -499,8 +499,11 @@ export default function Leave() {
         </Button>
       </div>
 
-      {/* Leave Balance KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* Only show content if dialog is not open */}
+      {!showLeaveForm && (
+        <>
+          {/* Leave Balance KPI Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {leaveBalanceCards.map((leave, index) => (
           <Card key={index} className="p-6 rounded-2xl">
             <div className="flex items-center justify-between mb-4">
@@ -719,6 +722,8 @@ Reason: ${leave.reason}
           )}
         </div>
       </Card>
+        </>
+      )}
 
       {/* Leave Form Dialog */}
       <Dialog open={showLeaveForm} onOpenChange={setShowLeaveForm}>

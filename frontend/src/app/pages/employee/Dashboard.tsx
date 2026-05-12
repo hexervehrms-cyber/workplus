@@ -487,6 +487,16 @@ export default function EmployeeDashboard() {
     const handleAttendanceUpdate = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] attendance:update event received:', data);
 
+      // CRITICAL: Don't refresh if a socket event happened recently (within 30 seconds)
+      // This prevents the attendance:update event from overwriting socket event updates
+      // The socket event (break:ended, meeting:ended, etc.) is more reliable than the attendance:update
+      // 30 seconds gives the database time to write changes before we query it
+      const timeSinceSocketEvent = Date.now() - lastSocketEventTime;
+      if (timeSinceSocketEvent < 30000) {
+        console.log('📡 [EMPLOYEE-DASHBOARD] Socket event too recent (within 30s) - skipping refresh to preserve socket update');
+        return;
+      }
+
       // Refresh dashboard data to get latest state
       if (!actionInProgress && !disableRefresh) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Refreshing dashboard data after attendance update');
@@ -566,11 +576,12 @@ export default function EmployeeDashboard() {
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       
-      // Don't refresh if a socket event happened within the last 15 seconds
-      // This prevents the periodic refresh from overwriting socket event updates
+      // CRITICAL: Don't refresh if a socket event happened within the last 30 seconds
+      // This gives the database time to write the changes before we query it
+      // Socket events are more reliable than API queries during the write window
       const timeSinceLastSocketEvent = Date.now() - lastSocketEventTime;
-      if (timeSinceLastSocketEvent < 15000) {
-        console.log('⏰ [DASHBOARD] Skipping refresh - socket event too recent');
+      if (timeSinceLastSocketEvent < 30000) {
+        console.log('⏰ [DASHBOARD] Skipping refresh - socket event too recent (within 30s)');
         return;
       }
       

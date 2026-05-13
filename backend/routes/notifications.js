@@ -24,13 +24,13 @@ router.get("/",
     } = req.query;
 
     try {
-      // Build filter
-      const filter = { userId };
+      // Schema uses recipientId + isRead (not userId)
+      const filter = { recipientId: userId };
 
       if (status === 'unread') {
-        filter.readAt = null;
+        filter.isRead = false;
       } else if (status === 'read') {
-        filter.readAt = { $ne: null };
+        filter.isRead = true;
       }
 
       if (type) {
@@ -58,7 +58,7 @@ router.get("/",
 
         Notification.countDocuments(filter),
 
-        Notification.countDocuments({ userId, readAt: null })
+        Notification.countDocuments({ recipientId: userId, isRead: false })
       ]);
 
       res.json({
@@ -100,8 +100,8 @@ router.get("/unread-count",
 
     try {
       const unreadCount = await Notification.countDocuments({
-        userId,
-        readAt: null
+        recipientId: userId,
+        isRead: false
       });
 
       res.json({
@@ -135,10 +135,10 @@ router.patch("/:id/read",
 
     try {
       const notification = await Notification.findOneAndUpdate(
-        { _id: id, userId },
-        { 
-          readAt: new Date(),
-          status: 'read'
+        { _id: id, recipientId: userId },
+        {
+          isRead: true,
+          readAt: new Date()
         },
         { new: true }
       );
@@ -186,10 +186,10 @@ router.patch("/mark-all-read",
 
     try {
       const result = await Notification.updateMany(
-        { userId, readAt: null },
-        { 
-          readAt: new Date(),
-          status: 'read'
+        { recipientId: userId, isRead: false },
+        {
+          isRead: true,
+          readAt: new Date()
         }
       );
 
@@ -214,6 +214,41 @@ router.patch("/mark-all-read",
 );
 
 /**
+ * DELETE /api/notifications/clear-all
+ * Clear all read notifications (must be registered before "/:id")
+ */
+router.delete("/clear-all",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+      const result = await Notification.deleteMany({
+        recipientId: userId,
+        isRead: true
+      });
+
+      res.json({
+        success: true,
+        message: `${result.deletedCount} notifications cleared`,
+        data: { deletedCount: result.deletedCount }
+      });
+
+    } catch (error) {
+      logger.error('Clear all notifications error', {
+        error: error.message,
+        userId
+      });
+
+      res.status(500).json({
+        success: false,
+        message: "Failed to clear notifications"
+      });
+    }
+  })
+);
+
+/**
  * DELETE /api/notifications/:id
  * Delete a notification
  */
@@ -226,7 +261,7 @@ router.delete("/:id",
     try {
       const notification = await Notification.findOneAndDelete({
         _id: id,
-        userId
+        recipientId: userId
       });
 
       if (!notification) {
@@ -251,41 +286,6 @@ router.delete("/:id",
       res.status(500).json({
         success: false,
         message: "Failed to delete notification"
-      });
-    }
-  })
-);
-
-/**
- * DELETE /api/notifications/clear-all
- * Clear all read notifications
- */
-router.delete("/clear-all",
-  authenticate,
-  asyncHandler(async (req, res) => {
-    const userId = req.user.userId;
-
-    try {
-      const result = await Notification.deleteMany({
-        userId,
-        readAt: { $ne: null }
-      });
-
-      res.json({
-        success: true,
-        message: `${result.deletedCount} notifications cleared`,
-        data: { deletedCount: result.deletedCount }
-      });
-
-    } catch (error) {
-      logger.error('Clear all notifications error', {
-        error: error.message,
-        userId
-      });
-
-      res.status(500).json({
-        success: false,
-        message: "Failed to clear notifications"
       });
     }
   })
@@ -495,12 +495,12 @@ router.get("/stats",
         
         Notification.countDocuments({
           ...baseFilter,
-          readAt: { $ne: null }
+          isRead: true
         }),
         
         Notification.countDocuments({
           ...baseFilter,
-          readAt: null
+          isRead: false
         }),
         
         Notification.aggregate([

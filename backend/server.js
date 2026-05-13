@@ -97,6 +97,7 @@ import onboardingRoutes from "./routes/onboarding.js";
 import salaryRoutes from "./routes/salary.js";
 import payrollRoutes from "./routes/payroll.js";
 import announcementsRoutes from "./routes/announcements.js";
+import notificationsRoutes from "./routes/notifications.js";
 import tasksRoutes from "./routes/tasks.js";
 import organizationsRoutes from "./routes/organizations.js";
 
@@ -610,6 +611,9 @@ app.use("/api/documents", authenticate, documentsRoutes);
 
 // Announcements routes (with authentication)
 app.use("/api/announcements", authenticate, announcementsRoutes);
+
+// In-app notifications (navbar, etc.)
+app.use("/api/notifications", authenticate, notificationsRoutes);
 
 // Tasks routes (with authentication)
 app.use("/api/tasks", authenticate, tasksRoutes);

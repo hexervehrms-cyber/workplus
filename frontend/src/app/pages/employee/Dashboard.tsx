@@ -50,6 +50,31 @@ function isLikelyMongoObjectId(id: string | null | undefined): boolean {
   return !!id && /^[a-f\d]{24}$/i.test(id);
 }
 
+/** Parse values from toLocaleTimeString (e.g. "02:30 PM") for today's clock math */
+function parseTodayCheckInTime(checkInTime: string): Date | null {
+  const raw = checkInTime?.trim();
+  if (!raw) return null;
+  const d = new Date();
+  const m = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (m) {
+    let h = parseInt(m[1], 10);
+    const min = parseInt(m[2], 10);
+    const sec = m[3] ? parseInt(m[3], 10) : 0;
+    const ap = m[4]?.toUpperCase();
+    if (Number.isNaN(h) || Number.isNaN(min)) return null;
+    if (ap === 'PM' && h < 12) h += 12;
+    if (ap === 'AM' && h === 12) h = 0;
+    d.setHours(h, min, Number.isNaN(sec) ? 0 : sec, 0);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const parts = raw.split(':').map((p) => parseInt(String(p).replace(/\D/g, ''), 10));
+  if (parts.length >= 2 && !Number.isNaN(parts[0]) && !Number.isNaN(parts[1])) {
+    d.setHours(parts[0], parts[1], 0, 0);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
 export default function EmployeeDashboard() {
   const { user, loading: authLoading } = useAuth();
   const { attendance: todayAttendance, updateAttendance, loadFromLocalStorage } = useAttendance();
@@ -574,10 +599,9 @@ export default function EmployeeDashboard() {
     const interval = setInterval(() => {
       // Calculate working hours (excluding breaks and meetings)
       if (todayAttendance.checkInTime) {
-        const checkInTime = new Date();
-        const [hours, minutes] = todayAttendance.checkInTime.split(':').map(Number);
-        checkInTime.setHours(hours, minutes, 0, 0);
-        
+        const checkInTime = parseTodayCheckInTime(todayAttendance.checkInTime);
+        if (!checkInTime) return;
+
         const now = new Date();
         let totalSeconds = (now.getTime() - checkInTime.getTime()) / 1000;
         

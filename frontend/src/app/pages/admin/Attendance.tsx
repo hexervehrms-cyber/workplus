@@ -75,15 +75,23 @@ export default function AttendanceAdmin() {
       fetchActivityLogs();
     };
 
+    // Listen to all attendance-related events
     realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
+    realTimeSocket.onBreakStarted(handleAttendanceUpdate);
+    realTimeSocket.onBreakEnded(handleAttendanceUpdate);
+    realTimeSocket.onMeetingStarted(handleAttendanceUpdate);
+    realTimeSocket.onMeetingEnded(handleAttendanceUpdate);
+    realTimeSocket.onKPIUpdate(handleAttendanceUpdate);
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       fetchAttendance();
       fetchActivityLogs();
-    }, 60000);
+    }, 30000); // Refresh every 30 seconds
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+    };
   }, []);
 
   // Separate function declarations for reuse

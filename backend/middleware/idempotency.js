@@ -38,12 +38,24 @@ const generateIdempotencyKey = (req) => {
     return req.headers['idempotency-key'];
   }
 
-  // Generate key from request signature
+/**
+ * Generate a unique idempotency key from request signature
+ * Includes timestamp to prevent duplicate requests across different time periods
+ */
+const generateIdempotencyKey = (req) => {
+  // Use custom idempotency key if provided (includes timestamp)
+  if (req.body?.idempotencyKey) {
+    return req.body.idempotencyKey;
+  }
+
+  // Fallback: Generate key from request signature
   const signature = JSON.stringify({
     method: req.method,
     path: req.path,
-    body: req.body,
-    userId: req.user?.userId || req.user?._id || req.user?.id
+    userId: req.user?.userId || req.user?._id || req.user?.id,
+    // Include action-specific fields to differentiate requests
+    action: req.body?.action || 'default',
+    timestamp: Math.floor(Date.now() / 1000) // Group by second
   });
 
   return crypto.createHash('sha256').update(signature).digest('hex');
@@ -51,10 +63,12 @@ const generateIdempotencyKey = (req) => {
 
 /**
  * Idempotency middleware for critical operations
- * Prevents duplicate submissions (payroll, expenses, leave approvals)
+ * Prevents duplicate submissions (payroll, expenses, leave approvals, break operations)
  * 
  * Usage:
  * router.post('/payroll', idempotencyMiddleware, createPayroll);
+ * 
+ * For break operations, include idempotencyKey in request body with timestamp
  */
 export const idempotencyMiddleware = async (req, res, next) => {
   // Only apply to POST, PUT, PATCH, DELETE
@@ -78,6 +92,38 @@ export const idempotencyMiddleware = async (req, res, next) => {
     // Request is still processing
     if (cached.status === 'processing') {
       return res.status(409).json({
+        success: false,
+        message: 'Request is still being processed. Please wait.',
+        retryAfter: 2
+      });
+    }
+
+    // Request already completed - return cached response
+    return res.status(cached.statusCode).json(cached.response);
+  }
+
+  // Mark request as processing
+  idempotencyStore.set(idempotencyKey, {
+    status: 'processing',
+    expiresAt: Date.now() + 60000 // 1 minute TTL for processing
+  });
+
+  // Intercept res.json to cache response
+  const originalJson = res.json.bind(res);
+  res.json = function(data) {
+    // Cache successful responses for 24 hours
+    idempotencyStore.set(idempotencyKey, {
+      status: 'completed',
+      statusCode: res.statusCode,
+      response: data,
+      expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hours
+    });
+
+    return originalJson(data);
+  };
+
+  next();
+};
         success: false,
         message: 'Request is already being processed. Please wait.',
         idempotencyKey

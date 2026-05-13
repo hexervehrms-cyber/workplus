@@ -13,8 +13,7 @@ import {
   TrendingUp,
   LogIn,
   LogOut,
-  Pause,
-  MessageSquare
+  Pause
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -37,8 +36,8 @@ type AttendanceUIState = 'IDLE' | 'WORKING' | 'ON_BREAK' | 'IN_MEETING' | 'SYNCI
 // ENTERPRISE SYNC CONFIGURATION
 // ============================================================================
 const SYNC_CONFIG = {
-  STALE_PROTECTION_MS: 5000,
-  SOCKET_PROTECTION_MS: 3000,
+  STALE_PROTECTION_MS: 10000, // Increased from 5s to 10s to account for socket delays
+  SOCKET_PROTECTION_MS: 5000, // Increased from 3s to 5s
   REFRESH_COOLDOWN_MS: 4000,
   DEBOUNCE_MS: 1000,
   SOCKET_WAIT_MS: 1500,
@@ -90,7 +89,6 @@ export default function EmployeeDashboard() {
   const [breakHistory, setBreakHistory] = useState<any[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [currentBreakDuration, setCurrentBreakDuration] = useState(0);
-  const [currentMeetingDuration, setCurrentMeetingDuration] = useState(0);
   const [workingHours, setWorkingHours] = useState(0);
   const attendanceCacheKey = `employee_attendance_state_${user?.id || 'unknown'}`;
 
@@ -101,17 +99,15 @@ export default function EmployeeDashboard() {
   // ============================================================================
   const attendanceUIState = useMemo((): AttendanceUIState => {
     if (!todayAttendance.isCheckedIn) return 'IDLE';
-    if (todayAttendance.isInMeeting) return 'IN_MEETING';
     if (todayAttendance.isOnBreak) return 'ON_BREAK';
     return 'WORKING';
-  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.isInMeeting]);
+  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak]);
 
   // Debug: Log todayAttendance changes
   useEffect(() => {
     console.group('[ATTENDANCE STATE]');
     console.log('🔍 [DASHBOARD] todayAttendance changed:', {
       isOnBreak: todayAttendance.isOnBreak,
-      isInMeeting: todayAttendance.isInMeeting,
       isCheckedIn: todayAttendance.isCheckedIn,
       breakType: todayAttendance.breakType,
       uiState: attendanceUIState
@@ -320,7 +316,6 @@ export default function EmployeeDashboard() {
           hoursWorked: attendance.hoursWorked || 0,
           status: attendance.status || 'absent',
           isOnBreak: calculatedIsOnBreak,
-          isInMeeting: attendanceData.liveStatus?.isInMeeting || false,
           currentBreakDuration: calculatedBreakDuration,
           breakType: calculatedBreakType
         });
@@ -335,7 +330,6 @@ export default function EmployeeDashboard() {
           currentHours: attendance.hoursWorked || 0,
           status: attendance.status || 'absent',
           isOnBreak: calculatedIsOnBreak,
-          isInMeeting: attendanceData.liveStatus?.isInMeeting || false,
           currentBreakDuration: calculatedBreakDuration,
           breakType: calculatedBreakType,
           timestamp: Date.now()
@@ -357,7 +351,6 @@ export default function EmployeeDashboard() {
             hoursWorked: 0,
             status: 'absent',
             isOnBreak: false,
-            isInMeeting: false,
             currentBreakDuration: 0,
             breakType: 'regular'
           });
@@ -429,24 +422,6 @@ export default function EmployeeDashboard() {
       }
     };
 
-    const handleMeetingStarted = (data: any) => {
-      console.log('📡 [EMPLOYEE-DASHBOARD] meeting:started event received:', data);
-      if (String(data.employeeId) === String(employeeIdRef.current)) {
-        console.log('📡 [EMPLOYEE-DASHBOARD] Meeting started for current employee, updating state');
-        setLastSocketEventTime(Date.now());
-        updateAttendance({ isInMeeting: true });
-      }
-    };
-
-    const handleMeetingEnded = (data: any) => {
-      console.log('📡 [EMPLOYEE-DASHBOARD] meeting:ended event received:', data);
-      if (String(data.employeeId) === String(employeeIdRef.current)) {
-        console.log('📡 [EMPLOYEE-DASHBOARD] Meeting ended for current employee, updating state');
-        setLastSocketEventTime(Date.now());
-        updateAttendance({ isInMeeting: false });
-      }
-    };
-
     const handleCheckedIn = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] attendance:checked_in event received:', data);
       if (String(data.employeeId) === String(employeeIdRef.current)) {
@@ -470,8 +445,7 @@ export default function EmployeeDashboard() {
           isCheckedIn: false,
           checkOutTime: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
           hoursWorked: data.hoursWorked || 0,
-          isOnBreak: false,
-          isInMeeting: false
+          isOnBreak: false
         });
       }
     };
@@ -479,8 +453,6 @@ export default function EmployeeDashboard() {
     // Subscribe to events and store unsubscribe functions
     const unsubscribeBreakStarted = realTimeSocket.onBreakStarted(handleBreakStarted);
     const unsubscribeBreakEnded = realTimeSocket.onBreakEnded(handleBreakEnded);
-    const unsubscribeMeetingStarted = realTimeSocket.onMeetingStarted(handleMeetingStarted);
-    const unsubscribeMeetingEnded = realTimeSocket.onMeetingEnded(handleMeetingEnded);
     realTimeSocket.on('attendance:checked_in', handleCheckedIn);
     realTimeSocket.on('attendance:checked_out', handleCheckedOut);
 
@@ -491,8 +463,8 @@ export default function EmployeeDashboard() {
       console.log('📡 [EMPLOYEE-DASHBOARD] Cleaning up Socket.IO listeners');
       unsubscribeBreakStarted?.();
       unsubscribeBreakEnded?.();
-      unsubscribeMeetingStarted?.();
-      unsubscribeMeetingEnded?.();
+      realTimeSocket.off('attendance:checked_in', handleCheckedIn);
+      realTimeSocket.off('attendance:checked_out', handleCheckedOut);
     };
   }, [user?.orgId, updateAttendance]);
 
@@ -563,7 +535,6 @@ export default function EmployeeDashboard() {
     if (!todayAttendance.isCheckedIn) {
       setWorkingHours(0);
       setCurrentBreakDuration(0);
-      setCurrentMeetingDuration(0);
       return;
     }
 
@@ -589,25 +560,13 @@ export default function EmployeeDashboard() {
           }
         }
         
-        // Subtract meeting time
-        if (todayAttendance.isInMeeting) {
-          // Currently in meeting - add current meeting duration
-          setCurrentMeetingDuration(prev => prev + 1);
-          totalSeconds -= (currentMeetingDuration + 1) * 60;
-        } else {
-          // Not in meeting - keep current meeting duration as is
-          if (currentMeetingDuration > 0) {
-            totalSeconds -= currentMeetingDuration * 60;
-          }
-        }
-        
         const hours_worked = totalSeconds / 3600;
         setWorkingHours(Math.max(0, hours_worked));
       }
     }, 1000); // Update every second
 
     return () => clearInterval(interval);
-  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.isInMeeting, todayAttendance.checkInTime, currentBreakDuration, currentMeetingDuration]);
+  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.checkInTime, currentBreakDuration]);
 
   // Format time display (HH:MM:SS)
   const formatTime = (seconds: number): string => {
@@ -623,24 +582,39 @@ export default function EmployeeDashboard() {
   
   const handleBreakStart = async (breakType: 'regular' = 'regular') => {
     // Debounce: prevent multiple clicks
-    if (actionInProgressRef.current) return;
+    if (actionInProgressRef.current) {
+      console.log('⏸️ [BREAK START] Action already in progress, ignoring duplicate click');
+      return;
+    }
+    
+    // Prevent starting break if already on break
+    if (todayAttendance.isOnBreak) {
+      console.log('⏸️ [BREAK START] Already on break, ignoring');
+      return;
+    }
     
     try {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
       
       const token = localStorage.getItem('authToken');
+      const idempotencyKey = `break-start-${employeeId}-${Date.now()}`;
+      
       const payload: any = {
         breakType,
-        notes: `Break started`
+        notes: `Break started`,
+        idempotencyKey // Include unique key to prevent duplicates
       };
       if (employeeId) payload.employeeId = employeeId;
+      
+      console.log('🔄 [BREAK START] Sending request:', { breakType, employeeId });
       
       const response = await fetch(buildApiUrl('/attendance/break-start'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey
         },
         body: JSON.stringify(payload)
       });
@@ -653,10 +627,14 @@ export default function EmployeeDashboard() {
         } catch (e) {
           // Response body is not JSON
         }
+        console.error('❌ [BREAK START] API Error:', errorMessage);
         throw new Error(errorMessage);
       }
 
-      // Update state immediately
+      const result = await response.json();
+      console.log('✅ [BREAK START] Success:', result);
+
+      // Update state immediately with optimistic update
       updateAttendance({
         isOnBreak: true,
         breakType: breakType,
@@ -670,10 +648,20 @@ export default function EmployeeDashboard() {
         currentHours: todayAttendance.hoursWorked || 0,
         isOnBreak: true,
         breakType,
-        isInMeeting: false
+        breakStartTime: new Date().toISOString()
       }));
+
+      // Wait for socket confirmation with timeout
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
     } catch (error) {
-      console.error('Break start error:', error);
+      console.error('❌ [BREAK START] Error:', error);
+      // Rollback optimistic update on error
+      updateAttendance({
+        isOnBreak: false,
+        breakType: 'regular',
+        currentBreakDuration: 0
+      });
     } finally {
       actionInProgressRef.current = false;
     }
@@ -681,23 +669,38 @@ export default function EmployeeDashboard() {
 
   const handleBreakEnd = async () => {
     // Debounce: prevent multiple clicks
-    if (actionInProgressRef.current) return;
+    if (actionInProgressRef.current) {
+      console.log('⏸️ [BREAK END] Action already in progress, ignoring duplicate click');
+      return;
+    }
+    
+    // Prevent ending break if not on break
+    if (!todayAttendance.isOnBreak) {
+      console.log('⏸️ [BREAK END] Not on break, ignoring');
+      return;
+    }
     
     try {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
       
       const token = localStorage.getItem('authToken');
+      const idempotencyKey = `break-end-${employeeId}-${Date.now()}`;
+      
       const payload: any = {
-        notes: 'Break ended'
+        notes: 'Break ended',
+        idempotencyKey // Include unique key to prevent duplicates
       };
       if (employeeId) payload.employeeId = employeeId;
+      
+      console.log('🔄 [BREAK END] Sending request:', { employeeId });
       
       const response = await fetch(buildApiUrl('/attendance/break-end'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey
         },
         body: JSON.stringify(payload)
       });
@@ -710,10 +713,14 @@ export default function EmployeeDashboard() {
         } catch (e) {
           // Response body is not JSON
         }
+        console.error('❌ [BREAK END] API Error:', errorMessage);
         throw new Error(errorMessage);
       }
 
-      // Update state immediately
+      const result = await response.json();
+      console.log('✅ [BREAK END] Success:', result);
+
+      // Update state immediately with optimistic update
       updateAttendance({
         isOnBreak: false,
         breakType: 'regular',
@@ -726,189 +733,27 @@ export default function EmployeeDashboard() {
         checkedIn: true,
         currentHours: todayAttendance.hoursWorked || 0,
         isOnBreak: false,
-        breakType: 'regular',
-        isInMeeting: false
-      }));
-
-      // Force refresh after a short delay to ensure state is updated
-      setTimeout(() => {
-        safeRefresh(true);
-      }, 500);
-    } catch (error) {
-      console.error('Break end error:', error);
-    } finally {
-      actionInProgressRef.current = false;
-    }
-  };
-
-  const handleMeetingStart = async () => {
-    // Debounce: prevent multiple clicks
-    if (actionInProgressRef.current) return;
-    
-    if (!todayAttendance.isCheckedIn) {
-      console.error('Please check in first before starting a meeting');
-      return;
-    }
-
-    try {
-      actionInProgressRef.current = true;
-      lastActionTimeRef.current = Date.now();
-      
-      const token = localStorage.getItem('authToken');
-      
-      // If on break, automatically end it first
-      if (todayAttendance.isOnBreak) {
-        try {
-          const breakEndResponse = await fetch(buildApiUrl('/attendance/break-end'), {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              employeeId,
-              notes: 'Break ended to start meeting'
-            })
-          });
-
-          if (breakEndResponse.ok) {
-            updateAttendance({
-              isOnBreak: false,
-              breakType: 'regular'
-            });
-            // Add small delay to ensure database is updated
-            await new Promise(resolve => setTimeout(resolve, 300));
-          } else {
-            let errorMessage = 'Failed to end break';
-            try {
-              const breakError = await breakEndResponse.json();
-              errorMessage = breakError.message || errorMessage;
-            } catch (e) {
-              // Response body is not JSON
-            }
-            throw new Error(errorMessage);
-          }
-        } catch (breakError) {
-          console.error('Error ending break:', breakError);
-          throw new Error(`Cannot start meeting: ${breakError instanceof Error ? breakError.message : 'Failed to end break'}`);
-        }
-      }
-      
-      const meetingData: any = {
-        meetingTitle: 'Meeting',
-        meetingType: 'internal',
-        notes: 'Meeting started'
-      };
-      if (employeeId) meetingData.employeeId = employeeId;
-      
-      const response = await fetch(buildApiUrl('/attendance/meeting-start'), {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(meetingData)
-      });
-
-      if (!response.ok) {
-        let errorMessage = 'Meeting start failed';
-        try {
-          const error = await response.json();
-          errorMessage = error.message || errorMessage;
-        } catch (e) {
-          // Response body is not JSON
-        }
-        throw new Error(errorMessage);
-      }
-
-      // Update state immediately
-      updateAttendance({
-        isInMeeting: true,
-        isOnBreak: false,
         breakType: 'regular'
-      });
-      
-      // Save state to localStorage
-      const today = getTodayKey();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-        checkedIn: true,
-        currentHours: todayAttendance.hoursWorked || 0,
-        isOnBreak: false,
-        breakType: 'regular',
-        isInMeeting: true
       }));
 
+      // Wait for socket confirmation with timeout
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
       // Force refresh after a short delay to ensure state is updated
       setTimeout(() => {
         safeRefresh(true);
-      }, 500);
+      }, 800);
     } catch (error) {
-      console.error('Meeting start error:', error);
-    } finally {
-      actionInProgressRef.current = false;
-    }
-  };
-
-  const handleMeetingEnd = async () => {
-    // Debounce: prevent multiple clicks
-    if (actionInProgressRef.current) return;
-    
-    try {
-      actionInProgressRef.current = true;
-      lastActionTimeRef.current = Date.now();
-      
-      const token = localStorage.getItem('authToken');
-      const payload: any = {
-        notes: 'Meeting ended'
-      };
-      if (employeeId) payload.employeeId = employeeId;
-      
-      const response = await fetch(buildApiUrl('/attendance/meeting-end'), {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        let errorMessage = 'Meeting end failed';
-        try {
-          const error = await response.json();
-          errorMessage = error.message || errorMessage;
-        } catch (e) {
-          // Response body is not JSON
-        }
-        throw new Error(errorMessage);
-      }
-
-      // Update state immediately
+      console.error('❌ [BREAK END] Error:', error);
+      // Rollback optimistic update on error
       updateAttendance({
-        isInMeeting: false
+        isOnBreak: true,
+        breakType: todayAttendance.breakType || 'regular'
       });
-      
-      // Save state to localStorage
-      const today = getTodayKey();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-        checkedIn: true,
-        currentHours: todayAttendance.hoursWorked || 0,
-        isOnBreak: false,
-        breakType: 'regular',
-        isInMeeting: false
-      }));
-
-      // Force refresh after a short delay to ensure state is updated
-      setTimeout(() => {
-        safeRefresh(true);
-      }, 500);
-    } catch (error) {
-      console.error('Meeting end error:', error);
     } finally {
       actionInProgressRef.current = false;
     }
   };
-
   const handleCheckIn = async () => {
     // Debounce: prevent multiple clicks
     if (actionInProgressRef.current) return;
@@ -1011,7 +856,6 @@ export default function EmployeeDashboard() {
         isCheckedIn: false,
         checkOutTime: checkOutTime,
         isOnBreak: false,
-        isInMeeting: false,
         breakType: 'regular',
         currentBreakDuration: 0
       });
@@ -1052,16 +896,12 @@ export default function EmployeeDashboard() {
             {todayAttendance.isCheckedIn && (
               <Badge 
                 className={`px-3 py-1.5 text-xs font-semibold rounded-full ${
-                  todayAttendance.isInMeeting 
-                    ? 'bg-purple-100 text-purple-700' 
-                    : todayAttendance.isOnBreak 
+                  todayAttendance.isOnBreak 
                     ? 'bg-amber-100 text-amber-700'
                     : 'bg-emerald-100 text-emerald-700'
                 }`}
               >
-                {todayAttendance.isInMeeting 
-                  ? `● In Meeting (${formatTime(currentMeetingDuration * 60)})` 
-                  : todayAttendance.isOnBreak 
+                {todayAttendance.isOnBreak 
                   ? `● On Break (${formatTime(currentBreakDuration * 60)})`
                   : `● Working (${formatTime(workingHours * 3600)})`}
               </Badge>
@@ -1091,9 +931,7 @@ export default function EmployeeDashboard() {
                     Log Out
                   </Button>
 
-                  {!todayAttendance.isInMeeting && (
-                    <>
-                      {!todayAttendance.isOnBreak ? (
+                  {!todayAttendance.isOnBreak ? (
                         <Button
                           size="sm"
                           className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
@@ -1114,34 +952,7 @@ export default function EmployeeDashboard() {
                           End Break
                         </Button>
                       )}
-                    </>
-                  )}
 
-                  {!todayAttendance.isOnBreak && (
-                    <>
-                      {!todayAttendance.isInMeeting ? (
-                        <Button
-                          size="sm"
-                          className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                          onClick={handleMeetingStart}
-                          disabled={loading}
-                        >
-                          <MessageSquare className="w-4 h-4 mr-1.5" />
-                          Meeting
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                          onClick={handleMeetingEnd}
-                          disabled={loading}
-                        >
-                          <MessageSquare className="w-4 h-4 mr-1.5" />
-                          End Meeting
-                        </Button>
-                      )}
-                    </>
-                  )}
                 </>
               )}
             </div>

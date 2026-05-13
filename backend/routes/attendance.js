@@ -114,7 +114,6 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
   let liveStatus = 'not_checked_in';
   let currentHours = 0;
   let isOnBreak = false;
-  let isInMeeting = false;
   let currentBreakDuration = 0;
   let totalBreakTime = 0;
 
@@ -139,12 +138,6 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
         }
       }
 
-      // Check if in meeting
-      if (attendance.meetingMode?.isActive) {
-        isInMeeting = true;
-        liveStatus = 'in_meeting';
-      }
-
       // Calculate total break time
       if (attendance.breaks && attendance.breaks.length > 0) {
         totalBreakTime = attendance.breaks.reduce((total, breakItem) => {
@@ -167,7 +160,6 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
         isOnBreak,
         currentBreakDuration: Math.round(currentBreakDuration),
         totalBreakTime: Math.round(totalBreakTime),
-        isInMeeting,
         lastUpdated: new Date()
       }
     }
@@ -658,10 +650,11 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
 
 /**
  * POST /api/attendance/break-start
- * Start a break
+ * Start a break - ATOMIC OPERATION
+ * Uses MongoDB atomic operations to prevent race conditions
  */
 router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const { employeeId, breakType = 'regular', notes, orgId, employeeName } = req.body;
+  const { employeeId, breakType = 'regular', notes, orgId, employeeName, idempotencyKey } = req.body;
   const currentUserId = req.user.userId;
   const authOrgId = req.user.orgId;
   const authRole = req.user.role;
@@ -696,145 +689,154 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
-  // Find today's attendance record
-  const attendance = await Attendance.findOne({
-    employeeId: effectiveEmployeeId,
-    orgId: effectiveOrgId,
-    date: { $gte: today, $lt: tomorrow }
-  }).sort({ _id: -1 });
-
-  if (!attendance || !attendance.checkIn) {
-    return res.status(400).json({
-      success: false,
-      message: 'No check-in found for today. Please check in first.'
-    });
-  }
-
-  if (attendance.checkOut) {
-    return res.status(400).json({
-      success: false,
-      message: 'Already checked out. Cannot start break.'
-    });
-  }
-
-  // Check if already on break
-  const currentBreak = attendance.breaks?.find(b => b.startTime && !b.endTime);
-  if (currentBreak) {
-    return res.status(200).json({
-      success: true,
-      message: 'Already on break.',
-      data: attendance
-    });
-  }
-
-  // Check if in meeting
-  if (attendance.meetingMode?.isActive) {
-    return res.status(400).json({
-      success: false,
-      message: 'Cannot start break while in meeting. End meeting first.'
-    });
-  }
-
-  // Add new break
+  // ATOMIC OPERATION: Find and update in one operation to prevent race conditions
+  // This ensures only one break can be started even with concurrent requests
   const newBreak = {
     startTime: new Date(),
     breakType,
     notes,
-    ipAddress: req.ip || req.connection.remoteAddress
+    ipAddress: req.ip || req.connection.remoteAddress,
+    idempotencyKey // Store key for deduplication
   };
 
-  const updatedAttendance = await Attendance.findByIdAndUpdate(
-    attendance._id,
-    {
-      $push: { breaks: newBreak }
-    },
-    { new: true }
-  ).select('_id employeeId orgId breaks meetingMode checkIn checkOut');
+  try {
+    // Use findOneAndUpdate with atomic $push to prevent duplicate breaks
+    const updatedAttendance = await Attendance.findOneAndUpdate(
+      {
+        employeeId: effectiveEmployeeId,
+        orgId: effectiveOrgId,
+        date: { $gte: today, $lt: tomorrow },
+        checkIn: { $exists: true },
+        checkOut: { $exists: false }, // Not checked out
+        'breaks': { $not: { $elemMatch: { startTime: { $exists: true }, endTime: { $exists: false } } } }, // No active break
+        'meetingMode.isActive': { $ne: true } // Not in meeting
+      },
+      {
+        $push: { breaks: newBreak }
+      },
+      { new: true, runValidators: false }
+    ).select('_id employeeId orgId breaks meetingMode checkIn checkOut');
 
-  // Verify the break was actually added
-  if (!updatedAttendance || !updatedAttendance.breaks || updatedAttendance.breaks.length === 0) {
+    if (!updatedAttendance) {
+      // Check why update failed
+      const attendance = await Attendance.findOne({
+        employeeId: effectiveEmployeeId,
+        orgId: effectiveOrgId,
+        date: { $gte: today, $lt: tomorrow }
+      }).select('_id checkIn checkOut breaks meetingMode');
+
+      if (!attendance) {
+        return res.status(400).json({
+          success: false,
+          message: 'No check-in found for today. Please check in first.'
+        });
+      }
+
+      if (attendance.checkOut) {
+        return res.status(400).json({
+          success: false,
+          message: 'Already checked out. Cannot start break.'
+        });
+      }
+
+      if (attendance.breaks?.some(b => b.startTime && !b.endTime)) {
+        return res.status(200).json({
+          success: true,
+          message: 'Already on break.',
+          data: attendance
+        });
+      }
+
+      if (attendance.meetingMode?.isActive) {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot start break while in meeting. End meeting first.'
+        });
+      }
+
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to start break. Please try again.'
+      });
+    }
+
+    // Send response immediately with updated data
+    res.status(201).json({
+      success: true,
+      message: 'Break started successfully',
+      data: updatedAttendance
+    });
+
+    // Log activity asynchronously
+    setImmediate(async () => {
+      try {
+        await ActivityLog.logActivity({
+          userId: currentUserId,
+          orgId: effectiveOrgId,
+          action: 'attendance_break_start',
+          entity: {
+            entityType: 'attendance',
+            entityId: updatedAttendance._id,
+            entityName: `Break Started - ${breakType}`
+          },
+          details: {
+            breakType,
+            notes,
+            idempotencyKey
+          },
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          severity: 'low',
+          category: 'user'
+        }).catch(err => logger.error('Failed to log break start activity', { error: err.message }));
+
+        // Emit real-time event to notify all connected clients
+        if (global.io) {
+          try {
+            global.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
+              employeeId: effectiveEmployeeId,
+              breakType: breakType,
+              timestamp: new Date().toISOString()
+            });
+            logger.info('Break started event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
+          } catch (err) {
+            logger.error('Failed to emit break:started event', { error: err.message });
+          }
+        }
+
+        // Emit KPI update to admin dashboard
+        if (global.io) {
+          try {
+            emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
+              action: 'break_start',
+              employeeId: effectiveEmployeeId,
+              status: 'on_break'
+            });
+          } catch (err) {
+            logger.error('Failed to emit KPI update', { error: err.message });
+          }
+        }
+      } catch (err) {
+        logger.error('Error in async break start operations', { error: err.message, employeeId: effectiveEmployeeId });
+      }
+    });
+
+  } catch (err) {
+    logger.error('Break start operation failed', { error: err.message, employeeId: effectiveEmployeeId });
     return res.status(500).json({
       success: false,
-      message: 'Failed to save break to database'
+      message: 'Failed to start break. Please try again.'
     });
-  }
-
-  // Send response immediately with updated data
-  res.status(201).json({
-    success: true,
-    message: 'Break started successfully',
-    data: updatedAttendance
-  });
-
-  // Log activity asynchronously
-  setImmediate(async () => {
-    try {
-      await ActivityLog.logActivity({
-        userId: currentUserId,
-        orgId: effectiveOrgId,
-        action: 'attendance_break_start',
-        entity: {
-          entityType: 'attendance',
-          entityId: attendance._id,
-          entityName: `Break Started - ${breakType}`
-        },
-        details: {
-          breakType,
-          notes
-        },
-        ipAddress: req.ip,
-        userAgent: req.get('User-Agent'),
-        severity: 'low',
-        category: 'user'
-      }).catch(err => logger.error('Failed to log break start activity', { error: err.message }));
-
-      // Emit real-time event to notify admin dashboard
-      if (req.emitAttendanceUpdate) {
-        req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId).catch(err => 
-          logger.error('Failed to emit attendance update', { error: err.message })
-        );
-      }
-
-      // Emit specific break:started event for page synchronization
-      if (global.io) {
-        try {
-          global.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
-            employeeId: effectiveEmployeeId,
-            breakType: breakType,
-            timestamp: new Date().toISOString()
-          });
-          logger.info('Break started event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
-        } catch (err) {
-          logger.error('Failed to emit break:started event', { error: err.message });
-        }
-      }
-
-      // Emit KPI update to admin dashboard
-      if (global.io) {
-        try {
-          emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
-            action: 'break_start',
-            employeeId: effectiveEmployeeId,
-            status: 'on_break'
-          });
-        } catch (err) {
-          logger.error('Failed to emit KPI update', { error: err.message });
-        }
-      }
-    } catch (err) {
-      logger.error('Error in async break start operations', { error: err.message, employeeId: effectiveEmployeeId });
-    }
-  });
-    }).catch(err => logger.error('Failed to emit KPI update on break start', { error: err.message }));
   }
 }));
 
 /**
  * POST /api/attendance/break-end
- * End a break
+ * End a break - ATOMIC OPERATION
+ * Uses MongoDB atomic operations to prevent race conditions
  */
 router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const { employeeId, notes, orgId, employeeName } = req.body;
+  const { employeeId, notes, orgId, employeeName, idempotencyKey } = req.body;
   const currentUserId = req.user.userId;
   const authOrgId = req.user.orgId;
   const authRole = req.user.role;
@@ -869,107 +871,147 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
-  // Find today's attendance record
-  const attendance = await Attendance.findOne({
-    employeeId: effectiveEmployeeId,
-    orgId: effectiveOrgId,
-    date: { $gte: today, $lt: tomorrow }
-  }).sort({ _id: -1 });
+  try {
+    // ATOMIC OPERATION: Use $pull with condition to end the active break
+    // This ensures only the active break is ended, preventing race conditions
+    const endTime = new Date();
 
-  if (!attendance) {
-    return res.status(400).json({
-      success: false,
-      message: 'No attendance record found for today.'
-    });
-  }
+    const updatedAttendance = await Attendance.findOneAndUpdate(
+      {
+        employeeId: effectiveEmployeeId,
+        orgId: effectiveOrgId,
+        date: { $gte: today, $lt: tomorrow },
+        'breaks': { $elemMatch: { startTime: { $exists: true }, endTime: { $exists: false } } } // Has active break
+      },
+      {
+        $set: {
+          'breaks.$[activeBreak].endTime': endTime,
+          'breaks.$[activeBreak].endNotes': notes
+        }
+      },
+      {
+        arrayFilters: [{ 'activeBreak.startTime': { $exists: true }, 'activeBreak.endTime': { $exists: false } }],
+        new: true,
+        runValidators: false
+      }
+    ).populate('userId', 'name email avatar')
+     .populate('employeeId', 'employeeCode department');
 
-  // Find active break
-  const activeBreakIndex = attendance.breaks?.findIndex(b => b.startTime && !b.endTime);
-  
-  if (activeBreakIndex === -1 || activeBreakIndex === undefined) {
-    return res.status(200).json({
-      success: true,
-      message: 'No active break found to end.',
-      data: attendance
-    });
-  }
+    if (!updatedAttendance) {
+      // Check why update failed
+      const attendance = await Attendance.findOne({
+        employeeId: effectiveEmployeeId,
+        orgId: effectiveOrgId,
+        date: { $gte: today, $lt: tomorrow }
+      }).select('_id breaks');
 
-  // End the break
-  const endTime = new Date();
-  const breakDuration = (endTime - attendance.breaks[activeBreakIndex].startTime) / (1000 * 60);
+      if (!attendance) {
+        return res.status(400).json({
+          success: false,
+          message: 'No attendance record found for today.'
+        });
+      }
 
-  const updateQuery = {
-    $set: {
-      [`breaks.${activeBreakIndex}.endTime`]: endTime,
-      [`breaks.${activeBreakIndex}.duration`]: Math.round(breakDuration),
-      [`breaks.${activeBreakIndex}.endNotes`]: notes
+      if (!attendance.breaks?.some(b => b.startTime && !b.endTime)) {
+        return res.status(200).json({
+          success: true,
+          message: 'No active break found to end.',
+          data: attendance
+        });
+      }
+
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to end break. Please try again.'
+      });
     }
-  };
 
-  const updatedAttendance = await Attendance.findByIdAndUpdate(
-    attendance._id,
-    updateQuery,
-    { new: true }
-  ).populate('userId', 'name email avatar')
-   .populate('employeeId', 'employeeCode department');
+    // Calculate break duration from the updated break
+    const activeBreak = updatedAttendance.breaks?.find(b => b.endTime && b.startTime);
+    const breakDuration = activeBreak 
+      ? Math.round((new Date(activeBreak.endTime).getTime() - new Date(activeBreak.startTime).getTime()) / (1000 * 60))
+      : 0;
 
-  // Emit real-time event to notify admin dashboard
-  req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
+    // Log activity asynchronously
+    setImmediate(async () => {
+      try {
+        await ActivityLog.logActivity({
+          userId: currentUserId,
+          orgId: effectiveOrgId,
+          action: 'attendance_break_end',
+          entity: {
+            entityType: 'attendance',
+            entityId: updatedAttendance._id,
+            entityName: `Break Ended - ${breakDuration} minutes`
+          },
+          details: {
+            duration: breakDuration,
+            notes,
+            idempotencyKey
+          },
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          severity: 'low',
+          category: 'user'
+        }).catch(err => logger.error('Failed to log break end activity', { error: err.message }));
 
-  // Log activity
-  await ActivityLog.logActivity({
-    userId: currentUserId,
-    orgId: effectiveOrgId,
-    action: 'attendance_break_end',
-    entity: {
-      entityType: 'attendance',
-      entityId: attendance._id,
-      entityName: `Break Ended - ${Math.round(breakDuration)} minutes`
-    },
-    details: {
-      duration: Math.round(breakDuration),
-      notes
-    },
-    ipAddress: req.ip,
-    userAgent: req.get('User-Agent'),
-    severity: 'low',
-    category: 'user'
-  });
+        // Emit real-time event to notify admin dashboard
+        if (req.emitAttendanceUpdate) {
+          req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId).catch(err => 
+            logger.error('Failed to emit attendance update', { error: err.message })
+          );
+        }
 
-  // Emit real-time event to notify admin dashboard (this also emits KPI update internally)
-  req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
+        // Emit specific break:ended event for page synchronization
+        if (global.io) {
+          try {
+            global.io.to(`tenant_${effectiveOrgId}`).emit('break:ended', {
+              employeeId: effectiveEmployeeId,
+              timestamp: new Date().toISOString(),
+              attendance: updatedAttendance
+            });
+            logger.info('Break ended event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
+          } catch (err) {
+            logger.error('Failed to emit break:ended event', { error: err.message });
+          }
+        }
 
-  // Emit specific break:ended event for page synchronization
-  if (global.io) {
-    global.io.to(`tenant_${effectiveOrgId}`).emit('break:ended', {
-      employeeId: effectiveEmployeeId,
-      timestamp: new Date().toISOString(),
-      attendance: updatedAttendance
+        // Emit KPI update to admin dashboard
+        if (global.io) {
+          try {
+            emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
+              action: 'break_end',
+              employeeId: effectiveEmployeeId,
+              status: 'checked_in'
+            });
+          } catch (err) {
+            logger.error('Failed to emit KPI update', { error: err.message });
+          }
+        }
+      } catch (err) {
+        logger.error('Error in async break end operations', { error: err.message, employeeId: effectiveEmployeeId });
+      }
     });
-    logger.info('Break ended event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
-  }
 
-  res.json({
-    success: true,
-    message: 'Break ended successfully',
-    data: updatedAttendance
-  });
+    res.json({
+      success: true,
+      message: 'Break ended successfully',
+      data: updatedAttendance
+    });
 
-  // Emit KPI update to admin dashboard
-  if (global.io) {
-    emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
-      action: 'break_end',
-      employeeId: effectiveEmployeeId,
-      status: 'checked_in'
-    }).catch(err => logger.error('Failed to emit KPI update on break end', { error: err.message }));
+  } catch (err) {
+    logger.error('Break end operation failed', { error: err.message, employeeId: effectiveEmployeeId });
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to end break. Please try again.'
+    });
   }
 }));
 
 /**
- * POST /api/attendance/meeting-start
- * Start a meeting
+ * GET /api/attendance/stats/summary
+ * Get attendance statistics
  */
-router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, meetingTitle = 'Meeting', meetingType = 'internal', notes, orgId } = req.body;
   const currentUserId = req.user.userId;
   const authOrgId = req.user.orgId;
@@ -1073,7 +1115,6 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
     success: true,
     message: 'Meeting started successfully',
     data: {
-      isInMeeting: true,
       meetingMode: {
         isActive: true,
         meetingTitle
@@ -1140,152 +1181,6 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
       }
     } catch (err) {
       logger.error('Error in async meeting start operations', { error: err.message, employeeId: effectiveEmployeeId });
-    }
-  });
-}));
-
-/**
- * POST /api/attendance/meeting-end
- * End a meeting
- */
-router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const { employeeId, notes, orgId } = req.body;
-  const currentUserId = req.user.userId;
-  const authOrgId = req.user.orgId;
-  const authRole = req.user.role;
-
-  let effectiveEmployeeId = employeeId;
-  let effectiveOrgId = orgId;
-
-  if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId, status: 'active' })
-      .select('_id')
-      .lean();
-    if (!employee) {
-      return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
-    }
-    effectiveEmployeeId = employee._id;
-    effectiveOrgId = authOrgId;
-  } else if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
-    return res.status(403).json({ success: false, message: 'Unauthorized org access' });
-  }
-
-  if (!effectiveEmployeeId || !effectiveOrgId) {
-    return res.status(400).json({ success: false, message: 'Missing required fields: employeeId, orgId' });
-  }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-
-  // Find today's attendance record
-  const attendance = await Attendance.findOne({
-    employeeId: effectiveEmployeeId,
-    orgId: effectiveOrgId,
-    date: { $gte: today, $lt: tomorrow }
-  }).sort({ _id: -1 });
-
-  if (!attendance || !attendance.meetingMode?.isActive) {
-    return res.status(200).json({
-      success: true,
-      message: 'No active meeting found to end.',
-      data: attendance
-    });
-  }
-
-  // End the meeting
-  const endTime = new Date();
-  
-  // Safely calculate meeting duration
-  let meetingDuration = 0;
-  if (attendance.meetingMode?.startTime) {
-    const startTime = new Date(attendance.meetingMode.startTime);
-    if (!isNaN(startTime.getTime())) {
-      meetingDuration = (endTime - startTime) / (1000 * 60);
-    }
-  }
-  
-  // Ensure duration is a valid number
-  const roundedDuration = Math.max(0, Math.round(meetingDuration));
-
-  // Find the index of the last meeting (which should be the active one)
-  const meetingIndex = attendance.meetings?.length ? attendance.meetings.length - 1 : -1;
-
-  const updateFields = {
-    'meetingMode.isActive': false,
-    'meetingMode.endTime': endTime,
-    'meetingMode.duration': roundedDuration,
-    'meetingMode.endNotes': notes
-  };
-
-  if (meetingIndex !== -1) {
-    updateFields[`meetings.${meetingIndex}.endTime`] = endTime;
-    updateFields[`meetings.${meetingIndex}.duration`] = roundedDuration;
-  }
-
-  // Send response immediately (don't wait for logging/events)
-  res.json({
-    success: true,
-    message: 'Meeting ended successfully',
-    data: {
-      isInMeeting: false,
-      meetingMode: {
-        isActive: false,
-        duration: roundedDuration
-      }
-    }
-  });
-
-  // Update database asynchronously
-  setImmediate(async () => {
-    try {
-      const updatedAttendance = await Attendance.findByIdAndUpdate(
-        attendance._id,
-        { $set: updateFields },
-        { new: true }
-      ).select('_id employeeId orgId meetingMode');
-
-      // Log activity asynchronously
-      ActivityLog.logActivity({
-        userId: currentUserId,
-        orgId: effectiveOrgId,
-        action: 'attendance_meeting_end',
-        entity: {
-          entityType: 'attendance',
-          entityId: attendance._id,
-          entityName: `Meeting Ended - ${roundedDuration} minutes`
-        },
-        details: {
-          meetingTitle: attendance.meetingMode?.meetingTitle || 'Meeting',
-          duration: roundedDuration,
-          notes
-        },
-        ipAddress: req.ip,
-        userAgent: req.get('User-Agent'),
-        severity: 'low',
-        category: 'user'
-      }).catch(err => logger.error('Failed to log meeting end activity', { error: err.message }));
-
-      // Emit real-time event to notify admin dashboard
-      if (req.emitAttendanceUpdate) {
-        req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId).catch(err => 
-          logger.error('Failed to emit attendance update', { error: err.message })
-        );
-      }
-
-      // Emit specific meeting:ended event for page synchronization
-      if (global.io) {
-        global.io.to(`tenant_${effectiveOrgId}`).emit('meeting:ended', {
-          employeeId: effectiveEmployeeId,
-          meetingTitle: attendance.meetingMode?.meetingTitle || 'Meeting',
-          duration: roundedDuration,
-          timestamp: new Date().toISOString()
-        });
-        logger.info('Meeting ended event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
-      }
-    } catch (err) {
-      logger.error('Error in async meeting end operations', { error: err.message, employeeId: effectiveEmployeeId });
     }
   });
 }));
@@ -1759,4 +1654,7 @@ router.get('/bulk-export', authorize('super_admin', 'admin', 'hr'), asyncHandler
 }));
 
 export default router;
+
+
+
 

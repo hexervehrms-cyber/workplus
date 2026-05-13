@@ -7,7 +7,6 @@ export interface AttendanceState {
   hoursWorked: number;
   status: string;
   isOnBreak: boolean;
-  isInMeeting: boolean;
   currentBreakDuration: number;
   breakType: string;
 }
@@ -29,7 +28,6 @@ const defaultState: AttendanceState = {
   hoursWorked: 0,
   status: 'absent',
   isOnBreak: false,
-  isInMeeting: false,
   currentBreakDuration: 0,
   breakType: 'regular'
 };
@@ -84,7 +82,6 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           hoursWorked: parsed.currentHours || parsed.hoursWorked || 0,
           status: parsed.status || 'absent',
           isOnBreak: parsed.isOnBreak || false,
-          isInMeeting: parsed.isInMeeting || false,
           currentBreakDuration: parsed.currentBreakDuration || 0,
           breakType: parsed.breakType || 'regular'
         });
@@ -108,7 +105,6 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         hoursWorked: attendance.hoursWorked,
         status: attendance.status,
         isOnBreak: attendance.isOnBreak,
-        isInMeeting: attendance.isInMeeting,
         currentBreakDuration: attendance.currentBreakDuration,
         breakType: attendance.breakType,
         timestamp: Date.now() // Add timestamp for freshness validation
@@ -141,7 +137,6 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             hoursWorked: newState.hoursWorked,
             status: newState.status,
             isOnBreak: newState.isOnBreak,
-            isInMeeting: newState.isInMeeting,
             currentBreakDuration: newState.currentBreakDuration,
             breakType: newState.breakType,
             timestamp: Date.now()
@@ -187,7 +182,6 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               hoursWorked: newState.hoursWorked,
               status: newState.status,
               isOnBreak: newState.isOnBreak,
-              isInMeeting: newState.isInMeeting,
               currentBreakDuration: newState.currentBreakDuration,
               breakType: newState.breakType,
               timestamp: Date.now()
@@ -215,7 +209,6 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             hoursWorked: state.hoursWorked,
             status: state.status,
             isOnBreak: state.isOnBreak,
-            isInMeeting: state.isInMeeting,
             currentBreakDuration: state.currentBreakDuration,
             breakType: state.breakType,
             timestamp: Date.now()

@@ -5,8 +5,20 @@
  * Also creates in-app notifications
  */
 
+import mongoose from 'mongoose';
 import logger from './logger.js';
 import Notification from '../models/Notification.js';
+
+function toRecipientUserId(employee) {
+  return employee?.userId || employee?.recipientUserId || employee?._id;
+}
+
+function toOrgObjectId(orgId) {
+  if (!orgId || orgId === 'system') return null;
+  const s = String(orgId);
+  if (!mongoose.Types.ObjectId.isValid(s)) return null;
+  return new mongoose.Types.ObjectId(s);
+}
 
 /**
  * Get the frontend URL for email links
@@ -24,14 +36,34 @@ class EmailNotificationService {
    */
   static async createInAppNotification(data) {
     try {
+      const rawRecipient = data.recipientUserId || data.recipientId;
+      const recipientId =
+        rawRecipient instanceof mongoose.Types.ObjectId
+          ? rawRecipient
+          : mongoose.Types.ObjectId.isValid(String(rawRecipient))
+            ? new mongoose.Types.ObjectId(String(rawRecipient))
+            : null;
+      const orgId = toOrgObjectId(data.orgId) || (data.orgId instanceof mongoose.Types.ObjectId ? data.orgId : null);
+      const senderId = data.senderId
+        ? (toOrgObjectId(data.senderId) || (data.senderId instanceof mongoose.Types.ObjectId ? data.senderId : null))
+        : undefined;
+
+      if (!recipientId || !orgId) {
+        logger.warn('In-app notification skipped: invalid recipientId or orgId', {
+          recipientId: data.recipientId,
+          orgId: data.orgId
+        });
+        return null;
+      }
+
       const notification = await Notification.create({
         title: data.title,
         message: data.message,
         type: data.type,
         priority: data.priority || 'medium',
-        recipientId: data.recipientId,
-        senderId: data.senderId,
-        orgId: data.orgId,
+        recipientId,
+        senderId,
+        orgId,
         relatedEntity: data.relatedEntity,
         actionUrl: data.actionUrl,
         actionText: data.actionText
@@ -39,13 +71,12 @@ class EmailNotificationService {
 
       logger.info('In-app notification created', {
         notificationId: notification._id,
-        recipientId: data.recipientId,
+        recipientId: String(recipientId),
         type: data.type
       });
 
-      // Emit real-time notification via Socket.IO
       if (global.io) {
-        global.io.to(`user_${data.recipientId}`).emit('notification', {
+        global.io.to(`user_${String(recipientId)}`).emit('notification', {
           id: notification._id,
           title: notification.title,
           message: notification.message,
@@ -82,37 +113,52 @@ class EmailNotificationService {
    */
   static async _sendEmailInternal(emailData) {
     try {
-      if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
-        logger.warn('Email service not configured', { 
+      const o = emailData.organizationSmtp;
+      const useOrg = o && o.host && o.user && o.pass;
+      const host = useOrg ? o.host : process.env.SMTP_HOST;
+      const port = useOrg ? (parseInt(String(o.port), 10) || 587) : (parseInt(process.env.SMTP_PORT, 10) || 587);
+      const secure = useOrg ? !!o.secure : (String(process.env.SMTP_PORT) === '465');
+      const authUser = useOrg ? o.user : process.env.SMTP_USER;
+      const authPass = useOrg ? o.pass : process.env.SMTP_PASS;
+
+      if (!host || !authUser || !authPass) {
+        logger.warn('Email service not configured', {
           to: emailData.to,
-          hasHost: !!process.env.SMTP_HOST,
-          hasUser: !!process.env.SMTP_USER,
-          hasPass: !!process.env.SMTP_PASS
+          useOrgSmtp: !!useOrg,
+          hasHost: !!host,
+          hasUser: !!authUser,
+          hasPass: !!authPass
         });
         return false;
       }
 
       const nodemailer = await import('nodemailer');
-      
+
       const transporter = nodemailer.default.createTransport({
-        host: process.env.SMTP_HOST,
-        port: parseInt(process.env.SMTP_PORT) || 587,
-        secure: false, // Use TLS (not SSL)
+        host,
+        port,
+        secure,
         auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS
+          user: authUser,
+          pass: authPass
         },
         tls: {
-          rejectUnauthorized: false // For Office 365
+          rejectUnauthorized: false
         }
       });
 
-      await transporter.verify();
+      try {
+        await transporter.verify();
+      } catch (verifyErr) {
+        logger.warn('SMTP verify failed; attempting send anyway', { error: verifyErr.message, host });
+      }
 
-      // Always send FROM the authenticated SMTP account (hr@hexerve.com)
-      // Use replyTo for employee email to comply with Office 365 security
-      const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER;
-      const fromName = emailData.fromName || 'WorkPlus HR';
+      const fromEmail = useOrg
+        ? (o.fromEmail || o.user)
+        : (process.env.FROM_EMAIL || process.env.SMTP_USER);
+      const fromName = useOrg
+        ? (o.fromName || emailData.fromName || 'WorkPlus HR')
+        : (emailData.fromName || 'WorkPlus HR');
       const replyToEmail = emailData.replyTo || emailData.from || fromEmail;
 
       const info = await transporter.sendMail({
@@ -124,21 +170,20 @@ class EmailNotificationService {
         replyTo: replyToEmail
       });
 
-      logger.info('Email sent successfully', { 
-        to: emailData.to, 
-        from: fromEmail, 
+      logger.info('Email sent successfully', {
+        to: emailData.to,
+        from: fromEmail,
         replyTo: replyToEmail,
-        subject: emailData.subject, 
+        subject: emailData.subject,
         messageId: info.messageId,
-        smtp: process.env.SMTP_HOST
+        smtp: host,
+        viaOrgSmtp: !!useOrg
       });
       return true;
     } catch (error) {
-      logger.error('Email send failed', { 
-        error: error.message, 
-        to: emailData.to,
-        smtp: process.env.SMTP_HOST,
-        user: process.env.SMTP_USER
+      logger.error('Email send failed', {
+        error: error.message,
+        to: emailData.to
       });
       return false;
     }
@@ -244,7 +289,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       message: `Your salary slip for ${monthName} has been approved. Net Salary: ₹${salarySlip.netSalary.toLocaleString()}`,
       type: 'payroll_generated',
       priority: 'high',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/payroll',
       actionText: 'View Payslip',
@@ -267,7 +312,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
   // LEAVE NOTIFICATIONS
   // ============================================
 
-  static async sendLeaveRequestSubmitted(employee, leaveRequest) {
+  static async sendLeaveRequestSubmitted(employee, leaveRequest, options = {}) {
     const start = new Date(leaveRequest.startDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     const end = new Date(leaveRequest.endDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     
@@ -281,13 +326,12 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Status:</span><span class="value" style="color:#ffc107">⏳ Pending</span></div></div>
 <div class="alert"><strong>⏰</strong> Pending approval from manager/HR.</div>`;
     
-    // Create in-app notification
     await this.createInAppNotification({
       title: 'Leave Request Submitted',
       message: `Your ${leaveRequest.type} leave request from ${start} to ${end} has been submitted and is pending approval.`,
       type: 'leave_request',
       priority: 'medium',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/leave',
       actionText: 'View Leave',
@@ -297,16 +341,16 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       }
     });
 
-    // Send email
     await this.sendEmail({
       to: employee.email,
       subject: `Leave Request Submitted - ${start} to ${end}`,
       html: this.getEmailTemplate(content, '📅 Leave Request Submitted'),
-      text: `Leave request from ${start} to ${end} submitted.`
+      text: `Leave request from ${start} to ${end} submitted.`,
+      organizationSmtp: options.organizationSmtp
     });
   }
 
-  static async sendLeaveRequestSubmittedToHR(employee, leaveRequest, hrEmail) {
+  static async sendLeaveRequestSubmittedToHR(employee, leaveRequest, hrEmail, options = {}) {
     const start = new Date(leaveRequest.startDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     const end = new Date(leaveRequest.endDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     const days = Math.ceil((new Date(leaveRequest.endDate) - new Date(leaveRequest.startDate)) / (1000 * 60 * 60 * 24)) + 1;
@@ -324,17 +368,17 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Status:</span><span class="value" style="color:#ffc107">⏳ Pending</span></div></div>
 <div style="text-align:center"><a href="${getFrontendUrl()}/admin/leave-requests" class="button">📋 Review Leave</a></div>`;
     
-    // Send email to HR with employee email in reply-to
     await this.sendEmail({
       to: hrEmail,
       replyTo: employee.email,
       subject: `New Leave Request - ${employee.name}: ${leaveRequest.type} (${days} days)`,
       html: this.getEmailTemplate(content, '📅 New Leave Request'),
-      text: `Leave request from ${start} to ${end} submitted by ${employee.name}.`
+      text: `Leave request from ${start} to ${end} submitted by ${employee.name}.`,
+      organizationSmtp: options.organizationSmtp
     });
   }
 
-  static async sendLeaveApproved(employee, leaveRequest, approver) {
+  static async sendLeaveApproved(employee, leaveRequest, approver, options = {}) {
     const start = new Date(leaveRequest.startDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     const end = new Date(leaveRequest.endDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     
@@ -348,13 +392,12 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Approved By:</span><span class="value">${approver.name}</span></div></div>
 <div style="text-align:center"><a href="${getFrontendUrl()}/employee/leave" class="button">📋 View Leaves</a></div>`;
     
-    // Create in-app notification
     await this.createInAppNotification({
       title: 'Leave Request Approved',
       message: `Your ${leaveRequest.type} leave request from ${start} to ${end} has been approved by ${approver.name}.`,
       type: 'leave_approved',
       priority: 'high',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       senderId: approver._id,
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/leave',
@@ -365,16 +408,16 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       }
     });
 
-    // Send email
     await this.sendEmail({
       to: employee.email,
       subject: `Leave Approved - ${start} to ${end}`,
       html: this.getEmailTemplate(content, '✅ Leave Approved'),
-      text: `Leave from ${start} to ${end} approved.`
+      text: `Leave from ${start} to ${end} approved.`,
+      organizationSmtp: options.organizationSmtp
     });
   }
 
-  static async sendLeaveApprovedToHR(employee, leaveRequest, approver, hrEmail) {
+  static async sendLeaveApprovedToHR(employee, leaveRequest, approver, hrEmail, options = {}) {
     const start = new Date(leaveRequest.startDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     const end = new Date(leaveRequest.endDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     
@@ -388,17 +431,17 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Approved By:</span><span class="value">${approver.name}</span></div></div>
 <div style="text-align:center"><a href="${getFrontendUrl()}/admin/leave-requests" class="button">📋 View All Leaves</a></div>`;
     
-    // Send email to HR with employee email in reply-to
     await this.sendEmail({
       to: hrEmail,
       replyTo: employee.email,
       subject: `Leave Approved - ${employee.name} (${start} to ${end})`,
       html: this.getEmailTemplate(content, '✅ Leave Approved'),
-      text: `Leave approved for ${employee.name} from ${start} to ${end}.`
+      text: `Leave approved for ${employee.name} from ${start} to ${end}.`,
+      organizationSmtp: options.organizationSmtp
     });
   }
 
-  static async sendLeaveRejected(employee, leaveRequest, rejector, reason) {
+  static async sendLeaveRejected(employee, leaveRequest, rejector, reason, options = {}) {
     const start = new Date(leaveRequest.startDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     const end = new Date(leaveRequest.endDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     
@@ -413,13 +456,12 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Reason:</span><span class="value">${reason || 'Not specified'}</span></div></div>
 <div style="text-align:center"><a href="${getFrontendUrl()}/employee/leave" class="button">📋 Submit New Request</a></div>`;
     
-    // Create in-app notification
     await this.createInAppNotification({
       title: 'Leave Request Rejected',
       message: `Your ${leaveRequest.type} leave request from ${start} to ${end} has been rejected. Reason: ${reason || 'Not specified'}`,
       type: 'leave_rejected',
       priority: 'high',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       senderId: rejector._id,
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/leave',
@@ -430,16 +472,16 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       }
     });
 
-    // Send email
     await this.sendEmail({
       to: employee.email,
       subject: `Leave Rejected - ${start} to ${end}`,
       html: this.getEmailTemplate(content, '❌ Leave Rejected'),
-      text: `Leave from ${start} to ${end} rejected. Reason: ${reason || 'Not specified'}`
+      text: `Leave from ${start} to ${end} rejected. Reason: ${reason || 'Not specified'}`,
+      organizationSmtp: options.organizationSmtp
     });
   }
 
-  static async sendExpenseRejected(employee, expense, rejector, reason) {
+  static async sendExpenseRejected(employee, expense, rejector, reason, options = {}) {
     const content = `<p>Dear <strong>${employee.name}</strong>,</p>
 <p>Your expense claim has been <strong style="color:#dc3545">rejected</strong>.</p>
 <div class="alert" style="background:#f8d7da;border-left-color:#dc3545"><strong>✗ Expense Rejected</strong></div>
@@ -450,13 +492,12 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Reason:</span><span class="value">${reason || 'Not specified'}</span></div></div>
 <div style="text-align:center"><a href="${getFrontendUrl()}/employee/expenses" class="button">📋 Submit New Request</a></div>`;
     
-    // Create in-app notification
     await this.createInAppNotification({
       title: 'Expense Claim Rejected',
       message: `Your expense claim of ₹${expense.amount.toLocaleString()} has been rejected. Reason: ${reason || 'Not specified'}`,
       type: 'expense_rejected',
       priority: 'high',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       senderId: rejector._id,
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/expenses',
@@ -467,12 +508,12 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       }
     });
 
-    // Send email
     await this.sendEmail({
       to: employee.email,
       subject: `Expense Rejected - ₹${expense.amount.toLocaleString()}`,
       html: this.getEmailTemplate(content, '❌ Expense Rejected'),
-      text: `Expense of ₹${expense.amount.toLocaleString()} rejected. Reason: ${reason || 'Not specified'}`
+      text: `Expense of ₹${expense.amount.toLocaleString()} rejected. Reason: ${reason || 'Not specified'}`,
+      organizationSmtp: options.organizationSmtp
     });
   }
 
@@ -480,7 +521,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
   // ATTENDANCE NOTIFICATIONS
   // ============================================
 
-  static async sendExpenseSubmitted(employee, expense) {
+  static async sendExpenseSubmitted(employee, expense, options = {}) {
     const content = `<p>Dear <strong>${employee.name}</strong>,</p>
 <p>Your expense claim has been submitted.</p>
 <div class="card"><h3 style="margin-top:0;color:#667eea">💳 Expense Details</h3>
@@ -491,13 +532,12 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Status:</span><span class="value" style="color:#ffc107">⏳ Pending</span></div></div>
 <div class="alert"><strong>⏰</strong> Under review. You'll be notified once processed.</div>`;
     
-    // Create in-app notification
     await this.createInAppNotification({
       title: 'Expense Claim Submitted',
       message: `Your expense claim of ₹${expense.amount.toLocaleString()} for ${expense.category} has been submitted and is under review.`,
       type: 'expense_submitted',
       priority: 'medium',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/expenses',
       actionText: 'View Expense',
@@ -507,16 +547,16 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       }
     });
 
-    // Send email
     await this.sendEmail({
       to: employee.email,
       subject: `Expense Submitted - ₹${expense.amount.toLocaleString()}`,
       html: this.getEmailTemplate(content, '💳 Expense Submitted'),
-      text: `Expense of ₹${expense.amount.toLocaleString()} submitted.`
+      text: `Expense of ₹${expense.amount.toLocaleString()} submitted.`,
+      organizationSmtp: options.organizationSmtp
     });
   }
 
-  static async sendExpenseSubmittedToHR(employee, expense, hrEmail) {
+  static async sendExpenseSubmittedToHR(employee, expense, hrEmail, options = {}) {
     const content = `<p>Dear HR Team,</p>
 <p>An employee has submitted an expense claim.</p>
 <div class="card"><h3 style="margin-top:0;color:#667eea">💳 Expense Details</h3>
@@ -529,17 +569,17 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Status:</span><span class="value" style="color:#ffc107">⏳ Pending</span></div></div>
 <div style="text-align:center"><a href="${getFrontendUrl()}/admin/expenses" class="button">📋 Review Expense</a></div>`;
     
-    // Send email to HR with employee email in reply-to
     await this.sendEmail({
       to: hrEmail,
       replyTo: employee.email,
       subject: `New Expense Claim - ${employee.name}: ₹${expense.amount.toLocaleString()}`,
       html: this.getEmailTemplate(content, '💳 New Expense Claim'),
-      text: `Expense of ₹${expense.amount.toLocaleString()} submitted by ${employee.name}.`
+      text: `Expense of ₹${expense.amount.toLocaleString()} submitted by ${employee.name}.`,
+      organizationSmtp: options.organizationSmtp
     });
   }
 
-  static async sendExpenseApproved(employee, expense, approver) {
+  static async sendExpenseApproved(employee, expense, approver, options = {}) {
     const content = `<p>Dear <strong>${employee.name}</strong>,</p>
 <p>Your expense claim has been <strong style="color:#28a745">approved</strong>!</p>
 <div class="success"><strong>✓ Expense Approved</strong></div>
@@ -550,13 +590,12 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="highlight"><div style="font-size:14px;opacity:0.9">Reimbursement</div><div class="amount">₹${expense.amount.toLocaleString()}</div></div>
 <div class="alert" style="background:#d4edda;border-left-color:#28a745"><strong>💰</strong> Amount will be credited in next payroll.</div>`;
     
-    // Create in-app notification
     await this.createInAppNotification({
       title: 'Expense Claim Approved',
       message: `Your expense claim of ₹${expense.amount.toLocaleString()} has been approved by ${approver.name}. Amount will be credited in next payroll.`,
       type: 'expense_approved',
       priority: 'high',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       senderId: approver._id,
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/expenses',
@@ -567,16 +606,16 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       }
     });
 
-    // Send email
     await this.sendEmail({
       to: employee.email,
       subject: `Expense Approved - ₹${expense.amount.toLocaleString()}`,
       html: this.getEmailTemplate(content, '✅ Expense Approved'),
-      text: `Expense of ₹${expense.amount.toLocaleString()} approved.`
+      text: `Expense of ₹${expense.amount.toLocaleString()} approved.`,
+      organizationSmtp: options.organizationSmtp
     });
   }
 
-  static async sendExpenseApprovedToHR(employee, expense, approver, hrEmail) {
+  static async sendExpenseApprovedToHR(employee, expense, approver, hrEmail, options = {}) {
     const content = `<p>Dear HR Team,</p>
 <p>An expense claim has been approved.</p>
 <div class="card"><h3 style="margin-top:0;color:#28a745">💳 Expense Approved</h3>
@@ -586,13 +625,13 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Approved By:</span><span class="value">${approver.name}</span></div></div>
 <div style="text-align:center"><a href="${getFrontendUrl()}/admin/expenses" class="button">📋 View All Expenses</a></div>`;
     
-    // Send email to HR with employee email in reply-to
     await this.sendEmail({
       to: hrEmail,
       replyTo: employee.email,
       subject: `Expense Approved - ${employee.name} (₹${expense.amount.toLocaleString()})`,
       html: this.getEmailTemplate(content, '✅ Expense Approved'),
-      text: `Expense approved for ${employee.name}: ₹${expense.amount.toLocaleString()}.`
+      text: `Expense approved for ${employee.name}: ₹${expense.amount.toLocaleString()}.`,
+      organizationSmtp: options.organizationSmtp
     });
   }
 
@@ -630,7 +669,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       message: `You checked in at ${time}`,
       type: 'attendance_checkin',
       priority: 'low',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/attendance',
       actionText: 'View Attendance'
@@ -686,7 +725,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
       message: `You checked out at ${time}. Work hours: ${workHours}`,
       type: 'attendance_checkout',
       priority: 'low',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/attendance',
       actionText: 'View Attendance'
@@ -743,7 +782,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
       message: `Your ${breakType} break of ${duration} minutes has been recorded at ${time}`,
       type: 'attendance_break',
       priority: 'low',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/attendance',
       actionText: 'View Attendance'
@@ -803,7 +842,7 @@ ${meeting.description ? `<div class="info-row"><span class="label">Description:<
       message: `Meeting "${meeting.title}" scheduled for ${startTime} - ${endTime}`,
       type: 'meeting_scheduled',
       priority: 'high',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/attendance',
       actionText: 'View Meeting'
@@ -867,7 +906,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       message: `Document "${document.name}" has been uploaded for you`,
       type: 'document_uploaded',
       priority: 'medium',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/documents',
       actionText: 'View Document',
@@ -904,7 +943,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       message: `Document "${document.name}" requires your approval`,
       type: 'document_approval_required',
       priority: 'high',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/admin/documents',
       actionText: 'Review Document',
@@ -940,7 +979,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       message: `Your document "${document.name}" has been approved by ${approver.name}`,
       type: 'document_approved',
       priority: 'high',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       senderId: approver._id,
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/documents',
@@ -981,7 +1020,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       message: `Your payslip for ${monthName} has been generated. Net Salary: ₹${payslip.netSalary.toLocaleString()}`,
       type: 'payslip_generated',
       priority: 'high',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/payroll',
       actionText: 'Download Payslip',
@@ -1024,7 +1063,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       message: `Asset "${asset.name}" (${asset.type}) has been allocated to you`,
       type: 'asset_allocated',
       priority: 'high',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/assets',
       actionText: 'View Asset',
@@ -1060,7 +1099,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       message: `Please return the asset "${asset.name}" as soon as possible`,
       type: 'asset_return_reminder',
       priority: 'high',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/assets',
       actionText: 'View Assets'
@@ -1093,7 +1132,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       message: `Your asset "${asset.name}" return has been confirmed`,
       type: 'asset_returned',
       priority: 'medium',
-      recipientId: employee._id,
+      recipientId: toRecipientUserId(employee),
       orgId: employee.orgId || 'system',
       actionUrl: '/employee/assets',
       actionText: 'View Assets'

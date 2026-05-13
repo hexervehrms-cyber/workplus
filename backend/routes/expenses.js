@@ -19,6 +19,7 @@ import EmailNotificationService from "../utils/emailNotificationService.js";
 import User from "../models/User.js";
 import { emitExpenseKPIUpdate } from "../utils/kpiUpdater.js";
 import { dashboardCache } from "../utils/dashboardCache.js";
+import { notifyAdminsOnExpenseSubmitted, resolveOrganizationSmtp } from "../utils/workflowNotifications.js";
 
 // Setup __dirname for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -342,35 +343,26 @@ router.post(
             .lean();
           
           if (user && user.email && employeeRecord) {
+            const orgSmtp = await resolveOrganizationSmtp(req.user.orgId);
             await EmailNotificationService.sendExpenseSubmitted(
-              { 
+              {
+                userId: req.user.userId,
                 _id: employeeRecord._id,
-                name: user.name, 
+                name: user.name,
                 email: user.email,
                 orgId: employeeRecord.orgId || req.user.orgId
               },
-              expense
+              expense,
+              { organizationSmtp: orgSmtp }
             );
             logger.info('Expense submitted email sent', { expenseId: expense._id, email: user.email });
-            
-            // Send notification to HR/admin
-            const hrEmail = process.env.HR_EMAIL;
-            if (!hrEmail) {
-              logger.warn('HR_EMAIL not configured; skipping expense HR email', { expenseId: expense._id, orgId: req.user.orgId });
-            }
-            if (hrEmail) {
-              await EmailNotificationService.sendExpenseSubmittedToHR(
-                {
-                  name: user.name,
-                  email: user.email,
-                  employeeCode: employeeRecord.employeeCode,
-                  department: employeeRecord.department
-                },
-                expense,
-                hrEmail
-              );
-              logger.info('Expense submitted notification sent to HR', { expenseId: expense._id, hrEmail });
-            }
+
+            await notifyAdminsOnExpenseSubmitted(req.user.orgId, {
+              expense,
+              employeeUserId: req.user.userId,
+              employeeName: user.name,
+              employeeEmail: user.email
+            });
           } else {
             logger.warn('Missing user or employee data for expense submission notification', { 
               expenseId: expense._id, 
@@ -549,24 +541,26 @@ router.put(
           const user = await User.findById(expense.userId).select('name email').lean();
           const employee = await Employee.findOne({ userId: expense.userId }).select('_id orgId').lean();
           const approver = await User.findById(req.user.userId).select('name').lean();
-          
+          const orgSmtp = await resolveOrganizationSmtp(expense.orgId);
+
           if (user && user.email && employee) {
             await EmailNotificationService.sendExpenseApproved(
-              { 
+              {
+                userId: expense.userId,
                 _id: employee._id,
-                name: user.name, 
+                name: user.name,
                 email: user.email,
                 orgId: employee.orgId || req.user.orgId
               },
               expense,
-              { 
+              {
                 _id: req.user.userId,
-                name: approver?.name || 'Admin' 
-              }
+                name: approver?.name || 'Admin'
+              },
+              { organizationSmtp: orgSmtp }
             );
             logger.info('Expense approved email sent', { expenseId, email: user.email });
-            
-            // Send notification to HR/admin
+
             const hrEmail = process.env.HR_EMAIL;
             if (!hrEmail) {
               logger.warn('HR_EMAIL not configured; skipping expense HR email', { expenseId, orgId: req.user.orgId });
@@ -578,19 +572,20 @@ router.put(
                   email: user.email
                 },
                 expense,
-                { 
+                {
                   _id: req.user.userId,
-                  name: approver?.name || 'Admin' 
+                  name: approver?.name || 'Admin'
                 },
-                hrEmail
+                hrEmail,
+                { organizationSmtp: orgSmtp }
               );
               logger.info('Expense approved notification sent to HR', { expenseId, hrEmail });
             }
           } else {
-            logger.warn('Missing user or employee data for expense notification', { 
-              expenseId, 
-              hasUser: !!user, 
-              hasEmployee: !!employee 
+            logger.warn('Missing user or employee data for expense notification', {
+              expenseId,
+              hasUser: !!user,
+              hasEmployee: !!employee
             });
           }
         } catch (emailError) {
@@ -665,28 +660,31 @@ router.put(
           const user = await User.findById(expense.userId).select('name email').lean();
           const employee = await Employee.findOne({ userId: expense.userId }).select('_id orgId').lean();
           const rejector = await User.findById(req.user.userId).select('name').lean();
-          
+          const orgSmtp = await resolveOrganizationSmtp(expense.orgId);
+
           if (user && user.email && employee) {
             await EmailNotificationService.sendExpenseRejected(
-              { 
+              {
+                userId: expense.userId,
                 _id: employee._id,
-                name: user.name, 
+                name: user.name,
                 email: user.email,
                 orgId: employee.orgId || req.user.orgId
               },
               expense,
-              { 
+              {
                 _id: req.user.userId,
-                name: rejector?.name || 'Admin' 
+                name: rejector?.name || 'Admin'
               },
-              rejectionReason || 'Not specified'
+              rejectionReason || 'Not specified',
+              { organizationSmtp: orgSmtp }
             );
             logger.info('Expense rejected email sent', { expenseId, email: user.email });
           } else {
-            logger.warn('Missing user or employee data for expense rejection notification', { 
-              expenseId, 
-              hasUser: !!user, 
-              hasEmployee: !!employee 
+            logger.warn('Missing user or employee data for expense rejection notification', {
+              expenseId,
+              hasUser: !!user,
+              hasEmployee: !!employee
             });
           }
         } catch (emailError) {

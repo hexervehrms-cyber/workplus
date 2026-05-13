@@ -18,6 +18,7 @@ import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
 import { emitLeaveKPIUpdate } from '../utils/kpiUpdater.js';
 import { dashboardCache } from '../utils/dashboardCache.js';
+import { notifyAdminsOnLeaveSubmitted, resolveOrganizationSmtp } from '../utils/workflowNotifications.js';
 
 const router = express.Router();
 
@@ -351,7 +352,9 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
   // Send email notification
   try {
     const employeeRecord = await Employee.findOne({ userId: updated.userId._id }).select('_id orgId').lean();
+    const orgSmtp = await resolveOrganizationSmtp(updated.orgId);
     const employee = {
+      userId: updated.userId?._id || updated.userId,
       _id: employeeRecord?._id,
       name: updated.userId?.name || updated.employeeName,
       email: updated.userId?.email,
@@ -362,23 +365,24 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
       name: updated.approvedBy?.name || 'Manager'
     };
     if (employee.email && employeeRecord) {
-      await EmailNotificationService.sendLeaveApproved(employee, updated, approver);
+      await EmailNotificationService.sendLeaveApproved(employee, updated, approver, { organizationSmtp: orgSmtp });
       logger.info('Leave approved email sent', { leaveRequestId: id, email: employee.email });
-      
-      // Send notification to HR/admin
+
       const hrEmail = process.env.HR_EMAIL;
       if (!hrEmail) {
         logger.warn('HR_EMAIL not configured; skipping leave HR email', { leaveRequestId: id, orgId: updated.orgId });
       }
       if (hrEmail) {
-        await EmailNotificationService.sendLeaveApprovedToHR(employee, updated, approver, hrEmail);
+        await EmailNotificationService.sendLeaveApprovedToHR(employee, updated, approver, hrEmail, {
+          organizationSmtp: orgSmtp
+        });
         logger.info('Leave approved notification sent to HR', { leaveRequestId: id, hrEmail });
       }
     } else {
-      logger.warn('Missing employee data for leave approval notification', { 
-        leaveRequestId: id, 
-        hasEmail: !!employee.email, 
-        hasEmployeeRecord: !!employeeRecord 
+      logger.warn('Missing employee data for leave approval notification', {
+        leaveRequestId: id,
+        hasEmail: !!employee.email,
+        hasEmployeeRecord: !!employeeRecord
       });
     }
   } catch (emailError) {
@@ -543,7 +547,9 @@ router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res)
   // Send email notification
   try {
     const employeeRecord = await Employee.findOne({ userId: updated.userId._id }).select('_id orgId').lean();
+    const orgSmtp = await resolveOrganizationSmtp(updated.orgId);
     const employee = {
+      userId: updated.userId?._id || updated.userId,
       _id: employeeRecord?._id,
       name: updated.userId?.name || updated.employeeName,
       email: updated.userId?.email,
@@ -554,7 +560,9 @@ router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res)
       name: updated.rejectedBy?.name || 'Manager'
     };
     if (employee.email && employeeRecord) {
-      await EmailNotificationService.sendLeaveRejected(employee, updated, rejector, rejectionReason);
+      await EmailNotificationService.sendLeaveRejected(employee, updated, rejector, rejectionReason, {
+        organizationSmtp: orgSmtp
+      });
       logger.info('Leave rejected email sent', { leaveRequestId: id, email: employee.email });
     } else {
       logger.warn('Missing employee data for leave rejection notification', { 
@@ -936,46 +944,38 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     data: { leaveRequestId: leaveRequest._id, leaveType, days }
   }, null, orgId);
 
-  // Send email notification to employee (confirmation)
+  // Send email notification to employee (confirmation) + admins / Teams
   try {
     const user = await User.findById(userId).select('name email').lean();
-    const employeeRecord = await Employee.findOne({ userId }).select('_id orgId').lean();
-    
+    const employeeRecord = await Employee.findOne({ userId }).select('_id orgId employeeCode department').lean();
+
+    const orgSmtp = await resolveOrganizationSmtp(orgId);
+
     if (user && user.email && employeeRecord) {
       await EmailNotificationService.sendLeaveRequestSubmitted(
-        { 
+        {
+          userId,
           _id: employeeRecord._id,
-          name: user.name, 
+          name: user.name,
           email: user.email,
           orgId: employeeRecord.orgId || orgId
         },
-        { _id: leaveRequest._id, type: leaveType, startDate: start, endDate: end, reason }
+        { _id: leaveRequest._id, type: leaveType, startDate: start, endDate: end, reason },
+        { organizationSmtp: orgSmtp }
       );
       logger.info('Leave request submitted email sent', { leaveRequestId: leaveRequest._id, email: user.email });
-      
-      // Send notification to HR/admin
-      const hrEmail = process.env.HR_EMAIL;
-      if (!hrEmail) {
-        logger.warn('HR_EMAIL not configured; skipping leave HR email', { leaveRequestId: leaveRequest._id, orgId });
-      }
-      if (hrEmail) {
-        await EmailNotificationService.sendLeaveRequestSubmittedToHR(
-          {
-            name: user.name,
-            email: user.email,
-            employeeCode: employeeRecord.employeeCode,
-            department: employeeRecord.department
-          },
-          { _id: leaveRequest._id, type: leaveType, startDate: start, endDate: end, reason },
-          hrEmail
-        );
-        logger.info('Leave request submitted notification sent to HR', { leaveRequestId: leaveRequest._id, hrEmail });
-      }
+
+      await notifyAdminsOnLeaveSubmitted(orgId, {
+        leaveRequest,
+        employeeUserId: userId,
+        employeeName: user.name,
+        employeeEmail: user.email
+      });
     } else {
-      logger.warn('Missing user or employee data for leave submission notification', { 
-        leaveRequestId: leaveRequest._id, 
-        hasUser: !!user, 
-        hasEmployeeRecord: !!employeeRecord 
+      logger.warn('Missing user or employee data for leave submission notification', {
+        leaveRequestId: leaveRequest._id,
+        hasUser: !!user,
+        hasEmployeeRecord: !!employeeRecord
       });
     }
   } catch (emailError) {

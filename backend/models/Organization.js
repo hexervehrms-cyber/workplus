@@ -76,7 +76,33 @@ const organizationSchema = new mongoose.Schema(
       currency: { type: String, default: "USD" },
       dateFormat: { type: String, default: "DD/MM/YYYY" },
       allowRemoteWork: { type: Boolean, default: false },
-      requireCheckInLocation: { type: Boolean, default: false }
+      requireCheckInLocation: { type: Boolean, default: false },
+      integrations: {
+        smtp: {
+          useCustom: { type: Boolean, default: false },
+          host: { type: String, default: '' },
+          port: { type: Number, default: 587 },
+          secure: { type: Boolean, default: false },
+          user: { type: String, default: '' },
+          pass: { type: String, default: '' },
+          fromEmail: { type: String, default: '' },
+          fromName: { type: String, default: '' }
+        },
+        teams: {
+          enabled: { type: Boolean, default: false },
+          webhookUrl: { type: String, default: '' }
+        }
+      },
+      notificationRouting: {
+        notifyAdminsOnLeaveSubmit: { type: Boolean, default: true },
+        notifyAdminsOnExpenseSubmit: { type: Boolean, default: true },
+        notifyEmployeeOnLeaveDecision: { type: Boolean, default: true },
+        notifyEmployeeOnExpenseDecision: { type: Boolean, default: true },
+        adminRoles: {
+          type: [String],
+          default: ['admin', 'hr', 'manager']
+        }
+      }
     },
     isActive: { 
       type: Boolean, 

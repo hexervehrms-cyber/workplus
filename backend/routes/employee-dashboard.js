@@ -30,6 +30,8 @@ import {
   schemas 
 } from '../middleware/validation.js';
 import logger from '../utils/logger.js';
+import EmailNotificationService from '../utils/emailNotificationService.js';
+import { notifyAdminsOnLeaveSubmitted, resolveOrganizationSmtp } from '../utils/workflowNotifications.js';
 
 // Import models
 import User from '../models/User.js';
@@ -980,6 +982,33 @@ router.post('/leaves',
         reason,
         orgId
       });
+
+      try {
+        const u = await User.findById(userId).select('name email').lean();
+        const employeeRec = await Employee.findOne({ userId, orgId }).select('_id orgId').lean();
+        if (u?.email && employeeRec) {
+          const orgSmtp = await resolveOrganizationSmtp(orgId);
+          await EmailNotificationService.sendLeaveRequestSubmitted(
+            {
+              userId,
+              _id: employeeRec._id,
+              name: u.name,
+              email: u.email,
+              orgId: employeeRec.orgId || orgId
+            },
+            leaveRequest,
+            { organizationSmtp: orgSmtp }
+          );
+          await notifyAdminsOnLeaveSubmitted(orgId, {
+            leaveRequest,
+            employeeUserId: userId,
+            employeeName: u.name,
+            employeeEmail: u.email
+          });
+        }
+      } catch (notifyErr) {
+        logger.warn('Leave workflow notifications failed', { error: notifyErr.message, leaveId: leaveRequest._id });
+      }
 
       // Emit real-time notification to managers
       if (global.socketManager && global.notificationManager) {

@@ -5,6 +5,8 @@ import { toast } from 'sonner';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
+import { Textarea } from '../../components/ui/textarea';
+import { Switch } from '../../components/ui/switch';
 import { Eye, EyeOff, Loader2, Save, Edit2, X } from 'lucide-react';
 
 interface AdminData {
@@ -29,6 +31,35 @@ export default function AdminSettings() {
     currentPassword: '',
     newPassword: '',
     confirmPassword: ''
+  });
+
+  const canManageOrgNotifications = ['admin', 'hr', 'super_admin'].includes(user?.role || '');
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [notifSaving, setNotifSaving] = useState(false);
+  const [smtpPassConfigured, setSmtpPassConfigured] = useState(false);
+  const [teamsWebhookConfigured, setTeamsWebhookConfigured] = useState(false);
+  const [integrations, setIntegrations] = useState({
+    smtp: {
+      useCustom: false,
+      host: '',
+      port: 587,
+      secure: false,
+      user: '',
+      pass: '',
+      fromEmail: '',
+      fromName: ''
+    },
+    teams: {
+      enabled: false,
+      webhookUrl: ''
+    }
+  });
+  const [notificationRouting, setNotificationRouting] = useState({
+    notifyAdminsOnLeaveSubmit: true,
+    notifyAdminsOnExpenseSubmit: true,
+    notifyEmployeeOnLeaveDecision: true,
+    notifyEmployeeOnExpenseDecision: true,
+    adminRoles: ['admin', 'hr', 'manager'] as string[]
   });
 
   // Fetch admin data
@@ -59,7 +90,49 @@ export default function AdminSettings() {
     }
   }, [user]);
 
-  // Handle save admin information
+  useEffect(() => {
+    const loadNotif = async () => {
+      if (!canManageOrgNotifications || !user?.id) return;
+      try {
+        setNotifLoading(true);
+        const res = await apiClient.get('/admin/notification-integrations');
+        if (res.data?.success && res.data.data) {
+          const d = res.data.data;
+          if (d.integrations) {
+            setIntegrations((prev) => ({
+              ...prev,
+              smtp: {
+                ...prev.smtp,
+                ...(d.integrations.smtp || {}),
+                pass: ''
+              },
+              teams: {
+                enabled: !!d.integrations.teams?.enabled,
+                webhookUrl: ''
+              }
+            }));
+            setSmtpPassConfigured(!!d.integrations.smtp?.passConfigured);
+            setTeamsWebhookConfigured(!!d.integrations.teams?.webhookConfigured);
+          }
+          if (d.notificationRouting) {
+            setNotificationRouting((prev) => ({
+              ...prev,
+              ...d.notificationRouting,
+              adminRoles: d.notificationRouting.adminRoles?.length
+                ? d.notificationRouting.adminRoles
+                : prev.adminRoles
+            }));
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setNotifLoading(false);
+      }
+    };
+    loadNotif();
+  }, [user?.id, user?.role, canManageOrgNotifications]);
+
   const handleSaveAdminInfo = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -70,13 +143,12 @@ export default function AdminSettings() {
 
     try {
       setSaving(true);
-      
+
       const response = await apiClient.put(`/users/${admin?._id}`, {
         name: editedAdmin.name,
         email: editedAdmin.email
       });
 
-      // Backend returns { success: true, message: "...", data: {...} }
       if (response.data?.success) {
         setAdmin(editedAdmin);
         setIsEditingInfo(false);
@@ -89,6 +161,51 @@ export default function AdminSettings() {
       toast.error(error.response?.data?.message || 'Failed to update admin information');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSaveNotificationSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setNotifSaving(true);
+      const smtpPayload: Record<string, unknown> = {
+        useCustom: integrations.smtp.useCustom,
+        host: integrations.smtp.host,
+        port: Number(integrations.smtp.port) || 587,
+        secure: integrations.smtp.secure,
+        user: integrations.smtp.user,
+        fromEmail: integrations.smtp.fromEmail,
+        fromName: integrations.smtp.fromName
+      };
+      if (integrations.smtp.pass.trim()) {
+        smtpPayload.pass = integrations.smtp.pass.trim();
+      }
+      const res = await apiClient.patch('/admin/notification-integrations', {
+        integrations: {
+          smtp: smtpPayload,
+          teams: {
+            enabled: integrations.teams.enabled,
+            webhookUrl: integrations.teams.webhookUrl.trim()
+          }
+        },
+        notificationRouting
+      });
+      if (res.data?.success) {
+        toast.success('Notification settings saved');
+        setIntegrations((p) => ({ ...p, smtp: { ...p.smtp, pass: '' } }));
+        if (res.data.data?.integrations?.smtp?.passConfigured !== undefined) {
+          setSmtpPassConfigured(!!res.data.data.integrations.smtp.passConfigured);
+        }
+        if (res.data.data?.integrations?.teams?.webhookConfigured !== undefined) {
+          setTeamsWebhookConfigured(!!res.data.data.integrations.teams.webhookConfigured);
+        }
+      } else {
+        toast.error(res.data?.message || 'Save failed');
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to save notification settings');
+    } finally {
+      setNotifSaving(false);
     }
   };
 
@@ -145,7 +262,7 @@ export default function AdminSettings() {
 
   return (
     <div className="min-h-screen bg-background p-6">
-      <div className="max-w-2xl mx-auto space-y-6">
+      <div className="max-w-3xl mx-auto space-y-6">
         {/* Header */}
         <div>
           <h1 className="text-3xl font-bold text-foreground">Settings</h1>
@@ -262,6 +379,194 @@ export default function AdminSettings() {
             </>
           )}
         </Card>
+
+        {canManageOrgNotifications && (
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-xl font-semibold text-foreground">Notifications &amp; integrations</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Route leave and expense alerts to admins over email, in-app, and Microsoft Teams. Optional org SMTP overrides server defaults.
+                </p>
+              </div>
+              {notifLoading && <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />}
+            </div>
+
+            <form onSubmit={handleSaveNotificationSettings} className="space-y-6">
+              <div className="space-y-3 rounded-lg border border-border p-4">
+                <h3 className="text-sm font-semibold text-foreground">Who gets employee requests</h3>
+                <div className="flex flex-wrap gap-4">
+                  <label className="flex items-center gap-2 text-sm">
+                    <Switch
+                      checked={notificationRouting.notifyAdminsOnLeaveSubmit}
+                      onCheckedChange={(v) =>
+                        setNotificationRouting((p) => ({ ...p, notifyAdminsOnLeaveSubmit: v }))
+                      }
+                    />
+                    Leave → admins
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Switch
+                      checked={notificationRouting.notifyAdminsOnExpenseSubmit}
+                      onCheckedChange={(v) =>
+                        setNotificationRouting((p) => ({ ...p, notifyAdminsOnExpenseSubmit: v }))
+                      }
+                    />
+                    Expense → admins
+                  </label>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground">Admin roles (comma-separated)</label>
+                  <Input
+                    className="mt-1"
+                    value={notificationRouting.adminRoles.join(', ')}
+                    onChange={(e) =>
+                      setNotificationRouting((p) => ({
+                        ...p,
+                        adminRoles: e.target.value.split(',').map((s) => s.trim()).filter(Boolean)
+                      }))
+                    }
+                    placeholder="admin, hr, manager"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-lg border border-border p-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-foreground">Organization SMTP (optional)</h3>
+                  <Switch
+                    checked={integrations.smtp.useCustom}
+                    onCheckedChange={(v) =>
+                      setIntegrations((p) => ({ ...p, smtp: { ...p.smtp, useCustom: v } }))
+                    }
+                  />
+                </div>
+                {integrations.smtp.useCustom && (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="sm:col-span-2">
+                      <label className="text-sm font-medium">SMTP host</label>
+                      <Input
+                        className="mt-1"
+                        value={integrations.smtp.host}
+                        onChange={(e) =>
+                          setIntegrations((p) => ({ ...p, smtp: { ...p.smtp, host: e.target.value } }))
+                        }
+                        placeholder="smtp.office365.com"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Port</label>
+                      <Input
+                        type="number"
+                        className="mt-1"
+                        value={integrations.smtp.port}
+                        onChange={(e) =>
+                          setIntegrations((p) => ({
+                            ...p,
+                            smtp: { ...p.smtp, port: Number(e.target.value) || 587 }
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="flex items-end pb-2">
+                      <label className="flex items-center gap-2 text-sm">
+                        <Switch
+                          checked={integrations.smtp.secure}
+                          onCheckedChange={(v) =>
+                            setIntegrations((p) => ({ ...p, smtp: { ...p.smtp, secure: v } }))
+                          }
+                        />
+                        SSL (465)
+                      </label>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Username</label>
+                      <Input
+                        className="mt-1"
+                        value={integrations.smtp.user}
+                        onChange={(e) =>
+                          setIntegrations((p) => ({ ...p, smtp: { ...p.smtp, user: e.target.value } }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Password</label>
+                      <Input
+                        type="password"
+                        className="mt-1"
+                        autoComplete="new-password"
+                        value={integrations.smtp.pass}
+                        onChange={(e) =>
+                          setIntegrations((p) => ({ ...p, smtp: { ...p.smtp, pass: e.target.value } }))
+                        }
+                        placeholder={smtpPassConfigured ? '•••••••• (leave blank to keep)' : ''}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">From email</label>
+                      <Input
+                        className="mt-1"
+                        value={integrations.smtp.fromEmail}
+                        onChange={(e) =>
+                          setIntegrations((p) => ({ ...p, smtp: { ...p.smtp, fromEmail: e.target.value } }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">From name</label>
+                      <Input
+                        className="mt-1"
+                        value={integrations.smtp.fromName}
+                        onChange={(e) =>
+                          setIntegrations((p) => ({ ...p, smtp: { ...p.smtp, fromName: e.target.value } }))
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-3 rounded-lg border border-border p-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-foreground">Microsoft Teams (incoming webhook)</h3>
+                  <Switch
+                    checked={integrations.teams.enabled}
+                    onCheckedChange={(v) =>
+                      setIntegrations((p) => ({ ...p, teams: { ...p.teams, enabled: v } }))
+                    }
+                  />
+                </div>
+                {integrations.teams.enabled && (
+                  <div>
+                    <label className="text-sm font-medium">Webhook URL</label>
+                    <Textarea
+                      className="mt-1 font-mono text-xs"
+                      rows={3}
+                      value={integrations.teams.webhookUrl}
+                      onChange={(e) =>
+                        setIntegrations((p) => ({
+                          ...p,
+                          teams: { ...p.teams, webhookUrl: e.target.value }
+                        }))
+                      }
+                      placeholder="https://outlook.office.com/webhook/..."
+                    />
+                    {teamsWebhookConfigured && !integrations.teams.webhookUrl && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        A webhook is already saved. Paste a new URL to replace it.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <Button type="submit" disabled={notifSaving || notifLoading} className="gap-2">
+                {notifSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Save notification settings
+              </Button>
+            </form>
+          </Card>
+        )}
 
         {/* Password Reset Card */}
         <Card className="p-6">

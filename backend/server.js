@@ -96,6 +96,7 @@ import chatRoutes from "./routes/chat.js";
 import onboardingRoutes from "./routes/onboarding.js";
 import salaryRoutes from "./routes/salary.js";
 import payrollRoutes from "./routes/payroll.js";
+import organizationNotificationSettingsRoutes from "./routes/organizationNotificationSettings.js";
 import announcementsRoutes from "./routes/announcements.js";
 import notificationsRoutes from "./routes/notifications.js";
 import tasksRoutes from "./routes/tasks.js";
@@ -666,6 +667,9 @@ app.use("/api/salary", authenticate, salaryRoutes);
 
 // Payroll routes (with authentication)
 app.use("/api/payroll", authenticate, payrollRoutes);
+
+// Admin: org notification integrations (SMTP + Teams) and routing
+app.use("/api/admin", organizationNotificationSettingsRoutes);
 
 // ============================================================================
 // SOCKET.IO SETUP

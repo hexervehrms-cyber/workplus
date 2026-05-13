@@ -654,7 +654,7 @@ export default function EmployeeDashboard() {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
       
-      const token = localStorage.getItem('authToken');
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       const idempotencyKey = `break-start-${employeeId}-${Date.now()}`;
       
       const payload: any = {
@@ -749,7 +749,7 @@ export default function EmployeeDashboard() {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
       
-      const token = localStorage.getItem('authToken');
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       const idempotencyKey = `break-end-${employeeId}-${Date.now()}`;
       
       const payload: any = {
@@ -835,7 +835,7 @@ export default function EmployeeDashboard() {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
       
-      const token = localStorage.getItem('authToken');
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       const payload: any = {
         notes: 'Checked in'
       };
@@ -911,7 +911,7 @@ export default function EmployeeDashboard() {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
       
-      const token = localStorage.getItem('authToken');
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       const payload: any = {
         notes: 'Checked out'
       };

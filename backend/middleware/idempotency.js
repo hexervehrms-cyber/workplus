@@ -6,15 +6,11 @@
 
 import crypto from 'crypto';
 
-// In-memory store for idempotency keys (use Redis in production)
 const idempotencyStore = new Map();
 
-// TTL for idempotency keys (24 hours)
 const IDEMPOTENCY_TTL = 24 * 60 * 60 * 1000;
+const PROCESSING_TTL = 60 * 1000;
 
-/**
- * Clean up expired idempotency keys
- */
 const cleanupExpiredKeys = () => {
   const now = Date.now();
   for (const [key, value] of idempotencyStore.entries()) {
@@ -24,54 +20,38 @@ const cleanupExpiredKeys = () => {
   }
 };
 
-// Run cleanup every hour
 setInterval(cleanupExpiredKeys, 60 * 60 * 1000);
 
 /**
- * Generate idempotency key from request
- * @param {Object} req - Express request object
- * @returns {string} Idempotency key
+ * @param {import('express').Request} req
+ * @returns {string}
  */
 const generateIdempotencyKey = (req) => {
-  // Use client-provided key if available
-  if (req.headers['idempotency-key']) {
-    return req.headers['idempotency-key'];
+  const headerKey = req.headers['idempotency-key'];
+  if (headerKey && typeof headerKey === 'string' && headerKey.trim()) {
+    return headerKey.trim();
   }
 
-/**
- * Generate a unique idempotency key from request signature
- * Includes timestamp to prevent duplicate requests across different time periods
- */
-const generateIdempotencyKey = (req) => {
-  // Use custom idempotency key if provided (includes timestamp)
-  if (req.body?.idempotencyKey) {
-    return req.body.idempotencyKey;
+  const bodyKey = req.body?.idempotencyKey;
+  if (bodyKey && typeof bodyKey === 'string' && bodyKey.trim()) {
+    return bodyKey.trim();
   }
 
-  // Fallback: Generate key from request signature
   const signature = JSON.stringify({
     method: req.method,
     path: req.path,
     userId: req.user?.userId || req.user?._id || req.user?.id,
-    // Include action-specific fields to differentiate requests
     action: req.body?.action || 'default',
-    timestamp: Math.floor(Date.now() / 1000) // Group by second
+    timestamp: Math.floor(Date.now() / 1000)
   });
 
   return crypto.createHash('sha256').update(signature).digest('hex');
 };
 
 /**
- * Idempotency middleware for critical operations
- * Prevents duplicate submissions (payroll, expenses, leave approvals, break operations)
- * 
- * Usage:
- * router.post('/payroll', idempotencyMiddleware, createPayroll);
- * 
- * For break operations, include idempotencyKey in request body with timestamp
+ * Idempotency middleware for critical operations (payroll, expenses, leave, breaks, etc.)
  */
 export const idempotencyMiddleware = async (req, res, next) => {
-  // Only apply to POST, PUT, PATCH, DELETE
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
     return next();
   }
@@ -79,17 +59,14 @@ export const idempotencyMiddleware = async (req, res, next) => {
   const idempotencyKey = generateIdempotencyKey(req);
   const cached = idempotencyStore.get(idempotencyKey);
 
-  // Check if request is duplicate
   if (cached) {
     const now = Date.now();
 
-    // Key expired, remove it
     if (cached.expiresAt < now) {
       idempotencyStore.delete(idempotencyKey);
       return next();
     }
 
-    // Request is still processing
     if (cached.status === 'processing') {
       return res.status(409).json({
         success: false,
@@ -98,102 +75,49 @@ export const idempotencyMiddleware = async (req, res, next) => {
       });
     }
 
-    // Request already completed - return cached response
-    return res.status(cached.statusCode).json(cached.response);
-  }
-
-  // Mark request as processing
-  idempotencyStore.set(idempotencyKey, {
-    status: 'processing',
-    expiresAt: Date.now() + 60000 // 1 minute TTL for processing
-  });
-
-  // Intercept res.json to cache response
-  const originalJson = res.json.bind(res);
-  res.json = function(data) {
-    // Cache successful responses for 24 hours
-    idempotencyStore.set(idempotencyKey, {
-      status: 'completed',
-      statusCode: res.statusCode,
-      response: data,
-      expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hours
-    });
-
-    return originalJson(data);
-  };
-
-  next();
-};
-        success: false,
-        message: 'Request is already being processed. Please wait.',
-        idempotencyKey
-      });
-    }
-
-    // Request completed, return cached response
     if (cached.status === 'completed') {
       return res.status(cached.statusCode).json(cached.response);
     }
   }
 
-  // Mark request as processing
   idempotencyStore.set(idempotencyKey, {
     status: 'processing',
-    expiresAt: Date.now() + IDEMPOTENCY_TTL,
-    startedAt: Date.now()
+    expiresAt: Date.now() + PROCESSING_TTL
   });
 
-  // Intercept response to cache it
   const originalJson = res.json.bind(res);
   const originalStatus = res.status.bind(res);
-  let statusCode = 200;
+  let statusCode = res.statusCode || 200;
 
   res.status = (code) => {
     statusCode = code;
     return originalStatus(code);
   };
 
-  res.json = (data) => {
-    // Cache successful responses
+  res.json = function (data) {
     if (statusCode >= 200 && statusCode < 300) {
       idempotencyStore.set(idempotencyKey, {
         status: 'completed',
         statusCode,
         response: data,
-        expiresAt: Date.now() + IDEMPOTENCY_TTL,
-        completedAt: Date.now()
+        expiresAt: Date.now() + IDEMPOTENCY_TTL
       });
     } else {
-      // Remove failed requests from cache
       idempotencyStore.delete(idempotencyKey);
     }
-
     return originalJson(data);
-  };
-
-  // Handle errors
-  const originalNext = next;
-  next = (err) => {
-    if (err) {
-      // Remove failed requests from cache
-      idempotencyStore.delete(idempotencyKey);
-    }
-    originalNext(err);
   };
 
   next();
 };
 
-/**
- * Get idempotency store stats (for monitoring)
- */
 export const getIdempotencyStats = () => {
   const now = Date.now();
   let processing = 0;
   let completed = 0;
   let expired = 0;
 
-  for (const [key, value] of idempotencyStore.entries()) {
+  for (const [, value] of idempotencyStore.entries()) {
     if (value.expiresAt < now) {
       expired++;
     } else if (value.status === 'processing') {
@@ -211,9 +135,6 @@ export const getIdempotencyStats = () => {
   };
 };
 
-/**
- * Clear idempotency store (for testing)
- */
 export const clearIdempotencyStore = () => {
   idempotencyStore.clear();
 };

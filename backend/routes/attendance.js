@@ -707,7 +707,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
         orgId: effectiveOrgId,
         date: { $gte: today, $lt: tomorrow },
         checkIn: { $exists: true },
-        checkOut: { $exists: false }, // Not checked out
+        $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
         'breaks': { $not: { $elemMatch: { startTime: { $exists: true }, endTime: { $exists: false } } } }, // No active break
         'meetingMode.isActive': { $ne: true } // Not in meeting
       },

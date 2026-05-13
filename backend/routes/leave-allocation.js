@@ -338,12 +338,16 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
     year: currentYear,
     month: currentMonth
   });
+
+  if (!allocation) {
     return res.json({
       success: true,
       data: {
         vacation: 0,
         sickLeave: 0,
         casualLeave: 0,
+        earnedLeave: 0,
+        medicalLeave: 0,
         maternityLeave: 0,
         paternityLeave: 0,
         compensatoryOff: 0,
@@ -355,8 +359,29 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
     });
   }
 
-  // Calculate remaining balance
+  const leaveKeys = [
+    'vacation',
+    'sickLeave',
+    'casualLeave',
+    'earnedLeave',
+    'medicalLeave',
+    'maternityLeave',
+    'paternityLeave',
+    'compensatoryOff',
+    'personal',
+    'emergency',
+    'ncns',
+    'sandwichLeave'
+  ];
+
   const balance = {};
+  for (const key of leaveKeys) {
+    const allocated = allocation.allocations?.[key] || 0;
+    const carried = allocation.carriedForward?.[key] || 0;
+    const used = allocation.used?.[key] || 0;
+    const pending = allocation.pending?.[key] || 0;
+    balance[key] = allocated + carried - used - pending;
+  }
 
   res.json({
     success: true,

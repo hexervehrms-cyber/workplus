@@ -1009,9 +1009,10 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 }));
 
 /**
- * GET /api/attendance/stats/summary
- * Get attendance statistics
+ * POST /api/attendance/meeting-start
+ * Start meeting mode for today's attendance
  */
+router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, meetingTitle = 'Meeting', meetingType = 'internal', notes, orgId } = req.body;
   const currentUserId = req.user.userId;
   const authOrgId = req.user.orgId;

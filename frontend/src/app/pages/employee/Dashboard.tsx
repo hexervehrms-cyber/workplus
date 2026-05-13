@@ -4,19 +4,16 @@ import InteractiveCalendar from '../../components/InteractiveCalendar';
 import ChatWidget from '../../components/ChatWidget';
 import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useAuth } from '../../context/AuthContext';
-import { apiGet, apiPost, buildApiUrl } from '../../utils/apiHelper';
+import { apiGet, buildApiUrl } from '../../utils/apiHelper';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useAttendance } from '../../../context/AttendanceContext';
 import {
   Calendar,
   Clock,
-  TrendingUp,
-  LogOut,
-  FileText
+  TrendingUp
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
-import { Button } from '../../components/ui/button';
 import {
   Table,
   TableBody,
@@ -55,18 +52,13 @@ export default function EmployeeDashboard() {
   // CRITICAL STATE VARIABLES - Enterprise sync management
   // ============================================================================
   const [lastSocketEventTime, setLastSocketEventTime] = useState(0);
-  const [lastActionTime, setLastActionTime] = useState(0);
   const [disableRefresh, setDisableRefresh] = useState(false);
-  const [actionInProgress, setActionInProgress] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
 
   // Refs for realtime values (prevent stale closures)
   const employeeIdRef = useRef<string | null>(null);
   const lastActionTimeRef = useRef(0);
   const lastSocketEventTimeRef = useRef(0);
   const disableRefreshRef = useRef(false);
-
-  // FIX #1: actionInProgressRef so fetchDashboardData reads live value, not stale closure
   const actionInProgressRef = useRef(false);
 
   // Update refs whenever state changes
@@ -75,21 +67,12 @@ export default function EmployeeDashboard() {
   }, [employeeId]);
 
   useEffect(() => {
-    lastActionTimeRef.current = lastActionTime;
-  }, [lastActionTime]);
-
-  useEffect(() => {
     lastSocketEventTimeRef.current = lastSocketEventTime;
   }, [lastSocketEventTime]);
 
   useEffect(() => {
     disableRefreshRef.current = disableRefresh;
   }, [disableRefresh]);
-
-  // FIX #1 continued: keep actionInProgressRef in sync with state
-  useEffect(() => {
-    actionInProgressRef.current = actionInProgress;
-  }, [actionInProgress]);
 
   const [kpiMetrics, setKpiMetrics] = useState({
     leaveBalance: "0 days",
@@ -109,12 +92,11 @@ export default function EmployeeDashboard() {
   // DERIVED UI STATE - Computed from attendance state
   // ============================================================================
   const attendanceUIState = useMemo((): AttendanceUIState => {
-    if (isSyncing) return 'SYNCING';
     if (!todayAttendance.isCheckedIn) return 'IDLE';
     if (todayAttendance.isInMeeting) return 'IN_MEETING';
     if (todayAttendance.isOnBreak) return 'ON_BREAK';
     return 'WORKING';
-  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.isInMeeting, isSyncing]);
+  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.isInMeeting]);
 
   // Debug: Log todayAttendance changes
   useEffect(() => {
@@ -127,13 +109,11 @@ export default function EmployeeDashboard() {
       uiState: attendanceUIState
     });
     console.log('⏱️ Sync timing:', {
-      lastActionTime,
       lastSocketEventTime,
-      timeSinceAction: Date.now() - lastActionTime,
       timeSinceSocket: Date.now() - lastSocketEventTime
     });
     console.groupEnd();
-  }, [todayAttendance, attendanceUIState, lastActionTime, lastSocketEventTime]);
+  }, [todayAttendance, attendanceUIState, lastSocketEventTime]);
 
   // ============================================================================
   // STALE PROTECTION LOGIC
@@ -555,7 +535,7 @@ export default function EmployeeDashboard() {
   // PERIODIC REFRESH - With enterprise-safe guards
   // ============================================================================
   useEffect(() => {
-    if (!todayAttendance.isCheckedIn || actionInProgress || disableRefresh) return;
+    if (!todayAttendance.isCheckedIn || disableRefresh) return;
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
@@ -567,410 +547,11 @@ export default function EmployeeDashboard() {
     }, SYNC_CONFIG.PERIODIC_REFRESH_MS);
 
     return () => clearInterval(interval);
-  }, [todayAttendance.isCheckedIn, actionInProgress, disableRefresh, safeRefresh, isRecentlyUpdated]);
+  }, [todayAttendance.isCheckedIn, disableRefresh, safeRefresh, isRecentlyUpdated]);
 
   // ============================================================================
-  // DEBOUNCE HELPER
+  // ATTENDANCE ACTION HANDLERS - REMOVED (moved to Attendance page)
   // ============================================================================
-  const debounceRef = useRef<{ [key: string]: number }>({});
-
-  const isDebounced = (key: string, delayMs = SYNC_CONFIG.DEBOUNCE_MS): boolean => {
-    const now = Date.now();
-    const lastCall = debounceRef.current[key] || 0;
-    if (now - lastCall < delayMs) {
-      console.log(`⏸️ [DEBOUNCE] ${key} called too soon, ignoring`);
-      return true;
-    }
-    debounceRef.current[key] = now;
-    return false;
-  };
-
-  // ============================================================================
-  // ENTERPRISE LOGGING HELPER
-  // ============================================================================
-  const logAction = (action: string, data: any = {}) => {
-    console.group(`[${action}]`);
-    console.log('🔵 Action triggered:', data);
-    console.log('⏱️ Timing:', {
-      lastActionTime,
-      lastSocketEventTime,
-      timeSinceAction: Date.now() - lastActionTime,
-      timeSinceSocket: Date.now() - lastSocketEventTime
-    });
-    console.groupEnd();
-  };
-
-  // ============================================================================
-  // ATTENDANCE ACTION HANDLERS
-  // ============================================================================
-
-  const handleCheckIn = async () => {
-    logAction('CHECK-IN ACTION');
-
-    if (isDebounced('checkIn')) return;
-    if (actionInProgress) {
-      console.log('⚠️ Action already in progress');
-      return;
-    }
-
-    try {
-      console.log('✅ Starting check-in process');
-      setActionInProgress(true);
-      setIsSyncing(true);
-      setLastActionTime(Date.now());
-
-      const checkInAt = new Date();
-      const checkInTime = checkInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-
-      const optimisticState = {
-        isCheckedIn: true,
-        checkInTime: checkInTime,
-        checkOutTime: null,
-        hoursWorked: 0,
-        status: 'present',
-        isOnBreak: false,
-        isInMeeting: false,
-        currentBreakDuration: 0,
-        breakType: 'regular' as const
-      };
-
-      console.log('🔄 Setting optimistic state:', optimisticState);
-      updateAttendance(optimisticState, 'action');
-
-      const result = await apiPost('/attendance/check-in', {
-        location: 'Office',
-        notes: 'Check-in from dashboard'
-      });
-
-      if (result.success) {
-        console.log('✅ Check-in API successful');
-        // FIX #3: Only refresh if socket is not connected; otherwise socket event handles it
-        await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.SOCKET_WAIT_MS));
-        if (!realTimeSocket.isConnected?.()) {
-          await safeRefresh(true);
-        }
-      } else {
-        console.error('❌ Check-in API failed:', result?.message);
-        updateAttendance({
-          isCheckedIn: false,
-          checkInTime: null,
-          checkOutTime: null,
-          hoursWorked: 0,
-          status: 'absent',
-          isOnBreak: false,
-          isInMeeting: false,
-          currentBreakDuration: 0,
-          breakType: 'regular'
-        }, 'rollback');
-      }
-    } catch (err) {
-      console.error('❌ Check-in error:', err);
-      updateAttendance({
-        isCheckedIn: false,
-        checkInTime: null,
-        checkOutTime: null,
-        hoursWorked: 0,
-        status: 'absent',
-        isOnBreak: false,
-        isInMeeting: false,
-        currentBreakDuration: 0,
-        breakType: 'regular'
-      }, 'rollback');
-    } finally {
-      setTimeout(() => {
-        setActionInProgress(false);
-        setIsSyncing(false);
-      }, 300);
-    }
-  };
-
-  const handleCheckOut = async () => {
-    logAction('CHECK-OUT ACTION');
-
-    if (isDebounced('checkOut')) return;
-    if (actionInProgress) {
-      console.log('⚠️ Action already in progress');
-      return;
-    }
-
-    try {
-      setActionInProgress(true);
-      setIsSyncing(true);
-      setLastActionTime(Date.now());
-
-      const result = await apiPost('/attendance/check-out', {
-        location: 'Office',
-        notes: 'Check-out from dashboard'
-      });
-
-      if (result?.success) {
-        console.log('✅ Check-out successful');
-        updateAttendance({
-          isCheckedIn: false,
-          isOnBreak: false,
-          isInMeeting: false
-        }, 'action');
-        // FIX #3: Only refresh if socket is not connected
-        if (!realTimeSocket.isConnected?.()) {
-          await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.DB_SYNC_WAIT_MS));
-          await safeRefresh(true);
-        }
-      } else {
-        console.error('❌ Check-out failed:', result?.message);
-      }
-    } catch (err) {
-      console.error('Check-out error:', err);
-    } finally {
-      setTimeout(() => {
-        setActionInProgress(false);
-        setIsSyncing(false);
-      }, 300);
-    }
-  };
-
-  const handleBreakStart = async (breakType = 'regular') => {
-    logAction('BREAK START ACTION', { breakType });
-
-    if (isDebounced('breakStart')) return;
-    if (actionInProgress) {
-      console.log('⚠️ Action already in progress');
-      return;
-    }
-
-    try {
-      setActionInProgress(true);
-      setIsSyncing(true);
-      setLastActionTime(Date.now());
-
-      const currentEmployeeId = await ensureEmployeeId();
-      if (!currentEmployeeId) {
-        console.error('Employee ID not found. Unable to start break.');
-        return;
-      }
-
-      updateAttendance({
-        isOnBreak: true,
-        breakType: breakType
-      }, 'action');
-
-      const result = await apiPost('/attendance/break-start', {
-        employeeId: currentEmployeeId,
-        orgId: user?.orgId || user?.tenantId || 'system',
-        employeeName: user?.name || 'Employee',
-        breakType: breakType,
-        notes: `${breakType === 'lunch' ? 'Lunch Break' : 'Break'} started from dashboard`
-      });
-
-      if (result.success) {
-        console.log('✅ Break started successfully');
-        // FIX #3: Let socket event update state; only fallback-refresh if disconnected
-        if (!realTimeSocket.isConnected?.()) {
-          await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.SOCKET_WAIT_MS));
-          await safeRefresh(true);
-        }
-      } else {
-        console.error('❌ Break start failed:', result?.message);
-        updateAttendance({
-          isOnBreak: false,
-          breakType: 'regular'
-        }, 'rollback');
-      }
-    } catch (err) {
-      console.error('Break start error:', err);
-      updateAttendance({
-        isOnBreak: false,
-        breakType: 'regular'
-      }, 'rollback');
-    } finally {
-      setTimeout(() => {
-        setActionInProgress(false);
-        setIsSyncing(false);
-      }, 300);
-    }
-  };
-
-  const handleBreakEnd = async () => {
-    console.group('[BREAK END ACTION]');
-    console.log('🟢 Ending break');
-
-    if (isDebounced('breakEnd')) {
-      console.groupEnd();
-      return;
-    }
-    if (actionInProgress) {
-      console.log('⚠️ Action already in progress');
-      console.groupEnd();
-      return;
-    }
-
-    try {
-      setActionInProgress(true);
-      setIsSyncing(true);
-      setLastActionTime(Date.now());
-
-      const currentEmployeeId = await ensureEmployeeId();
-      if (!currentEmployeeId) {
-        console.error('Employee ID not found. Unable to end break.');
-        console.groupEnd();
-        return;
-      }
-
-      // FIX #4: Added 'action' tag (was missing, unlike all other handlers)
-      updateAttendance({
-        isOnBreak: false,
-        currentBreakDuration: 0,
-        breakType: 'regular'
-      }, 'action');
-
-      const result = await apiPost('/attendance/break-end', {
-        employeeId: currentEmployeeId,
-        orgId: user?.orgId || user?.tenantId || 'system',
-        employeeName: user?.name || 'Employee',
-        notes: 'Break ended from dashboard'
-      });
-
-      if (result.success) {
-        console.log('✅ Break end successful');
-        // FIX #3: Let socket event update state; only fallback-refresh if disconnected
-        if (!realTimeSocket.isConnected?.()) {
-          await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.DB_SYNC_WAIT_MS));
-          await safeRefresh(true);
-        }
-      } else {
-        console.error('❌ Break end failed:', result);
-        updateAttendance({
-          isOnBreak: true,
-          breakType: todayAttendance.breakType
-        }, 'rollback');
-      }
-    } catch (err) {
-      console.error('Break end error:', err);
-      updateAttendance({
-        isOnBreak: true,
-        breakType: todayAttendance.breakType
-      }, 'rollback');
-    } finally {
-      setTimeout(() => {
-        setActionInProgress(false);
-        setIsSyncing(false);
-      }, 300);
-      console.groupEnd();
-    }
-  };
-
-  const handleMeetingStart = async () => {
-    console.group('[MEETING START ACTION]');
-    console.log('🟢 Starting meeting');
-
-    if (isDebounced('meetingStart')) {
-      console.groupEnd();
-      return;
-    }
-    if (actionInProgress) {
-      console.log('⚠️ Action already in progress');
-      console.groupEnd();
-      return;
-    }
-
-    try {
-      setActionInProgress(true);
-      setIsSyncing(true);
-      setLastActionTime(Date.now());
-
-      const currentEmployeeId = await ensureEmployeeId();
-      if (!currentEmployeeId) {
-        console.error('Employee ID not found. Unable to start meeting.');
-        console.groupEnd();
-        return;
-      }
-
-      updateAttendance({ isInMeeting: true }, 'action');
-
-      const result = await apiPost('/attendance/meeting-start', {
-        employeeId: currentEmployeeId,
-        orgId: user?.orgId || user?.tenantId || 'system',
-        meetingTitle: 'Meeting',
-        meetingType: 'internal',
-        notes: 'Meeting started from dashboard'
-      });
-
-      if (result.success) {
-        console.log('✅ Meeting start successful');
-        if (!realTimeSocket.isConnected?.()) {
-          await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.SOCKET_WAIT_MS));
-          await safeRefresh(true);
-        }
-      } else {
-        console.error('❌ Meeting start failed:', result?.message);
-        updateAttendance({ isInMeeting: false }, 'rollback');
-      }
-    } catch (err) {
-      console.error('Meeting start error:', err);
-      updateAttendance({ isInMeeting: false }, 'rollback');
-    } finally {
-      setTimeout(() => {
-        setActionInProgress(false);
-        setIsSyncing(false);
-      }, 300);
-      console.groupEnd();
-    }
-  };
-
-  const handleMeetingEnd = async () => {
-    console.group('[MEETING END ACTION]');
-    console.log('🔴 Ending meeting');
-
-    if (isDebounced('meetingEnd')) {
-      console.groupEnd();
-      return;
-    }
-    if (actionInProgress) {
-      console.log('⚠️ Action already in progress');
-      console.groupEnd();
-      return;
-    }
-
-    try {
-      setActionInProgress(true);
-      setIsSyncing(true);
-      setLastActionTime(Date.now());
-
-      const currentEmployeeId = await ensureEmployeeId();
-      if (!currentEmployeeId) {
-        console.error('Employee ID not found. Unable to end meeting.');
-        console.groupEnd();
-        return;
-      }
-
-      updateAttendance({ isInMeeting: false }, 'action');
-
-      const result = await apiPost('/attendance/meeting-end', {
-        employeeId: currentEmployeeId,
-        orgId: user?.orgId || user?.tenantId || 'system',
-        notes: 'Meeting ended from dashboard'
-      });
-
-      if (result.success) {
-        console.log('✅ Meeting end successful');
-        if (!realTimeSocket.isConnected?.()) {
-          await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.DB_SYNC_WAIT_MS));
-          await safeRefresh(true);
-        }
-      } else {
-        console.error('❌ Meeting end failed:', result);
-        updateAttendance({ isInMeeting: true }, 'rollback');
-      }
-    } catch (err) {
-      console.error('Meeting end error:', err);
-      updateAttendance({ isInMeeting: true }, 'rollback');
-    } finally {
-      setTimeout(() => {
-        setActionInProgress(false);
-        setIsSyncing(false);
-      }, 300);
-      console.groupEnd();
-    }
-  };
 
   return (
     <>
@@ -985,87 +566,7 @@ export default function EmployeeDashboard() {
             <p className="text-muted-foreground">Here's what's happening with your work today</p>
           </div>
 
-          {/* Attendance Action Buttons */}
-          <div className="flex items-center gap-2">
-            {!todayAttendance.isCheckedIn ? (
-              <Button
-                onClick={handleCheckIn}
-                disabled={actionInProgress}
-                size="sm"
-                className="gap-2 bg-green-600 hover:bg-green-700"
-              >
-                <Clock className="w-4 h-4" />
-                Log In
-              </Button>
-            ) : (
-              <>
-                {!todayAttendance.isOnBreak ? (
-                  <Button
-                    onClick={() => handleBreakStart('regular')}
-                    disabled={actionInProgress || todayAttendance.isInMeeting}
-                    size="sm"
-                    variant="outline"
-                    className="gap-2"
-                  >
-                    <Clock className="w-4 h-4" />
-                    Break
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={handleBreakEnd}
-                    disabled={actionInProgress}
-                    size="sm"
-                    variant="outline"
-                    className="gap-2"
-                  >
-                    <Clock className="w-4 h-4" />
-                    End Break
-                  </Button>
-                )}
-
-                {!todayAttendance.isInMeeting ? (
-                  <Button
-                    onClick={handleMeetingStart}
-                    disabled={actionInProgress}
-                    size="sm"
-                    variant="outline"
-                    className="gap-2"
-                  >
-                    <FileText className="w-4 h-4" />
-                    Meeting
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={handleMeetingEnd}
-                    disabled={actionInProgress}
-                    size="sm"
-                    variant="outline"
-                    className="gap-2"
-                  >
-                    <FileText className="w-4 h-4" />
-                    End Meeting
-                  </Button>
-                )}
-
-                <Button
-                  onClick={handleCheckOut}
-                  disabled={actionInProgress}
-                  size="sm"
-                  variant="destructive"
-                  className="gap-2"
-                >
-                  <LogOut className="w-4 h-4" />
-                  Log Out
-                </Button>
-              </>
-            )}
-
-            {todayAttendance.isCheckedIn && (
-              <Badge variant="default" className="ml-2">
-                {todayAttendance.isOnBreak ? 'On Break' : todayAttendance.isInMeeting ? 'In Meeting' : 'Working'}
-              </Badge>
-            )}
-          </div>
+        {/* Attendance Action Buttons - Moved to Attendance page */}
         </div>
 
         {/* KPI Cards */}

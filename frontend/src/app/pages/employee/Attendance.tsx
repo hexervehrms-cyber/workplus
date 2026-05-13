@@ -1,21 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Clock, LogIn, LogOut, Pause, MessageSquare, Calendar, Loader } from 'lucide-react';
+import { Pause, MessageSquare, Calendar, Loader } from 'lucide-react';
 import { buildApiUrl } from '../../utils/apiHelper';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '../../components/ui/alert-dialog';
+
 import { useAuth } from '../../context/AuthContext';
-import { useAttendance } from '../../context/AttendanceContext';
 
 interface AttendanceRecord {
   _id: string;
@@ -36,7 +27,6 @@ export default function Attendance() {
   const [currentHours, setCurrentHours] = useState(0);
   const [checkedIn, setCheckedIn] = useState(false);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
-  const [showCheckOutConfirm, setShowCheckOutConfirm] = useState(false);
   const [isOnBreak, setIsOnBreak] = useState(false);
   const [breakType, setBreakType] = useState<'regular' | null>(null);
   const [isInMeeting, setIsInMeeting] = useState(false);
@@ -290,152 +280,6 @@ export default function Attendance() {
       }
     }
     return orgId || 'system';
-  };
-
-  // Check In
-  const handleCheckIn = async () => {
-    try {
-      setActionLoading(true);
-      const token = localStorage.getItem('authToken');
-      const payload: any = {
-        location: 'Office',
-        notes: 'Check-in from attendance page'
-      };
-      // Optional identifiers for non-employee roles only; employee flow resolves from JWT.
-      if (employeeId) payload.employeeId = employeeId;
-      if (user?.id) payload.userId = user.id;
-      if (user?.name) payload.employeeName = user.name;
-      if (getOrgId()) payload.orgId = getOrgId();
-      const response = await fetch(buildApiUrl('/attendance/check-in'), {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Check-in failed');
-      }
-
-      const result = await response.json();
-
-      // Update state immediately - DO NOT fetch from server
-      setCheckedIn(true);
-      setCurrentHours(0);
-      setIsOnBreak(false);
-      setBreakType(null);
-      setIsInMeeting(false);
-      addActivityLog('Checked In', 'working');
-      setTodayData((prev: any) => ({
-        ...(prev || {}),
-        attendance: result?.data || result?.data?.attendance || prev?.attendance
-      }));
-      
-      // Save checked-in state to localStorage
-      const today = new Date().toDateString();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-        checkedIn: true,
-        currentHours: 0,
-        isOnBreak: false,
-        breakType: null,
-        isInMeeting: false
-      }));
-      localStorage.setItem(attendanceCacheKey, JSON.stringify({
-        checkedIn: true,
-        currentHours: 0,
-        isOnBreak: false,
-        breakType: null,
-        isInMeeting: false
-      }));
-
-      // Refresh from server in background (source of truth).
-      if (employeeId) {
-        void fetchTodayAttendance();
-      }
-    } catch (error) {
-      console.error('Check-in error:', error);
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  // Check Out
-  const handleCheckOut = async () => {
-    try {
-      setActionLoading(true);
-      const token = localStorage.getItem('authToken');
-      const payload: any = {
-        location: 'Office',
-        notes: 'Check-out from attendance page'
-      };
-      if (employeeId) payload.employeeId = employeeId;
-      if (user?.id) payload.userId = user.id;
-      if (getOrgId()) payload.orgId = getOrgId();
-      const response = await fetch(buildApiUrl('/attendance/check-out'), {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Check-out failed');
-      }
-
-      const result = await response.json();
-
-      // Update state immediately - DO NOT fetch from server
-      setCheckedIn(false);
-      setShowCheckOutConfirm(false);
-      setIsOnBreak(false);
-      setBreakType(null);
-      setIsInMeeting(false);
-      addActivityLog('Checked Out', 'completed');
-      setTodayData((prev: any) => ({
-        ...(prev || {}),
-        attendance: result?.data || result?.data?.attendance || prev?.attendance
-      }));
-      
-      // Save checked-out state to localStorage
-      const today = new Date().toDateString();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-        checkedIn: false,
-        currentHours: result.data?.hoursWorked || 0,
-        isOnBreak: false,
-        breakType: null,
-        isInMeeting: false
-      }));
-      localStorage.setItem(attendanceCacheKey, JSON.stringify({
-        checkedIn: false,
-        currentHours: result.data?.hoursWorked || 0,
-        isOnBreak: false,
-        breakType: null,
-        isInMeeting: false
-      }));
-      
-      // Update hours from response
-      if (result.data?.hoursWorked) {
-        setCurrentHours(result.data.hoursWorked);
-      }
-      
-      // Wait 2 seconds for database to update AND socket event to propagate
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      if (employeeId) {
-        await fetchTodayAttendance();
-      }
-      // History rarely changes; refresh it after check-out only
-      await fetchAttendanceHistory();
-    } catch (error) {
-      console.error('Check-out error:', error);
-    } finally {
-      setActionLoading(false);
-    }
   };
 
   // Break Start
@@ -1218,37 +1062,6 @@ export default function Attendance() {
           </Card>
         </>
       )}
-
-      {/* Check Out Confirmation Dialog */}
-      <AlertDialog open={showCheckOutConfirm} onOpenChange={setShowCheckOutConfirm}>
-        <AlertDialogContent className="rounded-2xl">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Check Out</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to check out? You have worked for {Math.floor(currentHours)}h {Math.round((currentHours % 1) * 60)}m today.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="bg-muted/50 p-4 rounded-lg mb-4">
-            <p className="text-sm text-muted-foreground mb-2">Check-in Time:</p>
-            <p className="font-semibold">
-              {todayData?.attendance?.checkIn 
-                ? new Date(todayData.attendance.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-                : '-'}
-            </p>
-          </div>
-          <div className="flex gap-3">
-            <AlertDialogCancel className="rounded-lg">Cancel</AlertDialogCancel>
-            <AlertDialogAction 
-              onClick={handleCheckOut}
-              disabled={actionLoading}
-              className="rounded-lg bg-destructive hover:bg-destructive/90"
-            >
-              {actionLoading ? <Loader className="w-4 h-4 mr-2 animate-spin" /> : null}
-              Check Out
-            </AlertDialogAction>
-          </div>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

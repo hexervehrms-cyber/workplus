@@ -56,18 +56,6 @@ export default function EmployeeDashboard() {
   const [loading, setLoading] = useState(false);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
 
-  // Guard: Don't render if auth is still loading or user is not authenticated
-  if (authLoading || !user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">Loading dashboard...</p>
-        </div>
-      </div>
-    );
-  }
-
   // ============================================================================
   // CRITICAL STATE VARIABLES - Enterprise sync management
   // ============================================================================
@@ -175,74 +163,8 @@ export default function EmployeeDashboard() {
   }, []);
 
   // ============================================================================
-  // SAFE REFRESH SYSTEM - Centralized refresh controller
+  // FETCH DASHBOARD DATA - With stale protection (must be above safeRefresh — TDZ)
   // ============================================================================
-  const safeRefresh = useCallback(async (forceRefresh = false) => {
-    if (disableRefreshRef.current && !forceRefresh) {
-      console.log('⏸️ [SAFE REFRESH] Refresh disabled, skipping');
-      return;
-    }
-
-    if (isRecentlyUpdated() && !forceRefresh) {
-      console.log('⏸️ [SAFE REFRESH] Recently updated, skipping');
-      return;
-    }
-
-    // FIX #3: Don't refresh if an action is currently in progress
-    if (actionInProgressRef.current) {
-      console.log('⏸️ [SAFE REFRESH] Action in progress, skipping to avoid overwriting optimistic state');
-      return;
-    }
-
-    console.log('🔄 [SAFE REFRESH] Starting safe refresh');
-    setDisableRefresh(true);
-
-    try {
-      await fetchDashboardData(forceRefresh);
-    } finally {
-      setTimeout(() => {
-        setDisableRefresh(false);
-      }, SYNC_CONFIG.REFRESH_COOLDOWN_MS);
-    }
-  }, [isRecentlyUpdated, fetchDashboardData]);
-
-  // Helper function to fetch employee ID
-  const ensureEmployeeId = async (): Promise<string | null> => {
-    if (employeeIdRef.current) return employeeIdRef.current;
-
-    if (!user?.id) return null;
-    if (user?.employeeId) {
-      setEmployeeId(user.employeeId);
-      return user.employeeId;
-    }
-
-    try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        if (result.data?._id) {
-          setEmployeeId(result.data._id);
-          return result.data._id;
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching employee data:', err);
-    }
-
-    return null;
-  };
-
-  // ============================================================================
-  // FETCH DASHBOARD DATA - With stale protection
-  // ============================================================================
-  // FIX #6: Added updateAttendance to useCallback deps
   const fetchDashboardData = useCallback(async (_forceRefresh = false) => {
     if (!user) return;
 
@@ -407,6 +329,69 @@ export default function EmployeeDashboard() {
     }
   // FIX #6: updateAttendance added to deps
   }, [user, attendanceCacheKey, isRecentlyUpdated, updateAttendance]);
+
+  const ensureEmployeeId = async (): Promise<string | null> => {
+    if (employeeIdRef.current) return employeeIdRef.current;
+
+    if (!user?.id) return null;
+    if (user?.employeeId) {
+      setEmployeeId(user.employeeId);
+      return user.employeeId;
+    }
+
+    try {
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.data?._id) {
+          setEmployeeId(result.data._id);
+          return result.data._id;
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching employee data:', err);
+    }
+
+    return null;
+  };
+
+  const safeRefresh = useCallback(
+    async (forceRefresh = false) => {
+      if (disableRefreshRef.current && !forceRefresh) {
+        console.log('⏸️ [SAFE REFRESH] Refresh disabled, skipping');
+        return;
+      }
+
+      if (isRecentlyUpdated() && !forceRefresh) {
+        console.log('⏸️ [SAFE REFRESH] Recently updated, skipping');
+        return;
+      }
+
+      if (actionInProgressRef.current) {
+        console.log('⏸️ [SAFE REFRESH] Action in progress, skipping to avoid overwriting optimistic state');
+        return;
+      }
+
+      console.log('🔄 [SAFE REFRESH] Starting safe refresh');
+      setDisableRefresh(true);
+
+      try {
+        await fetchDashboardData(forceRefresh);
+      } finally {
+        setTimeout(() => {
+          setDisableRefresh(false);
+        }, SYNC_CONFIG.REFRESH_COOLDOWN_MS);
+      }
+    },
+    [isRecentlyUpdated, fetchDashboardData]
+  );
 
   // Fetch data on mount with force refresh
   useEffect(() => {
@@ -969,6 +954,17 @@ export default function EmployeeDashboard() {
       actionInProgressRef.current = false;
     }
   };
+
+  if (authLoading || !user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
+          <p className="mt-4 text-muted-foreground">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>

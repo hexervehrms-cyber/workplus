@@ -3,6 +3,7 @@ import { lazy, Suspense } from 'react';
 import { MainLayout } from './layouts/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { RouteErrorBoundary } from './components/RouteErrorBoundary';
 import Login from './pages/Login';
 
 // Minimal loading fallback - no visible spinner for faster perceived performance
@@ -354,7 +355,9 @@ const routes = [
         path: 'employee',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
-            <EmployeeDashboard />
+            <RouteErrorBoundary>
+              <EmployeeDashboard />
+            </RouteErrorBoundary>
           </ProtectedRoute>
         ),
       },
@@ -394,7 +397,9 @@ const routes = [
         path: 'employee/attendance',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
-            <Attendance />
+            <RouteErrorBoundary>
+              <Attendance />
+            </RouteErrorBoundary>
           </ProtectedRoute>
         ),
       },

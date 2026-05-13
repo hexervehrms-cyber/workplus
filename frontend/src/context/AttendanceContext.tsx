@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
+import { TokenManager } from '../app/utils/api';
 
 export interface AttendanceState {
   isCheckedIn: boolean;
@@ -42,6 +43,32 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // Get today's date string for localStorage key
   const getTodayKey = () => new Date().toDateString();
 
+  const persistToLocalStorage = useCallback((state: AttendanceState) => {
+    try {
+      const today = getTodayKey();
+      const user = TokenManager.getUser();
+      const userId = user?.id ?? null;
+      const stateToSave = {
+        userId,
+        checkedIn: state.isCheckedIn,
+        isCheckedIn: state.isCheckedIn,
+        checkInTime: state.checkInTime,
+        checkOutTime: state.checkOutTime,
+        currentHours: state.hoursWorked,
+        hoursWorked: state.hoursWorked,
+        status: state.status,
+        isOnBreak: state.isOnBreak,
+        currentBreakDuration: state.currentBreakDuration,
+        breakType: state.breakType,
+        timestamp: Date.now()
+      };
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify(stateToSave));
+      console.log('💾 [ATTENDANCE-CONTEXT] Saved to localStorage:', stateToSave);
+    } catch (e) {
+      console.warn('Failed to save to localStorage:', e);
+    }
+  }, []);
+
   // Validate localStorage state is not stale (max 24 hours old)
   const isLocalStorageStateFresh = useCallback((): boolean => {
     try {
@@ -74,6 +101,11 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const cached = localStorage.getItem(`checkedIn_${today}`);
       if (cached && isLocalStorageStateFresh()) {
         const parsed = JSON.parse(cached);
+        const currentUser = TokenManager.getUser();
+        if (parsed.userId != null && currentUser?.id && String(parsed.userId) !== String(currentUser.id)) {
+          console.warn('⚠️ [ATTENDANCE-CONTEXT] Ignoring localStorage attendance: user mismatch');
+          return;
+        }
         console.log('📦 [ATTENDANCE-CONTEXT] Loaded from localStorage:', parsed);
         setAttendanceState({
           isCheckedIn: parsed.checkedIn || parsed.isCheckedIn || false,
@@ -94,61 +126,21 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Save to localStorage with timestamp
   const saveToLocalStorage = useCallback(() => {
-    try {
-      const today = getTodayKey();
-      const stateToSave = {
-        checkedIn: attendance.isCheckedIn,
-        isCheckedIn: attendance.isCheckedIn,
-        checkInTime: attendance.checkInTime,
-        checkOutTime: attendance.checkOutTime,
-        currentHours: attendance.hoursWorked,
-        hoursWorked: attendance.hoursWorked,
-        status: attendance.status,
-        isOnBreak: attendance.isOnBreak,
-        currentBreakDuration: attendance.currentBreakDuration,
-        breakType: attendance.breakType,
-        timestamp: Date.now() // Add timestamp for freshness validation
-      };
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify(stateToSave));
-      console.log('💾 [ATTENDANCE-CONTEXT] Saved to localStorage:', stateToSave);
-    } catch (e) {
-      console.warn('Failed to save to localStorage:', e);
-    }
-  }, [attendance]);
+    persistToLocalStorage(attendance);
+  }, [attendance, persistToLocalStorage]);
 
   // Update specific fields with source tracking
   const updateAttendance = useCallback((updates: Partial<AttendanceState>, source = 'action') => {
     console.log('🔄 [ATTENDANCE-CONTEXT] Updating attendance from', source, ':', updates);
     lastUpdateTimeRef.current = Date.now();
     setLastUpdateSource(source);
-    
+
     setAttendanceState(prev => {
       const newState = { ...prev, ...updates };
-      // Auto-save to localStorage after update
-      setTimeout(() => {
-        try {
-          const today = getTodayKey();
-          const stateToSave = {
-            checkedIn: newState.isCheckedIn,
-            isCheckedIn: newState.isCheckedIn,
-            checkInTime: newState.checkInTime,
-            checkOutTime: newState.checkOutTime,
-            currentHours: newState.hoursWorked,
-            hoursWorked: newState.hoursWorked,
-            status: newState.status,
-            isOnBreak: newState.isOnBreak,
-            currentBreakDuration: newState.currentBreakDuration,
-            breakType: newState.breakType,
-            timestamp: Date.now()
-          };
-          localStorage.setItem(`checkedIn_${today}`, JSON.stringify(stateToSave));
-        } catch (e) {
-          console.warn('Failed to auto-save to localStorage:', e);
-        }
-      }, 0);
+      persistToLocalStorage(newState);
       return newState;
     });
-  }, []);
+  }, [persistToLocalStorage]);
 
   // Reset to default state
   const resetAttendance = useCallback(() => {
@@ -169,57 +161,15 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setAttendanceState(prev => {
         const newState = state(prev);
         setLastUpdateSource('direct');
-        // Auto-save to localStorage
-        setTimeout(() => {
-          try {
-            const today = getTodayKey();
-            const stateToSave = {
-              checkedIn: newState.isCheckedIn,
-              isCheckedIn: newState.isCheckedIn,
-              checkInTime: newState.checkInTime,
-              checkOutTime: newState.checkOutTime,
-              currentHours: newState.hoursWorked,
-              hoursWorked: newState.hoursWorked,
-              status: newState.status,
-              isOnBreak: newState.isOnBreak,
-              currentBreakDuration: newState.currentBreakDuration,
-              breakType: newState.breakType,
-              timestamp: Date.now()
-            };
-            localStorage.setItem(`checkedIn_${today}`, JSON.stringify(stateToSave));
-          } catch (e) {
-            console.warn('Failed to auto-save to localStorage:', e);
-          }
-        }, 0);
+        persistToLocalStorage(newState);
         return newState;
       });
     } else {
       setAttendanceState(state);
       setLastUpdateSource('direct');
-      // Auto-save to localStorage
-      setTimeout(() => {
-        try {
-          const today = getTodayKey();
-          const stateToSave = {
-            checkedIn: state.isCheckedIn,
-            isCheckedIn: state.isCheckedIn,
-            checkInTime: state.checkInTime,
-            checkOutTime: state.checkOutTime,
-            currentHours: state.hoursWorked,
-            hoursWorked: state.hoursWorked,
-            status: state.status,
-            isOnBreak: state.isOnBreak,
-            currentBreakDuration: state.currentBreakDuration,
-            breakType: state.breakType,
-            timestamp: Date.now()
-          };
-          localStorage.setItem(`checkedIn_${today}`, JSON.stringify(stateToSave));
-        } catch (e) {
-          console.warn('Failed to auto-save to localStorage:', e);
-        }
-      }, 0);
+      persistToLocalStorage(state);
     }
-  }, []);
+  }, [persistToLocalStorage]);
 
   return (
     <AttendanceContext.Provider

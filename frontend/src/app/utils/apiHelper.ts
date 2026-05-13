@@ -8,6 +8,25 @@ import { TokenManager } from './api';
 // Simple request cache for GET requests
 const requestCache = new Map<string, { data: any; timestamp: number }>();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const REQUEST_TIMEOUT_MS = 30_000;
+
+function cacheKeyForEndpoint(endpoint: string): string {
+  return endpoint.trim();
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * Get the API base URL
@@ -69,7 +88,7 @@ export const apiRequest = async <T = any>(
   };
 
   try {
-    const response = await fetch(url, config);
+    const response = await fetchWithTimeout(url, config, REQUEST_TIMEOUT_MS);
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
@@ -78,7 +97,10 @@ export const apiRequest = async <T = any>(
 
     const data = await response.json();
     return data;
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+    }
     console.error(`API request failed for ${endpoint}:`, error);
     throw error;
   }
@@ -88,20 +110,18 @@ export const apiRequest = async <T = any>(
  * GET request with caching
  */
 export const apiGet = async <T = any>(endpoint: string, useCache = true): Promise<T> => {
-  // Check cache for GET requests
-  if (useCache && requestCache.has(endpoint)) {
-    const cached = requestCache.get(endpoint);
+  const cacheKey = cacheKeyForEndpoint(endpoint);
+  if (useCache && requestCache.has(cacheKey)) {
+    const cached = requestCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-      console.log(`📦 Using cached data for ${endpoint}`);
       return cached.data;
     }
   }
 
   const data = await apiRequest<T>(endpoint, { method: 'GET' });
   
-  // Cache the result
   if (useCache) {
-    requestCache.set(endpoint, { data, timestamp: Date.now() });
+    requestCache.set(cacheKey, { data, timestamp: Date.now() });
   }
   
   return data;
@@ -112,7 +132,7 @@ export const apiGet = async <T = any>(endpoint: string, useCache = true): Promis
  */
 export const clearApiCache = (endpoint?: string) => {
   if (endpoint) {
-    requestCache.delete(endpoint);
+    requestCache.delete(cacheKeyForEndpoint(endpoint));
   } else {
     requestCache.clear();
   }
@@ -173,13 +193,17 @@ export const apiUpload = async <T = any>(
   const url = buildApiUrl(endpoint);
   const token = localStorage.getItem('authToken') || localStorage.getItem('token');
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      ...(token && { Authorization: `Bearer ${token}` })
+  const response = await fetchWithTimeout(
+    url,
+    {
+      method: 'POST',
+      headers: {
+        ...(token && { Authorization: `Bearer ${token}` })
+      },
+      body: formData
     },
-    body: formData
-  });
+    REQUEST_TIMEOUT_MS
+  );
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));

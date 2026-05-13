@@ -46,11 +46,27 @@ const SYNC_CONFIG = {
   ACTION_TIMEOUT_MS: 8000
 };
 
+function isLikelyMongoObjectId(id: string | null | undefined): boolean {
+  return !!id && /^[a-f\d]{24}$/i.test(id);
+}
+
 export default function EmployeeDashboard() {
-  const { user } = useAuth();
-  const { attendance: todayAttendance, updateAttendance } = useAttendance();
+  const { user, loading: authLoading } = useAuth();
+  const { attendance: todayAttendance, updateAttendance, loadFromLocalStorage } = useAttendance();
   const [loading, setLoading] = useState(false);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
+
+  // Guard: Don't render if auth is still loading or user is not authenticated
+  if (authLoading || !user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+          <p className="mt-4 text-muted-foreground">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
 
   // ============================================================================
   // CRITICAL STATE VARIABLES - Enterprise sync management
@@ -64,6 +80,7 @@ export default function EmployeeDashboard() {
   const lastSocketEventTimeRef = useRef(0);
   const disableRefreshRef = useRef(false);
   const actionInProgressRef = useRef(false);
+  const lastUserActivityRef = useRef(Date.now());
 
   // Update refs whenever state changes
   useEffect(() => {
@@ -77,6 +94,21 @@ export default function EmployeeDashboard() {
   useEffect(() => {
     disableRefreshRef.current = disableRefresh;
   }, [disableRefresh]);
+
+  useEffect(() => {
+    const bump = () => {
+      lastUserActivityRef.current = Date.now();
+    };
+    const opts: AddEventListenerOptions = { passive: true };
+    ['pointerdown', 'keydown', 'scroll'].forEach((ev) => {
+      document.addEventListener(ev, bump, opts);
+    });
+    return () => {
+      ['pointerdown', 'keydown', 'scroll'].forEach((ev) => {
+        document.removeEventListener(ev, bump, opts);
+      });
+    };
+  }, []);
 
   const [kpiMetrics, setKpiMetrics] = useState({
     leaveBalance: "0 days",
@@ -172,7 +204,7 @@ export default function EmployeeDashboard() {
         setDisableRefresh(false);
       }, SYNC_CONFIG.REFRESH_COOLDOWN_MS);
     }
-  }, [isRecentlyUpdated]);
+  }, [isRecentlyUpdated, fetchDashboardData]);
 
   // Helper function to fetch employee ID
   const ensureEmployeeId = async (): Promise<string | null> => {
@@ -225,10 +257,11 @@ export default function EmployeeDashboard() {
       return;
     }
 
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
       setLoading(true);
 
-      const timeoutId = setTimeout(() => {
+      timeoutId = setTimeout(() => {
         setLoading(false);
       }, SYNC_CONFIG.ACTION_TIMEOUT_MS);
 
@@ -239,8 +272,6 @@ export default function EmployeeDashboard() {
         apiGet('/attendance/today'),
         apiGet('/holidays')
       ]);
-
-      clearTimeout(timeoutId);
 
       const cachedHolidays = localStorage.getItem('cached_holidays');
       if (cachedHolidays) {
@@ -371,6 +402,7 @@ export default function EmployeeDashboard() {
     } catch (err) {
       console.error('Failed to fetch dashboard data:', err);
     } finally {
+      if (timeoutId) clearTimeout(timeoutId);
       setLoading(false);
     }
   // FIX #6: updateAttendance added to deps
@@ -378,8 +410,20 @@ export default function EmployeeDashboard() {
 
   // Fetch data on mount with force refresh
   useEffect(() => {
-    fetchDashboardData(true);
-  }, [fetchDashboardData]);
+    // FIX #7: Load from localStorage FIRST to restore state immediately
+    // This ensures buttons are visible before API call completes
+    console.log('🚀 [DASHBOARD MOUNT] Loading state from localStorage first');
+    loadFromLocalStorage();
+    
+    // Then fetch from API to sync with server
+    // Use a longer delay to ensure auth context is fully initialized
+    const timeoutId = setTimeout(() => {
+      console.log('🚀 [DASHBOARD MOUNT] Fetching from API to sync with server');
+      fetchDashboardData(true);
+    }, 500);
+
+    return () => clearTimeout(timeoutId);
+  }, [fetchDashboardData, loadFromLocalStorage]);
 
   // Fetch employee ID on mount
   useEffect(() => {
@@ -387,17 +431,18 @@ export default function EmployeeDashboard() {
   }, [user?.id]);
 
   // ============================================================================
-  // SOCKET.IO LISTENERS
-  // FIX #5: Cleanup now actually removes all listeners
+  // SOCKET.IO LISTENERS - FIXED: Use refs to prevent stale closures
   // ============================================================================
   useEffect(() => {
-    if (!user?.orgId) return;
+    if (!user?.orgId || !employeeIdRef.current) return;
 
     console.group('[SOCKET LISTENERS SETUP]');
-    console.log('📡 [EMPLOYEE-DASHBOARD] Setting up Socket.IO listeners');
+    console.log('📡 [EMPLOYEE-DASHBOARD] Setting up Socket.IO listeners with employeeId:', employeeIdRef.current);
 
+    // CRITICAL FIX: Use refs instead of state to prevent stale closures
     const handleBreakStarted = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] break:started event received:', data);
+      // Use ref, not state - always has current value
       if (String(data.employeeId) === String(employeeIdRef.current)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Break started for current employee, updating state');
         setLastSocketEventTime(Date.now());
@@ -405,7 +450,7 @@ export default function EmployeeDashboard() {
           isOnBreak: true,
           breakType: data.breakType || 'regular',
           currentBreakDuration: 0
-        });
+        }, 'socket');
       }
     };
 
@@ -418,7 +463,7 @@ export default function EmployeeDashboard() {
           isOnBreak: false,
           currentBreakDuration: 0,
           breakType: 'regular'
-        });
+        }, 'socket');
       }
     };
 
@@ -432,7 +477,7 @@ export default function EmployeeDashboard() {
           checkInTime: data.checkInTime
             ? new Date(data.checkInTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
             : null
-        });
+        }, 'socket');
       }
     };
 
@@ -446,7 +491,7 @@ export default function EmployeeDashboard() {
           checkOutTime: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
           hoursWorked: data.hoursWorked || 0,
           isOnBreak: false
-        });
+        }, 'socket');
       }
     };
 
@@ -458,7 +503,7 @@ export default function EmployeeDashboard() {
 
     console.groupEnd();
 
-    // FIX #5: Actually clean up all listeners on unmount
+    // CRITICAL FIX: Clean up all listeners on unmount
     return () => {
       console.log('📡 [EMPLOYEE-DASHBOARD] Cleaning up Socket.IO listeners');
       unsubscribeBreakStarted?.();
@@ -466,7 +511,7 @@ export default function EmployeeDashboard() {
       realTimeSocket.off('attendance:checked_in', handleCheckedIn);
       realTimeSocket.off('attendance:checked_out', handleCheckedOut);
     };
-  }, [user?.orgId, updateAttendance]);
+  }, [user?.orgId, employeeId]);
 
   // Fetch attendance history
   const fetchAttendanceHistory = useCallback(async () => {
@@ -512,13 +557,16 @@ export default function EmployeeDashboard() {
 
   // ============================================================================
   // PERIODIC REFRESH - With enterprise-safe guards
+  // FIXED: Removed safeRefresh and isRecentlyUpdated from deps to prevent recreation
   // ============================================================================
   useEffect(() => {
     if (!todayAttendance.isCheckedIn || disableRefresh) return;
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastUserActivityRef.current > 120_000) return;
 
+      // Use refs directly to avoid dependency array issues
       if (!actionInProgressRef.current && !disableRefreshRef.current && !isRecentlyUpdated()) {
         console.log('⏰ Periodic refresh triggered');
         safeRefresh();
@@ -526,7 +574,7 @@ export default function EmployeeDashboard() {
     }, SYNC_CONFIG.PERIODIC_REFRESH_MS);
 
     return () => clearInterval(interval);
-  }, [todayAttendance.isCheckedIn, disableRefresh, safeRefresh, isRecentlyUpdated]);
+  }, [todayAttendance.isCheckedIn, disableRefresh]);
 
   // ============================================================================
   // TIMER SYSTEM - Track working hours, breaks, and meetings in real-time
@@ -603,11 +651,15 @@ export default function EmployeeDashboard() {
       const payload: any = {
         breakType,
         notes: `Break started`,
-        idempotencyKey // Include unique key to prevent duplicates
+        idempotencyKey
       };
-      if (employeeId) payload.employeeId = employeeId;
+      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
       
       console.log('🔄 [BREAK START] Sending request:', { breakType, employeeId });
+      
+      // CRITICAL FIX: Add timeout to fetch
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
       
       const response = await fetch(buildApiUrl('/attendance/break-start'), {
         method: 'POST',
@@ -616,8 +668,11 @@ export default function EmployeeDashboard() {
           'Content-Type': 'application/json',
           'Idempotency-Key': idempotencyKey
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         let errorMessage = 'Break start failed';
@@ -639,7 +694,7 @@ export default function EmployeeDashboard() {
         isOnBreak: true,
         breakType: breakType,
         currentBreakDuration: 0
-      });
+      }, 'action');
       
       // Save state to localStorage
       const today = getTodayKey();
@@ -648,7 +703,8 @@ export default function EmployeeDashboard() {
         currentHours: todayAttendance.hoursWorked || 0,
         isOnBreak: true,
         breakType,
-        breakStartTime: new Date().toISOString()
+        breakStartTime: new Date().toISOString(),
+        timestamp: Date.now()
       }));
 
       // Wait for socket confirmation with timeout
@@ -661,7 +717,7 @@ export default function EmployeeDashboard() {
         isOnBreak: false,
         breakType: 'regular',
         currentBreakDuration: 0
-      });
+      }, 'action');
     } finally {
       actionInProgressRef.current = false;
     }
@@ -689,11 +745,15 @@ export default function EmployeeDashboard() {
       
       const payload: any = {
         notes: 'Break ended',
-        idempotencyKey // Include unique key to prevent duplicates
+        idempotencyKey
       };
-      if (employeeId) payload.employeeId = employeeId;
+      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
       
       console.log('🔄 [BREAK END] Sending request:', { employeeId });
+      
+      // CRITICAL FIX: Add timeout to fetch
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
       
       const response = await fetch(buildApiUrl('/attendance/break-end'), {
         method: 'POST',
@@ -702,8 +762,11 @@ export default function EmployeeDashboard() {
           'Content-Type': 'application/json',
           'Idempotency-Key': idempotencyKey
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         let errorMessage = 'Break end failed';
@@ -725,7 +788,7 @@ export default function EmployeeDashboard() {
         isOnBreak: false,
         breakType: 'regular',
         currentBreakDuration: 0
-      });
+      }, 'action');
       
       // Save state to localStorage
       const today = getTodayKey();
@@ -733,7 +796,8 @@ export default function EmployeeDashboard() {
         checkedIn: true,
         currentHours: todayAttendance.hoursWorked || 0,
         isOnBreak: false,
-        breakType: 'regular'
+        breakType: 'regular',
+        timestamp: Date.now()
       }));
 
       // Wait for socket confirmation with timeout
@@ -749,7 +813,7 @@ export default function EmployeeDashboard() {
       updateAttendance({
         isOnBreak: true,
         breakType: todayAttendance.breakType || 'regular'
-      });
+      }, 'action');
     } finally {
       actionInProgressRef.current = false;
     }
@@ -766,50 +830,65 @@ export default function EmployeeDashboard() {
       const payload: any = {
         notes: 'Checked in'
       };
-      if (employeeId) payload.employeeId = employeeId;
+      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
       
-      const response = await fetch(buildApiUrl('/attendance/check-in'), {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+      // CRITICAL FIX: Add timeout to fetch
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
+      try {
+        const response = await fetch(buildApiUrl('/attendance/check-in'), {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
 
-      if (!response.ok) {
-        let errorMessage = 'Check-in failed';
-        try {
-          const error = await response.json();
-          errorMessage = error.message || errorMessage;
-        } catch (e) {
-          // Response body is not JSON
+        if (!response.ok) {
+          let errorMessage = 'Check-in failed';
+          try {
+            const error = await response.json();
+            errorMessage = error.message || errorMessage;
+          } catch (e) {
+            // Response body is not JSON
+          }
+          throw new Error(errorMessage);
         }
-        throw new Error(errorMessage);
+
+        const checkInTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+        // Update state immediately
+        updateAttendance({
+          isCheckedIn: true,
+          checkInTime: checkInTime,
+          status: 'present'
+        }, 'action');
+        
+        // Save state to localStorage
+        const today = getTodayKey();
+        localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+          checkedIn: true,
+          checkInTime: checkInTime,
+          currentHours: 0,
+          isOnBreak: false,
+          breakType: 'regular',
+          isInMeeting: false,
+          status: 'present',
+          timestamp: Date.now()
+        }));
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      const checkInTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-
-      // Update state immediately
-      updateAttendance({
-        isCheckedIn: true,
-        checkInTime: checkInTime,
-        status: 'present'
-      });
-      
-      // Save state to localStorage
-      const today = getTodayKey();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-        checkedIn: true,
-        checkInTime: checkInTime,
-        currentHours: 0,
-        isOnBreak: false,
-        breakType: 'regular',
-        isInMeeting: false,
-        status: 'present'
-      }));
     } catch (error) {
       console.error('Check-in error:', error);
+      // Rollback optimistic update on error
+      updateAttendance({
+        isCheckedIn: false,
+        checkInTime: null,
+        status: 'absent'
+      }, 'action');
     } finally {
       actionInProgressRef.current = false;
     }
@@ -827,51 +906,65 @@ export default function EmployeeDashboard() {
       const payload: any = {
         notes: 'Checked out'
       };
-      if (employeeId) payload.employeeId = employeeId;
+      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
       
-      const response = await fetch(buildApiUrl('/attendance/check-out'), {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+      // CRITICAL FIX: Add timeout to fetch
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
+      try {
+        const response = await fetch(buildApiUrl('/attendance/check-out'), {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
 
-      if (!response.ok) {
-        let errorMessage = 'Check-out failed';
-        try {
-          const error = await response.json();
-          errorMessage = error.message || errorMessage;
-        } catch (e) {
-          // Response body is not JSON
+        if (!response.ok) {
+          let errorMessage = 'Check-out failed';
+          try {
+            const error = await response.json();
+            errorMessage = error.message || errorMessage;
+          } catch (e) {
+            // Response body is not JSON
+          }
+          throw new Error(errorMessage);
         }
-        throw new Error(errorMessage);
+
+        const checkOutTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+        // Update state immediately
+        updateAttendance({
+          isCheckedIn: false,
+          checkOutTime: checkOutTime,
+          isOnBreak: false,
+          breakType: 'regular',
+          currentBreakDuration: 0
+        }, 'action');
+        
+        // Save state to localStorage
+        const today = getTodayKey();
+        localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+          checkedIn: false,
+          checkOutTime: checkOutTime,
+          currentHours: todayAttendance.hoursWorked || 0,
+          isOnBreak: false,
+          breakType: 'regular',
+          isInMeeting: false,
+          timestamp: Date.now()
+        }));
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      const checkOutTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-
-      // Update state immediately
-      updateAttendance({
-        isCheckedIn: false,
-        checkOutTime: checkOutTime,
-        isOnBreak: false,
-        breakType: 'regular',
-        currentBreakDuration: 0
-      });
-      
-      // Save state to localStorage
-      const today = getTodayKey();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-        checkedIn: false,
-        checkOutTime: checkOutTime,
-        currentHours: todayAttendance.hoursWorked || 0,
-        isOnBreak: false,
-        breakType: 'regular',
-        isInMeeting: false
-      }));
     } catch (error) {
       console.error('Check-out error:', error);
+      // Rollback optimistic update on error
+      updateAttendance({
+        isCheckedIn: true,
+        checkOutTime: null
+      }, 'action');
     } finally {
       actionInProgressRef.current = false;
     }
@@ -915,6 +1008,7 @@ export default function EmployeeDashboard() {
                   className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
                   disabled={loading}
                   onClick={handleCheckIn}
+                  aria-label="Check in to work"
                 >
                   <LogIn className="w-4 h-4 mr-1.5" />
                   Log In
@@ -926,6 +1020,7 @@ export default function EmployeeDashboard() {
                     className="bg-red-600 hover:bg-red-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
                     disabled={loading}
                     onClick={handleCheckOut}
+                    aria-label="Check out from work"
                   >
                     <LogOut className="w-4 h-4 mr-1.5" />
                     Log Out
@@ -937,6 +1032,7 @@ export default function EmployeeDashboard() {
                           className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
                           onClick={() => handleBreakStart('regular')}
                           disabled={loading}
+                          aria-label="Start a break"
                         >
                           <Pause className="w-4 h-4 mr-1.5" />
                           Break
@@ -947,6 +1043,7 @@ export default function EmployeeDashboard() {
                           className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
                           onClick={handleBreakEnd}
                           disabled={loading}
+                          aria-label="End break"
                         >
                           <Pause className="w-4 h-4 mr-1.5" />
                           End Break
@@ -955,6 +1052,21 @@ export default function EmployeeDashboard() {
 
                 </>
               )}
+              
+              {/* Manual Refresh Button - Always visible */}
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-muted-foreground hover:text-foreground px-3 py-2 rounded-md transition-colors"
+                disabled={loading || disableRefresh}
+                onClick={() => safeRefresh(true)}
+                title="Manually refresh attendance status"
+                aria-label="Refresh attendance from server"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </Button>
             </div>
           </div>
         </div>

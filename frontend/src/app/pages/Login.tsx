@@ -14,12 +14,36 @@ import { Alert, AlertDescription } from '../components/ui/alert';
 import { Briefcase, Loader2, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { ApiError } from '../utils/api';
 
+const REMEMBER_EMAIL_KEY = 'workplus_login_email';
+const LOGIN_ATTEMPTS_KEY = 'workplus_login_attempts_ts';
+
+function recordLoginAttempt(): { ok: boolean; retryAfterMs?: number } {
+  const now = Date.now();
+  const windowMs = 60_000;
+  const maxAttempts = 12;
+  try {
+    const raw = sessionStorage.getItem(LOGIN_ATTEMPTS_KEY);
+    const times: number[] = raw ? JSON.parse(raw).filter((t: number) => now - t < windowMs) : [];
+    if (times.length >= maxAttempts) {
+      const oldest = Math.min(...times);
+      return { ok: false, retryAfterMs: windowMs - (now - oldest) };
+    }
+    times.push(now);
+    sessionStorage.setItem(LOGIN_ATTEMPTS_KEY, JSON.stringify(times));
+    return { ok: true };
+  } catch {
+    sessionStorage.setItem(LOGIN_ATTEMPTS_KEY, JSON.stringify([now]));
+    return { ok: true };
+  }
+}
+
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   
   const navigate = useNavigate();
   const location = useLocation();
@@ -34,11 +58,31 @@ export default function Login() {
     }
   }, [user, authLoading, navigate, location.state, roleRedirect]);
 
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(REMEMBER_EMAIL_KEY);
+      if (saved) {
+        setEmail(saved);
+        setRememberMe(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   // Handle form submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+
+    const limit = recordLoginAttempt();
+    if (!limit.ok) {
+      const waitSec = Math.max(1, Math.ceil((limit.retryAfterMs || 60_000) / 1000));
+      setError(`Too many sign-in attempts. Please wait about ${waitSec} seconds and try again.`);
+      setLoading(false);
+      return;
+    }
 
     // Validate inputs
     if (!email.trim()) {
@@ -65,20 +109,31 @@ export default function Login() {
       const result = await login(email.trim().toLowerCase(), password);
 
       if (result.success) {
-        // Navigation will be handled by useEffect when user state updates
-        // Keep loading state true to prevent button interaction during redirect
+        try {
+          if (rememberMe) {
+            localStorage.setItem(REMEMBER_EMAIL_KEY, email.trim().toLowerCase());
+          } else {
+            localStorage.removeItem(REMEMBER_EMAIL_KEY);
+          }
+        } catch {
+          /* ignore */
+        }
       } else {
         setError(result.error || 'Invalid email or password');
+        setPassword('');
+        requestAnimationFrame(() => document.getElementById('password')?.focus());
         setLoading(false);
       }
     } catch (err: any) {
       console.error('Login submission error:', err);
-      
+
       if (err instanceof ApiError) {
         setError(err.getUserMessage());
       } else {
         setError('An unexpected error occurred. Please try again.');
       }
+      setPassword('');
+      requestAnimationFrame(() => document.getElementById('password')?.focus());
       setLoading(false);
     }
   };
@@ -126,6 +181,9 @@ export default function Login() {
         
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
+            <p className="sr-only">
+              Sign-in uses your email and password. CSRF for API routes is optional when using JWT; the backend may enable it with ENABLE_CSRF.
+            </p>
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -161,6 +219,8 @@ export default function Login() {
                   className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
                   onClick={() => setShowPassword(!showPassword)}
                   tabIndex={-1}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPassword}
                 >
                   {showPassword ? (
                     <EyeOff className="h-4 w-4 text-muted-foreground" />
@@ -169,6 +229,20 @@ export default function Login() {
                   )}
                 </Button>
               </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                id="remember-me"
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                disabled={loading}
+                className="h-4 w-4 rounded border border-border"
+              />
+              <Label htmlFor="remember-me" className="text-sm font-normal cursor-pointer">
+                Remember my email on this device
+              </Label>
             </div>
 
             {error && (

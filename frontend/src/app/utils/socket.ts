@@ -75,10 +75,15 @@ export class SocketService {
         this.socket = io(SOCKET_URL, {
           transports: ['websocket', 'polling'],
           reconnection: true,
-          reconnectionAttempts: this.maxReconnectAttempts,
-          reconnectionDelay: this.reconnectDelay,
-          reconnectionDelayMax: 5000,
-          timeout: 20000,
+          reconnectionAttempts: 12,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 30_000,
+          randomizationFactor: 0.5,
+          reconnectionDelayFn: (attempt) => {
+            const exp = Math.min(1000 * Math.pow(2, attempt - 1), 30_000);
+            return exp + Math.random() * 750;
+          },
+          timeout: 20_000,
           auth: {
             token: token || ''
           }

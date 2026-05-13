@@ -3,6 +3,7 @@
  * Features: Role-based access, loading states, redirect handling
  */
 
+import { useEffect, useState } from 'react';
 import { Navigate, useLocation } from 'react-router';
 import { useAuth, useRoleRedirect } from '../context/AuthContext';
 import { Loader2 } from 'lucide-react';
@@ -21,14 +22,29 @@ export function ProtectedRoute({
   const { user, loading: authLoading } = useAuth();
   const location = useLocation();
   const roleRedirect = useRoleRedirect();
+  const [slowAuthHint, setSlowAuthHint] = useState(false);
+
+  useEffect(() => {
+    if (!authLoading) {
+      setSlowAuthHint(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSlowAuthHint(true), 5000);
+    return () => window.clearTimeout(timer);
+  }, [authLoading]);
 
   // Show loading while checking authentication
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto" />
+        <div className="text-center max-w-sm px-4">
+          <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto" aria-hidden />
           <p className="mt-4 text-muted-foreground">Verifying session...</p>
+          {slowAuthHint && (
+            <p className="mt-3 text-sm text-muted-foreground">
+              This is taking longer than usual. Check your connection; we will keep trying to restore your session.
+            </p>
+          )}
         </div>
       </div>
     );
@@ -66,11 +82,12 @@ export function useCheckRole(roles: string | string[]): boolean {
 // Hook for getting redirect path
 export function useRedirectOnRole(roles: string | string[]): string {
   const { user } = useAuth();
+  const roleRedirect = useRoleRedirect();
   if (!user) return '/login';
-  
+
   const roleArray = Array.isArray(roles) ? roles : [roles];
   if (roleArray.includes(user.role)) {
-    return useRoleRedirect();
+    return roleRedirect;
   }
   return '/login';
 }

@@ -17,27 +17,31 @@ const router = express.Router();
 router.post('/auth/refresh-token', refreshTokenLimiter, async (req, res) => {
   try {
     const { refreshToken } = req.body;
-    const authHeader = req.headers.authorization;
 
-    if (!refreshToken || !authHeader) {
+    if (!refreshToken) {
       return res.status(401).json({
         success: false,
-        message: 'Refresh token and user ID are required'
+        message: 'Refresh token is required'
       });
     }
 
-    // Extract user ID from Authorization header (Bearer token)
-    const token = authHeader.replace('Bearer ', '');
+    const jwt = await import('jsonwebtoken');
+    const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
     let userId;
 
     try {
-      const jwt = await import('jsonwebtoken');
-      const decoded = jwt.default.verify(token, process.env.JWT_SECRET || 'supersecretkey');
+      const decoded = jwt.default.verify(refreshToken, JWT_SECRET);
+      if (decoded.type !== 'refresh' || !decoded.userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid refresh token'
+        });
+      }
       userId = decoded.userId;
     } catch (error) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid access token'
+        message: 'Invalid or expired refresh token'
       });
     }
 

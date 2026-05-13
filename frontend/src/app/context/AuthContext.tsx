@@ -4,8 +4,9 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { AuthService, TokenManager, ApiError } from '../utils/api';
+import { AuthService, TokenManager, ApiError, TokenRefreshService } from '../utils/api';
 import { socketService, ConnectionState } from '../utils/socket';
+import { clearApiCache } from '../utils/apiHelper';
 import { toast } from 'sonner';
 
 export type UserRole = 'super_admin' | 'admin' | 'hr' | 'manager' | 'accountant' | 'employee';
@@ -46,139 +47,227 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [socketConnected, setSocketConnected] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Initialize auth state from storage
-  useEffect(() => {
-    const initializeAuth = async () => {
-      try {
-        try {
-          const token = TokenManager.get();
-          const storedUser = TokenManager.getUser();
+  const performLogout = useCallback(async () => {
+    setLoading(true);
 
-          if (token && storedUser) {
-            // Check if token is expired
-            try {
-              const payload = JSON.parse(atob(token.split('.')[1]));
-              const exp = payload.exp * 1000;
-              
-              if (Date.now() >= exp) {
-                // Token expired, clear and redirect to login
-                console.log('Token expired, clearing session');
-                TokenManager.clear();
-                setLoading(false);
-                setIsInitialized(true);
-                return;
-              }
+    try {
+      await AuthService.logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      setUser(null);
+      socketService.disconnect();
+      setSocketConnected(false);
+      TokenManager.clear();
+      clearApiCache();
 
-              // Token valid, restore user
-              setUser(storedUser);
+      localStorage.removeItem('dashboardCache');
+      localStorage.removeItem('userPreferences');
 
-              // Verify with backend
-              try {
-                const currentUser = await AuthService.getCurrentUser();
-                if (currentUser) {
-                  setUser(currentUser);
-                  TokenManager.setUser(currentUser);
-                }
-              } catch (error) {
-                // Backend verification failed - check if it's an auth error
-                if (error instanceof ApiError && (error.code === 'TOKEN_EXPIRED' || error.code === 'INVALID_TOKEN')) {
-                  console.log('Token invalid on backend verification, clearing session');
-                  TokenManager.clear();
-                  setUser(null);
-                  setLoading(false);
-                  setIsInitialized(true);
-                  return;
-                }
-                // Other errors (network, server) - keep session but warn
-                console.warn('Could not verify session with backend:', error);
-              }
-            } catch (error) {
-              console.error('Error parsing token:', error);
-              TokenManager.clear();
-            }
-          }
-        } catch (error) {
-          console.error('Auth initialization error:', error);
-        }
-      } catch (error) {
-        console.error('Unexpected error in auth initialization:', error);
-      } finally {
-        setLoading(false);
-        setIsInitialized(true);
-      }
-    };
+      setLoading(false);
+      toast.info('You have been logged out.');
 
-    initializeAuth();
+      window.location.href = '/login';
+    }
   }, []);
 
-  // Socket.IO connection management
+  const handleLogout = useCallback(async () => {
+    if (!window.confirm('Sign out? You will need to log in again to continue.')) {
+      return;
+    }
+    await performLogout();
+  }, [performLogout]);
+
+  // Socket state callback — registered first so connect() in bootstrap can update UI.
   useEffect(() => {
-    if (!user || !isInitialized) return;
-
-    const connectSocket = async () => {
-      try {
-        await socketService.connect(user.id, user.role, user.tenantId);
-        setSocketConnected(true);
-      } catch (error) {
-        console.error('Failed to connect to Socket.IO:', error);
-        setSocketConnected(false);
-      }
-    };
-
-    connectSocket();
-
-    // Set up connection state listener
+    let isMounted = true;
     socketService.setStateChangeCallback((state: ConnectionState) => {
+      if (!isMounted) return;
       setSocketConnected(state === 'connected');
-      
       if (state === 'reconnecting') {
-        // Keep silent during transient reconnects to avoid noisy UI popups
+        console.log('🔄 [AUTH] Socket reconnecting...');
       } else if (state === 'disconnected') {
+        console.warn('⚠️ [AUTH] Socket disconnected');
         toast.error('Lost connection to real-time server');
       }
     });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
+  // Disconnect socket when the auth shell unmounts (full app teardown).
+  useEffect(() => {
     return () => {
       socketService.disconnect();
-      setSocketConnected(false);
     };
-  }, [user?.id, isInitialized]);
+  }, []);
 
-  // Session check interval
+  // Initialize auth from storage and await initial socket connect before exposing ready state.
+  useEffect(() => {
+    let cancelled = false;
+
+    const tryRefreshAccessToken = async (): Promise<boolean> => {
+      try {
+        const svc = new TokenRefreshService();
+        const result = await svc.refreshToken();
+        return !!(result.success && result.data?.token);
+      } catch {
+        return false;
+      }
+    };
+
+    const initializeAuth = async () => {
+      let userForSocket: User | null = null;
+
+      const finish = async () => {
+        if (cancelled) return;
+        if (userForSocket) {
+          try {
+            await socketService.connect(
+              userForSocket.id,
+              userForSocket.role,
+              userForSocket.tenantId || userForSocket.orgId
+            );
+            if (!cancelled) setSocketConnected(socketService.getState() === 'connected');
+          } catch (error) {
+            console.error('❌ [AUTH] Failed to connect to Socket.IO during bootstrap:', error);
+            if (!cancelled) setSocketConnected(false);
+          }
+        }
+        if (!cancelled) {
+          setLoading(false);
+          setIsInitialized(true);
+        }
+      };
+
+      try {
+        let token = TokenManager.get();
+        const storedUser = TokenManager.getUser();
+
+        if (token && storedUser) {
+          try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            const exp = payload.exp * 1000;
+
+            if (Date.now() >= exp) {
+              const refreshed = await tryRefreshAccessToken();
+              if (!refreshed) {
+                TokenManager.clear();
+                userForSocket = null;
+                await finish();
+                return;
+              }
+              token = TokenManager.get();
+            }
+
+            setUser(storedUser);
+            userForSocket = storedUser;
+
+            try {
+              const currentUser = await AuthService.getCurrentUser();
+              if (currentUser) {
+                setUser(currentUser);
+                TokenManager.setUser(currentUser);
+                userForSocket = currentUser;
+              }
+            } catch (error) {
+              if (error instanceof ApiError && (error.code === 'TOKEN_EXPIRED' || error.code === 'INVALID_TOKEN')) {
+                const recovered = await tryRefreshAccessToken();
+                if (recovered) {
+                  try {
+                    const retryUser = await AuthService.getCurrentUser();
+                    if (retryUser) {
+                      setUser(retryUser);
+                      TokenManager.setUser(retryUser);
+                      userForSocket = retryUser;
+                    }
+                  } catch {
+                    TokenManager.clear();
+                    setUser(null);
+                    userForSocket = null;
+                    await finish();
+                    return;
+                  }
+                } else {
+                  TokenManager.clear();
+                  setUser(null);
+                  userForSocket = null;
+                  await finish();
+                  return;
+                }
+              } else {
+                console.warn('Could not verify session with backend:', error);
+              }
+            }
+          } catch (error) {
+            console.error('Error parsing token:', error);
+            TokenManager.clear();
+            setUser(null);
+            userForSocket = null;
+          }
+        }
+      } catch (error) {
+        console.error('Auth initialization error:', error);
+      }
+
+      await finish();
+    };
+
+    void initializeAuth();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Session check interval — attempt refresh before forcing logout when access token expires
   useEffect(() => {
     if (!user) return;
 
-    const checkSession = () => {
-      const token = TokenManager.get();
-      if (!token) {
-        // No token, logout
-        handleLogout();
-        return;
-      }
-
+    const tryRefreshAccessToken = async (): Promise<boolean> => {
       try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        const exp = payload.exp * 1000;
-        
-        // If token expires in less than 5 minutes, warn user
-        const timeUntilExpiry = exp - Date.now();
-        if (timeUntilExpiry < 5 * 60 * 1000 && timeUntilExpiry > 0) {
-          toast.warning('Your session will expire soon. Please save your work.');
-        }
-        
-        if (Date.now() >= exp) {
-          toast.error('Your session has expired. Please log in again.');
-          handleLogout();
-        }
-      } catch (error) {
-        console.error('Session check error:', error);
-        handleLogout();
+        const svc = new TokenRefreshService();
+        const result = await svc.refreshToken();
+        return !!(result.success && result.data?.token);
+      } catch {
+        return false;
       }
+    };
+
+    const checkSession = () => {
+      void (async () => {
+        const token = TokenManager.get();
+        if (!token) {
+          await performLogout();
+          return;
+        }
+
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          const exp = payload.exp * 1000;
+
+          const timeUntilExpiry = exp - Date.now();
+          if (timeUntilExpiry < 5 * 60 * 1000 && timeUntilExpiry > 0) {
+            toast.warning('Your session will expire soon. Please save your work.');
+          }
+
+          if (Date.now() >= exp) {
+            const refreshed = await tryRefreshAccessToken();
+            if (!refreshed) {
+              toast.error('Your session has expired. Please log in again.');
+              await performLogout();
+            }
+          }
+        } catch (error) {
+          console.error('Session check error:', error);
+          await performLogout();
+        }
+      })();
     };
 
     const interval = setInterval(checkSession, SESSION_CHECK_INTERVAL);
     return () => clearInterval(interval);
-  }, [user]);
+  }, [user, performLogout]);
 
   // Login function
   const login = useCallback(async (email: string, password: string) => {
@@ -191,7 +280,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(result.user);
         toast.success(`Welcome back, ${result.user.name}!`);
         
-        // Redirect based on role - use setTimeout to ensure state updates are processed
+        // Redirect based on role - use navigate instead of window.location.href to avoid full page reload
         const redirectPath = result.user.role === 'super_admin' 
           ? '/super-admin' 
           : result.user.role === 'admin'
@@ -200,9 +289,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         
         // Use a small delay to ensure the UI updates before redirect
         setTimeout(() => {
+          // Use window.location.href with a hash to force navigation while keeping the app state
           window.location.href = redirectPath;
         }, 100);
         
+        // Don't reset loading state - keep it true during redirect
         return { success: true };
       }
 
@@ -222,32 +313,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       toast.error(errorMessage);
       setLoading(false);
       return { success: false, error: errorMessage };
-    }
-  }, []);
-
-  // Logout function
-  const handleLogout = useCallback(async () => {
-    setLoading(true);
-
-    try {
-      await AuthService.logout();
-    } catch (error) {
-      console.error('Logout error:', error);
-    } finally {
-      setUser(null);
-      socketService.disconnect();
-      setSocketConnected(false);
-      TokenManager.clear();
-      
-      // Clear any cached data
-      localStorage.removeItem('dashboardCache');
-      localStorage.removeItem('userPreferences');
-      
-      setLoading(false);
-      toast.info('You have been logged out.');
-      
-      // Force redirect to login
-      window.location.href = '/login';
     }
   }, []);
 

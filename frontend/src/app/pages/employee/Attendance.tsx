@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Pause, Calendar, Loader } from 'lucide-react';
 import { buildApiUrl } from '../../utils/apiHelper';
 import realTimeSocket from '../../utils/realTimeSocket';
@@ -7,6 +7,7 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 
 import { useAuth } from '../../context/AuthContext';
+import { useAttendance } from '../../../context/AttendanceContext';
 
 interface AttendanceRecord {
   _id: string;
@@ -17,17 +18,22 @@ interface AttendanceRecord {
   status: string;
 }
 
+const HISTORY_PAGE_SIZE = 10;
+
+function isLikelyMongoObjectId(id: string | null | undefined): boolean {
+  return !!id && /^[a-f\d]{24}$/i.test(id);
+}
+
 export default function Attendance() {
   const { user } = useAuth();
+  const { attendance: liveAttendance, updateAttendance: syncAttendance } = useAttendance();
   const [todayData, setTodayData] = useState<any>(null);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
   const [filteredAttendance, setFilteredAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [currentHours, setCurrentHours] = useState(0);
-  const [checkedIn, setCheckedIn] = useState(false);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
-  const [breakType, setBreakType] = useState<'regular' | null>(null);
   const [activityLogs, setActivityLogs] = useState<Array<{
     id: string;
     action: string;
@@ -37,6 +43,9 @@ export default function Attendance() {
   const [filterStartDate, setFilterStartDate] = useState<string>('');
   const [filterEndDate, setFilterEndDate] = useState<string>('');
   const [filterLoading, setFilterLoading] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyTotalPages, setHistoryTotalPages] = useState(1);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const attendanceCacheKey = `employee_attendance_state_${user?.id || 'unknown'}`;
 
   // Load activity logs from localStorage on mount
@@ -50,22 +59,6 @@ export default function Attendance() {
         console.warn('Failed to parse stored activity logs');
       }
     }
-    
-    // Also load checked-in state from localStorage
-    const storedCheckedIn = localStorage.getItem(`checkedIn_${today}`);
-    if (storedCheckedIn) {
-      try {
-        const state = JSON.parse(storedCheckedIn);
-        console.log('Loaded checked-in state from localStorage:', state);
-        setCheckedIn(state.checkedIn);
-        setCurrentHours(state.currentHours || 0);
-        // Don't load from localStorage - fetch from API instead
-        // setIsOnBreak(state.isOnBreak || false);
-        // setBreakType(state.breakType || null);
-      } catch (e) {
-        console.warn('Failed to parse stored checked-in state');
-      }
-    }
   }, []);
 
   // Fetch employee ID
@@ -73,8 +66,11 @@ export default function Attendance() {
     try {
       if (!user?.id) return;
       if ((user as any)?.employeeId) {
-        setEmployeeId((user as any).employeeId);
-        return (user as any).employeeId;
+        const eid = String((user as any).employeeId);
+        if (isLikelyMongoObjectId(eid)) {
+          setEmployeeId(eid);
+          return eid;
+        }
       }
       const token = localStorage.getItem('authToken');
       const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
@@ -86,7 +82,7 @@ export default function Attendance() {
 
       if (response.ok) {
         const data = await response.json();
-        if (data.data?._id) {
+        if (data.data?._id && isLikelyMongoObjectId(data.data._id)) {
           setEmployeeId(data.data._id);
           return data.data._id;
         }
@@ -100,8 +96,8 @@ export default function Attendance() {
     }
   };
 
-  // Fetch today's attendance - ONLY on initial load
-  const fetchTodayAttendance = async () => {
+  // Fetch today's attendance — server liveStatus is source of truth for check-in and break
+  const fetchTodayAttendance = useCallback(async () => {
     try {
       const token = localStorage.getItem('authToken');
       const response = await fetch(buildApiUrl('/attendance/today'), {
@@ -115,84 +111,101 @@ export default function Attendance() {
 
       const data = await response.json();
       console.log('Fetched today attendance:', data.data);
-      
+
       setTodayData(data.data);
-      
-      // Check if we have localStorage state - if yes, use it instead of server state
-      const today = new Date().toDateString();
-      const storedState = localStorage.getItem(`checkedIn_${today}`);
-      
-      if (storedState) {
-        // Use localStorage state (it's more up-to-date than server)
-        console.log('Using localStorage state instead of server state');
-        try {
-          const state = JSON.parse(storedState);
-          setCheckedIn(state.checkedIn);
-          setCurrentHours(state.currentHours || 0);
-          // Don't load from localStorage - fetch from API instead
-          // setIsOnBreak(state.isOnBreak || false);
-          // setBreakType(state.breakType || null);
-          localStorage.setItem(attendanceCacheKey, JSON.stringify(state));
-        } catch (e) {
-          console.warn('Failed to parse stored state, using server state');
-          // Fallback to server state - ALWAYS get break status from API
-          const liveStatus = data.data?.liveStatus?.status;
-          const isCheckedInNow = liveStatus === 'checked_in' || liveStatus === 'on_break' || liveStatus === 'in_meeting';
-          setCheckedIn(isCheckedInNow);
-          setCurrentHours(data.data?.liveStatus?.currentHours || 0);
-          // ALWAYS get break status from API, never from localStorage
-          setBreakType(null);
-          localStorage.setItem(attendanceCacheKey, JSON.stringify({
-            checkedIn: isCheckedInNow,
-            currentHours: data.data?.liveStatus?.currentHours || 0,
-            isOnBreak: data.data?.liveStatus?.isOnBreak || false,
-            breakType: null
-          }));
-        }
-      } else {
-        // No localStorage state, use server state
-        console.log('No localStorage state, using server state');
-        const liveStatus = data.data?.liveStatus?.status;
-        const isCheckedInNow = liveStatus === 'checked_in' || liveStatus === 'on_break' || liveStatus === 'in_meeting';
-        setCheckedIn(isCheckedInNow);
-        setCurrentHours(data.data?.liveStatus?.currentHours || 0);
-        // ALWAYS get break status from API, never from localStorage
-        setBreakType(null);
-        localStorage.setItem(attendanceCacheKey, JSON.stringify({
+
+      const liveStatus = data.data?.liveStatus?.status;
+      const isCheckedInNow =
+        liveStatus === 'checked_in' || liveStatus === 'on_break' || liveStatus === 'in_meeting';
+      const isOnBreak = !!data.data?.liveStatus?.isOnBreak;
+      const breakTypeFromApi = (data.data?.liveStatus?.breakType as string) || 'regular';
+      const hours = data.data?.liveStatus?.currentHours || 0;
+
+      const att = data.data?.attendance;
+      const checkInTime = att?.checkIn
+        ? new Date(att.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        : null;
+      const checkOutTime = att?.checkOut
+        ? new Date(att.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        : null;
+
+      setCurrentHours(hours);
+      syncAttendance(
+        {
+          isCheckedIn: isCheckedInNow,
+          checkInTime,
+          checkOutTime,
+          hoursWorked: att?.hoursWorked ?? hours,
+          status: att?.status || liveStatus || 'absent',
+          isOnBreak,
+          breakType: isOnBreak ? breakTypeFromApi : 'regular',
+          currentBreakDuration: 0
+        },
+        'api'
+      );
+
+      localStorage.setItem(
+        attendanceCacheKey,
+        JSON.stringify({
           checkedIn: isCheckedInNow,
-          currentHours: data.data?.liveStatus?.currentHours || 0,
-          isOnBreak: data.data?.liveStatus?.isOnBreak || false,
-          breakType: null
-        }));
-      }
+          currentHours: hours,
+          isOnBreak,
+          breakType: isOnBreak ? breakTypeFromApi : null
+        })
+      );
     } catch (error) {
       console.error('Error fetching attendance:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [attendanceCacheKey, syncAttendance]);
 
-  // Fetch attendance history
-  const fetchAttendanceHistory = async () => {
-    try {
-      const token = localStorage.getItem('authToken');
-      const response = await fetch(buildApiUrl('/attendance?limit=7'), {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+  // Fetch attendance history (paginated)
+  const fetchAttendanceHistoryPage = useCallback(
+    async (page: number, append: boolean) => {
+      try {
+        if (append) setHistoryLoadingMore(true);
+        const token = localStorage.getItem('authToken');
+        const response = await fetch(
+          buildApiUrl(`/attendance?limit=${HISTORY_PAGE_SIZE}&page=${page}`),
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        if (!response.ok) {
+          console.warn('Failed to fetch history:', response.status);
+          return;
         }
-      });
-
-      if (!response.ok) {
-        console.warn('Failed to fetch history:', response.status);
-        return;
+        const data = await response.json();
+        const list: AttendanceRecord[] = data.data || [];
+        setAttendanceHistory((prev) => (append ? [...prev, ...list] : list));
+        const pages = data.pagination?.pages;
+        if (typeof pages === 'number' && pages > 0) {
+          setHistoryTotalPages(pages);
+        } else {
+          setHistoryTotalPages(list.length < HISTORY_PAGE_SIZE ? page : page + 1);
+        }
+        setHistoryPage(page);
+      } catch (error) {
+        console.error('Error fetching history:', error);
+      } finally {
+        setHistoryLoadingMore(false);
       }
-      const data = await response.json();
-      console.log('Fetched attendance history:', data.data);
-      setAttendanceHistory(data.data || []);
-    } catch (error) {
-      console.error('Error fetching history:', error);
-    }
+    },
+    []
+  );
+
+  const fetchAttendanceHistory = useCallback(async () => {
+    await fetchAttendanceHistoryPage(1, false);
+  }, [fetchAttendanceHistoryPage]);
+
+  const loadMoreHistory = () => {
+    if (historyPage >= historyTotalPages || historyLoadingMore) return;
+    void fetchAttendanceHistoryPage(historyPage + 1, true);
   };
 
   // Handle filter submission
@@ -273,15 +286,15 @@ export default function Attendance() {
   };
 
   // Break Start
-  const handleBreakStart = async (breakType: 'regular' = 'regular') => {
+  const handleBreakStart = async (kind: 'regular' = 'regular') => {
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
       const payload: any = {
-        breakType,
+        breakType: kind,
         notes: `Break started`
       };
-      if (employeeId) payload.employeeId = employeeId;
+      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
       if (getOrgId()) payload.orgId = getOrgId();
       const response = await fetch(buildApiUrl('/attendance/break-start'), {
         method: 'POST',
@@ -297,27 +310,25 @@ export default function Attendance() {
         throw new Error(error.message || 'Break start failed');
       }
 
-      // Update state immediately
-      setBreakType(breakType);
-      const breakLabel = 'Break';
-      addActivityLog(`Started ${breakLabel}`, 'break');
-      
-      // Save state to localStorage
-      const today = new Date().toDateString();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-        checkedIn: true,
-        currentHours,
-        isOnBreak: true,
-        breakType
-      }));
-      localStorage.setItem(attendanceCacheKey, JSON.stringify({
-        checkedIn: true,
-        currentHours,
-        isOnBreak: true,
-        breakType
-      }));
+      syncAttendance(
+        {
+          isOnBreak: true,
+          breakType: kind,
+          currentBreakDuration: 0
+        },
+        'action'
+      );
+      addActivityLog('Started Break', 'break');
     } catch (error) {
       console.error('Break start error:', error);
+      syncAttendance(
+        {
+          isOnBreak: false,
+          breakType: 'regular',
+          currentBreakDuration: 0
+        },
+        'action'
+      );
     } finally {
       setActionLoading(false);
     }
@@ -325,13 +336,15 @@ export default function Attendance() {
 
   // Break End
   const handleBreakEnd = async () => {
+    const wasOnBreak = liveAttendance.isOnBreak;
+    const prevBreakType = liveAttendance.breakType;
     try {
       setActionLoading(true);
       const token = localStorage.getItem('authToken');
       const payload: any = {
         notes: 'Break ended'
       };
-      if (employeeId) payload.employeeId = employeeId;
+      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
       if (getOrgId()) payload.orgId = getOrgId();
       const response = await fetch(buildApiUrl('/attendance/break-end'), {
         method: 'POST',
@@ -347,26 +360,24 @@ export default function Attendance() {
         throw new Error(error.message || 'Break end failed');
       }
 
-      // Update state immediately
-      setBreakType(null);
+      syncAttendance(
+        {
+          isOnBreak: false,
+          breakType: 'regular',
+          currentBreakDuration: 0
+        },
+        'action'
+      );
       addActivityLog('Ended Break', 'working');
-      
-      // Save state to localStorage
-      const today = new Date().toDateString();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-        checkedIn: true,
-        currentHours,
-        isOnBreak: false,
-        breakType: null
-      }));
-      localStorage.setItem(attendanceCacheKey, JSON.stringify({
-        checkedIn: true,
-        currentHours,
-        isOnBreak: false,
-        breakType: null
-      }));
     } catch (error) {
       console.error('Break end error:', error);
+      syncAttendance(
+        {
+          isOnBreak: wasOnBreak,
+          breakType: prevBreakType || 'regular'
+        },
+        'action'
+      );
     } finally {
       setActionLoading(false);
     }
@@ -374,7 +385,7 @@ export default function Attendance() {
 
   // Update hours every second when checked in
   useEffect(() => {
-    if (!checkedIn || !todayData?.attendance?.checkIn) return;
+    if (!liveAttendance.isCheckedIn || !todayData?.attendance?.checkIn) return;
 
     const interval = setInterval(() => {
       const checkInTime = new Date(todayData.attendance.checkIn);
@@ -384,177 +395,15 @@ export default function Attendance() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [checkedIn, todayData]);
+  }, [liveAttendance.isCheckedIn, todayData]);
 
-  // Listen to break events from Dashboard and sync state
+  // Single subscription: refresh from API (context is updated in fetchTodayAttendance)
   useEffect(() => {
-    const today = new Date().toDateString();
-    
-    const handleBreakStarted = (data: any) => {
-      try {
-        console.log('📡 [ATTENDANCE] Break started event received:', data);
-        console.log('📡 [ATTENDANCE] Current employeeId:', employeeId);
-        console.log('📡 [ATTENDANCE] Event employeeId:', data.employeeId);
-        console.log('📡 [ATTENDANCE] Match:', data.employeeId === employeeId);
-        
-        // Only update if it's for this employee
-        if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
-          console.log('📡 [ATTENDANCE] Break started for current employee, updating state');
-          setBreakType(data.breakType || 'regular');
-          
-          // Update localStorage to keep in sync
-          const currentState = localStorage.getItem(`checkedIn_${today}`);
-          if (currentState) {
-            try {
-              const parsed = JSON.parse(currentState);
-              const updated = {
-                ...parsed,
-                isOnBreak: true,
-                breakType: data.breakType || 'regular'
-              };
-              localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updated));
-              localStorage.setItem(attendanceCacheKey, JSON.stringify(updated));
-            } catch (e) {
-              console.warn('Failed to update localStorage:', e);
-            }
-          }
-        } else {
-          console.log('📡 [ATTENDANCE] Break started for different employee, ignoring');
-        }
-      } catch (error) {
-        console.error('Error in handleBreakStarted:', error);
-      }
-    };
-
-    const handleBreakEnded = (data: any) => {
-      try {
-        console.log('📡 [ATTENDANCE] Break ended event received:', data);
-        console.log('📡 [ATTENDANCE] Current employeeId:', employeeId);
-        console.log('📡 [ATTENDANCE] Event employeeId:', data.employeeId);
-        console.log('📡 [ATTENDANCE] Match:', data.employeeId === employeeId);
-        
-        // Only update if it's for this employee
-        if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
-          console.log('📡 [ATTENDANCE] Break ended for current employee, updating state');
-          setBreakType(null);
-          
-          // Update localStorage to keep in sync
-          const currentState = localStorage.getItem(`checkedIn_${today}`);
-          if (currentState) {
-            try {
-              const parsed = JSON.parse(currentState);
-              const updated = {
-                ...parsed,
-                isOnBreak: false,
-                breakType: null
-              };
-              localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updated));
-              localStorage.setItem(attendanceCacheKey, JSON.stringify(updated));
-            } catch (e) {
-              console.warn('Failed to update localStorage:', e);
-            }
-          }
-        } else {
-          console.log('📡 [ATTENDANCE] Break ended for different employee, ignoring');
-        }
-      } catch (error) {
-        console.error('Error in handleBreakEnded:', error);
-      }
-    };
-
-    realTimeSocket.onBreakStarted(handleBreakStarted);
-    realTimeSocket.onBreakEnded(handleBreakEnded);
-
-    // Listen for all attendance updates (check-in, check-out, etc.)
-    const handleAttendanceUpdate = (data: any) => {
-      console.log('📡 [ATTENDANCE] Attendance update event received:', data);
-      // Refresh data when attendance updates
-      if (employeeId) {
-        fetchTodayAttendance();
-      }
-    };
-
-    // Listen for check-in events
-    const handleCheckedIn = (data: any) => {
-      try {
-        console.log('📡 [ATTENDANCE] attendance:checked_in event received:', data);
-        console.log('📡 [ATTENDANCE] Current employeeId:', employeeId);
-        console.log('📡 [ATTENDANCE] Event employeeId:', data.employeeId);
-
-        // Only update if it's for this employee
-        if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
-          console.log('📡 [ATTENDANCE] Check-in for current employee, updating state');
-          setCheckedIn(true);
-                    
-          // Update localStorage
-          const today = new Date().toDateString();
-          const currentState = localStorage.getItem(`checkedIn_${today}`);
-          if (currentState) {
-            try {
-              const parsed = JSON.parse(currentState);
-              const updated = {
-                ...parsed,
-                checkedIn: true
-              };
-              localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updated));
-              localStorage.setItem(attendanceCacheKey, JSON.stringify(updated));
-            } catch (e) {
-              console.warn('Failed to update localStorage:', e);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error in handleCheckedIn:', error);
-      }
-    };
-
-    // Listen for check-out events
-    const handleCheckedOut = (data: any) => {
-      try {
-        console.log('📡 [ATTENDANCE] attendance:checked_out event received:', data);
-        console.log('📡 [ATTENDANCE] Current employeeId:', employeeId);
-        console.log('📡 [ATTENDANCE] Event employeeId:', data.employeeId);
-
-        // Only update if it's for this employee
-        if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
-          console.log('📡 [ATTENDANCE] Check-out for current employee, updating state');
-          setCheckedIn(false);
-          setBreakType(null);
-                    
-          // Update localStorage
-          const today = new Date().toDateString();
-          const currentState = localStorage.getItem(`checkedIn_${today}`);
-          if (currentState) {
-            try {
-              const parsed = JSON.parse(currentState);
-              const updated = {
-                ...parsed,
-                checkedIn: false,
-                isOnBreak: false,
-                breakType: null,
-                currentHours: data.hoursWorked || parsed.currentHours || 0
-              };
-              localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updated));
-              localStorage.setItem(attendanceCacheKey, JSON.stringify(updated));
-            } catch (e) {
-              console.warn('Failed to update localStorage:', e);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error in handleCheckedOut:', error);
-      }
-    };
-
-    realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
-    realTimeSocket.on('attendance:checked_in', handleCheckedIn);
-    realTimeSocket.on('attendance:checked_out', handleCheckedOut);
-
-    return () => {
-      // Note: realTimeSocket doesn't expose removeListener methods
-      // The listeners will be cleaned up when the component unmounts
-    };
-  }, [employeeId, attendanceCacheKey]);
+    const unsub = realTimeSocket.onAttendanceUpdate(() => {
+      void fetchTodayAttendance();
+    });
+    return () => unsub();
+  }, [fetchTodayAttendance]);
 
   // Refresh today's attendance periodically while checked in
   useEffect(() => {
@@ -569,7 +418,7 @@ export default function Attendance() {
     }, 10000); // Refresh every 10 seconds
 
     return () => clearInterval(interval);
-  }, [employeeId]);
+  }, [employeeId, fetchTodayAttendance]);
 
   // Initial load only
   useEffect(() => {
@@ -577,11 +426,7 @@ export default function Attendance() {
     if (cached) {
       try {
         const parsed = JSON.parse(cached);
-        setCheckedIn(!!parsed.checkedIn);
         setCurrentHours(parsed.currentHours || 0);
-        // NEVER load breakType from localStorage - it's stale data
-        // setIsOnBreak(!!parsed.isOnBreak);
-        // setBreakType(parsed.breakType || null);
         setLoading(false);
       } catch (_) {}
     }
@@ -594,7 +439,7 @@ export default function Attendance() {
       }
     };
     void init();
-  }, [user?.id, attendanceCacheKey]);
+  }, [user?.id, attendanceCacheKey, fetchTodayAttendance]);
 
   return (
     <div className="p-8 space-y-8">
@@ -611,7 +456,7 @@ export default function Attendance() {
         <>
 
           {/* Break and Meeting Actions */}
-          {checkedIn && (
+          {liveAttendance.isCheckedIn && (
             <Card className="rounded-2xl overflow-hidden">
               <div className="p-6 border-b border-border">
                 <h3 className="font-semibold text-lg">Actions</h3>
@@ -620,14 +465,18 @@ export default function Attendance() {
               <div className="p-6">
                 <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
                   <Button
-                    variant={breakType === 'regular' ? "destructive" : "outline"}
+                    variant={liveAttendance.isOnBreak && liveAttendance.breakType === 'regular' ? "destructive" : "outline"}
                     size="lg"
                     className="rounded-xl"
-                    onClick={breakType === 'regular' ? handleBreakEnd : () => handleBreakStart('regular')}
+                    onClick={
+                      liveAttendance.isOnBreak && liveAttendance.breakType === 'regular'
+                        ? handleBreakEnd
+                        : () => handleBreakStart('regular')
+                    }
                     disabled={actionLoading}
                   >
                     <Pause className="w-5 h-5 mr-2" />
-                    {breakType === 'regular' ? 'End Break' : 'Start Break'}
+                    {liveAttendance.isOnBreak && liveAttendance.breakType === 'regular' ? 'End Break' : 'Start Break'}
                   </Button>
                 </div>
               </div>
@@ -784,6 +633,28 @@ export default function Attendance() {
                 </tbody>
               </table>
             </div>
+            {!filterStartDate && !filterEndDate && historyPage < historyTotalPages && (
+              <div className="p-4 border-t border-border flex justify-center">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg"
+                  onClick={loadMoreHistory}
+                  disabled={historyLoadingMore}
+                  aria-label="Load more attendance history"
+                >
+                  {historyLoadingMore ? (
+                    <>
+                      <Loader className="w-4 h-4 mr-2 animate-spin" />
+                      Loading…
+                    </>
+                  ) : (
+                    'Load more'
+                  )}
+                </Button>
+              </div>
+            )}
           </Card>
         </>
       )}

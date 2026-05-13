@@ -191,23 +191,19 @@ export class ApiClient {
     retryCount = 0
   ): Promise<ApiResponse<T>> {
     const url = this.buildUrl(endpoint);
-    const token = TokenManager.get();
+    let authToken = TokenManager.get();
 
-    // Check token expiration before request
-    if (token && isTokenExpired(token)) {
-      // Try to refresh token
+    if (authToken && isTokenExpired(authToken)) {
       try {
         const refreshService = new TokenRefreshService();
         const refreshResult = await refreshService.refreshToken();
         if (refreshResult.success && refreshResult.data?.token) {
-          // Update token and retry request
-          const newToken = refreshResult.data.token;
-          headers.Authorization = `Bearer ${newToken}`;
+          authToken = refreshResult.data.token;
         } else {
           TokenManager.clear();
           throw new ApiError('Session expired', 401, 'TOKEN_EXPIRED');
         }
-      } catch (refreshError) {
+      } catch {
         TokenManager.clear();
         throw new ApiError('Session expired', 401, 'TOKEN_EXPIRED');
       }
@@ -215,7 +211,7 @@ export class ApiClient {
 
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
+      ...(authToken && { Authorization: `Bearer ${authToken}` }),
       ...options.headers
     };
 
@@ -812,24 +808,29 @@ export class AdvanceLoanService {
 export class TokenRefreshService {
   async refreshToken(): Promise<ApiResponse<{ token: string; user: any }>> {
     const refreshToken = TokenManager.getRefreshToken();
-    
+
     if (!refreshToken) {
       throw new ApiError('No refresh token available', 401, 'NO_REFRESH_TOKEN');
     }
 
-    try {
-      const response = await fetch(`${getApiBaseUrl()}/security/auth/refresh-token`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${refreshToken}`
-        },
-        body: JSON.stringify({ refreshToken })
-      });
+    const url = `${getApiBaseUrl()}/security/auth/refresh-token`;
+    const REFRESH_TIMEOUT = 15000;
 
-      const data = await response.json();
+    try {
+      const response = await fetchWithTimeout(
+        url,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken })
+        },
+        REFRESH_TIMEOUT
+      );
+
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
+        TokenManager.clear();
         throw new ApiError(
           data.message || 'Token refresh failed',
           response.status,
@@ -837,7 +838,6 @@ export class TokenRefreshService {
         );
       }
 
-      // Update stored tokens
       if (data.data?.accessToken) {
         TokenManager.set(data.data.accessToken);
       }
@@ -846,14 +846,17 @@ export class TokenRefreshService {
       }
 
       return {
-        success: data.success,
-        data: data.data ? { token: data.data.accessToken, user: data.data.user } : undefined,
+        success: !!data.success,
+        data: data.data?.accessToken
+          ? { token: data.data.accessToken as string, user: data.data.user }
+          : undefined,
         message: data.message
       };
     } catch (error) {
-      // Clear tokens on refresh failure
-      TokenManager.clear();
-      throw error;
+      if (error instanceof ApiError) {
+        throw error;
+      }
+      throw new ApiError('Unable to refresh session', 0, 'NETWORK_ERROR');
     }
   }
 }

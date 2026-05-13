@@ -116,11 +116,15 @@ class RealTimeSocket {
   private handleReconnect() {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
-      console.log(`🔄 Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+      const delay = Math.min(
+        this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1) + Math.random() * 500,
+        30_000
+      );
+      console.log(`🔄 Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts}) in ${Math.round(delay)}ms...`);
       
       setTimeout(() => {
         this.socket?.connect();
-      }, this.reconnectDelay * this.reconnectAttempts);
+      }, delay);
     } else {
       console.error('❌ Max reconnection attempts reached');
     }
@@ -139,43 +143,6 @@ class RealTimeSocket {
     this.socket.on('activity_update', (activity) => {
       console.log('📝 Activity update received:', activity);
       this.notifyActivityUpdate(activity);
-    });
-
-    // Attendance-specific events
-    this.socket.on('attendance:checked_in', (data) => {
-      console.log('✅ [SOCKET] Employee checked in:', data);
-      this.notifyAttendanceUpdate(data);
-    });
-
-    this.socket.on('attendance:checked_out', (data) => {
-      console.log('❌ [SOCKET] Employee checked out:', data);
-      this.notifyAttendanceUpdate(data);
-    });
-
-    this.socket.on('break:started', (data) => {
-      console.log('☕ [SOCKET] Break started:', data);
-      this.notifyBreakStarted(data);
-    });
-
-    this.socket.on('break:ended', (data) => {
-      console.log('🔄 [SOCKET] Break ended:', data);
-      this.notifyBreakEnded(data);
-    });
-
-    this.socket.on('meeting:started', (data) => {
-      console.log('📞 [SOCKET] Meeting started:', data);
-      this.notifyMeetingStarted(data);
-    });
-
-    this.socket.on('meeting:ended', (data) => {
-      console.log('📞 [SOCKET] Meeting ended:', data);
-      this.notifyMeetingEnded(data);
-    });
-
-    // KPI updates for admin dashboard
-    this.socket.on('kpi:update', (data) => {
-      console.log('📊 [SOCKET] KPI update received:', data);
-      this.notifyKPIUpdate(data);
     });
 
     // Employee updates
@@ -291,6 +258,7 @@ class RealTimeSocket {
       console.log('📊 [SOCKET] KPI activeUsers value:', data?.kpis?.activeUsers);
       
       // Notify dashboard with the KPI data
+      this.notifyKPIUpdate(data);
       this.notifyDashboardUpdate({ type: 'kpi_update', data });
       
       console.log('📊 [SOCKET] Dashboard update callbacks count:', this.dashboardUpdateCallbacks.length);
@@ -434,50 +402,62 @@ class RealTimeSocket {
 
   // Notification methods
   private notifyDashboardUpdate(data: any) {
+    if (data == null || typeof data !== 'object') return;
     this.dashboardUpdateCallbacks.forEach(callback => callback(data));
   }
 
   private notifyActivityUpdate(activity: any) {
+    if (activity == null || typeof activity !== 'object') return;
     this.activityUpdateCallbacks.forEach(callback => callback(activity));
   }
 
   private notifyEmployeeUpdate(type: string, employee: any) {
+    if (typeof type !== 'string') return;
     this.employeeUpdateCallbacks.forEach(callback => callback(type, employee));
   }
 
   private notifyLeaveUpdate(type: string, leave: any) {
+    if (typeof type !== 'string') return;
     this.leaveUpdateCallbacks.forEach(callback => callback(type, leave));
   }
 
   private notifyAttendanceUpdate(attendance: any) {
+    if (attendance == null || typeof attendance !== 'object') return;
     this.attendanceUpdateCallbacks.forEach(callback => callback(attendance));
   }
 
   private notifyExpenseUpdate(type: string, expense: any) {
+    if (typeof type !== 'string') return;
     this.expenseUpdateCallbacks.forEach(callback => callback(type, expense));
   }
 
   private notifySystemNotification(notification: any) {
+    if (notification == null || typeof notification !== 'object') return;
     this.notificationCallbacks.forEach(callback => callback(notification));
   }
 
   private notifyBreakStarted(data: any) {
+    if (data == null || typeof data !== 'object') return;
     this.breakStartedCallbacks.forEach(callback => callback(data));
   }
 
   private notifyBreakEnded(data: any) {
+    if (data == null || typeof data !== 'object') return;
     this.breakEndedCallbacks.forEach(callback => callback(data));
   }
 
   private notifyMeetingStarted(data: any) {
+    if (data == null || typeof data !== 'object') return;
     this.meetingStartedCallbacks.forEach(callback => callback(data));
   }
 
   private notifyMeetingEnded(data: any) {
+    if (data == null || typeof data !== 'object') return;
     this.meetingEndedCallbacks.forEach(callback => callback(data));
   }
 
   private notifyKPIUpdate(data: any) {
+    if (data == null || typeof data !== 'object') return;
     this.kpiUpdateCallbacks.forEach(callback => callback(data));
   }
 

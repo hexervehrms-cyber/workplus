@@ -819,20 +819,18 @@ export default function Attendance() {
 
   // Refresh today's attendance periodically while checked in
   useEffect(() => {
-    if (!checkedIn) return;
+    if (!employeeId) return;
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       
-      // SIMPLE RULE: Only refresh if we're still checked in
-      if (checkedIn && employeeId) {
-        console.log('⏰ [ATTENDANCE] Periodic refresh triggered');
-        fetchTodayAttendance();
-      }
-    }, 30000); // Refresh every 30 seconds
+      // Refresh every 10 seconds regardless of checked-in status
+      console.log('⏰ [ATTENDANCE] Periodic refresh triggered');
+      fetchTodayAttendance();
+    }, 10000); // Refresh every 10 seconds
 
     return () => clearInterval(interval);
-  }, [checkedIn, employeeId]);
+  }, [employeeId]);
 
   // Initial load only
   useEffect(() => {

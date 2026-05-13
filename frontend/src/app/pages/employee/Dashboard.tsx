@@ -10,10 +10,15 @@ import { useAttendance } from '../../../context/AttendanceContext';
 import {
   Calendar,
   Clock,
-  TrendingUp
+  TrendingUp,
+  LogIn,
+  LogOut,
+  Pause,
+  MessageSquare
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
+import { Button } from '../../components/ui/button';
 import {
   Table,
   TableBody,
@@ -84,6 +89,9 @@ export default function EmployeeDashboard() {
   const [attendanceHistory, setAttendanceHistory] = useState<any[]>([]);
   const [breakHistory, setBreakHistory] = useState<any[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [currentBreakDuration, setCurrentBreakDuration] = useState(0);
+  const [currentMeetingDuration, setCurrentMeetingDuration] = useState(0);
+  const [workingHours, setWorkingHours] = useState(0);
   const attendanceCacheKey = `employee_attendance_state_${user?.id || 'unknown'}`;
 
   const getTodayKey = () => new Date().toDateString();
@@ -468,10 +476,11 @@ export default function EmployeeDashboard() {
       }
     };
 
-    realTimeSocket.onBreakStarted(handleBreakStarted);
-    realTimeSocket.onBreakEnded(handleBreakEnded);
-    realTimeSocket.onMeetingStarted(handleMeetingStarted);
-    realTimeSocket.onMeetingEnded(handleMeetingEnded);
+    // Subscribe to events and store unsubscribe functions
+    const unsubscribeBreakStarted = realTimeSocket.onBreakStarted(handleBreakStarted);
+    const unsubscribeBreakEnded = realTimeSocket.onBreakEnded(handleBreakEnded);
+    const unsubscribeMeetingStarted = realTimeSocket.onMeetingStarted(handleMeetingStarted);
+    const unsubscribeMeetingEnded = realTimeSocket.onMeetingEnded(handleMeetingEnded);
     realTimeSocket.on('attendance:checked_in', handleCheckedIn);
     realTimeSocket.on('attendance:checked_out', handleCheckedOut);
 
@@ -480,12 +489,10 @@ export default function EmployeeDashboard() {
     // FIX #5: Actually clean up all listeners on unmount
     return () => {
       console.log('📡 [EMPLOYEE-DASHBOARD] Cleaning up Socket.IO listeners');
-      realTimeSocket.off('break:started', handleBreakStarted);
-      realTimeSocket.off('break:ended', handleBreakEnded);
-      realTimeSocket.off('meeting:started', handleMeetingStarted);
-      realTimeSocket.off('meeting:ended', handleMeetingEnded);
-      realTimeSocket.off('attendance:checked_in', handleCheckedIn);
-      realTimeSocket.off('attendance:checked_out', handleCheckedOut);
+      unsubscribeBreakStarted?.();
+      unsubscribeBreakEnded?.();
+      unsubscribeMeetingStarted?.();
+      unsubscribeMeetingEnded?.();
     };
   }, [user?.orgId, updateAttendance]);
 
@@ -550,15 +557,473 @@ export default function EmployeeDashboard() {
   }, [todayAttendance.isCheckedIn, disableRefresh, safeRefresh, isRecentlyUpdated]);
 
   // ============================================================================
-  // ATTENDANCE ACTION HANDLERS - REMOVED (moved to Attendance page)
+  // TIMER SYSTEM - Track working hours, breaks, and meetings in real-time
   // ============================================================================
+  useEffect(() => {
+    if (!todayAttendance.isCheckedIn) {
+      setWorkingHours(0);
+      setCurrentBreakDuration(0);
+      setCurrentMeetingDuration(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      // Calculate working hours (excluding breaks and meetings)
+      if (todayAttendance.checkInTime) {
+        const checkInTime = new Date();
+        const [hours, minutes] = todayAttendance.checkInTime.split(':').map(Number);
+        checkInTime.setHours(hours, minutes, 0, 0);
+        
+        const now = new Date();
+        let totalSeconds = (now.getTime() - checkInTime.getTime()) / 1000;
+        
+        // Subtract break time - accumulate all breaks taken so far
+        if (todayAttendance.isOnBreak) {
+          // Currently on break - add current break duration
+          setCurrentBreakDuration(prev => prev + 1);
+          totalSeconds -= (currentBreakDuration + 1) * 60;
+        } else {
+          // Not on break - keep current break duration as is
+          if (currentBreakDuration > 0) {
+            totalSeconds -= currentBreakDuration * 60;
+          }
+        }
+        
+        // Subtract meeting time
+        if (todayAttendance.isInMeeting) {
+          // Currently in meeting - add current meeting duration
+          setCurrentMeetingDuration(prev => prev + 1);
+          totalSeconds -= (currentMeetingDuration + 1) * 60;
+        } else {
+          // Not in meeting - keep current meeting duration as is
+          if (currentMeetingDuration > 0) {
+            totalSeconds -= currentMeetingDuration * 60;
+          }
+        }
+        
+        const hours_worked = totalSeconds / 3600;
+        setWorkingHours(Math.max(0, hours_worked));
+      }
+    }, 1000); // Update every second
+
+    return () => clearInterval(interval);
+  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.isInMeeting, todayAttendance.checkInTime, currentBreakDuration, currentMeetingDuration]);
+
+  // Format time display (HH:MM:SS)
+  const formatTime = (seconds: number): string => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  // ============================================================================
+  // ATTENDANCE ACTION HANDLERS - Integrated from Attendance page
+  // ============================================================================
+  
+  const handleBreakStart = async (breakType: 'regular' = 'regular') => {
+    // Debounce: prevent multiple clicks
+    if (actionInProgressRef.current) return;
+    
+    try {
+      actionInProgressRef.current = true;
+      lastActionTimeRef.current = Date.now();
+      
+      const token = localStorage.getItem('authToken');
+      const payload: any = {
+        breakType,
+        notes: `Break started`
+      };
+      if (employeeId) payload.employeeId = employeeId;
+      
+      const response = await fetch(buildApiUrl('/attendance/break-start'), {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Break start failed';
+        try {
+          const error = await response.json();
+          errorMessage = error.message || errorMessage;
+        } catch (e) {
+          // Response body is not JSON
+        }
+        throw new Error(errorMessage);
+      }
+
+      // Update state immediately
+      updateAttendance({
+        isOnBreak: true,
+        breakType: breakType,
+        currentBreakDuration: 0
+      });
+      
+      // Save state to localStorage
+      const today = getTodayKey();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        currentHours: todayAttendance.hoursWorked || 0,
+        isOnBreak: true,
+        breakType,
+        isInMeeting: false
+      }));
+    } catch (error) {
+      console.error('Break start error:', error);
+    } finally {
+      actionInProgressRef.current = false;
+    }
+  };
+
+  const handleBreakEnd = async () => {
+    // Debounce: prevent multiple clicks
+    if (actionInProgressRef.current) return;
+    
+    try {
+      actionInProgressRef.current = true;
+      lastActionTimeRef.current = Date.now();
+      
+      const token = localStorage.getItem('authToken');
+      const payload: any = {
+        notes: 'Break ended'
+      };
+      if (employeeId) payload.employeeId = employeeId;
+      
+      const response = await fetch(buildApiUrl('/attendance/break-end'), {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Break end failed';
+        try {
+          const error = await response.json();
+          errorMessage = error.message || errorMessage;
+        } catch (e) {
+          // Response body is not JSON
+        }
+        throw new Error(errorMessage);
+      }
+
+      // Update state immediately
+      updateAttendance({
+        isOnBreak: false,
+        breakType: 'regular',
+        currentBreakDuration: 0
+      });
+      
+      // Save state to localStorage
+      const today = getTodayKey();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        currentHours: todayAttendance.hoursWorked || 0,
+        isOnBreak: false,
+        breakType: 'regular',
+        isInMeeting: false
+      }));
+    } catch (error) {
+      console.error('Break end error:', error);
+    } finally {
+      actionInProgressRef.current = false;
+    }
+  };
+
+  const handleMeetingStart = async () => {
+    // Debounce: prevent multiple clicks
+    if (actionInProgressRef.current) return;
+    
+    if (!todayAttendance.isCheckedIn) {
+      console.error('Please check in first before starting a meeting');
+      return;
+    }
+
+    try {
+      actionInProgressRef.current = true;
+      lastActionTimeRef.current = Date.now();
+      
+      const token = localStorage.getItem('authToken');
+      
+      // If on break, automatically end it first
+      if (todayAttendance.isOnBreak) {
+        try {
+          const breakEndResponse = await fetch(buildApiUrl('/attendance/break-end'), {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              employeeId,
+              notes: 'Break ended to start meeting'
+            })
+          });
+
+          if (breakEndResponse.ok) {
+            updateAttendance({
+              isOnBreak: false,
+              breakType: 'regular'
+            });
+            // Add small delay to ensure database is updated
+            await new Promise(resolve => setTimeout(resolve, 300));
+          } else {
+            let errorMessage = 'Failed to end break';
+            try {
+              const breakError = await breakEndResponse.json();
+              errorMessage = breakError.message || errorMessage;
+            } catch (e) {
+              // Response body is not JSON
+            }
+            throw new Error(errorMessage);
+          }
+        } catch (breakError) {
+          console.error('Error ending break:', breakError);
+          throw new Error(`Cannot start meeting: ${breakError instanceof Error ? breakError.message : 'Failed to end break'}`);
+        }
+      }
+      
+      const meetingData: any = {
+        meetingTitle: 'Meeting',
+        meetingType: 'internal',
+        notes: 'Meeting started'
+      };
+      if (employeeId) meetingData.employeeId = employeeId;
+      
+      const response = await fetch(buildApiUrl('/attendance/meeting-start'), {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(meetingData)
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Meeting start failed';
+        try {
+          const error = await response.json();
+          errorMessage = error.message || errorMessage;
+        } catch (e) {
+          // Response body is not JSON
+        }
+        throw new Error(errorMessage);
+      }
+
+      // Update state immediately
+      updateAttendance({
+        isInMeeting: true,
+        isOnBreak: false,
+        breakType: 'regular'
+      });
+      
+      // Save state to localStorage
+      const today = getTodayKey();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        currentHours: todayAttendance.hoursWorked || 0,
+        isOnBreak: false,
+        breakType: 'regular',
+        isInMeeting: true
+      }));
+    } catch (error) {
+      console.error('Meeting start error:', error);
+    } finally {
+      actionInProgressRef.current = false;
+    }
+  };
+
+  const handleMeetingEnd = async () => {
+    // Debounce: prevent multiple clicks
+    if (actionInProgressRef.current) return;
+    
+    try {
+      actionInProgressRef.current = true;
+      lastActionTimeRef.current = Date.now();
+      
+      const token = localStorage.getItem('authToken');
+      const payload: any = {
+        notes: 'Meeting ended'
+      };
+      if (employeeId) payload.employeeId = employeeId;
+      
+      const response = await fetch(buildApiUrl('/attendance/meeting-end'), {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Meeting end failed';
+        try {
+          const error = await response.json();
+          errorMessage = error.message || errorMessage;
+        } catch (e) {
+          // Response body is not JSON
+        }
+        throw new Error(errorMessage);
+      }
+
+      // Update state immediately (don't wait for response body)
+      updateAttendance({
+        isInMeeting: false
+      });
+      
+      // Save state to localStorage
+      const today = getTodayKey();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        currentHours: todayAttendance.hoursWorked || 0,
+        isOnBreak: false,
+        breakType: 'regular',
+        isInMeeting: false
+      }));
+    } catch (error) {
+      console.error('Meeting end error:', error);
+    } finally {
+      actionInProgressRef.current = false;
+    }
+  };
+
+  const handleCheckIn = async () => {
+    // Debounce: prevent multiple clicks
+    if (actionInProgressRef.current) return;
+    
+    try {
+      actionInProgressRef.current = true;
+      lastActionTimeRef.current = Date.now();
+      
+      const token = localStorage.getItem('authToken');
+      const payload: any = {
+        notes: 'Checked in'
+      };
+      if (employeeId) payload.employeeId = employeeId;
+      
+      const response = await fetch(buildApiUrl('/attendance/check-in'), {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Check-in failed';
+        try {
+          const error = await response.json();
+          errorMessage = error.message || errorMessage;
+        } catch (e) {
+          // Response body is not JSON
+        }
+        throw new Error(errorMessage);
+      }
+
+      const checkInTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+      // Update state immediately
+      updateAttendance({
+        isCheckedIn: true,
+        checkInTime: checkInTime,
+        status: 'present'
+      });
+      
+      // Save state to localStorage
+      const today = getTodayKey();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: true,
+        checkInTime: checkInTime,
+        currentHours: 0,
+        isOnBreak: false,
+        breakType: 'regular',
+        isInMeeting: false,
+        status: 'present'
+      }));
+    } catch (error) {
+      console.error('Check-in error:', error);
+    } finally {
+      actionInProgressRef.current = false;
+    }
+  };
+
+  const handleCheckOut = async () => {
+    // Debounce: prevent multiple clicks
+    if (actionInProgressRef.current) return;
+    
+    try {
+      actionInProgressRef.current = true;
+      lastActionTimeRef.current = Date.now();
+      
+      const token = localStorage.getItem('authToken');
+      const payload: any = {
+        notes: 'Checked out'
+      };
+      if (employeeId) payload.employeeId = employeeId;
+      
+      const response = await fetch(buildApiUrl('/attendance/check-out'), {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Check-out failed';
+        try {
+          const error = await response.json();
+          errorMessage = error.message || errorMessage;
+        } catch (e) {
+          // Response body is not JSON
+        }
+        throw new Error(errorMessage);
+      }
+
+      const checkOutTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+      // Update state immediately
+      updateAttendance({
+        isCheckedIn: false,
+        checkOutTime: checkOutTime,
+        isOnBreak: false,
+        isInMeeting: false,
+        breakType: 'regular',
+        currentBreakDuration: 0
+      });
+      
+      // Save state to localStorage
+      const today = getTodayKey();
+      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
+        checkedIn: false,
+        checkOutTime: checkOutTime,
+        currentHours: todayAttendance.hoursWorked || 0,
+        isOnBreak: false,
+        breakType: 'regular',
+        isInMeeting: false
+      }));
+    } catch (error) {
+      console.error('Check-out error:', error);
+    } finally {
+      actionInProgressRef.current = false;
+    }
+  };
 
   return (
     <>
       <LoadingProgressBar isLoading={loading} color="bg-blue-500" />
       <div className="p-8 space-y-8">
         {/* Welcome Header with Attendance Buttons */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-3xl font-bold text-foreground mb-2">
               Welcome back, {user?.name || 'Employee'}! 👋
@@ -566,7 +1031,106 @@ export default function EmployeeDashboard() {
             <p className="text-muted-foreground">Here's what's happening with your work today</p>
           </div>
 
-        {/* Attendance Action Buttons - Moved to Attendance page */}
+          {/* Attendance Status and Action Buttons - Top Right Corner */}
+          <div className="flex flex-col items-end gap-4">
+            {/* Status Badge */}
+            {todayAttendance.isCheckedIn && (
+              <Badge 
+                className={`px-3 py-1.5 text-xs font-semibold rounded-full ${
+                  todayAttendance.isInMeeting 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : todayAttendance.isOnBreak 
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-emerald-100 text-emerald-700'
+                }`}
+              >
+                {todayAttendance.isInMeeting 
+                  ? `● In Meeting (${formatTime(currentMeetingDuration * 60)})` 
+                  : todayAttendance.isOnBreak 
+                  ? `● On Break (${formatTime(currentBreakDuration * 60)})`
+                  : `● Working (${formatTime(workingHours * 3600)})`}
+              </Badge>
+            )}
+
+            {/* Action Buttons - Professional Layout */}
+            <div className="flex gap-2">
+              {!todayAttendance.isCheckedIn ? (
+                <Button
+                  size="sm"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
+                  disabled={loading}
+                  onClick={handleCheckIn}
+                >
+                  <LogIn className="w-4 h-4 mr-1.5" />
+                  Log In
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    size="sm"
+                    className="bg-red-600 hover:bg-red-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
+                    disabled={loading}
+                    onClick={handleCheckOut}
+                  >
+                    <LogOut className="w-4 h-4 mr-1.5" />
+                    Log Out
+                  </Button>
+
+                  {!todayAttendance.isInMeeting && (
+                    <>
+                      {!todayAttendance.isOnBreak ? (
+                        <Button
+                          size="sm"
+                          className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
+                          onClick={() => handleBreakStart('regular')}
+                          disabled={loading}
+                        >
+                          <Pause className="w-4 h-4 mr-1.5" />
+                          Break
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
+                          onClick={handleBreakEnd}
+                          disabled={loading}
+                        >
+                          <Pause className="w-4 h-4 mr-1.5" />
+                          End Break
+                        </Button>
+                      )}
+                    </>
+                  )}
+
+                  {!todayAttendance.isOnBreak && (
+                    <>
+                      {!todayAttendance.isInMeeting ? (
+                        <Button
+                          size="sm"
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
+                          onClick={handleMeetingStart}
+                          disabled={loading}
+                        >
+                          <MessageSquare className="w-4 h-4 mr-1.5" />
+                          Meeting
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
+                          onClick={handleMeetingEnd}
+                          disabled={loading}
+                        >
+                          <MessageSquare className="w-4 h-4 mr-1.5" />
+                          End Meeting
+                        </Button>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* KPI Cards */}

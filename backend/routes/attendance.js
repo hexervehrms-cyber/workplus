@@ -749,55 +749,82 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
       $push: { breaks: newBreak }
     },
     { new: true }
-  ).populate('userId', 'name email avatar')
-   .populate('employeeId', 'employeeCode department');
+  ).select('_id employeeId orgId breaks meetingMode checkIn checkOut');
 
-  // Log activity
-  await ActivityLog.logActivity({
-    userId: currentUserId,
-    orgId: effectiveOrgId,
-    action: 'attendance_break_start',
-    entity: {
-      entityType: 'attendance',
-      entityId: attendance._id,
-      entityName: `Break Started - ${breakType}`
-    },
-    details: {
-      breakType,
-      notes
-    },
-    ipAddress: req.ip,
-    userAgent: req.get('User-Agent'),
-    severity: 'low',
-    category: 'user'
-  });
-
-  // Emit real-time event to notify admin dashboard (this also emits KPI update internally)
-  req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
-
-  // Emit specific break:started event for page synchronization
-  if (global.io) {
-    global.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
-      employeeId: effectiveEmployeeId,
-      breakType: breakType,
-      timestamp: new Date().toISOString(),
-      attendance: updatedAttendance
+  // Verify the break was actually added
+  if (!updatedAttendance || !updatedAttendance.breaks || updatedAttendance.breaks.length === 0) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to save break to database'
     });
-    logger.info('Break started event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
   }
 
+  // Send response immediately with updated data
   res.status(201).json({
     success: true,
     message: 'Break started successfully',
     data: updatedAttendance
   });
 
-  // Emit KPI update to admin dashboard
-  if (global.io) {
-    emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
-      action: 'break_start',
-      employeeId: effectiveEmployeeId,
-      status: 'on_break'
+  // Log activity asynchronously
+  setImmediate(async () => {
+    try {
+      await ActivityLog.logActivity({
+        userId: currentUserId,
+        orgId: effectiveOrgId,
+        action: 'attendance_break_start',
+        entity: {
+          entityType: 'attendance',
+          entityId: attendance._id,
+          entityName: `Break Started - ${breakType}`
+        },
+        details: {
+          breakType,
+          notes
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        severity: 'low',
+        category: 'user'
+      }).catch(err => logger.error('Failed to log break start activity', { error: err.message }));
+
+      // Emit real-time event to notify admin dashboard
+      if (req.emitAttendanceUpdate) {
+        req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId).catch(err => 
+          logger.error('Failed to emit attendance update', { error: err.message })
+        );
+      }
+
+      // Emit specific break:started event for page synchronization
+      if (global.io) {
+        try {
+          global.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
+            employeeId: effectiveEmployeeId,
+            breakType: breakType,
+            timestamp: new Date().toISOString()
+          });
+          logger.info('Break started event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
+        } catch (err) {
+          logger.error('Failed to emit break:started event', { error: err.message });
+        }
+      }
+
+      // Emit KPI update to admin dashboard
+      if (global.io) {
+        try {
+          emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
+            action: 'break_start',
+            employeeId: effectiveEmployeeId,
+            status: 'on_break'
+          });
+        } catch (err) {
+          logger.error('Failed to emit KPI update', { error: err.message });
+        }
+      }
+    } catch (err) {
+      logger.error('Error in async break start operations', { error: err.message, employeeId: effectiveEmployeeId });
+    }
+  });
     }).catch(err => logger.error('Failed to emit KPI update on break start', { error: err.message }));
   }
 }));
@@ -1041,66 +1068,80 @@ router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager',
     startedBy: currentUserId
   };
 
-  const updatedAttendance = await Attendance.findByIdAndUpdate(
-    attendance._id,
-    { 
-      $set: { meetingMode },
-      $push: {
-        meetings: {
-          startTime: meetingMode.startTime,
-          title: meetingTitle,
-          type: meetingType,
-          ipAddress: req.ip || req.connection.remoteAddress
-        }
-      }
-    },
-    { new: true }
-  ).populate('userId', 'name email avatar')
-   .populate('employeeId', 'employeeCode department');
-
-  // Log activity
-  await ActivityLog.logActivity({
-    userId: currentUserId,
-    orgId: effectiveOrgId,
-    action: 'attendance_meeting_start',
-    entity: {
-      entityType: 'attendance',
-      entityId: attendance._id,
-      entityName: `Meeting Started - ${meetingTitle}`
-    },
-    details: {
-      meetingTitle,
-      meetingType,
-      notes
-    },
-    ipAddress: req.ip,
-    userAgent: req.get('User-Agent'),
-    severity: 'low',
-    category: 'user'
-  });
-
+  // Send response immediately
   res.status(201).json({
     success: true,
     message: 'Meeting started successfully',
-    data: updatedAttendance
+    data: {
+      isInMeeting: true,
+      meetingMode: {
+        isActive: true,
+        meetingTitle
+      }
+    }
   });
 
-  // Emit real-time event to notify admin dashboard
-  if (req.emitAttendanceUpdate) {
-    req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
-  }
+  // Update database asynchronously
+  setImmediate(async () => {
+    try {
+      const updatedAttendance = await Attendance.findByIdAndUpdate(
+        attendance._id,
+        { 
+          $set: { meetingMode },
+          $push: {
+            meetings: {
+              startTime: meetingMode.startTime,
+              title: meetingTitle,
+              type: meetingType,
+              ipAddress: req.ip || req.connection.remoteAddress
+            }
+          }
+        },
+        { new: true }
+      ).select('_id employeeId orgId meetingMode');
 
-  // Emit specific meeting:started event for page synchronization
-  if (global.io) {
-    global.io.to(`tenant_${effectiveOrgId}`).emit('meeting:started', {
-      employeeId: effectiveEmployeeId,
-      meetingTitle: meetingMode.meetingTitle,
-      meetingType: meetingMode.meetingType,
-      timestamp: new Date().toISOString(),
-      attendance: updatedAttendance
-    });
-    logger.info('Meeting started event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
-  }
+      // Log activity asynchronously
+      ActivityLog.logActivity({
+        userId: currentUserId,
+        orgId: effectiveOrgId,
+        action: 'attendance_meeting_start',
+        entity: {
+          entityType: 'attendance',
+          entityId: attendance._id,
+          entityName: `Meeting Started - ${meetingTitle}`
+        },
+        details: {
+          meetingTitle,
+          meetingType,
+          notes
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        severity: 'low',
+        category: 'user'
+      }).catch(err => logger.error('Failed to log meeting start activity', { error: err.message }));
+
+      // Emit real-time event to notify admin dashboard
+      if (req.emitAttendanceUpdate) {
+        req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId).catch(err => 
+          logger.error('Failed to emit attendance update', { error: err.message })
+        );
+      }
+
+      // Emit specific meeting:started event for page synchronization
+      if (global.io) {
+        global.io.to(`tenant_${effectiveOrgId}`).emit('meeting:started', {
+          employeeId: effectiveEmployeeId,
+          meetingTitle: meetingMode.meetingTitle,
+          meetingType: meetingMode.meetingType,
+          timestamp: new Date().toISOString()
+        });
+        logger.info('Meeting started event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
+      }
+    } catch (err) {
+      logger.error('Error in async meeting start operations', { error: err.message, employeeId: effectiveEmployeeId });
+    }
+  });
 }));
 
 /**
@@ -1155,7 +1196,18 @@ router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', '
 
   // End the meeting
   const endTime = new Date();
-  const meetingDuration = (endTime - attendance.meetingMode.startTime) / (1000 * 60);
+  
+  // Safely calculate meeting duration
+  let meetingDuration = 0;
+  if (attendance.meetingMode?.startTime) {
+    const startTime = new Date(attendance.meetingMode.startTime);
+    if (!isNaN(startTime.getTime())) {
+      meetingDuration = (endTime - startTime) / (1000 * 60);
+    }
+  }
+  
+  // Ensure duration is a valid number
+  const roundedDuration = Math.max(0, Math.round(meetingDuration));
 
   // Find the index of the last meeting (which should be the active one)
   const meetingIndex = attendance.meetings?.length ? attendance.meetings.length - 1 : -1;
@@ -1163,65 +1215,79 @@ router.post('/meeting-end', authorize('super_admin', 'admin', 'hr', 'manager', '
   const updateFields = {
     'meetingMode.isActive': false,
     'meetingMode.endTime': endTime,
-    'meetingMode.duration': Math.round(meetingDuration),
+    'meetingMode.duration': roundedDuration,
     'meetingMode.endNotes': notes
   };
 
   if (meetingIndex !== -1) {
     updateFields[`meetings.${meetingIndex}.endTime`] = endTime;
-    updateFields[`meetings.${meetingIndex}.duration`] = Math.round(meetingDuration);
+    updateFields[`meetings.${meetingIndex}.duration`] = roundedDuration;
   }
 
-  const updatedAttendance = await Attendance.findByIdAndUpdate(
-    attendance._id,
-    { $set: updateFields },
-    { new: true }
-  ).populate('userId', 'name email avatar')
-   .populate('employeeId', 'employeeCode department');
-
-  // Log activity
-  await ActivityLog.logActivity({
-    userId: currentUserId,
-    orgId,
-    action: 'attendance_meeting_end',
-    entity: {
-      entityType: 'attendance',
-      entityId: attendance._id,
-      entityName: `Meeting Ended - ${Math.round(meetingDuration)} minutes`
-    },
-    details: {
-      meetingTitle: attendance.meetingMode.meetingTitle,
-      duration: Math.round(meetingDuration),
-      notes
-    },
-    ipAddress: req.ip,
-    userAgent: req.get('User-Agent'),
-    severity: 'low',
-    category: 'user'
-  });
-
+  // Send response immediately (don't wait for logging/events)
   res.json({
     success: true,
     message: 'Meeting ended successfully',
-    data: updatedAttendance
+    data: {
+      isInMeeting: false,
+      meetingMode: {
+        isActive: false,
+        duration: roundedDuration
+      }
+    }
   });
 
-  // Emit real-time event to notify admin dashboard
-  if (req.emitAttendanceUpdate) {
-    req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
-  }
+  // Update database asynchronously
+  setImmediate(async () => {
+    try {
+      const updatedAttendance = await Attendance.findByIdAndUpdate(
+        attendance._id,
+        { $set: updateFields },
+        { new: true }
+      ).select('_id employeeId orgId meetingMode');
 
-  // Emit specific meeting:ended event for page synchronization
-  if (global.io) {
-    global.io.to(`tenant_${effectiveOrgId}`).emit('meeting:ended', {
-      employeeId: effectiveEmployeeId,
-      meetingTitle: attendance.meetingMode.meetingTitle,
-      duration: Math.round(meetingDuration),
-      timestamp: new Date().toISOString(),
-      attendance: updatedAttendance
-    });
-    logger.info('Meeting ended event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
-  }
+      // Log activity asynchronously
+      ActivityLog.logActivity({
+        userId: currentUserId,
+        orgId: effectiveOrgId,
+        action: 'attendance_meeting_end',
+        entity: {
+          entityType: 'attendance',
+          entityId: attendance._id,
+          entityName: `Meeting Ended - ${roundedDuration} minutes`
+        },
+        details: {
+          meetingTitle: attendance.meetingMode?.meetingTitle || 'Meeting',
+          duration: roundedDuration,
+          notes
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        severity: 'low',
+        category: 'user'
+      }).catch(err => logger.error('Failed to log meeting end activity', { error: err.message }));
+
+      // Emit real-time event to notify admin dashboard
+      if (req.emitAttendanceUpdate) {
+        req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId).catch(err => 
+          logger.error('Failed to emit attendance update', { error: err.message })
+        );
+      }
+
+      // Emit specific meeting:ended event for page synchronization
+      if (global.io) {
+        global.io.to(`tenant_${effectiveOrgId}`).emit('meeting:ended', {
+          employeeId: effectiveEmployeeId,
+          meetingTitle: attendance.meetingMode?.meetingTitle || 'Meeting',
+          duration: roundedDuration,
+          timestamp: new Date().toISOString()
+        });
+        logger.info('Meeting ended event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
+      }
+    } catch (err) {
+      logger.error('Error in async meeting end operations', { error: err.message, employeeId: effectiveEmployeeId });
+    }
+  });
 }));
 
 /**

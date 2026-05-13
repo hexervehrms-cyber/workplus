@@ -729,6 +729,11 @@ export default function EmployeeDashboard() {
         breakType: 'regular',
         isInMeeting: false
       }));
+
+      // Force refresh after a short delay to ensure state is updated
+      setTimeout(() => {
+        safeRefresh(true);
+      }, 500);
     } catch (error) {
       console.error('Break end error:', error);
     } finally {
@@ -832,6 +837,11 @@ export default function EmployeeDashboard() {
         breakType: 'regular',
         isInMeeting: true
       }));
+
+      // Force refresh after a short delay to ensure state is updated
+      setTimeout(() => {
+        safeRefresh(true);
+      }, 500);
     } catch (error) {
       console.error('Meeting start error:', error);
     } finally {
@@ -873,7 +883,7 @@ export default function EmployeeDashboard() {
         throw new Error(errorMessage);
       }
 
-      // Update state immediately (don't wait for response body)
+      // Update state immediately
       updateAttendance({
         isInMeeting: false
       });
@@ -887,6 +897,11 @@ export default function EmployeeDashboard() {
         breakType: 'regular',
         isInMeeting: false
       }));
+
+      // Force refresh after a short delay to ensure state is updated
+      setTimeout(() => {
+        safeRefresh(true);
+      }, 500);
     } catch (error) {
       console.error('Meeting end error:', error);
     } finally {

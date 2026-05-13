@@ -487,7 +487,7 @@ export default function EmployeeDashboard() {
     };
 
     const handleBreakEnded = (data: any) => {
-      console.log('📡 [EMPLOYEE-DASHBOARD] break:ended event received:', data);
+      console.log('� [EMPLOYEE-DASHBOARD] break:ended event received:', data);
       if (String(data.employeeId) === String(employeeIdRef.current)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Break ended for current employee, updating state');
         setLastSocketEventTime(Date.now());
@@ -661,16 +661,7 @@ export default function EmployeeDashboard() {
   
   const handleBreakStart = async (breakType: 'regular' = 'regular') => {
     // Debounce: prevent multiple clicks
-    if (actionInProgressRef.current) {
-      console.log('⏸️ [BREAK START] Action already in progress, ignoring duplicate click');
-      return;
-    }
-    
-    // Prevent starting break if already on break
-    if (todayAttendance.isOnBreak) {
-      console.log('⏸️ [BREAK START] Already on break, ignoring');
-      return;
-    }
+    if (actionInProgressRef.current) return;
     
     try {
       actionInProgressRef.current = true;
@@ -689,55 +680,54 @@ export default function EmployeeDashboard() {
       
       console.log('🔄 [BREAK START] Sending request:', { breakType, employeeId: resolvedEmployeeId });
       
-      // CRITICAL FIX: Add timeout to fetch
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
       
-      const response = await fetch(buildApiUrl('/attendance/break-start'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json',
-          'Idempotency-Key': idempotencyKey
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
+      try {
+        const response = await fetch(buildApiUrl('/attendance/break-start'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            'Content-Type': 'application/json',
+            'Idempotency-Key': idempotencyKey
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        let errorMessage = 'Break start failed';
-        try {
-          const error = await response.json();
-          errorMessage = error.message || errorMessage;
-        } catch (e) {
-          // Response body is not JSON
+        if (!response.ok) {
+          let errorMessage = 'Break start failed';
+          try {
+            const error = await response.json();
+            errorMessage = error.message || errorMessage;
+          } catch (e) {
+            // Response body is not JSON
+          }
+          console.error('❌ [BREAK START] API Error:', errorMessage);
+          throw new Error(errorMessage);
         }
-        console.error('❌ [BREAK START] API Error:', errorMessage);
-        throw new Error(errorMessage);
+
+        const result = await response.json();
+        console.log('✅ [BREAK START] Success:', result);
+
+        // Update state immediately - SAME PATTERN AS CHECK-IN
+        updateAttendance({
+          isOnBreak: true,
+          breakType: breakType,
+          currentBreakDuration: 0
+        }, 'action');
+
+        clearApiCache('/attendance/today');
+        setTimeout(() => {
+          void safeRefresh(true);
+        }, 600);
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      const result = await response.json();
-      console.log('✅ [BREAK START] Success:', result);
-
-      // Update state immediately with optimistic update
-      updateAttendance({
-        isOnBreak: true,
-        breakType: breakType,
-        currentBreakDuration: 0
-      }, 'action');
-
-      clearApiCache('/attendance/today');
-      await new Promise(resolve => setTimeout(resolve, 500));
-      setTimeout(() => {
-        void safeRefresh(true);
-      }, 600);
-      
     } catch (error) {
       console.error('❌ [BREAK START] Error:', error);
-      // Rollback optimistic update on error
+      // Rollback optimistic update on error - SAME PATTERN AS CHECK-IN
       updateAttendance({
         isOnBreak: false,
         breakType: 'regular',
@@ -750,21 +740,15 @@ export default function EmployeeDashboard() {
 
   const handleBreakEnd = async () => {
     // Debounce: prevent multiple clicks
-    if (actionInProgressRef.current) {
-      console.log('⏸️ [BREAK END] Action already in progress, ignoring duplicate click');
-      return;
-    }
-    
-    // Prevent ending break if not on break
-    if (!todayAttendance.isOnBreak) {
-      console.log('⏸️ [BREAK END] Not on break, ignoring');
-      return;
-    }
+    if (actionInProgressRef.current) return;
     
     try {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
 
+      const wasOnBreak = todayAttendance.isOnBreak;
+      const prevBreakType = todayAttendance.breakType;
+      
       const resolvedEmployeeId = await ensureEmployeeId();
       const token = TokenManager.get();
       const idempotencyKey = `break-end-${resolvedEmployeeId || 'me'}-${Date.now()}`;
@@ -777,57 +761,58 @@ export default function EmployeeDashboard() {
       
       console.log('🔄 [BREAK END] Sending request:', { employeeId: resolvedEmployeeId });
       
-      // CRITICAL FIX: Add timeout to fetch
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
       
-      const response = await fetch(buildApiUrl('/attendance/break-end'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json',
-          'Idempotency-Key': idempotencyKey
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
+      try {
+        const response = await fetch(buildApiUrl('/attendance/break-end'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            'Content-Type': 'application/json',
+            'Idempotency-Key': idempotencyKey
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        let errorMessage = 'Break end failed';
-        try {
-          const error = await response.json();
-          errorMessage = error.message || errorMessage;
-        } catch (e) {
-          // Response body is not JSON
+        if (!response.ok) {
+          let errorMessage = 'Break end failed';
+          try {
+            const error = await response.json();
+            errorMessage = error.message || errorMessage;
+          } catch (e) {
+            // Response body is not JSON
+          }
+          console.error('❌ [BREAK END] API Error:', errorMessage);
+          throw new Error(errorMessage);
         }
-        console.error('❌ [BREAK END] API Error:', errorMessage);
-        throw new Error(errorMessage);
+
+        const result = await response.json();
+        console.log('✅ [BREAK END] Success:', result);
+
+        const newBreakType = result?.data?.liveStatus?.breakType || prevBreakType || 'regular';
+
+        // Update state immediately - SAME PATTERN AS CHECK-OUT
+        updateAttendance({
+          isOnBreak: false,
+          breakType: newBreakType,
+          currentBreakDuration: 0
+        }, 'action');
+
+        clearApiCache('/attendance/today');
+        setTimeout(() => {
+          void safeRefresh(true);
+        }, 600);
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      const result = await response.json();
-      console.log('✅ [BREAK END] Success:', result);
-
-      // Update state immediately with optimistic update
-      updateAttendance({
-        isOnBreak: false,
-        breakType: 'regular',
-        currentBreakDuration: 0
-      }, 'action');
-
-      clearApiCache('/attendance/today');
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      setTimeout(() => {
-        void safeRefresh(true);
-      }, 800);
     } catch (error) {
       console.error('❌ [BREAK END] Error:', error);
-      // Rollback optimistic update on error
+      // Rollback optimistic update on error - SAME PATTERN AS CHECK-OUT
       updateAttendance({
-        isOnBreak: true,
+        isOnBreak: todayAttendance.isOnBreak,
         breakType: todayAttendance.breakType || 'regular'
       }, 'action');
     } finally {

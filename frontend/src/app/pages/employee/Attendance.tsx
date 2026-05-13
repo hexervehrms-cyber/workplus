@@ -351,15 +351,16 @@ export default function Attendance() {
         body: JSON.stringify(payload)
       });
 
+      const responseData = await response.json();
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Break end failed');
+        throw new Error(responseData.message || 'Break end failed');
       }
 
+      const newBreakType = responseData?.data?.liveStatus?.breakType || prevBreakType || 'regular';
       syncAttendance(
         {
           isOnBreak: false,
-          breakType: 'regular',
+          breakType: newBreakType,
           currentBreakDuration: 0
         },
         'action'
@@ -407,14 +408,14 @@ export default function Attendance() {
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      
-      // Refresh every 10 seconds regardless of checked-in status
+      if (!liveAttendance.isCheckedIn && !liveAttendance.isOnBreak) return;
+
       console.log('⏰ [ATTENDANCE] Periodic refresh triggered');
       fetchTodayAttendance();
-    }, 10000); // Refresh every 10 seconds
+    }, 30000); // Refresh every 30 seconds while checked in or on break
 
     return () => clearInterval(interval);
-  }, [employeeId, fetchTodayAttendance]);
+  }, [employeeId, fetchTodayAttendance, liveAttendance.isCheckedIn, liveAttendance.isOnBreak]);
 
   // Initial load only — hydrate from IndexedDB / local cache, then API
   useEffect(() => {
@@ -458,18 +459,18 @@ export default function Attendance() {
               <div className="p-6">
                 <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
                   <Button
-                    variant={liveAttendance.isOnBreak && liveAttendance.breakType === 'regular' ? "destructive" : "outline"}
+                    variant={liveAttendance.isOnBreak ? "destructive" : "outline"}
                     size="lg"
                     className="rounded-xl"
                     onClick={
-                      liveAttendance.isOnBreak && liveAttendance.breakType === 'regular'
+                      liveAttendance.isOnBreak
                         ? handleBreakEnd
                         : () => handleBreakStart('regular')
                     }
                     disabled={actionLoading}
                   >
                     <Pause className="w-5 h-5 mr-2" />
-                    {liveAttendance.isOnBreak && liveAttendance.breakType === 'regular' ? 'End Break' : 'Start Break'}
+                    {liveAttendance.isOnBreak ? 'End Break' : 'Start Break'}
                   </Button>
                 </div>
               </div>

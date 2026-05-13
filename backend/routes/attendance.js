@@ -18,6 +18,115 @@ import { dashboardCache } from '../utils/dashboardCache.js';
 
 const router = express.Router();
 
+/** Condition inside $elemMatch: break started and not finished. */
+const OPEN_BREAK_INNER = {
+  startTime: { $exists: true, $ne: null },
+  $or: [{ endTime: { $exists: false } }, { endTime: null }]
+};
+
+/** No open break — safe to start another. */
+const noOpenBreakFilter = () => ({
+  breaks: { $not: { $elemMatch: OPEN_BREAK_INNER } }
+});
+
+/** Has an open break (for break-end). */
+const hasOpenBreakFilter = () => ({
+  breaks: { $elemMatch: OPEN_BREAK_INNER }
+});
+
+/**
+ * Employee row for the logged-in user (JWT orgId can be wrong vs Employee.orgId).
+ */
+const findEmployeeForSelfService = async (currentUserId, authOrgId) => {
+  let employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId, status: 'active' })
+    .select('_id firstName lastName orgId')
+    .lean();
+  if (!employee) {
+    employee = await Employee.findOne({ userId: currentUserId, status: 'active' })
+      .select('_id firstName lastName orgId')
+      .sort({ updatedAt: -1 })
+      .lean();
+  }
+  return employee;
+};
+
+/**
+ * Find the latest completed break record for the attendance entry.
+ */
+const findLatestCompletedBreak = (breaks = []) => {
+  if (!Array.isArray(breaks) || breaks.length === 0) return null;
+  for (let index = breaks.length - 1; index >= 0; index -= 1) {
+    const item = breaks[index];
+    if (item?.startTime && item?.endTime) {
+      return { breakItem: item, index };
+    }
+  }
+  return null;
+};
+
+const buildLiveStatus = (attendance) => {
+  let liveStatus = 'not_checked_in';
+  let currentHours = 0;
+  let isOnBreak = false;
+  let currentBreakDuration = 0;
+  let totalBreakTime = 0;
+  let breakType = 'regular';
+  let breakStartTime = null;
+
+  if (!attendance || !attendance.checkIn) {
+    return {
+      status: liveStatus,
+      currentHours,
+      isOnBreak,
+      currentBreakDuration,
+      breakType,
+      breakStartTime,
+      totalBreakTime,
+      lastUpdated: new Date()
+    };
+  }
+
+  const now = new Date();
+  if (attendance.checkOut) {
+    liveStatus = 'checked_out';
+    currentHours = (new Date(attendance.checkOut) - new Date(attendance.checkIn)) / (1000 * 60 * 60);
+  } else {
+    liveStatus = 'checked_in';
+    currentHours = (now - new Date(attendance.checkIn)) / (1000 * 60 * 60);
+
+    if (attendance.breaks?.length) {
+      const lastBreak = attendance.breaks[attendance.breaks.length - 1];
+      if (lastBreak?.startTime && !lastBreak?.endTime) {
+        isOnBreak = true;
+        currentBreakDuration = (now - new Date(lastBreak.startTime)) / (1000 * 60);
+        liveStatus = 'on_break';
+        breakType = lastBreak.breakType || 'regular';
+        breakStartTime = lastBreak.startTime;
+      }
+    }
+  }
+
+  if (attendance.breaks?.length) {
+    totalBreakTime = attendance.breaks.reduce((sum, item) => {
+      if (item?.startTime && item?.endTime) {
+        return sum + ((new Date(item.endTime) - new Date(item.startTime)) / (1000 * 60));
+      }
+      return sum;
+    }, 0);
+  }
+
+  return {
+    status: liveStatus,
+    currentHours: Math.round(currentHours * 100) / 100,
+    isOnBreak,
+    currentBreakDuration: Math.round(currentBreakDuration),
+    breakType,
+    breakStartTime,
+    totalBreakTime: Math.round(totalBreakTime),
+    lastUpdated: new Date()
+  };
+};
+
 const queueHrAttendanceEmail = (type, payload) => {
   setImmediate(async () => {
     try {
@@ -110,58 +219,11 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
   .populate('employeeId', 'employeeCode department')
   .lean();
 
-  // Calculate live status
-  let liveStatus = 'not_checked_in';
-  let currentHours = 0;
-  let isOnBreak = false;
-  let currentBreakDuration = 0;
-  let totalBreakTime = 0;
-
-  if (attendance) {
-    const now = new Date();
-    
-    if (attendance.checkOut) {
-      liveStatus = 'checked_out';
-      currentHours = (attendance.checkOut - attendance.checkIn) / (1000 * 60 * 60);
-    } else if (attendance.checkIn) {
-      liveStatus = 'checked_in';
-      currentHours = (now - attendance.checkIn) / (1000 * 60 * 60);
-
-      // Check if on break
-      if (attendance.breaks && attendance.breaks.length > 0) {
-        const lastBreak = attendance.breaks[attendance.breaks.length - 1];
-        
-        if (lastBreak.startTime && !lastBreak.endTime) {
-          isOnBreak = true;
-          currentBreakDuration = (now - lastBreak.startTime) / (1000 * 60);
-          liveStatus = 'on_break';
-        }
-      }
-
-      // Calculate total break time
-      if (attendance.breaks && attendance.breaks.length > 0) {
-        totalBreakTime = attendance.breaks.reduce((total, breakItem) => {
-          if (breakItem.startTime && breakItem.endTime) {
-            return total + (breakItem.endTime - breakItem.startTime);
-          }
-          return total;
-        }, 0) / (1000 * 60);
-      }
-    }
-  }
-
   res.json({
     success: true,
     data: {
       attendance,
-      liveStatus: {
-        status: liveStatus,
-        currentHours: Math.round(currentHours * 100) / 100,
-        isOnBreak,
-        currentBreakDuration: Math.round(currentBreakDuration),
-        totalBreakTime: Math.round(totalBreakTime),
-        lastUpdated: new Date()
-      }
+      liveStatus: buildLiveStatus(attendance)
     }
   });
 }));
@@ -664,14 +726,12 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId, status: 'active' })
-      .select('_id firstName lastName')
-      .lean();
+    const employee = await findEmployeeForSelfService(currentUserId, authOrgId);
     if (!employee) {
       return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
     }
     effectiveEmployeeId = employee._id;
-    effectiveOrgId = authOrgId;
+    effectiveOrgId = employee.orgId || authOrgId;
     effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || effectiveEmployeeName || 'Employee';
   } else if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
     return res.status(403).json({ success: false, message: 'Unauthorized org access' });
@@ -700,17 +760,23 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
   };
 
   try {
+    const baseDay = {
+      orgId: effectiveOrgId,
+      date: { $gte: today, $lt: tomorrow },
+      checkIn: { $exists: true },
+      $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
+      ...noOpenBreakFilter(),
+      'meetingMode.isActive': { $ne: true }
+    };
+
+    const attendanceMatch =
+      authRole === 'employee'
+        ? { ...baseDay, userId: currentUserId }
+        : { ...baseDay, employeeId: effectiveEmployeeId };
+
     // Use findOneAndUpdate with atomic $push to prevent duplicate breaks
     const updatedAttendance = await Attendance.findOneAndUpdate(
-      {
-        employeeId: effectiveEmployeeId,
-        orgId: effectiveOrgId,
-        date: { $gte: today, $lt: tomorrow },
-        checkIn: { $exists: true },
-        $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
-        'breaks': { $not: { $elemMatch: { startTime: { $exists: true }, endTime: { $exists: false } } } }, // No active break
-        'meetingMode.isActive': { $ne: true } // Not in meeting
-      },
+      attendanceMatch,
       {
         $push: { breaks: newBreak }
       },
@@ -718,12 +784,12 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
     ).select('_id employeeId orgId breaks meetingMode checkIn checkOut');
 
     if (!updatedAttendance) {
-      // Check why update failed
-      const attendance = await Attendance.findOne({
-        employeeId: effectiveEmployeeId,
-        orgId: effectiveOrgId,
-        date: { $gte: today, $lt: tomorrow }
-      }).select('_id checkIn checkOut breaks meetingMode');
+      // Check why update failed (same scope as GET /today for employees)
+      const attendance = await Attendance.findOne(
+        authRole === 'employee'
+          ? { userId: currentUserId, orgId: effectiveOrgId, date: { $gte: today, $lt: tomorrow } }
+          : { employeeId: effectiveEmployeeId, orgId: effectiveOrgId, date: { $gte: today, $lt: tomorrow } }
+      ).select('_id checkIn checkOut breaks meetingMode');
 
       if (!attendance) {
         return res.status(400).json({
@@ -739,7 +805,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
         });
       }
 
-      if (attendance.breaks?.some(b => b.startTime && !b.endTime)) {
+      if (attendance.breaks?.some((b) => b.startTime && b.endTime == null)) {
         return res.status(200).json({
           success: true,
           message: 'Already on break.',
@@ -760,11 +826,16 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
       });
     }
 
+    const liveStatus = buildLiveStatus(updatedAttendance);
+
     // Send response immediately with updated data
     res.status(201).json({
       success: true,
       message: 'Break started successfully',
-      data: updatedAttendance
+      data: {
+        attendance: updatedAttendance,
+        liveStatus
+      }
     });
 
     // Log activity asynchronously
@@ -795,8 +866,10 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
           try {
             global.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
               employeeId: effectiveEmployeeId,
-              breakType: breakType,
-              timestamp: new Date().toISOString()
+              breakType,
+              timestamp: new Date().toISOString(),
+              attendance: updatedAttendance,
+              liveStatus
             });
             logger.info('Break started event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
           } catch (err) {
@@ -846,14 +919,12 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId, status: 'active' })
-      .select('_id firstName lastName')
-      .lean();
+    const employee = await findEmployeeForSelfService(currentUserId, authOrgId);
     if (!employee) {
       return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
     }
     effectiveEmployeeId = employee._id;
-    effectiveOrgId = authOrgId;
+    effectiveOrgId = employee.orgId || authOrgId;
     effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || effectiveEmployeeName || 'Employee';
   } else if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
     return res.status(403).json({ success: false, message: 'Unauthorized org access' });
@@ -876,13 +947,23 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     // This ensures only the active break is ended, preventing race conditions
     const endTime = new Date();
 
+    const endMatch =
+      authRole === 'employee'
+        ? {
+            userId: currentUserId,
+            orgId: effectiveOrgId,
+            date: { $gte: today, $lt: tomorrow },
+            ...hasOpenBreakFilter()
+          }
+        : {
+            employeeId: effectiveEmployeeId,
+            orgId: effectiveOrgId,
+            date: { $gte: today, $lt: tomorrow },
+            ...hasOpenBreakFilter()
+          };
+
     const updatedAttendance = await Attendance.findOneAndUpdate(
-      {
-        employeeId: effectiveEmployeeId,
-        orgId: effectiveOrgId,
-        date: { $gte: today, $lt: tomorrow },
-        'breaks': { $elemMatch: { startTime: { $exists: true }, endTime: { $exists: false } } } // Has active break
-      },
+      endMatch,
       {
         $set: {
           'breaks.$[activeBreak].endTime': endTime,
@@ -890,7 +971,12 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
         }
       },
       {
-        arrayFilters: [{ 'activeBreak.startTime': { $exists: true }, 'activeBreak.endTime': { $exists: false } }],
+        arrayFilters: [
+          {
+            'activeBreak.startTime': { $exists: true, $ne: null },
+            'activeBreak.endTime': null
+          }
+        ],
         new: true,
         runValidators: false
       }
@@ -899,11 +985,11 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
     if (!updatedAttendance) {
       // Check why update failed
-      const attendance = await Attendance.findOne({
-        employeeId: effectiveEmployeeId,
-        orgId: effectiveOrgId,
-        date: { $gte: today, $lt: tomorrow }
-      }).select('_id breaks');
+      const attendance = await Attendance.findOne(
+        authRole === 'employee'
+          ? { userId: currentUserId, orgId: effectiveOrgId, date: { $gte: today, $lt: tomorrow } }
+          : { employeeId: effectiveEmployeeId, orgId: effectiveOrgId, date: { $gte: today, $lt: tomorrow } }
+      ).select('_id breaks');
 
       if (!attendance) {
         return res.status(400).json({
@@ -912,7 +998,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
         });
       }
 
-      if (!attendance.breaks?.some(b => b.startTime && !b.endTime)) {
+      if (!attendance.breaks?.some((b) => b.startTime && b.endTime == null)) {
         return res.status(200).json({
           success: true,
           message: 'No active break found to end.',
@@ -926,11 +1012,23 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       });
     }
 
-    // Calculate break duration from the updated break
-    const activeBreak = updatedAttendance.breaks?.find(b => b.endTime && b.startTime);
-    const breakDuration = activeBreak 
+    const latestBreakEntry = findLatestCompletedBreak(updatedAttendance.breaks);
+    const activeBreak = latestBreakEntry?.breakItem || null;
+    const breakDuration = activeBreak
       ? Math.round((new Date(activeBreak.endTime).getTime() - new Date(activeBreak.startTime).getTime()) / (1000 * 60))
       : 0;
+
+    if (activeBreak && latestBreakEntry.index !== undefined && activeBreak.duration !== breakDuration) {
+      await Attendance.updateOne(
+        { _id: updatedAttendance._id },
+        { $set: { [`breaks.${latestBreakEntry.index}.duration`]: breakDuration } }
+      );
+      if (updatedAttendance.breaks && updatedAttendance.breaks[latestBreakEntry.index]) {
+        updatedAttendance.breaks[latestBreakEntry.index].duration = breakDuration;
+      }
+    }
+
+    const liveStatus = buildLiveStatus(updatedAttendance);
 
     // Log activity asynchronously
     setImmediate(async () => {
@@ -967,8 +1065,11 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
           try {
             global.io.to(`tenant_${effectiveOrgId}`).emit('break:ended', {
               employeeId: effectiveEmployeeId,
+              breakType: activeBreak?.breakType || 'regular',
               timestamp: new Date().toISOString(),
-              attendance: updatedAttendance
+              breakDuration,
+              attendance: updatedAttendance,
+              liveStatus
             });
             logger.info('Break ended event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
           } catch (err) {

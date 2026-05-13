@@ -64,6 +64,7 @@ export function setAccessTokenCookie(res, token, maxAgeSec = 24 * 60 * 60) {
   const sameSite = normalizeSameSite(process.env.AUTH_COOKIE_SAMESITE, isProd);
   const secure =
     process.env.AUTH_COOKIE_SECURE !== 'false' && (isProd || sameSite === 'None');
+  const domain = process.env.AUTH_COOKIE_DOMAIN;
   const parts = [
     `${ACCESS_TOKEN_COOKIE}=${encodeURIComponent(token)}`,
     'Path=/',
@@ -71,6 +72,7 @@ export function setAccessTokenCookie(res, token, maxAgeSec = 24 * 60 * 60) {
     'HttpOnly',
     `SameSite=${sameSite}`
   ];
+  if (domain) parts.push(`Domain=${domain}`);
   if (secure) parts.push('Secure');
   res.append('Set-Cookie', parts.join('; '));
 }
@@ -84,6 +86,7 @@ export function clearAccessTokenCookie(res) {
   const sameSite = normalizeSameSite(process.env.AUTH_COOKIE_SAMESITE, isProd);
   const secure =
     process.env.AUTH_COOKIE_SECURE !== 'false' && (isProd || sameSite === 'None');
+  const domain = process.env.AUTH_COOKIE_DOMAIN;
   const parts = [
     `${ACCESS_TOKEN_COOKIE}=`,
     'Path=/',
@@ -91,6 +94,7 @@ export function clearAccessTokenCookie(res) {
     'HttpOnly',
     `SameSite=${sameSite}`
   ];
+  if (domain) parts.push(`Domain=${domain}`);
   if (secure) parts.push('Secure');
   res.append('Set-Cookie', parts.join('; '));
 }

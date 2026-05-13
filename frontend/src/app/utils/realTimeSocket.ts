@@ -13,7 +13,7 @@ class RealTimeSocket {
 
   private connect() {
     const user = TokenManager.getUser();
-    const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+    const token = TokenManager.get() || '';
 
     if (!user?.id) {
       console.warn('No user data found for socket connection');
@@ -21,8 +21,7 @@ class RealTimeSocket {
     }
 
     if (!token) {
-      console.warn('No JWT token found for socket connection');
-      return;
+      console.log('🔐 [SOCKET] No Bearer token in storage — relying on httpOnly session cookie (withCredentials)');
     }
 
     console.log('🔐 [SOCKET] User data from TokenManager:', user);
@@ -37,7 +36,7 @@ class RealTimeSocket {
     this.socket = io(socketUrl, {
       transports: ['websocket', 'polling'],
       auth: {
-        token: token
+        token
       },
       withCredentials: true
     });

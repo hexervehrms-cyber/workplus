@@ -74,6 +74,7 @@ export class SocketService {
         
         this.socket = io(SOCKET_URL, {
           transports: ['websocket', 'polling'],
+          withCredentials: true,
           reconnection: true,
           reconnectionAttempts: 12,
           reconnectionDelay: 1000,

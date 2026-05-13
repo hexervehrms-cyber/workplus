@@ -1,5 +1,11 @@
-import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { TokenManager } from '../app/utils/api';
+import {
+  readPersistedAttendance,
+  writePersistedAttendance,
+  clearPersistedAttendance,
+  isPayloadFresh
+} from '../app/utils/attendancePersistence';
 
 export interface AttendanceState {
   isCheckedIn: boolean;
@@ -40,15 +46,11 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [lastUpdateSource, setLastUpdateSource] = useState('init');
   const lastUpdateTimeRef = useRef(Date.now());
 
-  // Get today's date string for localStorage key
-  const getTodayKey = () => new Date().toDateString();
-
   const persistToLocalStorage = useCallback((state: AttendanceState) => {
     try {
-      const today = getTodayKey();
       const user = TokenManager.getUser();
-      const userId = user?.id ?? null;
-      const stateToSave = {
+      const userId = user?.id != null ? String(user.id) : null;
+      writePersistedAttendance(userId, {
         userId,
         checkedIn: state.isCheckedIn,
         isCheckedIn: state.isCheckedIn,
@@ -61,68 +63,44 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         currentBreakDuration: state.currentBreakDuration,
         breakType: state.breakType,
         timestamp: Date.now()
-      };
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify(stateToSave));
-      console.log('💾 [ATTENDANCE-CONTEXT] Saved to localStorage:', stateToSave);
+      });
+      console.log('💾 [ATTENDANCE-CONTEXT] Saved attendance cache (canonical + mirrors)');
     } catch (e) {
-      console.warn('Failed to save to localStorage:', e);
+      console.warn('Failed to save attendance cache:', e);
     }
   }, []);
 
-  // Validate localStorage state is not stale (max 24 hours old)
-  const isLocalStorageStateFresh = useCallback((): boolean => {
-    try {
-      const today = getTodayKey();
-      const cached = localStorage.getItem(`checkedIn_${today}`);
-      if (!cached) return false;
-      
-      const parsed = JSON.parse(cached);
-      const timestamp = parsed.timestamp || 0;
-      const now = Date.now();
-      const age = now - timestamp;
-      
-      // If state is older than 24 hours, consider it stale
-      if (age > 24 * 60 * 60 * 1000) {
-        console.log('⚠️ [ATTENDANCE-CONTEXT] localStorage state is stale (age:', age, 'ms)');
-        return false;
-      }
-      
-      return true;
-    } catch (e) {
-      console.warn('Failed to validate localStorage freshness:', e);
-      return false;
-    }
-  }, []);
-
-  // Load from localStorage - ONLY on initial mount, never during sync
+  // Load from durable cache (IndexedDB + localStorage + legacy migration)
   const loadFromLocalStorage = useCallback(() => {
-    try {
-      const today = getTodayKey();
-      const cached = localStorage.getItem(`checkedIn_${today}`);
-      if (cached && isLocalStorageStateFresh()) {
-        const parsed = JSON.parse(cached);
+    void (async () => {
+      try {
         const currentUser = TokenManager.getUser();
-        if (parsed.userId != null && currentUser?.id && String(parsed.userId) !== String(currentUser.id)) {
-          console.warn('⚠️ [ATTENDANCE-CONTEXT] Ignoring localStorage attendance: user mismatch');
+        const userId = currentUser?.id != null ? String(currentUser.id) : null;
+        const payload = await readPersistedAttendance(userId);
+        if (!payload || !isPayloadFresh(payload)) {
           return;
         }
-        console.log('📦 [ATTENDANCE-CONTEXT] Loaded from localStorage:', parsed);
+        if (payload.userId != null && userId && String(payload.userId) !== String(userId)) {
+          console.warn('⚠️ [ATTENDANCE-CONTEXT] Ignoring cached attendance: user mismatch');
+          return;
+        }
+        console.log('📦 [ATTENDANCE-CONTEXT] Loaded from attendance cache:', payload);
         setAttendanceState({
-          isCheckedIn: parsed.checkedIn || parsed.isCheckedIn || false,
-          checkInTime: parsed.checkInTime || null,
-          checkOutTime: parsed.checkOutTime || null,
-          hoursWorked: parsed.currentHours || parsed.hoursWorked || 0,
-          status: parsed.status || 'absent',
-          isOnBreak: parsed.isOnBreak || false,
-          currentBreakDuration: parsed.currentBreakDuration || 0,
-          breakType: parsed.breakType || 'regular'
+          isCheckedIn: payload.checkedIn || payload.isCheckedIn || false,
+          checkInTime: payload.checkInTime || null,
+          checkOutTime: payload.checkOutTime || null,
+          hoursWorked: payload.currentHours || payload.hoursWorked || 0,
+          status: payload.status || 'absent',
+          isOnBreak: payload.isOnBreak || false,
+          currentBreakDuration: payload.currentBreakDuration || 0,
+          breakType: payload.breakType || 'regular'
         });
         setLastUpdateSource('localStorage');
+      } catch (e) {
+        console.warn('Failed to load attendance cache:', e);
       }
-    } catch (e) {
-      console.warn('Failed to load from localStorage:', e);
-    }
-  }, [isLocalStorageStateFresh]);
+    })();
+  }, []);
 
   // Save to localStorage with timestamp
   const saveToLocalStorage = useCallback(() => {
@@ -145,13 +123,16 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // Reset to default state
   const resetAttendance = useCallback(() => {
     console.log('🔄 [ATTENDANCE-CONTEXT] Resetting attendance');
+    const user = TokenManager.getUser();
+    const userId = user?.id != null ? String(user.id) : null;
     setAttendanceState(defaultState);
     setLastUpdateSource('reset');
     try {
-      const today = getTodayKey();
-      localStorage.removeItem(`checkedIn_${today}`);
+      clearPersistedAttendance(userId).catch(() => {
+        /* non-fatal */
+      });
     } catch (e) {
-      console.warn('Failed to clear localStorage:', e);
+      console.warn('Failed to clear attendance cache:', e);
     }
   }, []);
 
@@ -170,6 +151,26 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       persistToLocalStorage(state);
     }
   }, [persistToLocalStorage]);
+
+  // Flush when tab goes to background or navigates away (mobile / sleep / reload)
+  useEffect(() => {
+    const flush = () => {
+      try {
+        persistToLocalStorage(attendance);
+      } catch {
+        /* ignore */
+      }
+    };
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, [attendance, persistToLocalStorage]);
 
   return (
     <AttendanceContext.Provider

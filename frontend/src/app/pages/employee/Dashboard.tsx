@@ -4,7 +4,9 @@ import InteractiveCalendar from '../../components/InteractiveCalendar';
 import ChatWidget from '../../components/ChatWidget';
 import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useAuth } from '../../context/AuthContext';
-import { apiGet, buildApiUrl } from '../../utils/apiHelper';
+import { TokenManager } from '../../utils/api';
+import { apiGet, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
+import { clearPersistedAttendance, writePersistedAttendance } from '../../utils/attendancePersistence';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useAttendance } from '../../../context/AttendanceContext';
 import {
@@ -135,10 +137,6 @@ export default function EmployeeDashboard() {
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [currentBreakDuration, setCurrentBreakDuration] = useState(0);
   const [workingHours, setWorkingHours] = useState(0);
-  const attendanceCacheKey = `employee_attendance_state_${user?.id || 'unknown'}`;
-
-  const getTodayKey = () => new Date().toDateString();
-
   // ============================================================================
   // DERIVED UI STATE - Computed from attendance state
   // ============================================================================
@@ -251,11 +249,23 @@ export default function EmployeeDashboard() {
         error: attendanceResult.status === 'rejected' ? attendanceResult.reason?.message : undefined
       });
 
-      const attendanceData = attendanceResult.status === 'fulfilled' && attendanceResult.value?.success
-        ? attendanceResult.value.data
-        : null;
+      const attendanceApiOk =
+        attendanceResult.status === 'fulfilled' &&
+        attendanceResult.value &&
+        attendanceResult.value.success === true;
 
-      if (attendanceData?.attendance) {
+      const attendanceData = attendanceApiOk ? attendanceResult.value.data : null;
+
+      if (!attendanceApiOk) {
+        console.warn('📊 Attendance sync skipped — no definitive server response; keeping cached/local state', {
+          status: attendanceResult.status,
+          success: attendanceResult.status === 'fulfilled' ? attendanceResult.value?.success : undefined,
+          error: attendanceResult.status === 'rejected' ? String((attendanceResult.reason as Error)?.message || attendanceResult.reason) : undefined
+        });
+        if (!actionInProgressRef.current) {
+          loadFromLocalStorage();
+        }
+      } else if (attendanceData?.attendance) {
         const attendance = attendanceData.attendance;
         const checkInTime = attendance.checkIn
           ? new Date(attendance.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
@@ -264,20 +274,33 @@ export default function EmployeeDashboard() {
           ? new Date(attendance.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
           : null;
 
-        const isCurrentlyCheckedIn = !!attendance.checkIn && !attendance.checkOut;
+        const ls = attendanceData.liveStatus;
+        const isCurrentlyCheckedIn = ls?.status
+          ? ls.status === 'checked_in' || ls.status === 'on_break'
+          : !!attendance.checkIn && !attendance.checkOut;
 
         let calculatedIsOnBreak = false;
         let calculatedBreakType = 'regular';
         let calculatedBreakDuration = 0;
 
+        if (ls?.isOnBreak || ls?.status === 'on_break') {
+          calculatedIsOnBreak = true;
+          calculatedBreakDuration =
+            typeof ls.currentBreakDuration === 'number'
+              ? Math.round(ls.currentBreakDuration)
+              : 0;
+        }
+
         if (attendance.breaks && attendance.breaks.length > 0) {
           const lastBreak = attendance.breaks[attendance.breaks.length - 1];
           if (lastBreak.startTime && !lastBreak.endTime) {
-            calculatedIsOnBreak = true;
+            if (!calculatedIsOnBreak) {
+              calculatedIsOnBreak = true;
+              const breakStart = new Date(lastBreak.startTime).getTime();
+              const now = new Date().getTime();
+              calculatedBreakDuration = Math.round((now - breakStart) / (1000 * 60));
+            }
             calculatedBreakType = lastBreak.breakType || 'regular';
-            const breakStart = new Date(lastBreak.startTime).getTime();
-            const now = new Date().getTime();
-            calculatedBreakDuration = Math.round((now - breakStart) / (1000 * 60));
           }
         }
 
@@ -298,45 +321,39 @@ export default function EmployeeDashboard() {
           breakType: calculatedBreakType
         });
 
-        const today = getTodayKey();
-        const stateToSave = {
-          isCheckedIn: isCurrentlyCheckedIn,
+        const uid = user?.id ? String(user.id) : null;
+        writePersistedAttendance(uid, {
           checkedIn: isCurrentlyCheckedIn,
+          isCheckedIn: isCurrentlyCheckedIn,
           checkInTime,
           checkOutTime,
-          hoursWorked: attendance.hoursWorked || 0,
           currentHours: attendance.hoursWorked || 0,
+          hoursWorked: attendance.hoursWorked || 0,
           status: attendance.status || 'absent',
           isOnBreak: calculatedIsOnBreak,
           currentBreakDuration: calculatedBreakDuration,
           breakType: calculatedBreakType,
           timestamp: Date.now()
-        };
-        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(stateToSave));
-        localStorage.setItem(attendanceCacheKey, JSON.stringify(stateToSave));
+        });
       } else {
-        console.log('ℹ️ No attendance record for today - showing Log In button');
-        if (attendanceResult.status === 'rejected') {
-          console.error('❌ Attendance API Error:', attendanceResult.reason);
-        }
+        console.log('ℹ️ Server confirmed no attendance row for today — showing Log In');
 
-        // FIX #2: Use ref here so we don't read a stale closure value
-        if (!actionInProgressRef.current) {
-          updateAttendance({
-            isCheckedIn: false,
-            checkInTime: null,
-            checkOutTime: null,
-            hoursWorked: 0,
-            status: 'absent',
-            isOnBreak: false,
-            currentBreakDuration: 0,
-            breakType: 'regular'
-          });
+        updateAttendance({
+          isCheckedIn: false,
+          checkInTime: null,
+          checkOutTime: null,
+          hoursWorked: 0,
+          status: 'absent',
+          isOnBreak: false,
+          currentBreakDuration: 0,
+          breakType: 'regular'
+        });
 
-          const today = getTodayKey();
-          localStorage.removeItem(`checkedIn_${today}`);
-          localStorage.removeItem(attendanceCacheKey);
-        }
+        await clearPersistedAttendance(user?.id ? String(user.id) : null);
+      }
+
+      if (attendanceApiOk) {
+        clearApiCache('/attendance/today');
       }
 
       setKpiMetrics({
@@ -353,31 +370,35 @@ export default function EmployeeDashboard() {
       setLoading(false);
     }
   // FIX #6: updateAttendance added to deps
-  }, [user, attendanceCacheKey, isRecentlyUpdated, updateAttendance]);
+  }, [user, isRecentlyUpdated, updateAttendance, loadFromLocalStorage]);
 
   const ensureEmployeeId = async (): Promise<string | null> => {
     if (employeeIdRef.current) return employeeIdRef.current;
 
     if (!user?.id) return null;
-    if (user?.employeeId) {
-      setEmployeeId(user.employeeId);
-      return user.employeeId;
+    const fromUser = user.employeeId != null ? String(user.employeeId) : '';
+    if (isLikelyMongoObjectId(fromUser)) {
+      setEmployeeId(fromUser);
+      return fromUser;
     }
 
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const token = TokenManager.get();
       const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'Content-Type': 'application/json'
         }
       });
 
       if (response.ok) {
         const result = await response.json();
-        if (result.data?._id) {
-          setEmployeeId(result.data._id);
-          return result.data._id;
+        const empId = result.data?._id || result.data?.id;
+        if (empId && isLikelyMongoObjectId(String(empId))) {
+          const idStr = String(empId);
+          setEmployeeId(idStr);
+          return idStr;
         }
       }
     } catch (err) {
@@ -444,7 +465,8 @@ export default function EmployeeDashboard() {
   // SOCKET.IO LISTENERS - FIXED: Use refs to prevent stale closures
   // ============================================================================
   useEffect(() => {
-    if (!user?.orgId || !employeeIdRef.current) return;
+    // Match realTimeSocket: org can be orgId or tenantId; listeners only need employeeId + user session
+    if (!user?.id || !employeeIdRef.current) return;
 
     console.group('[SOCKET LISTENERS SETUP]');
     console.log('📡 [EMPLOYEE-DASHBOARD] Setting up Socket.IO listeners with employeeId:', employeeIdRef.current);
@@ -521,7 +543,7 @@ export default function EmployeeDashboard() {
       realTimeSocket.off('attendance:checked_in', handleCheckedIn);
       realTimeSocket.off('attendance:checked_out', handleCheckedOut);
     };
-  }, [user?.orgId, employeeId]);
+  }, [user?.id, employeeId]);
 
   // Fetch attendance history
   const fetchAttendanceHistory = useCallback(async () => {
@@ -653,18 +675,19 @@ export default function EmployeeDashboard() {
     try {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
-      
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const idempotencyKey = `break-start-${employeeId}-${Date.now()}`;
+
+      const resolvedEmployeeId = await ensureEmployeeId();
+      const token = TokenManager.get();
+      const idempotencyKey = `break-start-${resolvedEmployeeId || 'me'}-${Date.now()}`;
       
       const payload: any = {
         breakType,
         notes: `Break started`,
         idempotencyKey
       };
-      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
+      if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
       
-      console.log('🔄 [BREAK START] Sending request:', { breakType, employeeId });
+      console.log('🔄 [BREAK START] Sending request:', { breakType, employeeId: resolvedEmployeeId });
       
       // CRITICAL FIX: Add timeout to fetch
       const controller = new AbortController();
@@ -672,8 +695,9 @@ export default function EmployeeDashboard() {
       
       const response = await fetch(buildApiUrl('/attendance/break-start'), {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'Content-Type': 'application/json',
           'Idempotency-Key': idempotencyKey
         },
@@ -704,20 +728,12 @@ export default function EmployeeDashboard() {
         breakType: breakType,
         currentBreakDuration: 0
       }, 'action');
-      
-      // Save state to localStorage
-      const today = getTodayKey();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-        checkedIn: true,
-        currentHours: todayAttendance.hoursWorked || 0,
-        isOnBreak: true,
-        breakType,
-        breakStartTime: new Date().toISOString(),
-        timestamp: Date.now()
-      }));
 
-      // Wait for socket confirmation with timeout
+      clearApiCache('/attendance/today');
       await new Promise(resolve => setTimeout(resolve, 500));
+      setTimeout(() => {
+        void safeRefresh(true);
+      }, 600);
       
     } catch (error) {
       console.error('❌ [BREAK START] Error:', error);
@@ -748,17 +764,18 @@ export default function EmployeeDashboard() {
     try {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
-      
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const idempotencyKey = `break-end-${employeeId}-${Date.now()}`;
+
+      const resolvedEmployeeId = await ensureEmployeeId();
+      const token = TokenManager.get();
+      const idempotencyKey = `break-end-${resolvedEmployeeId || 'me'}-${Date.now()}`;
       
       const payload: any = {
         notes: 'Break ended',
         idempotencyKey
       };
-      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
+      if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
       
-      console.log('🔄 [BREAK END] Sending request:', { employeeId });
+      console.log('🔄 [BREAK END] Sending request:', { employeeId: resolvedEmployeeId });
       
       // CRITICAL FIX: Add timeout to fetch
       const controller = new AbortController();
@@ -766,8 +783,9 @@ export default function EmployeeDashboard() {
       
       const response = await fetch(buildApiUrl('/attendance/break-end'), {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'Content-Type': 'application/json',
           'Idempotency-Key': idempotencyKey
         },
@@ -798,23 +816,12 @@ export default function EmployeeDashboard() {
         breakType: 'regular',
         currentBreakDuration: 0
       }, 'action');
-      
-      // Save state to localStorage
-      const today = getTodayKey();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-        checkedIn: true,
-        currentHours: todayAttendance.hoursWorked || 0,
-        isOnBreak: false,
-        breakType: 'regular',
-        timestamp: Date.now()
-      }));
 
-      // Wait for socket confirmation with timeout
+      clearApiCache('/attendance/today');
       await new Promise(resolve => setTimeout(resolve, 500));
       
-      // Force refresh after a short delay to ensure state is updated
       setTimeout(() => {
-        safeRefresh(true);
+        void safeRefresh(true);
       }, 800);
     } catch (error) {
       console.error('❌ [BREAK END] Error:', error);
@@ -834,12 +841,13 @@ export default function EmployeeDashboard() {
     try {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
-      
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+
+      const resolvedEmployeeId = await ensureEmployeeId();
+      const token = TokenManager.get();
       const payload: any = {
         notes: 'Checked in'
       };
-      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
+      if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
       
       // CRITICAL FIX: Add timeout to fetch
       const controller = new AbortController();
@@ -847,8 +855,9 @@ export default function EmployeeDashboard() {
       try {
         const response = await fetch(buildApiUrl('/attendance/check-in'), {
           method: 'POST',
+          credentials: 'include',
           headers: {
-            'Authorization': `Bearer ${token}`,
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(payload),
@@ -874,19 +883,11 @@ export default function EmployeeDashboard() {
           checkInTime: checkInTime,
           status: 'present'
         }, 'action');
-        
-        // Save state to localStorage
-        const today = getTodayKey();
-        localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-          checkedIn: true,
-          checkInTime: checkInTime,
-          currentHours: 0,
-          isOnBreak: false,
-          breakType: 'regular',
-          isInMeeting: false,
-          status: 'present',
-          timestamp: Date.now()
-        }));
+
+        clearApiCache('/attendance/today');
+        setTimeout(() => {
+          void safeRefresh(true);
+        }, 600);
       } finally {
         clearTimeout(timeoutId);
       }
@@ -910,12 +911,13 @@ export default function EmployeeDashboard() {
     try {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
-      
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+
+      const resolvedEmployeeId = await ensureEmployeeId();
+      const token = TokenManager.get();
       const payload: any = {
         notes: 'Checked out'
       };
-      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
+      if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
       
       // CRITICAL FIX: Add timeout to fetch
       const controller = new AbortController();
@@ -923,8 +925,9 @@ export default function EmployeeDashboard() {
       try {
         const response = await fetch(buildApiUrl('/attendance/check-out'), {
           method: 'POST',
+          credentials: 'include',
           headers: {
-            'Authorization': `Bearer ${token}`,
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(payload),
@@ -952,18 +955,11 @@ export default function EmployeeDashboard() {
           breakType: 'regular',
           currentBreakDuration: 0
         }, 'action');
-        
-        // Save state to localStorage
-        const today = getTodayKey();
-        localStorage.setItem(`checkedIn_${today}`, JSON.stringify({
-          checkedIn: false,
-          checkOutTime: checkOutTime,
-          currentHours: todayAttendance.hoursWorked || 0,
-          isOnBreak: false,
-          breakType: 'regular',
-          isInMeeting: false,
-          timestamp: Date.now()
-        }));
+
+        clearApiCache('/attendance/today');
+        setTimeout(() => {
+          void safeRefresh(true);
+        }, 600);
       } finally {
         clearTimeout(timeoutId);
       }

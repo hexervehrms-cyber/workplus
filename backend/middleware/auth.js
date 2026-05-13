@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import { asyncHandler } from "./errorHandler.js";
 import User from "../models/User.js";
 import logger from "../utils/logger.js";
+import { getBearerOrCookieAccessToken } from "../utils/httpAuth.js";
 
 /**
  * Authentication middleware
@@ -18,17 +19,15 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     });
   }
 
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  const token = getBearerOrCookieAccessToken(req);
+
+  if (!token) {
     return res.status(401).json({
       success: false,
-      message: "Access denied. No token provided.",
+      message: "Access denied. No token or session cookie.",
       code: "NO_TOKEN"
     });
   }
-  
-  const token = authHeader.substring(7); // Remove 'Bearer ' prefix
   
   try {
     // Verify JWT token
@@ -90,7 +89,7 @@ export const authenticate = asyncHandler(async (req, res, next) => {
   } catch (error) {
     logger.warn('Authentication failed', { 
       error: error.message,
-      token: token.substring(0, 20) + '...',
+      token: typeof token === 'string' ? token.substring(0, 20) + '...' : '',
       ip: req.ip
     });
     

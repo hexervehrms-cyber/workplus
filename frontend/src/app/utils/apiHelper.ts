@@ -74,7 +74,7 @@ export const apiRequest = async <T = any>(
   options: RequestInit = {}
 ): Promise<T> => {
   const url = buildApiUrl(endpoint);
-  const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+  const token = TokenManager.get();
 
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
@@ -84,7 +84,8 @@ export const apiRequest = async <T = any>(
 
   const config: RequestInit = {
     ...options,
-    headers
+    headers,
+    credentials: options.credentials ?? 'include'
   };
 
   try {
@@ -191,7 +192,7 @@ export const apiUpload = async <T = any>(
   formData: FormData
 ): Promise<T> => {
   const url = buildApiUrl(endpoint);
-  const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+  const token = TokenManager.get();
 
   const response = await fetchWithTimeout(
     url,
@@ -200,7 +201,8 @@ export const apiUpload = async <T = any>(
       headers: {
         ...(token && { Authorization: `Bearer ${token}` })
       },
-      body: formData
+      body: formData,
+      credentials: 'include'
     },
     REQUEST_TIMEOUT_MS
   );

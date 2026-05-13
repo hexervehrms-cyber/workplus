@@ -69,6 +69,7 @@ import logger from "./utils/logger.js";
 
 // Import KPI updater
 import { emitKPIUpdate, emitAttendanceKPIUpdate, emitLeaveKPIUpdate, emitExpenseKPIUpdate, emitEmployeeKPIUpdate } from "./utils/kpiUpdater.js";
+import { setAccessTokenCookie, clearAccessTokenCookie, parseCookies, ACCESS_TOKEN_COOKIE } from "./utils/httpAuth.js";
 
 // Import seeders
 import seedSuperAdmin from "./seeders/superAdminSeeder.js";
@@ -679,8 +680,9 @@ io.on('connection', (socket) => {
   try {
     logger.info(`User connected: ${socket.id}`);
 
-    // Validate JWT token from Socket.IO auth
-    const token = socket.handshake.auth?.token;
+    // Validate JWT from Socket.IO auth or httpOnly cookie (browser)
+    const cookies = parseCookies(socket.handshake.headers?.cookie);
+    const token = socket.handshake.auth?.token || cookies[ACCESS_TOKEN_COOKIE];
     
     if (!token) {
       logger.warn(`Socket connection without token: ${socket.id}`);
@@ -1162,10 +1164,10 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
       });
     }
 
-    // Find user by email
-    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
+    // Find user by email (must be active — same rules as JWT-protected routes)
+    const user = await User.findOne({ email: email.toLowerCase().trim(), isActive: true }).select('+password');
     if (!user) {
-      console.error(`LOGIN ERROR: User not found - ${email}`);
+      console.error(`LOGIN ERROR: User not found or inactive - ${email}`);
       return res.status(401).json({ 
         success: false, 
         message: "Invalid credentials",
@@ -1184,13 +1186,24 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
       });
     }
 
-    // Generate JWT token
+    if (user.lockUntil && user.lockUntil > new Date()) {
+      return res.status(423).json({
+        success: false,
+        message: "Account is temporarily locked.",
+        code: "ACCOUNT_LOCKED"
+      });
+    }
+
+    const orgId = user.orgId || 'system';
+
+    // Access token — claims must satisfy authenticate middleware + attendance (userId, orgId)
     const token = jwt.sign(
       { 
         userId: user._id.toString(),
         email: user.email,
         role: user.role,
-        tenantId: user.orgId || 'system'
+        orgId,
+        tenantId: orgId
       },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
@@ -1202,7 +1215,12 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
       role: user.role
     });
 
-    // Return standardized response
+    const employee = await Employee.findOne({ userId: user._id, orgId }).lean();
+
+    // httpOnly access cookie (Bearer still accepted for API clients)
+    setAccessTokenCookie(res, token, 24 * 60 * 60);
+
+    // Return standardized response (token in body optional for legacy tools; prefer cookie for browsers)
     return res.status(200).json({
       success: true,
       message: "Login successful",
@@ -1214,7 +1232,10 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
         role: user.role,
         avatar: user.avatar || null,
         organization: user.organization || 'WorkPlus Inc.',
-        tenantId: user.orgId || 'system'
+        tenantId: orgId,
+        orgId,
+        employeeId: employee?._id?.toString?.() || '',
+        employeeCode: employee?.employeeCode || ''
       }
     });
 
@@ -1262,17 +1283,20 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
 
   const token = jwt.sign(
     { 
-      userId: user._id,
+      userId: user._id.toString(),
       email: user.email,
       role: user.role,
-      tenantId: user.orgId || 'system'
+      tenantId: user.orgId || 'system',
+      orgId: user.orgId || 'system'
     },
     process.env.JWT_SECRET,
     { expiresIn: '24h' }
   );
 
+  setAccessTokenCookie(res, token, 24 * 60 * 60);
+
   const userData = {
-    id: user._id,
+    id: user._id.toString(),
     name: user.name,
     email: user.email,
     role: user.role,
@@ -1292,71 +1316,44 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
   });
 }));
 
-app.get("/api/auth/me", asyncHandler(async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ 
-      success: false, 
-      message: "No token provided" 
+// Same JWT rules as /api/attendance/* (Bearer + verify + active user)
+app.get("/api/auth/me", authenticate, asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user.userId).lean();
+  if (!user) {
+    return res.status(401).json({
+      success: false,
+      message: "User not found",
+      code: "USER_NOT_FOUND"
     });
   }
 
-  const token = authHeader.replace('Bearer ', '');
-  
-  let decoded;
-  try {
-    decoded = jwt.verify(token, process.env.JWT_SECRET);
-  } catch (jwtError) {
-    return res.status(401).json({ 
-      success: false, 
-      message: "Invalid or expired token" 
-    });
-  }
-  
-  const user = await User.findById(decoded.userId);
-  if (!user) {
-    return res.status(401).json({ 
-      success: false, 
-      message: "User not found" 
-    });
-  }
+  const orgId = user.orgId || req.user.orgId || 'system';
+  const employee = await Employee.findOne({ userId: user._id, orgId }).lean();
 
   res.json({
     success: true,
     data: {
+      _id: user._id,
       id: user._id,
+      userId: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
       avatar: user.avatar || null,
-      organization: user.organization || 'WorkPlus Inc.'
+      organization: user.organization || 'WorkPlus Inc.',
+      tenantId: orgId,
+      orgId,
+      employeeId: employee?._id,
+      employeeCode: employee?.employeeCode
     }
   });
 }));
 
-app.post("/api/auth/logout", asyncHandler(async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ 
-      success: false, 
-      message: "No token provided" 
-    });
-  }
-
-  const token = authHeader.replace('Bearer ', '');
-  
-  try {
-    jwt.verify(token, process.env.JWT_SECRET);
-  } catch (jwtError) {
-    return res.status(401).json({ 
-      success: false, 
-      message: "Invalid or expired token" 
-    });
-  }
-
-  res.json({ 
-    success: true, 
-    message: "Logout successful" 
+app.post("/api/auth/logout", authenticate, asyncHandler(async (req, res) => {
+  clearAccessTokenCookie(res);
+  res.json({
+    success: true,
+    message: "Logout successful"
   });
 }));
 

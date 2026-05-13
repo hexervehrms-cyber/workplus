@@ -86,12 +86,21 @@ export class ApiError extends Error {
 
 // Token management
 const TOKEN_KEY = 'authToken';
+/** Legacy key used by older code paths; must be honored so session checks match API calls. */
+const LEGACY_TOKEN_KEY = 'token';
 const REFRESH_TOKEN_KEY = 'refreshToken';
 const USER_KEY = 'user';
 
 export const TokenManager = {
   get(): string | null {
-    return localStorage.getItem(TOKEN_KEY);
+    const primary = localStorage.getItem(TOKEN_KEY);
+    if (primary) return primary;
+    const legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
+    if (legacy) {
+      localStorage.setItem(TOKEN_KEY, legacy);
+      return legacy;
+    }
+    return null;
   },
   
   set(token: string): void {
@@ -108,6 +117,7 @@ export const TokenManager = {
   
   remove(): void {
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
     localStorage.removeItem(REFRESH_TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
   },
@@ -130,8 +140,15 @@ export const TokenManager = {
   
   clear(): void {
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
     localStorage.removeItem(REFRESH_TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+  },
+
+  /** Remove only access tokens (keep user + refresh) — use when session uses httpOnly access cookie. */
+  clearAccessTokens(): void {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
   }
 };
 
@@ -315,6 +332,7 @@ export class ApiClient {
 
     const response = await fetchWithTimeout(url, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         ...(token && { Authorization: `Bearer ${token}` })
       },
@@ -354,50 +372,48 @@ export class AuthService {
       const user = response.data?.user || response.user;
       const refreshToken = response.data?.refreshToken || response.refreshToken;
 
-      if (response.success && token && user) {
-        // Store token
-        TokenManager.set(token);
-        
-        // Store refresh token if available
+      if (response.success && user) {
+        TokenManager.clearAccessTokens();
+
+        let userId = user.id || user.userId;
+        let orgId = user.orgId || user.tenantId || 'system';
+        if (token) {
+          try {
+            const tokenPayload = JSON.parse(atob(token.split('.')[1]));
+            userId = userId || tokenPayload.userId;
+            orgId = tokenPayload.orgId || orgId;
+          } catch {
+            /* ignore */
+          }
+        }
+
         if (refreshToken) {
           TokenManager.setRefreshToken(refreshToken);
         }
-        
-        // Extract userId from token
-        try {
-          const tokenPayload = JSON.parse(atob(token.split('.')[1]));
-          const userId = tokenPayload.userId;
-          const orgId = tokenPayload.orgId || user.orgId || user.tenantId || 'system';
-          
-          // Store user data with userId, orgId, and employeeId
-          const userData = {
-            id: user.id || userId,
-            userId: userId,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            avatar: user.avatar,
-            organization: user.organization,
-            tenantId: user.tenantId || orgId,
-            orgId: orgId,
-            employeeId: user.employeeId,
-            employeeCode: user.employeeCode
-          };
-          
-          TokenManager.setUser(userData);
 
-          console.log('Login successful:', userData);
-          console.log('Token stored:', token.substring(0, 50) + '...');
+        const userData = {
+          id: String(userId),
+          userId,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          avatar: user.avatar,
+          organization: user.organization,
+          tenantId: user.tenantId || orgId,
+          orgId: orgId,
+          employeeId: user.employeeId,
+          employeeCode: user.employeeCode
+        };
 
-          return {
-            success: true,
-            user: userData,
-            token: token
-          };
-        } catch (tokenError) {
-          console.error('Error parsing token:', tokenError);
-          throw new ApiError('Invalid token format', 400, 'INVALID_TOKEN');
-        }
+        TokenManager.setUser(userData);
+
+        console.log('Login successful (httpOnly cookie session; access token not stored in localStorage):', userData);
+
+        return {
+          success: true,
+          user: userData,
+          token: token || ''
+        };
       }
 
       throw new ApiError(response.message || 'Login failed', 401, 'LOGIN_FAILED');
@@ -412,13 +428,29 @@ export class AuthService {
       const response = await apiClient.post<any>('/auth/register', userData);
 
       if (response.success && response.data) {
-        TokenManager.set(response.data.token);
-        TokenManager.setUser(response.data.user);
+        TokenManager.clearAccessTokens();
+        const token = response.data.token;
+        let orgId = response.data.user?.orgId || response.data.user?.tenantId || 'system';
+        if (token) {
+          try {
+            const tokenPayload = JSON.parse(atob(token.split('.')[1]));
+            orgId = tokenPayload.orgId || orgId;
+          } catch {
+            /* ignore */
+          }
+        }
+        const u = response.data.user;
+        TokenManager.setUser({
+          ...u,
+          id: u.id || u._id,
+          orgId: u.orgId || orgId,
+          tenantId: u.tenantId || orgId
+        });
 
         return {
           success: true,
           user: response.data.user,
-          token: response.data.token
+          token: token || ''
         };
       }
 

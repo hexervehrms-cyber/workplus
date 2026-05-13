@@ -1,12 +1,13 @@
 /**
  * Authentication Context - Production Ready
- * Features: Session persistence, auto logout, role-based routing
+ * Features: Session persistence, proactive token refresh, role-based routing
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { AuthService, TokenManager, ApiError, TokenRefreshService } from '../utils/api';
 import { socketService, ConnectionState } from '../utils/socket';
 import { clearApiCache } from '../utils/apiHelper';
+import { clearPersistedAttendance } from '../utils/attendancePersistence';
 import { toast } from 'sonner';
 
 export type UserRole = 'super_admin' | 'admin' | 'hr' | 'manager' | 'accountant' | 'employee';
@@ -38,8 +39,8 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Session check interval (5 minutes)
-const SESSION_CHECK_INTERVAL = 5 * 60 * 1000;
+// Session check interval (15 minutes) — proactive refresh / expiry warnings only
+const SESSION_CHECK_INTERVAL = 15 * 60 * 1000;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -49,6 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const performLogout = useCallback(async () => {
     setLoading(true);
+    const attendanceUserId = TokenManager.getUser()?.id;
 
     try {
       await AuthService.logout();
@@ -58,6 +60,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       socketService.disconnect();
       setSocketConnected(false);
+      if (attendanceUserId) {
+        try {
+          await clearPersistedAttendance(String(attendanceUserId));
+        } catch (e) {
+          console.warn('Attendance cache clear on logout', e);
+        }
+      }
       TokenManager.clear();
       clearApiCache();
 
@@ -206,6 +215,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setUser(null);
             userForSocket = null;
           }
+        } else if (storedUser) {
+          try {
+            const currentUser = await AuthService.getCurrentUser();
+            if (currentUser) {
+              setUser(currentUser);
+              TokenManager.setUser(currentUser);
+              userForSocket = currentUser;
+            } else {
+              TokenManager.clear();
+              setUser(null);
+              userForSocket = null;
+            }
+          } catch (error) {
+            console.warn('Cookie session invalid or expired:', error);
+            TokenManager.clear();
+            setUser(null);
+            userForSocket = null;
+          }
         }
       } catch (error) {
         console.error('Auth initialization error:', error);
@@ -238,7 +265,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       void (async () => {
         const token = TokenManager.get();
         if (!token) {
-          await performLogout();
           return;
         }
 
@@ -259,8 +285,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
           }
         } catch (error) {
-          console.error('Session check error:', error);
-          await performLogout();
+          console.error('Session check error (ignored; not forcing logout):', error);
         }
       })();
     };

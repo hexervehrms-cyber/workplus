@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Pause, Calendar, Loader } from 'lucide-react';
 import { buildApiUrl } from '../../utils/apiHelper';
+import { TokenManager } from '../../utils/api';
+import { readPersistedAttendance, isPayloadFresh } from '../../utils/attendancePersistence';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -46,7 +48,6 @@ export default function Attendance() {
   const [historyPage, setHistoryPage] = useState(1);
   const [historyTotalPages, setHistoryTotalPages] = useState(1);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
-  const attendanceCacheKey = `employee_attendance_state_${user?.id || 'unknown'}`;
 
   // Load activity logs from localStorage on mount
   useEffect(() => {
@@ -72,10 +73,11 @@ export default function Attendance() {
           return eid;
         }
       }
-      const token = localStorage.getItem('authToken');
+      const token = TokenManager.get();
       const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'Content-Type': 'application/json'
         }
       });
@@ -99,10 +101,11 @@ export default function Attendance() {
   // Fetch today's attendance — server liveStatus is source of truth for check-in and break
   const fetchTodayAttendance = useCallback(async () => {
     try {
-      const token = localStorage.getItem('authToken');
+      const token = TokenManager.get();
       const response = await fetch(buildApiUrl('/attendance/today'), {
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'Content-Type': 'application/json'
         }
       });
@@ -143,34 +146,25 @@ export default function Attendance() {
         },
         'api'
       );
-
-      localStorage.setItem(
-        attendanceCacheKey,
-        JSON.stringify({
-          checkedIn: isCheckedInNow,
-          currentHours: hours,
-          isOnBreak,
-          breakType: isOnBreak ? breakTypeFromApi : null
-        })
-      );
     } catch (error) {
       console.error('Error fetching attendance:', error);
     } finally {
       setLoading(false);
     }
-  }, [attendanceCacheKey, syncAttendance]);
+  }, [user?.id, syncAttendance]);
 
   // Fetch attendance history (paginated)
   const fetchAttendanceHistoryPage = useCallback(
     async (page: number, append: boolean) => {
       try {
         if (append) setHistoryLoadingMore(true);
-        const token = localStorage.getItem('authToken');
+        const token = TokenManager.get();
         const response = await fetch(
           buildApiUrl(`/attendance?limit=${HISTORY_PAGE_SIZE}&page=${page}`),
           {
+            credentials: 'include',
             headers: {
-              Authorization: `Bearer ${token}`,
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
               'Content-Type': 'application/json'
             }
           }
@@ -289,7 +283,7 @@ export default function Attendance() {
   const handleBreakStart = async (kind: 'regular' = 'regular') => {
     try {
       setActionLoading(true);
-      const token = localStorage.getItem('authToken');
+      const token = TokenManager.get();
       const payload: any = {
         breakType: kind,
         notes: `Break started`
@@ -298,8 +292,9 @@ export default function Attendance() {
       if (getOrgId()) payload.orgId = getOrgId();
       const response = await fetch(buildApiUrl('/attendance/break-start'), {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
@@ -340,7 +335,7 @@ export default function Attendance() {
     const prevBreakType = liveAttendance.breakType;
     try {
       setActionLoading(true);
-      const token = localStorage.getItem('authToken');
+      const token = TokenManager.get();
       const payload: any = {
         notes: 'Break ended'
       };
@@ -348,8 +343,9 @@ export default function Attendance() {
       if (getOrgId()) payload.orgId = getOrgId();
       const response = await fetch(buildApiUrl('/attendance/break-end'), {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
@@ -420,26 +416,23 @@ export default function Attendance() {
     return () => clearInterval(interval);
   }, [employeeId, fetchTodayAttendance]);
 
-  // Initial load only
+  // Initial load only — hydrate from IndexedDB / local cache, then API
   useEffect(() => {
-    const cached = localStorage.getItem(attendanceCacheKey);
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        setCurrentHours(parsed.currentHours || 0);
+    void (async () => {
+      const uid = user?.id ? String(user.id) : null;
+      const payload = await readPersistedAttendance(uid);
+      if (payload && isPayloadFresh(payload)) {
+        setCurrentHours(payload.currentHours || payload.hoursWorked || 0);
         setLoading(false);
-      } catch (_) {}
-    }
+      }
 
-    const init = async () => {
       const empId = await fetchEmployeeId();
       if (empId) {
         await fetchTodayAttendance();
         await fetchAttendanceHistory();
       }
-    };
-    void init();
-  }, [user?.id, attendanceCacheKey, fetchTodayAttendance]);
+    })();
+  }, [user?.id, fetchTodayAttendance]);
 
   return (
     <div className="p-8 space-y-8">

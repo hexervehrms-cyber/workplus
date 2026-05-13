@@ -1,33 +1,22 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { KPICard } from '../../components/KPICard';
-import EmployeeDocuments from '../../components/EmployeeDocuments';
 import InteractiveCalendar from '../../components/InteractiveCalendar';
 import ChatWidget from '../../components/ChatWidget';
 import LoadingProgressBar from '../../components/LoadingProgressBar';
-import { useCurrency } from '../../context/CurrencyContext';
 import { useAuth } from '../../context/AuthContext';
-import { ExpenseService, LeaveRequestService } from '../../utils/api';
 import { apiGet, apiPost, buildApiUrl } from '../../utils/apiHelper';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useAttendance } from '../../../context/AttendanceContext';
 import {
   Calendar,
   Clock,
-  DollarSign,
   TrendingUp,
-  Cake,
-  Bell,
-  Award,
-  Target,
   LogOut,
-  FileText,
-  AlertCircle
+  FileText
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
-import { Progress } from '../../components/ui/progress';
-import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
 import {
   Table,
   TableBody,
@@ -36,30 +25,71 @@ import {
   TableHeader,
   TableRow,
 } from '../../components/ui/table';
-import { toast } from 'sonner';
 
-interface DashboardData {
-  employee: any;
-  attendance: any;
-  leaves: any;
-  expenses: any;
-  payroll: any;
-}
+// ============================================================================
+// ATTENDANCE STATE MACHINE - Deterministic state transitions
+// ============================================================================
+type AttendanceUIState = 'IDLE' | 'WORKING' | 'ON_BREAK' | 'IN_MEETING' | 'SYNCING' | 'CHECKING_OUT';
+
+// ============================================================================
+// ENTERPRISE SYNC CONFIGURATION
+// ============================================================================
+const SYNC_CONFIG = {
+  STALE_PROTECTION_MS: 5000,
+  SOCKET_PROTECTION_MS: 3000,
+  REFRESH_COOLDOWN_MS: 4000,
+  DEBOUNCE_MS: 1000,
+  SOCKET_WAIT_MS: 1500,
+  DB_SYNC_WAIT_MS: 2000,
+  PERIODIC_REFRESH_MS: 30000,
+  ACTION_TIMEOUT_MS: 8000
+};
 
 export default function EmployeeDashboard() {
-  const { formatCurrency } = useCurrency();
   const { user } = useAuth();
-  const [isCheckedIn, setIsCheckedIn] = useState(false);
+  const { attendance: todayAttendance, updateAttendance } = useAttendance();
   const [loading, setLoading] = useState(false);
-  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
 
-  // Dropdown states
-  const [breakDropdownOpen, setBreakDropdownOpen] = useState(false);
-  const [meetingDropdownOpen, setMeetingDropdownOpen] = useState(false);
-  const breakDropdownRef = useRef<HTMLDivElement>(null);
-  const meetingDropdownRef = useRef<HTMLDivElement>(null);
+  // ============================================================================
+  // CRITICAL STATE VARIABLES - Enterprise sync management
+  // ============================================================================
+  const [lastSocketEventTime, setLastSocketEventTime] = useState(0);
+  const [lastActionTime, setLastActionTime] = useState(0);
+  const [disableRefresh, setDisableRefresh] = useState(false);
+  const [actionInProgress, setActionInProgress] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Refs for realtime values (prevent stale closures)
+  const employeeIdRef = useRef<string | null>(null);
+  const lastActionTimeRef = useRef(0);
+  const lastSocketEventTimeRef = useRef(0);
+  const disableRefreshRef = useRef(false);
+
+  // FIX #1: actionInProgressRef so fetchDashboardData reads live value, not stale closure
+  const actionInProgressRef = useRef(false);
+
+  // Update refs whenever state changes
+  useEffect(() => {
+    employeeIdRef.current = employeeId;
+  }, [employeeId]);
+
+  useEffect(() => {
+    lastActionTimeRef.current = lastActionTime;
+  }, [lastActionTime]);
+
+  useEffect(() => {
+    lastSocketEventTimeRef.current = lastSocketEventTime;
+  }, [lastSocketEventTime]);
+
+  useEffect(() => {
+    disableRefreshRef.current = disableRefresh;
+  }, [disableRefresh]);
+
+  // FIX #1 continued: keep actionInProgressRef in sync with state
+  useEffect(() => {
+    actionInProgressRef.current = actionInProgress;
+  }, [actionInProgress]);
 
   const [kpiMetrics, setKpiMetrics] = useState({
     leaveBalance: "0 days",
@@ -67,73 +97,102 @@ export default function EmployeeDashboard() {
     performance: "0%"
   });
 
-  const [todayAttendance, setTodayAttendance] = useState({
-    isCheckedIn: false,
-    checkInTime: null,
-    checkOutTime: null,
-    hoursWorked: 0,
-    status: 'absent',
-    isOnBreak: false,
-    isInMeeting: false,
-    currentBreakDuration: 0,
-    breakType: 'regular'
-  });
-
-  // Add action lock states to prevent UI conflicts
-  const [actionInProgress, setActionInProgress] = useState(false);
-  const [lastActionTime, setLastActionTime] = useState(0);  // Initialize to 0 so page load is never blocked
-  const [lastSocketEventTime, setLastSocketEventTime] = useState(0); // Track last socket event to prevent refresh overwrite
-
-  const [performanceMetrics, setPerformanceMetrics] = useState({
-    taskCompletion: 0,
-    attendance: 0,
-    qualityScore: 0,
-    presentDays: 0,
-    totalHours: 0
-  });
-
   const [holidays, setHolidays] = useState<any[]>([]);
-  const [recentActivities, setRecentActivities] = useState<any[]>([]);
-  const [upcomingEvents, setUpcomingEvents] = useState<any[]>([]);
-  const [disableRefresh, setDisableRefresh] = useState(false);
   const [attendanceHistory, setAttendanceHistory] = useState<any[]>([]);
   const [breakHistory, setBreakHistory] = useState<any[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const attendanceCacheKey = `employee_attendance_state_${user?.id || 'unknown'}`;
-  
-  // Get today's date string for localStorage key (same format as Attendance page)
+
   const getTodayKey = () => new Date().toDateString();
+
+  // ============================================================================
+  // DERIVED UI STATE - Computed from attendance state
+  // ============================================================================
+  const attendanceUIState = useMemo((): AttendanceUIState => {
+    if (isSyncing) return 'SYNCING';
+    if (!todayAttendance.isCheckedIn) return 'IDLE';
+    if (todayAttendance.isInMeeting) return 'IN_MEETING';
+    if (todayAttendance.isOnBreak) return 'ON_BREAK';
+    return 'WORKING';
+  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.isInMeeting, isSyncing]);
 
   // Debug: Log todayAttendance changes
   useEffect(() => {
+    console.group('[ATTENDANCE STATE]');
     console.log('🔍 [DASHBOARD] todayAttendance changed:', {
       isOnBreak: todayAttendance.isOnBreak,
       isInMeeting: todayAttendance.isInMeeting,
       isCheckedIn: todayAttendance.isCheckedIn,
-      breakType: todayAttendance.breakType
+      breakType: todayAttendance.breakType,
+      uiState: attendanceUIState
     });
-  }, [todayAttendance]);
+    console.log('⏱️ Sync timing:', {
+      lastActionTime,
+      lastSocketEventTime,
+      timeSinceAction: Date.now() - lastActionTime,
+      timeSinceSocket: Date.now() - lastSocketEventTime
+    });
+    console.groupEnd();
+  }, [todayAttendance, attendanceUIState, lastActionTime, lastSocketEventTime]);
 
-  // Close dropdowns when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (breakDropdownRef.current && !breakDropdownRef.current.contains(event.target as Node)) {
-        setBreakDropdownOpen(false);
-      }
-      if (meetingDropdownRef.current && !meetingDropdownRef.current.contains(event.target as Node)) {
-        setMeetingDropdownOpen(false);
-      }
-    };
+  // ============================================================================
+  // STALE PROTECTION LOGIC
+  // ============================================================================
+  const isRecentlyUpdated = useCallback((): boolean => {
+    const now = Date.now();
+    const timeSinceAction = now - lastActionTimeRef.current;
+    const timeSinceSocket = now - lastSocketEventTimeRef.current;
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
+    const recentAction = timeSinceAction < SYNC_CONFIG.STALE_PROTECTION_MS;
+    const recentSocket = timeSinceSocket < SYNC_CONFIG.SOCKET_PROTECTION_MS;
+
+    if (recentAction || recentSocket) {
+      console.log('🛡️ [STALE PROTECTION] Blocking refresh:', {
+        recentAction,
+        recentSocket,
+        timeSinceAction,
+        timeSinceSocket
+      });
+      return true;
+    }
+    return false;
   }, []);
+
+  // ============================================================================
+  // SAFE REFRESH SYSTEM - Centralized refresh controller
+  // ============================================================================
+  const safeRefresh = useCallback(async (forceRefresh = false) => {
+    if (disableRefreshRef.current && !forceRefresh) {
+      console.log('⏸️ [SAFE REFRESH] Refresh disabled, skipping');
+      return;
+    }
+
+    if (isRecentlyUpdated() && !forceRefresh) {
+      console.log('⏸️ [SAFE REFRESH] Recently updated, skipping');
+      return;
+    }
+
+    // FIX #3: Don't refresh if an action is currently in progress
+    if (actionInProgressRef.current) {
+      console.log('⏸️ [SAFE REFRESH] Action in progress, skipping to avoid overwriting optimistic state');
+      return;
+    }
+
+    console.log('🔄 [SAFE REFRESH] Starting safe refresh');
+    setDisableRefresh(true);
+
+    try {
+      await fetchDashboardData(forceRefresh);
+    } finally {
+      setTimeout(() => {
+        setDisableRefresh(false);
+      }, SYNC_CONFIG.REFRESH_COOLDOWN_MS);
+    }
+  }, [isRecentlyUpdated]);
 
   // Helper function to fetch employee ID
   const ensureEmployeeId = async (): Promise<string | null> => {
-    if (employeeId) return employeeId;
+    if (employeeIdRef.current) return employeeIdRef.current;
 
     if (!user?.id) return null;
     if (user?.employeeId) {
@@ -164,30 +223,41 @@ export default function EmployeeDashboard() {
     return null;
   };
 
-  // Fetch dashboard data
+  // ============================================================================
+  // FETCH DASHBOARD DATA - With stale protection
+  // ============================================================================
+  // FIX #6: Added updateAttendance to useCallback deps
   const fetchDashboardData = useCallback(async (_forceRefresh = false) => {
     if (!user) return;
 
+    if (!_forceRefresh && isRecentlyUpdated()) {
+      console.log('⏸️ [FETCH] Skipping due to recent update');
+      return;
+    }
+
+    // FIX #2: Use ref (not state) to read live actionInProgress value
+    if (!_forceRefresh && actionInProgressRef.current) {
+      console.log('⏸️ [FETCH] Skipping because action is in progress');
+      return;
+    }
+
     try {
       setLoading(true);
-      setError(null);
 
-      // Set a timeout to prevent infinite loading
       const timeoutId = setTimeout(() => {
         setLoading(false);
-      }, 8000); // 8 second timeout
+      }, SYNC_CONFIG.ACTION_TIMEOUT_MS);
 
-      // Fetch all data in parallel using Promise.allSettled for resilience
+      console.group('[FETCH DASHBOARD]');
       console.log('⚡ Fetching all dashboard data in parallel...');
-      const [attendanceResult, holidaysResult, activitiesResult] = await Promise.allSettled([
+
+      const [attendanceResult, holidaysResult] = await Promise.allSettled([
         apiGet('/attendance/today'),
-        apiGet('/holidays'),
-        apiGet('/activity-logs?limit=5')
+        apiGet('/holidays')
       ]);
 
       clearTimeout(timeoutId);
 
-      // Use cached holidays as fallback
       const cachedHolidays = localStorage.getItem('cached_holidays');
       if (cachedHolidays) {
         try {
@@ -198,11 +268,9 @@ export default function EmployeeDashboard() {
         }
       }
 
-      // Process holidays result
       if (holidaysResult.status === 'fulfilled' && holidaysResult.value?.success && Array.isArray(holidaysResult.value.data)) {
-        console.log('✅ Dashboard: Loaded', holidaysResult.value.data.length, 'holidays');
+        console.log('✅ Loaded', holidaysResult.value.data.length, 'holidays');
         setHolidays(holidaysResult.value.data);
-        // Cache holidays for offline access
         localStorage.setItem('cached_holidays', JSON.stringify(holidaysResult.value.data));
       } else if (cachedHolidays) {
         try {
@@ -214,23 +282,17 @@ export default function EmployeeDashboard() {
         }
       }
 
-      // Process attendance result
       console.log('📊 Attendance API Result:', {
         status: attendanceResult.status,
-        success: attendanceResult.value?.success,
-        hasData: !!attendanceResult.value?.data,
-        error: attendanceResult.reason?.message
+        success: attendanceResult.status === 'fulfilled' ? attendanceResult.value?.success : false,
+        hasData: attendanceResult.status === 'fulfilled' ? !!attendanceResult.value?.data : false,
+        error: attendanceResult.status === 'rejected' ? attendanceResult.reason?.message : undefined
       });
 
       const attendanceData = attendanceResult.status === 'fulfilled' && attendanceResult.value?.success
         ? attendanceResult.value.data
         : null;
 
-      let data = { attendance: { today: attendanceData?.attendance } };
-
-      setDashboardData(data);
-
-      // Update today's attendance
       if (attendanceData?.attendance) {
         const attendance = attendanceData.attendance;
         const checkInTime = attendance.checkIn
@@ -242,7 +304,6 @@ export default function EmployeeDashboard() {
 
         const isCurrentlyCheckedIn = !!attendance.checkIn && !attendance.checkOut;
 
-        // Calculate isOnBreak from actual breaks array (most reliable source)
         let calculatedIsOnBreak = false;
         let calculatedBreakType = 'regular';
         let calculatedBreakDuration = 0;
@@ -252,54 +313,30 @@ export default function EmployeeDashboard() {
           if (lastBreak.startTime && !lastBreak.endTime) {
             calculatedIsOnBreak = true;
             calculatedBreakType = lastBreak.breakType || 'regular';
-            const breakStart = new Date(lastBreak.startTime);
-            const now = new Date();
-            calculatedBreakDuration = Math.round((now - breakStart.getTime()) / (1000 * 60));
+            const breakStart = new Date(lastBreak.startTime).getTime();
+            const now = new Date().getTime();
+            calculatedBreakDuration = Math.round((now - breakStart) / (1000 * 60));
           }
         }
 
-        updateAttendance(prev => {
-          // CRITICAL: If an action just completed, ALWAYS trust the optimistic state
-          // Don't overwrite it with API data for at least 5 seconds
-          const timeSinceLastAction = Date.now() - lastActionTime;
-          if (timeSinceLastAction < 5000) {
-            console.log('🔒 [DASHBOARD] Action just completed - preserving optimistic state for 5 seconds');
-            return prev;
-          }
-
-          // Don't overwrite if a socket event happened recently (within 30 seconds)
-          // This prevents the periodic refresh from overwriting socket event updates
-          const timeSinceSocketEvent = Date.now() - lastSocketEventTime;
-          if (timeSinceSocketEvent < 30000 && prev.isCheckedIn) {
-            // Only skip if we're still checked in
-            // If we're checked out, always allow refresh to confirm the state
-            console.log('🔒 [DASHBOARD] Socket event too recent (within 30s) - preserving state');
-            return prev;
-          }
-
-          // If we're currently checked in but API returns no data, keep the checked-in state
-          // This prevents race conditions where check-in hasn't synced to DB yet
-          if (prev.isCheckedIn && !isCurrentlyCheckedIn) {
-            console.log('⚠️ [DASHBOARD] API returned no check-in but we are checked in - preserving state');
-            return prev;
-          }
-
-          console.log('✅ [DASHBOARD] Updating state from API data');
-          return {
-            isCheckedIn: isCurrentlyCheckedIn,
-            checkInTime: checkInTime,
-            checkOutTime: checkOutTime,
-            hoursWorked: attendance.hoursWorked || 0,
-            status: attendance.status || 'absent',
-            isOnBreak: calculatedIsOnBreak,  // Always use calculated value from API
-            isInMeeting: attendanceData.liveStatus?.isInMeeting || false,
-            currentBreakDuration: calculatedBreakDuration,
-            breakType: calculatedBreakType
-          };
+        console.log('✅ Updating attendance from API:', {
+          isCheckedIn: isCurrentlyCheckedIn,
+          isOnBreak: calculatedIsOnBreak,
+          breakType: calculatedBreakType
         });
-        setIsCheckedIn(isCurrentlyCheckedIn);
-        
-        // Save to BOTH localStorage keys (same as Attendance page)
+
+        updateAttendance({
+          isCheckedIn: isCurrentlyCheckedIn,
+          checkInTime: checkInTime,
+          checkOutTime: checkOutTime,
+          hoursWorked: attendance.hoursWorked || 0,
+          status: attendance.status || 'absent',
+          isOnBreak: calculatedIsOnBreak,
+          isInMeeting: attendanceData.liveStatus?.isInMeeting || false,
+          currentBreakDuration: calculatedBreakDuration,
+          breakType: calculatedBreakType
+        });
+
         const today = getTodayKey();
         const stateToSave = {
           isCheckedIn: isCurrentlyCheckedIn,
@@ -312,22 +349,19 @@ export default function EmployeeDashboard() {
           isOnBreak: calculatedIsOnBreak,
           isInMeeting: attendanceData.liveStatus?.isInMeeting || false,
           currentBreakDuration: calculatedBreakDuration,
-          breakType: calculatedBreakType
+          breakType: calculatedBreakType,
+          timestamp: Date.now()
         };
         localStorage.setItem(`checkedIn_${today}`, JSON.stringify(stateToSave));
         localStorage.setItem(attendanceCacheKey, JSON.stringify(stateToSave));
       } else {
-        // NO attendance data from API - employee hasn't checked in yet today
-        // ALWAYS show the "Log In" button - this is the normal state
         console.log('ℹ️ No attendance record for today - showing Log In button');
-        console.log('📊 Attendance API Status:', attendanceResult.status);
         if (attendanceResult.status === 'rejected') {
           console.error('❌ Attendance API Error:', attendanceResult.reason);
         }
-        
-        // Only update state if not in the middle of an action
-        if (!actionInProgress) {
-          updateAttendance({ isCheckedIn: false });
+
+        // FIX #2: Use ref here so we don't read a stale closure value
+        if (!actionInProgressRef.current) {
           updateAttendance({
             isCheckedIn: false,
             checkInTime: null,
@@ -339,60 +373,31 @@ export default function EmployeeDashboard() {
             currentBreakDuration: 0,
             breakType: 'regular'
           });
-          
-          // Clear localStorage to ensure clean state
+
           const today = getTodayKey();
           localStorage.removeItem(`checkedIn_${today}`);
           localStorage.removeItem(attendanceCacheKey);
         }
       }
 
-      // Update KPI metrics
       setKpiMetrics({
         leaveBalance: "12 days",
         hoursThisWeek: `${attendanceData?.liveStatus?.currentHours || 0}h`,
         performance: "85%"
       });
 
-      // Update performance metrics
-      setPerformanceMetrics({
-        taskCompletion: 85,
-        attendance: attendanceData?.attendance?.status === 'present' ? 100 : 0,
-        qualityScore: 90,
-        presentDays: 1,
-        totalHours: attendanceData?.liveStatus?.currentHours || 0
-      });
-
-      // Update recent activities
-      const activities: any[] = [];
-      if (attendanceData?.attendance?.checkIn) {
-        const checkInTime = new Date(attendanceData.attendance.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-        activities.push({
-          action: 'Checked In',
-          description: `Started work at ${checkInTime}`,
-          time: 'Today',
-          icon: 'clock'
-        });
-      }
-      setRecentActivities(activities);
-
-      // Update upcoming events
-      const events: any[] = [];
-      setUpcomingEvents(events);
+      console.groupEnd();
     } catch (err) {
       console.error('Failed to fetch dashboard data:', err);
-      setError(err instanceof Error ? err.message : '');
     } finally {
       setLoading(false);
     }
-  }, [user, attendanceCacheKey, actionInProgress, disableRefresh]);
+  // FIX #6: updateAttendance added to deps
+  }, [user, attendanceCacheKey, isRecentlyUpdated, updateAttendance]);
 
   // Fetch data on mount with force refresh
   useEffect(() => {
-    // DON'T load from localStorage on initial mount
-    // Always fetch fresh data from API to ensure accuracy
-    // localStorage is only used for optimistic updates during actions
-    fetchDashboardData(true);  // Force refresh on page load
+    fetchDashboardData(true);
   }, [fetchDashboardData]);
 
   // Fetch employee ID on mount
@@ -400,137 +405,86 @@ export default function EmployeeDashboard() {
     ensureEmployeeId();
   }, [user?.id]);
 
-  // Socket.IO listeners for real-time updates
+  // ============================================================================
+  // SOCKET.IO LISTENERS
+  // FIX #5: Cleanup now actually removes all listeners
+  // ============================================================================
   useEffect(() => {
     if (!user?.orgId) return;
 
+    console.group('[SOCKET LISTENERS SETUP]');
     console.log('📡 [EMPLOYEE-DASHBOARD] Setting up Socket.IO listeners');
 
-    // Listen for break started events
     const handleBreakStarted = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] break:started event received:', data);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Match:', data.employeeId === employeeId);
-
-      // Only update if it's for this employee
-      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+      if (String(data.employeeId) === String(employeeIdRef.current)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Break started for current employee, updating state');
-        updateAttendance(prev => ({
-          ...prev,
+        setLastSocketEventTime(Date.now());
+        updateAttendance({
           isOnBreak: true,
           breakType: data.breakType || 'regular',
           currentBreakDuration: 0
-        }));
-        setLastSocketEventTime(Date.now()); // Mark socket event time
-      } else {
-        console.log('📡 [EMPLOYEE-DASHBOARD] Break started for different employee, ignoring');
+        });
       }
     };
 
-    // Listen for break ended events
     const handleBreakEnded = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] break:ended event received:', data);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Match:', data.employeeId === employeeId);
-
-      // Only update if it's for this employee
-      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+      if (String(data.employeeId) === String(employeeIdRef.current)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Break ended for current employee, updating state');
-        updateAttendance(prev => ({
-          ...prev,
+        setLastSocketEventTime(Date.now());
+        updateAttendance({
           isOnBreak: false,
           currentBreakDuration: 0,
           breakType: 'regular'
-        }));
-        setLastSocketEventTime(Date.now()); // Mark socket event time
-      } else {
-        console.log('📡 [EMPLOYEE-DASHBOARD] Break ended for different employee, ignoring');
+        });
       }
     };
 
-    // Listen for meeting started events
     const handleMeetingStarted = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] meeting:started event received:', data);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
-
-      // Only update if it's for this employee
-      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+      if (String(data.employeeId) === String(employeeIdRef.current)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Meeting started for current employee, updating state');
-        updateAttendance(prev => ({
-          ...prev,
-          isInMeeting: true
-        }));
-        setLastSocketEventTime(Date.now()); // Mark socket event time
+        setLastSocketEventTime(Date.now());
+        updateAttendance({ isInMeeting: true });
       }
     };
 
-    // Listen for meeting ended events
     const handleMeetingEnded = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] meeting:ended event received:', data);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
-
-      // Only update if it's for this employee
-      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+      if (String(data.employeeId) === String(employeeIdRef.current)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Meeting ended for current employee, updating state');
-        updateAttendance(prev => ({
-          ...prev,
-          isInMeeting: false
-        }));
-        setLastSocketEventTime(Date.now()); // Mark socket event time
+        setLastSocketEventTime(Date.now());
+        updateAttendance({ isInMeeting: false });
       }
     };
 
-    // Listen for attendance updates
-    const handleAttendanceUpdate = (data: any) => {
-      console.log('📡 [EMPLOYEE-DASHBOARD] attendance:update event received:', data);
-      // Refresh data when attendance updates
-      if (!actionInProgress) {
-        fetchDashboardData();
-      }
-    };
-
-    // Listen for check-in events
     const handleCheckedIn = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] attendance:checked_in event received:', data);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
-
-      // Only update if it's for this employee
-      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+      if (String(data.employeeId) === String(employeeIdRef.current)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Check-in for current employee, updating state');
-        updateAttendance(prev => ({
-          ...prev,
-          isCheckedIn: true,
-          checkInTime: data.checkInTime ? new Date(data.checkInTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : prev.checkInTime
-        }));
-        updateAttendance({ isCheckedIn: true });
         setLastSocketEventTime(Date.now());
+        updateAttendance({
+          isCheckedIn: true,
+          checkInTime: data.checkInTime
+            ? new Date(data.checkInTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+            : null
+        });
       }
     };
 
-    // Listen for check-out events
     const handleCheckedOut = (data: any) => {
       console.log('📡 [EMPLOYEE-DASHBOARD] attendance:checked_out event received:', data);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Current employeeId:', employeeId);
-      console.log('📡 [EMPLOYEE-DASHBOARD] Event employeeId:', data.employeeId);
-
-      // Only update if it's for this employee
-      if (data.employeeId === employeeId || String(data.employeeId) === String(employeeId)) {
+      if (String(data.employeeId) === String(employeeIdRef.current)) {
         console.log('📡 [EMPLOYEE-DASHBOARD] Check-out for current employee, updating state');
-        updateAttendance(prev => ({
-          ...prev,
+        setLastSocketEventTime(Date.now());
+        updateAttendance({
           isCheckedIn: false,
           checkOutTime: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-          hoursWorked: data.hoursWorked || prev.hoursWorked,
+          hoursWorked: data.hoursWorked || 0,
           isOnBreak: false,
           isInMeeting: false
-        }));
-        updateAttendance({ isCheckedIn: false });
-        setLastSocketEventTime(Date.now());
+        });
       }
     };
 
@@ -538,23 +492,28 @@ export default function EmployeeDashboard() {
     realTimeSocket.onBreakEnded(handleBreakEnded);
     realTimeSocket.onMeetingStarted(handleMeetingStarted);
     realTimeSocket.onMeetingEnded(handleMeetingEnded);
-    realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
     realTimeSocket.on('attendance:checked_in', handleCheckedIn);
     realTimeSocket.on('attendance:checked_out', handleCheckedOut);
 
+    console.groupEnd();
+
+    // FIX #5: Actually clean up all listeners on unmount
     return () => {
       console.log('📡 [EMPLOYEE-DASHBOARD] Cleaning up Socket.IO listeners');
-      // Note: realTimeSocket doesn't expose removeListener methods
-      // The listeners will be cleaned up when the component unmounts
+      realTimeSocket.off('break:started', handleBreakStarted);
+      realTimeSocket.off('break:ended', handleBreakEnded);
+      realTimeSocket.off('meeting:started', handleMeetingStarted);
+      realTimeSocket.off('meeting:ended', handleMeetingEnded);
+      realTimeSocket.off('attendance:checked_in', handleCheckedIn);
+      realTimeSocket.off('attendance:checked_out', handleCheckedOut);
     };
-  }, [user?.orgId, employeeId, actionInProgress, disableRefresh, fetchDashboardData]);
+  }, [user?.orgId, updateAttendance]);
 
   // Fetch attendance history
   const fetchAttendanceHistory = useCallback(async () => {
     try {
       setAttendanceLoading(true);
 
-      // Fetch last 30 days of attendance
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -563,7 +522,6 @@ export default function EmployeeDashboard() {
       if (result.success && Array.isArray(result.data)) {
         setAttendanceHistory(result.data);
 
-        // Extract break history from attendance records
         const breaks: any[] = [];
         result.data.forEach((record: any) => {
           if (record.breaks && Array.isArray(record.breaks)) {
@@ -589,31 +547,67 @@ export default function EmployeeDashboard() {
     }
   }, []);
 
-  // Fetch attendance history on mount
   useEffect(() => {
     fetchAttendanceHistory();
   }, [fetchAttendanceHistory]);
 
-  // Periodic refresh of attendance data every 30 seconds when checked in
+  // ============================================================================
+  // PERIODIC REFRESH - With enterprise-safe guards
+  // ============================================================================
   useEffect(() => {
-    if (!isCheckedIn || actionInProgress) return;
+    if (!todayAttendance.isCheckedIn || actionInProgress || disableRefresh) return;
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      
-      if (!actionInProgress) {
+
+      if (!actionInProgressRef.current && !disableRefreshRef.current && !isRecentlyUpdated()) {
         console.log('⏰ Periodic refresh triggered');
-        fetchDashboardData();
+        safeRefresh();
       }
-    }, 30000); // Refresh every 30 seconds
+    }, SYNC_CONFIG.PERIODIC_REFRESH_MS);
 
     return () => clearInterval(interval);
-  }, [isCheckedIn, fetchDashboardData, actionInProgress]);
+  }, [todayAttendance.isCheckedIn, actionInProgress, disableRefresh, safeRefresh, isRecentlyUpdated]);
 
-  // Handle check-in
+  // ============================================================================
+  // DEBOUNCE HELPER
+  // ============================================================================
+  const debounceRef = useRef<{ [key: string]: number }>({});
+
+  const isDebounced = (key: string, delayMs = SYNC_CONFIG.DEBOUNCE_MS): boolean => {
+    const now = Date.now();
+    const lastCall = debounceRef.current[key] || 0;
+    if (now - lastCall < delayMs) {
+      console.log(`⏸️ [DEBOUNCE] ${key} called too soon, ignoring`);
+      return true;
+    }
+    debounceRef.current[key] = now;
+    return false;
+  };
+
+  // ============================================================================
+  // ENTERPRISE LOGGING HELPER
+  // ============================================================================
+  const logAction = (action: string, data: any = {}) => {
+    console.group(`[${action}]`);
+    console.log('🔵 Action triggered:', data);
+    console.log('⏱️ Timing:', {
+      lastActionTime,
+      lastSocketEventTime,
+      timeSinceAction: Date.now() - lastActionTime,
+      timeSinceSocket: Date.now() - lastSocketEventTime
+    });
+    console.groupEnd();
+  };
+
+  // ============================================================================
+  // ATTENDANCE ACTION HANDLERS
+  // ============================================================================
+
   const handleCheckIn = async () => {
-    console.log('🔵 Check-in button clicked');
-    
+    logAction('CHECK-IN ACTION');
+
+    if (isDebounced('checkIn')) return;
     if (actionInProgress) {
       console.log('⚠️ Action already in progress');
       return;
@@ -622,8 +616,9 @@ export default function EmployeeDashboard() {
     try {
       console.log('✅ Starting check-in process');
       setActionInProgress(true);
+      setIsSyncing(true);
+      setLastActionTime(Date.now());
 
-      // Update UI immediately (optimistic update)
       const checkInAt = new Date();
       const checkInTime = checkInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
@@ -639,66 +634,70 @@ export default function EmployeeDashboard() {
         breakType: 'regular' as const
       };
 
-      console.log('🔄 Setting state to:', optimisticState);
-      updateAttendance(optimisticState);
-      updateAttendance({ isCheckedIn: true });
-      
-      // Save to localStorage
-      const today = getTodayKey();
-      localStorage.setItem(`checkedIn_${today}`, JSON.stringify(optimisticState));
-      localStorage.setItem(attendanceCacheKey, JSON.stringify(optimisticState));
-      
-      console.log('✅ State updated and saved to localStorage');
+      console.log('🔄 Setting optimistic state:', optimisticState);
+      updateAttendance(optimisticState, 'action');
 
-      // Make API call
-      console.log('📡 Making API call to /attendance/check-in');
       const result = await apiPost('/attendance/check-in', {
         location: 'Office',
         notes: 'Check-in from dashboard'
       });
 
-      console.log('📡 API Response:', result);
-
       if (result.success) {
         console.log('✅ Check-in API successful');
-        // Update with actual server data if needed
-        const actualCheckInAt = result?.data?.checkIn ? new Date(result.data.checkIn) : checkInAt;
-        const actualCheckInTime = actualCheckInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-        const serverState = {
-          ...optimisticState,
-          checkInTime: actualCheckInTime
-        };
-        console.log('🔄 Updating with server state:', serverState);
-        updateAttendance(serverState);
-        
-        // Save to localStorage
-        const today = getTodayKey();
-        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(serverState));
-        localStorage.setItem(attendanceCacheKey, JSON.stringify(serverState));
+        // FIX #3: Only refresh if socket is not connected; otherwise socket event handles it
+        await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.SOCKET_WAIT_MS));
+        if (!realTimeSocket.isConnected?.()) {
+          await safeRefresh(true);
+        }
       } else {
         console.error('❌ Check-in API failed:', result?.message);
+        updateAttendance({
+          isCheckedIn: false,
+          checkInTime: null,
+          checkOutTime: null,
+          hoursWorked: 0,
+          status: 'absent',
+          isOnBreak: false,
+          isInMeeting: false,
+          currentBreakDuration: 0,
+          breakType: 'regular'
+        }, 'rollback');
       }
     } catch (err) {
       console.error('❌ Check-in error:', err);
+      updateAttendance({
+        isCheckedIn: false,
+        checkInTime: null,
+        checkOutTime: null,
+        hoursWorked: 0,
+        status: 'absent',
+        isOnBreak: false,
+        isInMeeting: false,
+        currentBreakDuration: 0,
+        breakType: 'regular'
+      }, 'rollback');
     } finally {
       setTimeout(() => {
         setActionInProgress(false);
+        setIsSyncing(false);
       }, 300);
     }
   };
 
-  // Handle check-out
   const handleCheckOut = async () => {
-    console.log('🔴 Checking out');
-    
+    logAction('CHECK-OUT ACTION');
+
+    if (isDebounced('checkOut')) return;
     if (actionInProgress) {
+      console.log('⚠️ Action already in progress');
       return;
     }
 
     try {
       setActionInProgress(true);
+      setIsSyncing(true);
+      setLastActionTime(Date.now());
 
-      // Make the API call
       const result = await apiPost('/attendance/check-out', {
         location: 'Office',
         notes: 'Check-out from dashboard'
@@ -706,41 +705,53 @@ export default function EmployeeDashboard() {
 
       if (result?.success) {
         console.log('✅ Check-out successful');
-        // Wait 2 seconds for database to update AND socket event to propagate
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        // Fetch fresh data from API
-        await fetchDashboardData(true);
+        updateAttendance({
+          isCheckedIn: false,
+          isOnBreak: false,
+          isInMeeting: false
+        }, 'action');
+        // FIX #3: Only refresh if socket is not connected
+        if (!realTimeSocket.isConnected?.()) {
+          await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.DB_SYNC_WAIT_MS));
+          await safeRefresh(true);
+        }
       } else {
         console.error('❌ Check-out failed:', result?.message);
       }
     } catch (err) {
       console.error('Check-out error:', err);
-      setError(err instanceof Error ? err.message : 'Check-out failed');
     } finally {
       setTimeout(() => {
         setActionInProgress(false);
+        setIsSyncing(false);
       }, 300);
     }
   };
 
-  // Handle break start
   const handleBreakStart = async (breakType = 'regular') => {
-    console.log('🟢 Starting break:', breakType);
-    
+    logAction('BREAK START ACTION', { breakType });
+
+    if (isDebounced('breakStart')) return;
     if (actionInProgress) {
+      console.log('⚠️ Action already in progress');
       return;
     }
 
     try {
       setActionInProgress(true);
+      setIsSyncing(true);
+      setLastActionTime(Date.now());
 
       const currentEmployeeId = await ensureEmployeeId();
-
       if (!currentEmployeeId) {
-        setError('Employee ID not found. Unable to start break.');
-        setActionInProgress(false);
+        console.error('Employee ID not found. Unable to start break.');
         return;
       }
+
+      updateAttendance({
+        isOnBreak: true,
+        breakType: breakType
+      }, 'action');
 
       const result = await apiPost('/attendance/break-start', {
         employeeId: currentEmployeeId,
@@ -751,50 +762,65 @@ export default function EmployeeDashboard() {
       });
 
       if (result.success) {
-        updateAttendance(prev => ({
-          ...prev,
-          isOnBreak: true,
-          breakType: breakType
-        }));
-        
-        const today = getTodayKey();
-        const updatedState = {
-          checkedIn: true,
-          currentHours: todayAttendance.hoursWorked,
-          isOnBreak: true,
-          breakType,
-          isInMeeting: false
-        };
-        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
-        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
-
-        console.log('📡 [DASHBOARD] Break started successfully, backend will broadcast socket event');
+        console.log('✅ Break started successfully');
+        // FIX #3: Let socket event update state; only fallback-refresh if disconnected
+        if (!realTimeSocket.isConnected?.()) {
+          await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.SOCKET_WAIT_MS));
+          await safeRefresh(true);
+        }
+      } else {
+        console.error('❌ Break start failed:', result?.message);
+        updateAttendance({
+          isOnBreak: false,
+          breakType: 'regular'
+        }, 'rollback');
       }
     } catch (err) {
       console.error('Break start error:', err);
+      updateAttendance({
+        isOnBreak: false,
+        breakType: 'regular'
+      }, 'rollback');
     } finally {
       setTimeout(() => {
         setActionInProgress(false);
+        setIsSyncing(false);
       }, 300);
     }
   };
 
-  // Handle break end
   const handleBreakEnd = async () => {
+    console.group('[BREAK END ACTION]');
+    console.log('🟢 Ending break');
+
+    if (isDebounced('breakEnd')) {
+      console.groupEnd();
+      return;
+    }
     if (actionInProgress) {
+      console.log('⚠️ Action already in progress');
+      console.groupEnd();
       return;
     }
 
     try {
       setActionInProgress(true);
+      setIsSyncing(true);
+      setLastActionTime(Date.now());
 
       const currentEmployeeId = await ensureEmployeeId();
-
       if (!currentEmployeeId) {
-        setError('Employee ID not found. Unable to end break.');
-        setActionInProgress(false);
+        console.error('Employee ID not found. Unable to end break.');
+        console.groupEnd();
         return;
       }
+
+      // FIX #4: Added 'action' tag (was missing, unlike all other handlers)
+      updateAttendance({
+        isOnBreak: false,
+        currentBreakDuration: 0,
+        breakType: 'regular'
+      }, 'action');
 
       const result = await apiPost('/attendance/break-end', {
         employeeId: currentEmployeeId,
@@ -805,40 +831,60 @@ export default function EmployeeDashboard() {
 
       if (result.success) {
         console.log('✅ Break end successful');
-        // Wait 2 seconds for database to update AND socket event to propagate
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        // Fetch fresh data from API
-        await fetchDashboardData(true);
+        // FIX #3: Let socket event update state; only fallback-refresh if disconnected
+        if (!realTimeSocket.isConnected?.()) {
+          await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.DB_SYNC_WAIT_MS));
+          await safeRefresh(true);
+        }
       } else {
         console.error('❌ Break end failed:', result);
+        updateAttendance({
+          isOnBreak: true,
+          breakType: todayAttendance.breakType
+        }, 'rollback');
       }
     } catch (err) {
       console.error('Break end error:', err);
+      updateAttendance({
+        isOnBreak: true,
+        breakType: todayAttendance.breakType
+      }, 'rollback');
     } finally {
       setTimeout(() => {
         setActionInProgress(false);
+        setIsSyncing(false);
       }, 300);
+      console.groupEnd();
     }
   };
 
-  // Handle meeting start
   const handleMeetingStart = async () => {
+    console.group('[MEETING START ACTION]');
     console.log('🟢 Starting meeting');
-    
+
+    if (isDebounced('meetingStart')) {
+      console.groupEnd();
+      return;
+    }
     if (actionInProgress) {
+      console.log('⚠️ Action already in progress');
+      console.groupEnd();
       return;
     }
 
     try {
       setActionInProgress(true);
+      setIsSyncing(true);
+      setLastActionTime(Date.now());
 
       const currentEmployeeId = await ensureEmployeeId();
-
       if (!currentEmployeeId) {
-        setError('Employee ID not found. Unable to start meeting.');
-        setActionInProgress(false);
+        console.error('Employee ID not found. Unable to start meeting.');
+        console.groupEnd();
         return;
       }
+
+      updateAttendance({ isInMeeting: true }, 'action');
 
       const result = await apiPost('/attendance/meeting-start', {
         employeeId: currentEmployeeId,
@@ -849,47 +895,54 @@ export default function EmployeeDashboard() {
       });
 
       if (result.success) {
-        updateAttendance(prev => ({
-          ...prev,
-          isInMeeting: true
-        }));
-        
-        const today = getTodayKey();
-        const updatedState = {
-          checkedIn: true,
-          currentHours: todayAttendance.hoursWorked,
-          isOnBreak: false,
-          breakType: null,
-          isInMeeting: true
-        };
-        localStorage.setItem(`checkedIn_${today}`, JSON.stringify(updatedState));
-        localStorage.setItem(attendanceCacheKey, JSON.stringify(updatedState));
+        console.log('✅ Meeting start successful');
+        if (!realTimeSocket.isConnected?.()) {
+          await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.SOCKET_WAIT_MS));
+          await safeRefresh(true);
+        }
+      } else {
+        console.error('❌ Meeting start failed:', result?.message);
+        updateAttendance({ isInMeeting: false }, 'rollback');
       }
     } catch (err) {
       console.error('Meeting start error:', err);
+      updateAttendance({ isInMeeting: false }, 'rollback');
     } finally {
       setTimeout(() => {
         setActionInProgress(false);
+        setIsSyncing(false);
       }, 300);
+      console.groupEnd();
     }
   };
 
-  // Handle meeting end
   const handleMeetingEnd = async () => {
+    console.group('[MEETING END ACTION]');
+    console.log('🔴 Ending meeting');
+
+    if (isDebounced('meetingEnd')) {
+      console.groupEnd();
+      return;
+    }
     if (actionInProgress) {
+      console.log('⚠️ Action already in progress');
+      console.groupEnd();
       return;
     }
 
     try {
       setActionInProgress(true);
+      setIsSyncing(true);
+      setLastActionTime(Date.now());
 
       const currentEmployeeId = await ensureEmployeeId();
-
       if (!currentEmployeeId) {
-        setError('Employee ID not found. Unable to end meeting.');
-        setActionInProgress(false);
+        console.error('Employee ID not found. Unable to end meeting.');
+        console.groupEnd();
         return;
       }
+
+      updateAttendance({ isInMeeting: false }, 'action');
 
       const result = await apiPost('/attendance/meeting-end', {
         employeeId: currentEmployeeId,
@@ -899,19 +952,23 @@ export default function EmployeeDashboard() {
 
       if (result.success) {
         console.log('✅ Meeting end successful');
-        // Wait 2 seconds for database to update AND socket event to propagate
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        // Fetch fresh data from API
-        await fetchDashboardData(true);
+        if (!realTimeSocket.isConnected?.()) {
+          await new Promise(resolve => setTimeout(resolve, SYNC_CONFIG.DB_SYNC_WAIT_MS));
+          await safeRefresh(true);
+        }
       } else {
         console.error('❌ Meeting end failed:', result);
+        updateAttendance({ isInMeeting: true }, 'rollback');
       }
     } catch (err) {
       console.error('Meeting end error:', err);
+      updateAttendance({ isInMeeting: true }, 'rollback');
     } finally {
       setTimeout(() => {
         setActionInProgress(false);
+        setIsSyncing(false);
       }, 300);
+      console.groupEnd();
     }
   };
 
@@ -919,398 +976,369 @@ export default function EmployeeDashboard() {
     <>
       <LoadingProgressBar isLoading={loading} color="bg-blue-500" />
       <div className="p-8 space-y-8">
-      {/* Welcome Header with Attendance Buttons */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground mb-2">
-            Welcome back, {user?.name || 'Employee'}! 👋
-          </h1>
-          <p className="text-muted-foreground">Here's what's happening with your work today</p>
-        </div>
-        
-        {/* Attendance Action Buttons - Synced with Attendance Page */}
-        <div className="flex items-center gap-2">
-          {!todayAttendance.isCheckedIn ? (
-            <Button
-              onClick={handleCheckIn}
-              disabled={actionInProgress}
-              size="sm"
-              className="gap-2 bg-green-600 hover:bg-green-700"
-            >
-              <Clock className="w-4 h-4" />
-              Log In
-            </Button>
-          ) : (
-            <>
-              {/* Break Button */}
-              {!todayAttendance.isOnBreak ? (
-                <Button
-                  onClick={() => handleBreakStart('regular')}
-                  disabled={actionInProgress || todayAttendance.isInMeeting}
-                  size="sm"
-                  variant="outline"
-                  className="gap-2"
-                >
-                  <Clock className="w-4 h-4" />
-                  Break
-                </Button>
-              ) : (
-                <Button
-                  onClick={handleBreakEnd}
-                  disabled={actionInProgress}
-                  size="sm"
-                  variant="outline"
-                  className="gap-2"
-                >
-                  <Clock className="w-4 h-4" />
-                  End Break
-                </Button>
-              )}
+        {/* Welcome Header with Attendance Buttons */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-foreground mb-2">
+              Welcome back, {user?.name || 'Employee'}! 👋
+            </h1>
+            <p className="text-muted-foreground">Here's what's happening with your work today</p>
+          </div>
 
-              {/* Meeting Button */}
-              {!todayAttendance.isInMeeting ? (
-                <Button
-                  onClick={handleMeetingStart}
-                  disabled={actionInProgress}
-                  size="sm"
-                  variant="outline"
-                  className="gap-2"
-                >
-                  <FileText className="w-4 h-4" />
-                  Meeting
-                </Button>
-              ) : (
-                <Button
-                  onClick={handleMeetingEnd}
-                  disabled={actionInProgress}
-                  size="sm"
-                  variant="outline"
-                  className="gap-2"
-                >
-                  <FileText className="w-4 h-4" />
-                  End Meeting
-                </Button>
-              )}
-
-              {/* Log Out Button */}
+          {/* Attendance Action Buttons */}
+          <div className="flex items-center gap-2">
+            {!todayAttendance.isCheckedIn ? (
               <Button
-                onClick={handleCheckOut}
+                onClick={handleCheckIn}
                 disabled={actionInProgress}
                 size="sm"
-                variant="destructive"
-                className="gap-2"
+                className="gap-2 bg-green-600 hover:bg-green-700"
               >
-                <LogOut className="w-4 h-4" />
-                Log Out
+                <Clock className="w-4 h-4" />
+                Log In
               </Button>
-            </>
-          )}
-
-          {/* Status Badge */}
-          {todayAttendance.isCheckedIn && (
-            <Badge variant="default" className="ml-2">
-              {todayAttendance.isOnBreak ? 'On Break' : todayAttendance.isInMeeting ? 'In Meeting' : 'Working'}
-            </Badge>
-          )}
-        </div>
-      </div>
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <KPICard
-          title="Leave Balance"
-          value={kpiMetrics.leaveBalance}
-          icon={Calendar}
-          color="primary"
-        />
-        <KPICard
-          title="Hours This Week"
-          value={kpiMetrics.hoursThisWeek}
-          icon={Clock}
-          color="secondary"
-        />
-        <KPICard
-          title="Performance"
-          value={kpiMetrics.performance}
-          change={5.2}
-          icon={TrendingUp}
-          color="secondary"
-        />
-      </div>
-
-      {/* Calendar and Holidays Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Interactive Calendar */}
-        <div className="lg:col-span-2">
-          <InteractiveCalendar />
-        </div>
-
-        {/* Holidays List */}
-        <Card className="rounded-2xl overflow-hidden flex flex-col">
-          <div className="p-6 border-b border-border flex-shrink-0">
-            <div>
-              <h3 className="font-semibold text-lg">Holidays</h3>
-              <p className="text-sm text-muted-foreground">
-                {holidays.length > 0
-                  ? `${holidays.filter(h => new Date(h.date) >= new Date()).length} upcoming, ${holidays.length} total`
-                  : 'Company holidays'
-                }
-              </p>
-            </div>
-          </div>
-          <div className="p-6 space-y-3 flex-1 min-h-0">
-            {holidays && holidays.length > 0 ? (
-              <div className="space-y-3 h-full">
-                {holidays
-                  .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-                  .map((holiday) => {
-                    const holidayDate = new Date(holiday.date);
-                    const today = new Date();
-                    const isUpcoming = holidayDate >= today;
-
-                    return (
-                      <div
-                        key={holiday._id || holiday.id}
-                        className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d ${isUpcoming
-                            ? 'bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300'
-                            : 'bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
-                          }`}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <p className="font-medium text-sm">{holiday.name}</p>
-                              {isUpcoming && (
-                                <span className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded-full">
-                                  Upcoming
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-1">
-                              {holidayDate.toLocaleDateString('en-US', {
-                                weekday: 'long',
-                                month: 'long',
-                                day: 'numeric',
-                                year: 'numeric'
-                              })}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
             ) : (
-              <div className="text-center py-8 flex flex-col items-center justify-center h-full">
-                <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
-                <p className="text-muted-foreground">No holidays added yet</p>
-              </div>
+              <>
+                {!todayAttendance.isOnBreak ? (
+                  <Button
+                    onClick={() => handleBreakStart('regular')}
+                    disabled={actionInProgress || todayAttendance.isInMeeting}
+                    size="sm"
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    <Clock className="w-4 h-4" />
+                    Break
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={handleBreakEnd}
+                    disabled={actionInProgress}
+                    size="sm"
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    <Clock className="w-4 h-4" />
+                    End Break
+                  </Button>
+                )}
+
+                {!todayAttendance.isInMeeting ? (
+                  <Button
+                    onClick={handleMeetingStart}
+                    disabled={actionInProgress}
+                    size="sm"
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    <FileText className="w-4 h-4" />
+                    Meeting
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={handleMeetingEnd}
+                    disabled={actionInProgress}
+                    size="sm"
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    <FileText className="w-4 h-4" />
+                    End Meeting
+                  </Button>
+                )}
+
+                <Button
+                  onClick={handleCheckOut}
+                  disabled={actionInProgress}
+                  size="sm"
+                  variant="destructive"
+                  className="gap-2"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Log Out
+                </Button>
+              </>
+            )}
+
+            {todayAttendance.isCheckedIn && (
+              <Badge variant="default" className="ml-2">
+                {todayAttendance.isOnBreak ? 'On Break' : todayAttendance.isInMeeting ? 'In Meeting' : 'Working'}
+              </Badge>
             )}
           </div>
-        </Card>
-      </div>
-
-      {/* Main Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column - Quick Stats */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Sections removed as per user request */}
         </div>
 
-        {/* Right Column - Events & Notifications */}
-        <div className="space-y-6">
+        {/* KPI Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <KPICard
+            title="Leave Balance"
+            value={kpiMetrics.leaveBalance}
+            icon={Calendar}
+            color="primary"
+          />
+          <KPICard
+            title="Hours This Week"
+            value={kpiMetrics.hoursThisWeek}
+            icon={Clock}
+            color="secondary"
+          />
+          <KPICard
+            title="Performance"
+            value={kpiMetrics.performance}
+            change={5.2}
+            icon={TrendingUp}
+            color="secondary"
+          />
         </div>
-      </div>
 
-      {/* Attendance History Section */}
-      <div className="mt-8 space-y-6">
-        {/* Attendance History Table */}
-        <Card className="p-6 rounded-2xl">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-                <Calendar className="w-5 h-5 text-primary" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-lg">Attendance History</h3>
-                <p className="text-sm text-muted-foreground">Last 30 days</p>
-              </div>
-            </div>
-            <Badge variant="outline" className="text-xs">
-              {attendanceHistory.length} Records
-            </Badge>
+        {/* Calendar and Holidays Section */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2">
+            <InteractiveCalendar />
           </div>
 
-          {attendanceLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-            </div>
-          ) : attendanceHistory.length === 0 ? (
-            <div className="text-center py-8">
-              <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-              <p className="text-muted-foreground">No attendance records found</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Check In</TableHead>
-                    <TableHead>Check Out</TableHead>
-                    <TableHead>Hours Worked</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Breaks</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {attendanceHistory.slice(0, 10).map((record: any, index: number) => (
-                    <TableRow key={index}>
-                      <TableCell className="font-medium">
-                        {new Date(record.date).toLocaleDateString('en-US', {
-                          weekday: 'short',
-                          month: 'short',
-                          day: 'numeric'
-                        })}
-                      </TableCell>
-                      <TableCell>
-                        {record.checkIn
-                          ? new Date(record.checkIn).toLocaleTimeString('en-US', {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })
-                          : '-'}
-                      </TableCell>
-                      <TableCell>
-                        {record.checkOut
-                          ? new Date(record.checkOut).toLocaleTimeString('en-US', {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })
-                          : '-'}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="text-xs">
-                          {record.hoursWorked?.toFixed(2) || 0}h
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={record.status === 'present' ? 'default' : 'secondary'}
-                          className="text-xs capitalize"
-                        >
-                          {record.status || 'absent'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {record.breaks && record.breaks.length > 0
-                          ? `${record.breaks.length} break(s)`
-                          : '-'}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </Card>
-
-        {/* Break History Table */}
-        <Card className="p-6 rounded-2xl">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
-                <Clock className="w-5 h-5 text-accent" />
-              </div>
+          <Card className="rounded-2xl overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-border flex-shrink-0">
               <div>
-                <h3 className="font-semibold text-lg">Break History</h3>
-                <p className="text-sm text-muted-foreground">Last 30 days</p>
+                <h3 className="font-semibold text-lg">Holidays</h3>
+                <p className="text-sm text-muted-foreground">
+                  {holidays.length > 0
+                    ? `${holidays.filter(h => new Date(h.date) >= new Date()).length} upcoming, ${holidays.length} total`
+                    : 'Company holidays'
+                  }
+                </p>
               </div>
             </div>
-            <Badge variant="outline" className="text-xs">
-              {breakHistory.length} Breaks
-            </Badge>
-          </div>
+            <div className="p-6 space-y-3 flex-1 min-h-0">
+              {holidays && holidays.length > 0 ? (
+                <div className="space-y-3 h-full">
+                  {holidays
+                    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                    .map((holiday) => {
+                      const holidayDate = new Date(holiday.date);
+                      const today = new Date();
+                      const isUpcoming = holidayDate >= today;
 
-          {attendanceLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-            </div>
-          ) : breakHistory.length === 0 ? (
-            <div className="text-center py-8">
-              <Clock className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-              <p className="text-muted-foreground">No break records found</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Break Type</TableHead>
-                    <TableHead>Start Time</TableHead>
-                    <TableHead>End Time</TableHead>
-                    <TableHead>Duration</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {breakHistory.slice(0, 10).map((breakRecord: any, index: number) => (
-                    <TableRow key={index}>
-                      <TableCell className="font-medium">
-                        {new Date(breakRecord.date).toLocaleDateString('en-US', {
-                          weekday: 'short',
-                          month: 'short',
-                          day: 'numeric'
-                        })}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={breakRecord.breakType === 'lunch' ? 'default' : 'secondary'}
-                          className="text-xs capitalize"
+                      return (
+                        <div
+                          key={holiday._id || holiday.id}
+                          className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d ${isUpcoming
+                            ? 'bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300'
+                            : 'bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
+                            }`}
                         >
-                          {breakRecord.breakType}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {breakRecord.startTime
-                          ? new Date(breakRecord.startTime).toLocaleTimeString('en-US', {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })
-                          : '-'}
-                      </TableCell>
-                      <TableCell>
-                        {breakRecord.endTime
-                          ? new Date(breakRecord.endTime).toLocaleTimeString('en-US', {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })
-                          : '-'}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="text-xs">
-                          {breakRecord.duration} min
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <p className="font-medium text-sm">{holiday.name}</p>
+                                {isUpcoming && (
+                                  <span className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded-full">
+                                    Upcoming
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {holidayDate.toLocaleDateString('en-US', {
+                                  weekday: 'long',
+                                  month: 'long',
+                                  day: 'numeric',
+                                  year: 'numeric'
+                                })}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              ) : (
+                <div className="text-center py-8 flex flex-col items-center justify-center h-full">
+                  <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
+                  <p className="text-muted-foreground">No holidays added yet</p>
+                </div>
+              )}
             </div>
-          )}
-        </Card>
-      </div>
+          </Card>
+        </div>
 
-      {/* Chat Widget */}
-      <ChatWidget />
+        {/* Main Content Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-6">
+            {/* Sections removed as per user request */}
+          </div>
+          <div className="space-y-6"></div>
+        </div>
+
+        {/* Attendance History Section */}
+        <div className="mt-8 space-y-6">
+          {/* Attendance History Table */}
+          <Card className="p-6 rounded-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                  <Calendar className="w-5 h-5 text-primary" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-lg">Attendance History</h3>
+                  <p className="text-sm text-muted-foreground">Last 30 days</p>
+                </div>
+              </div>
+              <Badge variant="outline" className="text-xs">
+                {attendanceHistory.length} Records
+              </Badge>
+            </div>
+
+            {attendanceLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+              </div>
+            ) : attendanceHistory.length === 0 ? (
+              <div className="text-center py-8">
+                <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground">No attendance records found</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Check In</TableHead>
+                      <TableHead>Check Out</TableHead>
+                      <TableHead>Hours Worked</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Breaks</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {attendanceHistory.slice(0, 10).map((record: any, index: number) => (
+                      <TableRow key={index}>
+                        <TableCell className="font-medium">
+                          {new Date(record.date).toLocaleDateString('en-US', {
+                            weekday: 'short',
+                            month: 'short',
+                            day: 'numeric'
+                          })}
+                        </TableCell>
+                        <TableCell>
+                          {record.checkIn
+                            ? new Date(record.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                            : '-'}
+                        </TableCell>
+                        <TableCell>
+                          {record.checkOut
+                            ? new Date(record.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                            : '-'}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs">
+                            {record.hoursWorked?.toFixed(2) || 0}h
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={record.status === 'present' ? 'default' : 'secondary'}
+                            className="text-xs capitalize"
+                          >
+                            {record.status || 'absent'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {record.breaks && record.breaks.length > 0
+                            ? `${record.breaks.length} break(s)`
+                            : '-'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </Card>
+
+          {/* Break History Table */}
+          <Card className="p-6 rounded-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
+                  <Clock className="w-5 h-5 text-accent" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-lg">Break History</h3>
+                  <p className="text-sm text-muted-foreground">Last 30 days</p>
+                </div>
+              </div>
+              <Badge variant="outline" className="text-xs">
+                {breakHistory.length} Breaks
+              </Badge>
+            </div>
+
+            {attendanceLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+              </div>
+            ) : breakHistory.length === 0 ? (
+              <div className="text-center py-8">
+                <Clock className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground">No break records found</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Break Type</TableHead>
+                      <TableHead>Start Time</TableHead>
+                      <TableHead>End Time</TableHead>
+                      <TableHead>Duration</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {breakHistory.slice(0, 10).map((breakRecord: any, index: number) => (
+                      <TableRow key={index}>
+                        <TableCell className="font-medium">
+                          {new Date(breakRecord.date).toLocaleDateString('en-US', {
+                            weekday: 'short',
+                            month: 'short',
+                            day: 'numeric'
+                          })}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={breakRecord.breakType === 'lunch' ? 'default' : 'secondary'}
+                            className="text-xs capitalize"
+                          >
+                            {breakRecord.breakType}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {breakRecord.startTime
+                            ? new Date(breakRecord.startTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                            : '-'}
+                        </TableCell>
+                        <TableCell>
+                          {breakRecord.endTime
+                            ? new Date(breakRecord.endTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                            : '-'}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs">
+                            {breakRecord.duration} min
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </Card>
+        </div>
+
+        {/* Chat Widget */}
+        <ChatWidget />
       </div>
     </>
   );
 }
-
-
-
-
-
-
-

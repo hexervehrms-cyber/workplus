@@ -2,7 +2,7 @@
  * Employee Onboarding Routes
  * 
  * Features:
- * - Generate shareable onboarding links for new employees
+ * - Generate shareable onboarding links for new employees (JWT + Redis)
  * - Validate and process onboarding links
  * - Submit onboarding form data
  * - Track onboarding status
@@ -10,7 +10,6 @@
  */
 
 import express from 'express';
-import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { authenticate, authorize } from '../middleware/auth.js';
@@ -19,6 +18,7 @@ import OnboardingSubmission from '../models/OnboardingSubmission.js';
 import User from '../models/User.js';
 import Employee from '../models/Employee.js';
 import logger from '../utils/logger.js';
+import OnboardingTokenManager from '../utils/onboardingTokenManager.js';
 
 const router = express.Router();
 
@@ -83,7 +83,7 @@ router.get('/debug/check-employee',
 
 /**
  * POST /api/onboarding/generate-link
- * Generate a shareable onboarding link for a new employee
+ * Generate a shareable onboarding link for a new employee (JWT + Redis)
  * Only accessible by Super Admin, Admin, and HR
  */
 router.post('/generate-link',
@@ -145,124 +145,49 @@ router.post('/generate-link',
         });
       }
 
-      // Generate unique token
-      const token = crypto.randomBytes(32).toString('hex');
-
-      // Set expiration to 30 days from now
-      const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + 30);
-
-      // Create onboarding link
-      const onboardingLink = await OnboardingLink.create({
-        token,
+      // Generate JWT token using OnboardingTokenManager
+      const jwtToken = OnboardingTokenManager.generateToken({
         employeeEmail,
         employeeName,
         department: department || 'General',
         organizationId: finalOrgId,
-        organizationName: req.user.orgName || 'WorkPlus',
-        createdBy,
-        expiresAt
+        organizationName: req.user.orgName || 'WorkPlus'
+      });
+
+      // Store token in Redis
+      await OnboardingTokenManager.storeToken(jwtToken, {
+        employeeEmail,
+        employeeName,
+        department: department || 'General',
+        organizationId: finalOrgId,
+        organizationName: req.user.orgName || 'WorkPlus'
       });
 
       // Generate onboarding URL
-      // Use FRONTEND_URL from environment variable (set in production)
       const frontendUrl = process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app';
-      const onboardingUrl = `${frontendUrl}/onboarding/${token}`;
+      const onboardingUrl = `${frontendUrl}/onboarding/${jwtToken}`;
+
+      // Calculate expiration date (30 days from now)
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
       logger.info('Onboarding link generated', {
         employeeEmail,
         employeeName,
-        token: token.substring(0, 10) + '...',
+        token: jwtToken.substring(0, 10) + '...',
         expiresAt,
         createdBy
       });
 
-      // Send email to employee with onboarding link (async, non-blocking)
-      // Don't await this - let it send in the background
-      (async () => {
-        try {
-          const EmailNotificationService = (await import('../utils/emailNotificationService.js')).default;
-
-          const emailSubject = `Welcome to ${req.user.orgName || 'WorkPlus'}! Complete Your Onboarding`;
-          
-          const emailHtml = `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-                <h1 style="color: white; margin: 0;">Welcome to ${req.user.orgName || 'WorkPlus'}!</h1>
-              </div>
-              
-              <div style="padding: 30px; background-color: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 0 0 8px 8px;">
-                <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
-                  Hi <strong>${employeeName}</strong>,
-                </p>
-                
-                <p style="font-size: 14px; color: #666; line-height: 1.6; margin-bottom: 20px;">
-                  We're excited to have you join our team! To get started, please complete your onboarding form using the link below. This link will be valid for 30 days.
-                </p>
-                
-                <div style="text-align: center; margin: 30px 0;">
-                  <a href="${onboardingUrl}" style="display: inline-block; background-color: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
-                    Complete Your Onboarding
-                  </a>
-                </div>
-              
-              <p style="font-size: 12px; color: #999; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
-                Or copy and paste this link in your browser:<br>
-                <code style="background-color: #f0f0f0; padding: 5px 10px; border-radius: 3px; word-break: break-all;">
-                  ${onboardingUrl}
-                </code>
-              </p>
-              
-              <p style="font-size: 12px; color: #999; margin-top: 20px;">
-                If you have any questions, please contact our HR team.
-              </p>
-              
-              <p style="font-size: 12px; color: #999; margin-top: 30px;">
-                Best regards,<br>
-                <strong>${req.user.orgName || 'WorkPlus'} HR Team</strong>
-              </p>
-            </div>
-          </div>
-        `;
-
-          await EmailNotificationService.sendEmail({
-            to: employeeEmail,
-            subject: emailSubject,
-            html: emailHtml,
-            from: process.env.FROM_EMAIL || process.env.SMTP_USER
-          });
-
-          // Update onboarding link to track email sent
-          onboardingLink.emailSentAt = new Date();
-          onboardingLink.emailSentBy = createdBy;
-          await onboardingLink.save();
-
-          logger.info('Onboarding email sent successfully', {
-            employeeEmail,
-            employeeName,
-            linkId: onboardingLink._id
-          });
-        } catch (emailError) {
-          logger.error('Failed to send onboarding email', {
-            error: emailError.message,
-            employeeEmail,
-            employeeName
-          });
-          // Don't fail the entire request if email fails - link is still created
-        }
-      })();  // Execute immediately but don't await
-
       res.status(201).json({
         success: true,
-        message: 'Onboarding link generated successfully and email sent to employee',
+        message: 'Onboarding link generated successfully',
         data: {
-          id: onboardingLink._id,
-          token,
+          token: jwtToken,
           employeeEmail,
           employeeName,
           onboardingUrl,
           expiresAt,
-          createdAt: onboardingLink.createdAt
+          createdAt: new Date()
         }
       });
 
@@ -281,6 +206,134 @@ router.post('/generate-link',
 );
 
 /**
+ * POST /api/onboarding/send-email
+ * Send onboarding email with link to employee
+ * Only accessible by Super Admin, Admin, and HR
+ */
+router.post('/send-email',
+  authenticate,
+  authorize('super_admin', 'admin', 'hr'),
+  asyncHandler(async (req, res) => {
+    const { token, employeeEmail, employeeName, onboardingUrl } = req.body;
+
+    try {
+      // Validate required fields
+      if (!token || !employeeEmail || !employeeName || !onboardingUrl) {
+        logger.warn('Missing required fields for send-email', {
+          hasToken: !!token,
+          hasEmail: !!employeeEmail,
+          hasName: !!employeeName,
+          hasUrl: !!onboardingUrl
+        });
+        return res.status(400).json({
+          success: false,
+          message: 'Missing required fields: token, employeeEmail, employeeName, onboardingUrl'
+        });
+      }
+
+      // Verify token is valid
+      const isValid = await OnboardingTokenManager.isTokenValid(token);
+      if (!isValid) {
+        logger.warn('Invalid or expired token for send-email', {
+          employeeEmail,
+          tokenPrefix: token.substring(0, 10) + '...'
+        });
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid or expired onboarding token'
+        });
+      }
+
+      logger.info('Sending onboarding email', {
+        employeeEmail,
+        employeeName,
+        tokenPrefix: token.substring(0, 10) + '...'
+      });
+
+      // Send email to employee with onboarding link
+      const EmailNotificationService = (await import('../utils/emailNotificationService.js')).default;
+
+      const emailSubject = `Welcome to ${req.user.orgName || 'WorkPlus'}! Complete Your Onboarding`;
+      
+      const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+            <h1 style="color: white; margin: 0;">Welcome to ${req.user.orgName || 'WorkPlus'}!</h1>
+          </div>
+          
+          <div style="padding: 30px; background-color: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 0 0 8px 8px;">
+            <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
+              Hi <strong>${employeeName}</strong>,
+            </p>
+            
+            <p style="font-size: 14px; color: #666; line-height: 1.6; margin-bottom: 20px;">
+              We're excited to have you join our team! To get started, please complete your onboarding form using the link below. This link will be valid for 30 days.
+            </p>
+            
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${onboardingUrl}" style="display: inline-block; background-color: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
+                Complete Your Onboarding
+              </a>
+            </div>
+          
+            <p style="font-size: 12px; color: #999; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
+              Or copy and paste this link in your browser:<br>
+              <code style="background-color: #f0f0f0; padding: 5px 10px; border-radius: 3px; word-break: break-all;">
+                ${onboardingUrl}
+              </code>
+            </p>
+            
+            <p style="font-size: 12px; color: #999; margin-top: 20px;">
+              If you have any questions, please contact our HR team.
+            </p>
+            
+            <p style="font-size: 12px; color: #999; margin-top: 30px;">
+              Best regards,<br>
+              <strong>${req.user.orgName || 'WorkPlus'} HR Team</strong>
+            </p>
+          </div>
+        </div>
+      `;
+
+      await EmailNotificationService.sendEmail({
+        to: employeeEmail,
+        subject: emailSubject,
+        html: emailHtml,
+        from: process.env.FROM_EMAIL || process.env.SMTP_USER
+      });
+
+      logger.info('Onboarding email sent successfully', {
+        employeeEmail,
+        employeeName,
+        tokenPrefix: token.substring(0, 10) + '...'
+      });
+
+      res.json({
+        success: true,
+        message: 'Onboarding email sent successfully to employee',
+        data: {
+          employeeEmail,
+          employeeName,
+          sentAt: new Date()
+        }
+      });
+
+    } catch (error) {
+      logger.error('Send onboarding email error', {
+        error: error.message,
+        stack: error.stack,
+        body: req.body
+      });
+      res.status(500).json({
+        success: false,
+        message: 'Failed to send onboarding email',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  })
+);
+
+/**
  * GET /api/onboarding/validate/:token
  * Validate an onboarding link and get employee details
  * Public endpoint - no authentication required
@@ -290,40 +343,32 @@ router.get('/validate/:token',
     const { token } = req.params;
 
     try {
-      // Find onboarding link
-      const onboardingLink = await OnboardingLink.findOne({ token });
+      // Verify token is valid
+      const isValid = await OnboardingTokenManager.isTokenValid(token);
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid or expired onboarding link'
+        });
+      }
 
-      if (!onboardingLink) {
+      // Get token data from Redis
+      const tokenData = await OnboardingTokenManager.getToken(token);
+      if (!tokenData) {
         return res.status(404).json({
           success: false,
-          message: 'Invalid onboarding link'
-        });
-      }
-
-      // Check if link has expired
-      if (onboardingLink.expiresAt < new Date()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Onboarding link has expired'
-        });
-      }
-
-      // Check if link has already been used
-      if (onboardingLink.isUsed) {
-        return res.status(400).json({
-          success: false,
-          message: 'Onboarding link has already been used'
+          message: 'Onboarding link not found'
         });
       }
 
       res.json({
         success: true,
         data: {
-          employeeEmail: onboardingLink.employeeEmail,
-          employeeName: onboardingLink.employeeName,
-          department: onboardingLink.department,
-          organizationName: onboardingLink.organizationName,
-          organizationId: onboardingLink.organizationId
+          employeeEmail: tokenData.employeeEmail,
+          employeeName: tokenData.employeeName,
+          department: tokenData.department,
+          organizationName: tokenData.organizationName,
+          organizationId: tokenData.organizationId
         }
       });
 
@@ -358,35 +403,22 @@ router.post('/submit',
       });
 
       // Validate token
-      const onboardingLink = await OnboardingLink.findOne({ token });
+      const isValid = await OnboardingTokenManager.isTokenValid(token);
+      if (!isValid) {
+        logger.warn('Invalid or expired token for submit', { token: token?.substring(0, 10) + '...' });
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid or expired onboarding link'
+        });
+      }
 
-      if (!onboardingLink) {
-        logger.warn('Invalid onboarding token', { token: token?.substring(0, 10) + '...' });
+      // Get token data from Redis
+      const tokenData = await OnboardingTokenManager.getToken(token);
+      if (!tokenData) {
+        logger.warn('Token data not found in Redis', { token: token?.substring(0, 10) + '...' });
         return res.status(404).json({
           success: false,
-          message: 'Invalid onboarding link'
-        });
-      }
-
-      if (onboardingLink.expiresAt < new Date()) {
-        logger.warn('Onboarding link expired', { 
-          token: token?.substring(0, 10) + '...',
-          expiresAt: onboardingLink.expiresAt
-        });
-        return res.status(400).json({
-          success: false,
-          message: 'Onboarding link has expired'
-        });
-      }
-
-      if (onboardingLink.isUsed) {
-        logger.warn('Onboarding link already used', { 
-          token: token?.substring(0, 10) + '...',
-          employeeEmail: onboardingLink.employeeEmail
-        });
-        return res.status(400).json({
-          success: false,
-          message: 'Onboarding link has already been used'
+          message: 'Onboarding link not found'
         });
       }
 
@@ -401,7 +433,7 @@ router.post('/submit',
 
       // Validate password
       if (!password) {
-        logger.warn('Missing password', { email: onboardingLink.employeeEmail });
+        logger.warn('Missing password', { email: tokenData.employeeEmail });
         return res.status(400).json({
           success: false,
           message: 'Password is required'
@@ -410,14 +442,14 @@ router.post('/submit',
 
       // Create onboarding submission
       logger.info('Creating onboarding submission', {
-        employeeEmail: onboardingLink.employeeEmail,
-        employeeName: onboardingLink.employeeName
+        employeeEmail: tokenData.employeeEmail,
+        employeeName: tokenData.employeeName
       });
 
       const submission = await OnboardingSubmission.create({
         employeeId: '', // Will be updated after user creation
-        employeeName: onboardingLink.employeeName,
-        email: onboardingLink.employeeEmail,
+        employeeName: tokenData.employeeName,
+        email: tokenData.employeeEmail,
         phone: personalInfo.phone,
         personalInfo: {
           firstName: personalInfo.firstName,
@@ -452,20 +484,20 @@ router.post('/submit',
       // Create User account
       const fullName = `${personalInfo.firstName} ${personalInfo.lastName}`;
       logger.info('Creating user account', {
-        email: onboardingLink.employeeEmail,
+        email: tokenData.employeeEmail,
         fullName,
-        orgId: onboardingLink.organizationId
+        orgId: tokenData.organizationId
       });
 
       let user;
       try {
         user = await User.create({
           name: fullName,
-          email: onboardingLink.employeeEmail,
+          email: tokenData.employeeEmail,
           password: hashedPassword, // Store hashed password
           role: 'employee',
           status: 'active',
-          orgId: onboardingLink.organizationId,
+          orgId: tokenData.organizationId,
           avatar: profilePhoto || null, // Store the base64 photo as avatar
           lastLogin: null,
           profile: {
@@ -478,7 +510,7 @@ router.post('/submit',
         logger.error('Failed to create user account', {
           error: userError.message,
           stack: userError.stack,
-          email: onboardingLink.employeeEmail
+          email: tokenData.employeeEmail
         });
         throw userError;
       }
@@ -488,8 +520,8 @@ router.post('/submit',
         userId: user._id,
         firstName: personalInfo.firstName,
         lastName: personalInfo.lastName,
-        department: onboardingLink.department,
-        orgId: onboardingLink.organizationId
+        department: tokenData.department,
+        orgId: tokenData.organizationId
       });
 
       let employee;
@@ -500,7 +532,7 @@ router.post('/submit',
           firstName: personalInfo.firstName,
           lastName: personalInfo.lastName,
           designation: 'Employee',
-          department: onboardingLink.department,
+          department: tokenData.department,
           baseSalary: 0, // Will be set by HR
           hra: 0,
           bonus: 0,
@@ -527,7 +559,7 @@ router.post('/submit',
           },
           status: 'active',
           createdViaOnboarding: true, // Mark as created via onboarding
-          orgId: onboardingLink.organizationId
+          orgId: tokenData.organizationId
         });
         logger.info('Employee profile created successfully', { 
           employeeId: employee._id, 
@@ -548,7 +580,7 @@ router.post('/submit',
       // Update onboarding submission with employee and user IDs
       submission.employeeId = employee._id.toString();
       submission.submittedBy = user._id;
-      submission.organizationId = onboardingLink.organizationId;
+      submission.organizationId = tokenData.organizationId;
       await submission.save();
 
       logger.info('Onboarding submission updated with employee and user IDs', {
@@ -557,20 +589,16 @@ router.post('/submit',
         userId: user._id
       });
 
-      // Mark onboarding link as used
-      logger.info('Marking onboarding link as used', { linkId: onboardingLink._id });
-      await OnboardingLink.findByIdAndUpdate(
-        onboardingLink._id,
-        { isUsed: true },
-        { new: true }
-      );
+      // Mark token as used in Redis
+      logger.info('Marking onboarding token as used', { tokenPrefix: token.substring(0, 10) + '...' });
+      await OnboardingTokenManager.markTokenAsUsed(token);
 
       logger.info('Employee profile created from onboarding - SUCCESS', {
         submissionId: submission._id,
         userId: user._id,
         employeeId: employee._id,
-        employeeEmail: onboardingLink.employeeEmail,
-        employeeName: onboardingLink.employeeName
+        employeeEmail: tokenData.employeeEmail,
+        employeeName: tokenData.employeeName
       });
 
       // Emit real-time employee creation event
@@ -585,10 +613,10 @@ router.post('/submit',
           department: employee.department,
           status: employee.status,
           createdViaOnboarding: true
-        }, onboardingLink.organizationId);
+        }, tokenData.organizationId);
         logger.info('Employee creation event emitted', { 
           employeeId: employee._id,
-          orgId: onboardingLink.organizationId
+          orgId: tokenData.organizationId
         });
       }
 
@@ -597,7 +625,7 @@ router.post('/submit',
         try {
           const EmailNotificationService = (await import('../utils/emailNotificationService.js')).default;
 
-          const emailSubject = `Welcome to ${onboardingLink.organizationName || 'WorkPlus'}! Your Account is Ready`;
+          const emailSubject = `Welcome to ${tokenData.organizationName || 'WorkPlus'}! Your Account is Ready`;
           
           const emailHtml = `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -623,9 +651,9 @@ router.post('/submit',
                   <h3 style="margin-top: 0; color: #333;">Your Account Details:</h3>
                   <div style="font-size: 14px; color: #666; line-height: 1.8;">
                     <p><strong>Name:</strong> ${personalInfo.firstName} ${personalInfo.lastName}</p>
-                    <p><strong>Email:</strong> ${onboardingLink.employeeEmail}</p>
-                    <p><strong>Department:</strong> ${onboardingLink.department}</p>
-                    <p><strong>Organization:</strong> ${onboardingLink.organizationName || 'WorkPlus'}</p>
+                    <p><strong>Email:</strong> ${tokenData.employeeEmail}</p>
+                    <p><strong>Department:</strong> ${tokenData.department}</p>
+                    <p><strong>Organization:</strong> ${tokenData.organizationName || 'WorkPlus'}</p>
                   </div>
                 </div>
                 
@@ -651,28 +679,28 @@ router.post('/submit',
                 
                 <p style="font-size: 12px; color: #999; margin-top: 20px;">
                   Best regards,<br>
-                  <strong>${onboardingLink.organizationName || 'WorkPlus'} HR Team</strong>
+                  <strong>${tokenData.organizationName || 'WorkPlus'} HR Team</strong>
                 </p>
               </div>
             </div>
           `;
 
           await EmailNotificationService.sendEmail({
-            to: onboardingLink.employeeEmail,
+            to: tokenData.employeeEmail,
             subject: emailSubject,
             html: emailHtml,
             from: process.env.FROM_EMAIL || process.env.SMTP_USER
           });
 
           logger.info('Onboarding confirmation email sent successfully', {
-            employeeEmail: onboardingLink.employeeEmail,
+            employeeEmail: tokenData.employeeEmail,
             employeeName: `${personalInfo.firstName} ${personalInfo.lastName}`,
             employeeId: employee._id
           });
         } catch (emailError) {
           logger.error('Failed to send onboarding confirmation email', {
             error: emailError.message,
-            employeeEmail: onboardingLink.employeeEmail
+            employeeEmail: tokenData.employeeEmail
           });
           // Don't fail the entire request if email fails - employee is already created
         }
@@ -1113,138 +1141,7 @@ router.get('/documents/employee/:employeeId',
  * Send onboarding link via email to employee
  * Uses configured SMTP settings to send from HR email
  */
-router.post('/send-email',
-  authenticate,
-  authorize('super_admin', 'admin', 'hr'),
-  asyncHandler(async (req, res) => {
-    const { token, employeeEmail, employeeName, onboardingUrl } = req.body;
-    const sentBy = req.user.userId;
-    const orgId = req.user.orgId;
-
-    try {
-      // Validate required fields
-      if (!token || !employeeEmail || !employeeName || !onboardingUrl) {
-        return res.status(400).json({
-          success: false,
-          message: 'Missing required fields: token, employeeEmail, employeeName, onboardingUrl'
-        });
-      }
-
-      // Verify the onboarding link exists by token
-      const onboardingLink = await OnboardingLink.findOne({ token });
-      if (!onboardingLink) {
-        return res.status(404).json({
-          success: false,
-          message: 'Onboarding link not found'
-        });
-      }
-
-      // Check if link is still valid
-      if (onboardingLink.isUsed) {
-        return res.status(400).json({
-          success: false,
-          message: 'Onboarding link has already been used'
-        });
-      }
-
-      if (onboardingLink.expiresAt < new Date()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Onboarding link has expired'
-        });
-      }
-
-      // Import email service
-      const EmailNotificationService = (await import('../utils/emailNotificationService.js')).default;
-
-      // Prepare email content
-      const emailSubject = `Welcome to ${onboardingLink.organizationName || 'WorkPlus'}! Complete Your Onboarding`;
-      
-      const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-            <h1 style="color: white; margin: 0;">Welcome to ${onboardingLink.organizationName || 'WorkPlus'}!</h1>
-          </div>
-          
-          <div style="padding: 30px; background-color: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 0 0 8px 8px;">
-            <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
-              Hi <strong>${employeeName}</strong>,
-            </p>
-            
-            <p style="font-size: 14px; color: #666; line-height: 1.6; margin-bottom: 20px;">
-              We're excited to have you join our team! To get started, please complete your onboarding form using the link below. This link will be valid for 30 days.
-            </p>
-            
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${onboardingUrl}" style="display: inline-block; background-color: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
-                Complete Your Onboarding
-              </a>
-            </div>
-            
-            <p style="font-size: 12px; color: #999; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
-              Or copy and paste this link in your browser:<br>
-              <code style="background-color: #f0f0f0; padding: 5px 10px; border-radius: 3px; word-break: break-all;">
-                ${onboardingUrl}
-              </code>
-            </p>
-            
-            <p style="font-size: 12px; color: #999; margin-top: 20px;">
-              If you have any questions, please contact our HR team.
-            </p>
-            
-            <p style="font-size: 12px; color: #999; margin-top: 30px;">
-              Best regards,<br>
-              <strong>${onboardingLink.organizationName || 'WorkPlus'} HR Team</strong>
-            </p>
-          </div>
-        </div>
-      `;
-
-      // Send email using configured SMTP
-      await EmailNotificationService.sendEmail({
-        to: employeeEmail,
-        subject: emailSubject,
-        html: emailHtml,
-        from: process.env.FROM_EMAIL || process.env.SMTP_USER
-      });
-
-      logger.info('Onboarding email sent successfully', {
-        linkId,
-        employeeEmail,
-        employeeName,
-        sentBy,
-        orgId
-      });
-
-      // Update onboarding link to track email sent
-      onboardingLink.emailSentAt = new Date();
-      onboardingLink.emailSentBy = sentBy;
-      await onboardingLink.save();
-
-      res.json({
-        success: true,
-        message: `Onboarding link sent successfully to ${employeeEmail}`,
-        data: {
-          linkId,
-          employeeEmail,
-          sentAt: new Date()
-        }
-      });
-
-    } catch (error) {
-      logger.error('Send onboarding email error', {
-        error: error.message,
-        stack: error.stack,
-        linkId: req.body.linkId,
-        employeeEmail: req.body.employeeEmail
-      });
-      res.status(500).json({
-        success: false,
-        message: 'Failed to send onboarding email',
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
-  })
-);
+// NOTE: This endpoint is already defined earlier in the file with JWT + Redis support
+// Keeping this comment for reference - the earlier implementation is the one being used
 
 export default router;

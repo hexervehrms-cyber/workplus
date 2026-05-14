@@ -1,18 +1,16 @@
 /**
- * JWT Token Cache Manager
- * Caches JWT tokens and user sessions in Redis for performance
- * Reduces database queries and improves authentication speed
+ * JWT Cache Manager - Redis-based token caching
+ * Improves performance by caching JWT verification results
+ * Includes token blacklisting for logout functionality
  */
 
 import redis from './redis.js';
 import logger from './logger.js';
 
-const TOKEN_CACHE_PREFIX = 'jwt:token:';
-const USER_SESSION_PREFIX = 'session:user:';
-const BLACKLIST_PREFIX = 'jwt:blacklist:';
+const TOKEN_CACHE_PREFIX = 'jwt_token:';
+const USER_SESSION_PREFIX = 'user_session:';
+const TOKEN_BLACKLIST_PREFIX = 'token_blacklist:';
 const TOKEN_TTL = 24 * 60 * 60; // 24 hours
-const SESSION_TTL = 24 * 60 * 60; // 24 hours
-const BLACKLIST_TTL = 24 * 60 * 60; // 24 hours
 
 class JWTCache {
   /**
@@ -62,16 +60,16 @@ class JWTCache {
 
     try {
       const key = `${TOKEN_CACHE_PREFIX}${token.substring(0, 20)}`;
-      const cached = await redis.get(key);
+      const cachedData = await redis.get(key);
       
-      if (cached) {
-        logger.debug('Token cache hit', {
-          userId: cached.userId,
+      if (cachedData) {
+        logger.debug('Token retrieved from cache', {
+          userId: cachedData.userData?.userId,
           tokenPrefix: token.substring(0, 20)
         });
       }
       
-      return cached;
+      return cachedData;
     } catch (error) {
       logger.warn('Failed to get token cache', {
         error: error.message
@@ -81,30 +79,24 @@ class JWTCache {
   }
 
   /**
-   * Cache user session
+   * Cache user session data
    */
-  static async cacheUserSession(userId, sessionData, expiresIn = SESSION_TTL) {
+  static async cacheUserSession(userId, userData, expiresIn = TOKEN_TTL) {
     if (!redis.isRedisConnected()) {
-      logger.debug('Redis not connected - skipping session cache');
       return false;
     }
 
     try {
       const key = `${USER_SESSION_PREFIX}${userId}`;
-      const cacheData = {
-        userId,
-        ...sessionData,
+      const sessionData = {
+        ...userData,
         cachedAt: new Date().toISOString()
       };
 
-      const success = await redis.set(key, cacheData, expiresIn);
+      const success = await redis.set(key, sessionData, expiresIn);
       
       if (success) {
-        logger.debug('User session cached', {
-          userId,
-          role: sessionData.role,
-          orgId: sessionData.orgId
-        });
+        logger.debug('User session cached', { userId });
       }
       
       return success;
@@ -127,16 +119,13 @@ class JWTCache {
 
     try {
       const key = `${USER_SESSION_PREFIX}${userId}`;
-      const cached = await redis.get(key);
+      const sessionData = await redis.get(key);
       
-      if (cached) {
-        logger.debug('User session cache hit', {
-          userId,
-          role: cached.role
-        });
+      if (sessionData) {
+        logger.debug('User session retrieved from cache', { userId });
       }
       
-      return cached;
+      return sessionData;
     } catch (error) {
       logger.warn('Failed to get user session', {
         error: error.message,
@@ -147,16 +136,16 @@ class JWTCache {
   }
 
   /**
-   * Invalidate token (add to blacklist)
+   * Blacklist a token (for logout)
    */
-  static async invalidateToken(token, expiresIn = BLACKLIST_TTL) {
+  static async blacklistToken(token, expiresIn = TOKEN_TTL) {
     if (!redis.isRedisConnected()) {
       logger.debug('Redis not connected - skipping token blacklist');
       return false;
     }
 
     try {
-      const key = `${BLACKLIST_PREFIX}${token.substring(0, 20)}`;
+      const key = `${TOKEN_BLACKLIST_PREFIX}${token.substring(0, 20)}`;
       const success = await redis.set(key, { blacklistedAt: new Date().toISOString() }, expiresIn);
       
       if (success) {
@@ -183,7 +172,7 @@ class JWTCache {
     }
 
     try {
-      const key = `${BLACKLIST_PREFIX}${token.substring(0, 20)}`;
+      const key = `${TOKEN_BLACKLIST_PREFIX}${token.substring(0, 20)}`;
       const blacklisted = await redis.get(key);
       
       if (blacklisted) {
@@ -202,56 +191,49 @@ class JWTCache {
   }
 
   /**
-   * Invalidate user session
+   * Clear token cache
    */
-  static async invalidateUserSession(userId) {
+  static async clearTokenCache(token) {
     if (!redis.isRedisConnected()) {
-      logger.debug('Redis not connected - skipping session invalidation');
       return false;
     }
 
     try {
-      const key = `${USER_SESSION_PREFIX}${userId}`;
-      const success = await redis.del(key);
+      const key = `${TOKEN_CACHE_PREFIX}${token.substring(0, 20)}`;
+      await redis.del(key);
       
-      if (success) {
-        logger.debug('User session invalidated', { userId });
-      }
+      logger.debug('Token cache cleared', {
+        tokenPrefix: token.substring(0, 20)
+      });
       
-      return success;
+      return true;
     } catch (error) {
-      logger.warn('Failed to invalidate user session', {
-        error: error.message,
-        userId
+      logger.warn('Failed to clear token cache', {
+        error: error.message
       });
       return false;
     }
   }
 
   /**
-   * Clear all JWT caches (for maintenance)
+   * Clear user session cache
    */
-  static async clearAllCaches() {
+  static async clearUserSession(userId) {
     if (!redis.isRedisConnected()) {
       return false;
     }
 
     try {
-      const patterns = [
-        `${TOKEN_CACHE_PREFIX}*`,
-        `${USER_SESSION_PREFIX}*`,
-        `${BLACKLIST_PREFIX}*`
-      ];
-
-      for (const pattern of patterns) {
-        await redis.deletePattern(pattern);
-      }
+      const key = `${USER_SESSION_PREFIX}${userId}`;
+      await redis.del(key);
       
-      logger.info('All JWT caches cleared');
+      logger.debug('User session cache cleared', { userId });
+      
       return true;
     } catch (error) {
-      logger.warn('Failed to clear JWT caches', {
-        error: error.message
+      logger.warn('Failed to clear user session', {
+        error: error.message,
+        userId
       });
       return false;
     }
@@ -262,21 +244,25 @@ class JWTCache {
    */
   static async getCacheStats() {
     if (!redis.isRedisConnected()) {
-      return null;
+      return { error: 'Redis not connected' };
     }
 
     try {
-      // This is a simplified version - in production you'd use Redis INFO command
+      const tokenKeys = await redis.keys(`${TOKEN_CACHE_PREFIX}*`);
+      const sessionKeys = await redis.keys(`${USER_SESSION_PREFIX}*`);
+      const blacklistKeys = await redis.keys(`${TOKEN_BLACKLIST_PREFIX}*`);
+
       return {
-        status: 'connected',
-        timestamp: new Date().toISOString(),
-        note: 'Use Redis CLI for detailed cache statistics'
+        cachedTokens: tokenKeys.length,
+        cachedSessions: sessionKeys.length,
+        blacklistedTokens: blacklistKeys.length,
+        timestamp: new Date().toISOString()
       };
     } catch (error) {
-      logger.warn('Failed to get cache stats', {
+      logger.error('Failed to get cache stats', {
         error: error.message
       });
-      return null;
+      return { error: error.message };
     }
   }
 }

@@ -1,10 +1,63 @@
 import { createBrowserRouter, Navigate } from 'react-router';
-import { lazy, Suspense } from 'react';
+import React, { lazy, Suspense, useEffect, useState } from 'react';
 import { MainLayout } from './layouts/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { RouteErrorBoundary } from './components/RouteErrorBoundary';
 import Login from './pages/Login';
+import { useAuth } from './context/AuthContext';
+
+// Role-based redirect component
+function RoleBasedRedirect() {
+  const { user } = useAuth();
+  const [verifying, setVerifying] = useState(true);
+  const [redirectPath, setRedirectPath] = useState<string | null>(null);
+  
+  useEffect(() => {
+    const verifyAndRedirect = async () => {
+      if (!user) {
+        setRedirectPath('/login');
+        setVerifying(false);
+        return;
+      }
+
+      // Verify role is valid
+      if (!user.role) {
+        console.error('User object missing role field');
+        setRedirectPath('/login');
+        setVerifying(false);
+        return;
+      }
+
+      // Determine redirect path based on role
+      let path = '/employee'; // Default fallback
+      
+      if (user.role === 'super_admin') {
+        path = '/super-admin';
+      } else if (user.role === 'admin') {
+        path = '/admin';
+      } else if (['employee', 'hr', 'manager', 'accountant'].includes(user.role)) {
+        path = '/employee';
+      }
+
+      console.log('RoleBasedRedirect - User role:', user.role, 'Redirecting to:', path);
+      setRedirectPath(path);
+      setVerifying(false);
+    };
+
+    verifyAndRedirect();
+  }, [user]);
+
+  if (verifying) {
+    return null; // Show nothing while verifying
+  }
+
+  if (!redirectPath) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <Navigate to={redirectPath} replace />;
+}
 
 // Minimal loading fallback - no visible spinner for faster perceived performance
 const LazyLoader = () => null;
@@ -82,7 +135,10 @@ const routes = [
       </ErrorBoundary>
     ),
     children: [
-      { index: true, element: <Navigate to="/employee" replace /> },
+      { 
+        index: true, 
+        element: <RoleBasedRedirect />
+      },
       {
         path: 'super-admin',
         element: (

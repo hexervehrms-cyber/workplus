@@ -12,6 +12,7 @@ import SecurityEvent from "../models/SecurityEvent.js";
 import TwoFactorAuth from "../utils/twoFactor.js";
 import PasswordSecurity from "../utils/passwordSecurity.js";
 import logger from "../utils/logger.js";
+import SessionManager from "../utils/sessionManager.js";
 
 const router = express.Router();
 
@@ -53,13 +54,14 @@ router.post("/login",
       }
 
       // Generate access token (short-lived)
+      const sessionId = crypto.randomBytes(16).toString('hex');
       const token = jwt.sign(
         { 
           userId: user._id,
           email: user.email,
           role: user.role,
           orgId: user.orgId || 'system',
-          sessionId: crypto.randomBytes(16).toString('hex')
+          sessionId: sessionId
         },
         process.env.JWT_SECRET,
         { expiresIn: '15m' } // Short-lived access token
@@ -70,11 +72,23 @@ router.post("/login",
         { 
           userId: user._id,
           type: 'refresh',
-          sessionId: crypto.randomBytes(16).toString('hex')
+          sessionId: sessionId
         },
         process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
+
+      // Create session in Redis for per-employee tracking
+      await SessionManager.createSession(user._id, sessionId, {
+        role: user.role,
+        email: user.email,
+        name: user.name,
+        orgId: user.orgId || 'system',
+        departmentId: user.departmentId,
+        permissions: user.permissions || [],
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent']
+      });
 
       // Store refresh token in database
       const authToken = await AuthToken.create({
@@ -322,16 +336,23 @@ router.post("/logout",
   asyncHandler(async (req, res) => {
     const { refreshToken, logoutAll = false } = req.body;
     const userId = req.user.userId;
+    const sessionId = req.user.sessionId;
     
     try {
       if (logoutAll) {
-        // Revoke all user tokens
+        // Revoke all user tokens and sessions
         await AuthToken.revokeAllUserTokens(userId, null, userId, 'user_logout_all');
+        // Invalidate all sessions for this user
+        await SessionManager.invalidateAllUserSessions(userId);
       } else if (refreshToken) {
         // Revoke specific token
         const authToken = await AuthToken.findByToken(refreshToken);
         if (authToken) {
           await authToken.revoke(userId, 'user_logout');
+        }
+        // Invalidate specific session
+        if (sessionId) {
+          await SessionManager.invalidateSession(sessionId);
         }
       }
       
@@ -761,6 +782,130 @@ router.get("/security-status",
       res.status(500).json({
         success: false,
         message: "Failed to get security status"
+      });
+    }
+  })
+);
+
+/**
+ * GET /api/auth/verify-role
+ * Verify user's role and session validity
+ * Used by frontend to ensure correct dashboard routing
+ */
+router.get("/verify-role",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const userId = req.user.userId;
+    const sessionId = req.user.sessionId;
+    const userRole = req.user.role;
+
+    try {
+      // Verify session is still valid
+      if (sessionId) {
+        const sessionValid = await SessionManager.getSession(sessionId);
+        if (!sessionValid) {
+          return res.status(401).json({
+            success: false,
+            message: "Session invalid or expired",
+            code: "SESSION_INVALID"
+          });
+        }
+
+        // Verify role matches
+        if (sessionValid.role !== userRole) {
+          logger.warn('Role mismatch in session verification', {
+            userId,
+            sessionId: sessionId.substring(0, 16),
+            tokenRole: userRole,
+            sessionRole: sessionValid.role
+          });
+          return res.status(401).json({
+            success: false,
+            message: "Role mismatch detected",
+            code: "ROLE_MISMATCH"
+          });
+        }
+      }
+
+      // Get user from database to ensure latest role
+      const user = await User.findById(userId)
+        .select('role orgId departmentId')
+        .lean();
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
+          code: "USER_NOT_FOUND"
+        });
+      }
+
+      // Verify role hasn't changed
+      if (user.role !== userRole) {
+        logger.warn('User role changed', {
+          userId,
+          previousRole: userRole,
+          currentRole: user.role
+        });
+        return res.status(401).json({
+          success: false,
+          message: "User role has changed. Please log in again.",
+          code: "ROLE_CHANGED"
+        });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          userId,
+          role: user.role,
+          orgId: user.orgId,
+          departmentId: user.departmentId,
+          sessionId: sessionId,
+          verified: true
+        }
+      });
+
+    } catch (error) {
+      logger.error('Role verification error', { error: error.message, userId });
+      
+      res.status(500).json({
+        success: false,
+        message: "Failed to verify role"
+      });
+    }
+  })
+);
+
+/**
+ * GET /api/auth/session-stats
+ * Get session statistics (admin only)
+ */
+router.get("/session-stats",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    // Only super_admin can view session stats
+    if (req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: "Insufficient permissions"
+      });
+    }
+
+    try {
+      const stats = await SessionManager.getSessionStats();
+      
+      res.json({
+        success: true,
+        data: stats
+      });
+
+    } catch (error) {
+      logger.error('Session stats error', { error: error.message });
+      
+      res.status(500).json({
+        success: false,
+        message: "Failed to get session stats"
       });
     }
   })

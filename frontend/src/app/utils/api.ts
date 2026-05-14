@@ -506,6 +506,34 @@ export class AuthService {
     return { success: true };
   }
 
+  /**
+   * Verify user's role and session validity
+   * Used to ensure correct dashboard routing
+   */
+  static async verifyRole() {
+    try {
+      const response = await apiClient.get<any>('/auth/verify-role');
+      
+      if (response.success && response.data) {
+        return {
+          success: true,
+          data: response.data
+        };
+      }
+
+      return {
+        success: false,
+        error: response.message || 'Role verification failed'
+      };
+    } catch (error: any) {
+      console.error('Role verification error:', error);
+      return {
+        success: false,
+        error: error.message || 'Role verification failed'
+      };
+    }
+  }
+
   static async createAdmin(adminData: any) {
     try {
       const response = await apiClient.post<any>('/auth/create-admin', adminData);

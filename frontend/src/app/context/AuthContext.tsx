@@ -302,15 +302,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const result = await AuthService.login(email, password);
       
       if (result.success && result.user) {
+        // Verify role is present and valid
+        if (!result.user.role) {
+          console.error('Login response missing role field');
+          toast.error('Login failed: Invalid user data');
+          setLoading(false);
+          return { success: false, error: 'Invalid user data' };
+        }
+
         setUser(result.user);
         toast.success(`Welcome back, ${result.user.name}!`);
         
-        // Redirect based on role - use navigate instead of window.location.href to avoid full page reload
-        const redirectPath = result.user.role === 'super_admin' 
-          ? '/super-admin' 
-          : result.user.role === 'admin'
-          ? '/admin'
-          : '/employee';
+        // Determine redirect path based on role
+        let redirectPath = '/employee'; // Default fallback
+        
+        if (result.user.role === 'super_admin') {
+          redirectPath = '/super-admin';
+        } else if (result.user.role === 'admin') {
+          redirectPath = '/admin';
+        } else if (['employee', 'hr', 'manager', 'accountant'].includes(result.user.role)) {
+          redirectPath = '/employee';
+        }
+        
+        console.log('Login successful - redirecting to:', redirectPath, 'Role:', result.user.role);
         
         // Use a small delay to ensure the UI updates before redirect
         setTimeout(() => {

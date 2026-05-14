@@ -53,19 +53,28 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     // Try to get from cache first
     let cachedData = await JWTCache.getTokenCache(token);
     if (cachedData) {
-      req.user = {
-        userId: cachedData.userData.userId,
-        email: cachedData.userData.email,
-        name: cachedData.userData.name,
-        role: cachedData.userData.role,
-        orgId: cachedData.userData.orgId || 'system',
-        tenantId: cachedData.userData.orgId || 'system',
-        departmentId: cachedData.userData.departmentId,
-        permissions: cachedData.userData.permissions || [],
-        sessionId: cachedData.userData.sessionId,
-        fromCache: true
-      };
-      return next();
+      // Validate role is present in cached data
+      if (!cachedData.userData.role) {
+        logger.warn('Cached token missing role field', {
+          userId: cachedData.userData.userId,
+          tokenPrefix: token.substring(0, 20)
+        });
+        // Continue to JWT verification instead of using incomplete cache
+      } else {
+        req.user = {
+          userId: cachedData.userData.userId,
+          email: cachedData.userData.email,
+          name: cachedData.userData.name,
+          role: cachedData.userData.role,
+          orgId: cachedData.userData.orgId || 'system',
+          tenantId: cachedData.userData.orgId || 'system',
+          departmentId: cachedData.userData.departmentId,
+          permissions: cachedData.userData.permissions || [],
+          sessionId: cachedData.userData.sessionId,
+          fromCache: true
+        };
+        return next();
+      }
     }
 
     // Verify JWT token

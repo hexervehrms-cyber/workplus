@@ -183,8 +183,31 @@ export default function AttendanceAdmin() {
       
       if (!token) {
         console.warn('⚠️ [EXPORT] No token found, attempting to refresh auth');
-        toast.error('Authentication required. Please log in again.');
-        return;
+        // Try to refresh token
+        const refreshToken = TokenManager.getRefreshToken();
+        if (refreshToken) {
+          try {
+            const refreshResponse = await fetch(buildApiUrl('/auth/refresh'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ refreshToken }),
+              credentials: 'include'
+            });
+            if (refreshResponse.ok) {
+              const data = await refreshResponse.json();
+              token = data.token;
+              TokenManager.set(token);
+              console.log('✅ [EXPORT] Token refreshed successfully');
+            }
+          } catch (refreshError) {
+            console.error('❌ [EXPORT] Token refresh failed:', refreshError);
+          }
+        }
+        
+        if (!token) {
+          toast.error('Authentication required. Please log in again.');
+          return;
+        }
       }
       
       const response = await fetch(apiUrl, {

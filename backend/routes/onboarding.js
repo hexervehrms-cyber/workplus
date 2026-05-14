@@ -172,32 +172,34 @@ router.post('/generate-link',
         createdBy
       });
 
-      // Send email to employee with onboarding link
-      try {
-        const EmailNotificationService = (await import('../utils/emailNotificationService.js')).default;
+      // Send email to employee with onboarding link (async, non-blocking)
+      // Don't await this - let it send in the background
+      (async () => {
+        try {
+          const EmailNotificationService = (await import('../utils/emailNotificationService.js')).default;
 
-        const emailSubject = `Welcome to ${req.user.orgName || 'WorkPlus'}! Complete Your Onboarding`;
-        
-        const emailHtml = `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-              <h1 style="color: white; margin: 0;">Welcome to ${req.user.orgName || 'WorkPlus'}!</h1>
-            </div>
-            
-            <div style="padding: 30px; background-color: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 0 0 8px 8px;">
-              <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
-                Hi <strong>${employeeName}</strong>,
-              </p>
-              
-              <p style="font-size: 14px; color: #666; line-height: 1.6; margin-bottom: 20px;">
-                We're excited to have you join our team! To get started, please complete your onboarding form using the link below. This link will be valid for 30 days.
-              </p>
-              
-              <div style="text-align: center; margin: 30px 0;">
-                <a href="${onboardingUrl}" style="display: inline-block; background-color: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
-                  Complete Your Onboarding
-                </a>
+          const emailSubject = `Welcome to ${req.user.orgName || 'WorkPlus'}! Complete Your Onboarding`;
+          
+          const emailHtml = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+                <h1 style="color: white; margin: 0;">Welcome to ${req.user.orgName || 'WorkPlus'}!</h1>
               </div>
+              
+              <div style="padding: 30px; background-color: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 0 0 8px 8px;">
+                <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
+                  Hi <strong>${employeeName}</strong>,
+                </p>
+                
+                <p style="font-size: 14px; color: #666; line-height: 1.6; margin-bottom: 20px;">
+                  We're excited to have you join our team! To get started, please complete your onboarding form using the link below. This link will be valid for 30 days.
+                </p>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                  <a href="${onboardingUrl}" style="display: inline-block; background-color: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
+                    Complete Your Onboarding
+                  </a>
+                </div>
               
               <p style="font-size: 12px; color: #999; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
                 Or copy and paste this link in your browser:<br>
@@ -218,31 +220,32 @@ router.post('/generate-link',
           </div>
         `;
 
-        await EmailNotificationService.sendEmail({
-          to: employeeEmail,
-          subject: emailSubject,
-          html: emailHtml,
-          from: process.env.FROM_EMAIL || process.env.SMTP_USER
-        });
+          await EmailNotificationService.sendEmail({
+            to: employeeEmail,
+            subject: emailSubject,
+            html: emailHtml,
+            from: process.env.FROM_EMAIL || process.env.SMTP_USER
+          });
 
-        // Update onboarding link to track email sent
-        onboardingLink.emailSentAt = new Date();
-        onboardingLink.emailSentBy = createdBy;
-        await onboardingLink.save();
+          // Update onboarding link to track email sent
+          onboardingLink.emailSentAt = new Date();
+          onboardingLink.emailSentBy = createdBy;
+          await onboardingLink.save();
 
-        logger.info('Onboarding email sent successfully', {
-          employeeEmail,
-          employeeName,
-          linkId: onboardingLink._id
-        });
-      } catch (emailError) {
-        logger.error('Failed to send onboarding email', {
-          error: emailError.message,
-          employeeEmail,
-          employeeName
-        });
-        // Don't fail the entire request if email fails - link is still created
-      }
+          logger.info('Onboarding email sent successfully', {
+            employeeEmail,
+            employeeName,
+            linkId: onboardingLink._id
+          });
+        } catch (emailError) {
+          logger.error('Failed to send onboarding email', {
+            error: emailError.message,
+            employeeEmail,
+            employeeName
+          });
+          // Don't fail the entire request if email fails - link is still created
+        }
+      })();  // Execute immediately but don't await
 
       res.status(201).json({
         success: true,

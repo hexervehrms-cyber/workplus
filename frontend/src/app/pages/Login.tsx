@@ -54,7 +54,7 @@ export default function Login() {
   useEffect(() => {
     if (user && !authLoading) {
       const from = (location.state as any)?.from?.pathname || roleRedirect;
-      console.log('🔄 User already logged in, redirecting to:', from, 'Role:', user.role);
+      console.log('🔄 User already logged in, redirecting to:', from, 'Role:', user.role, 'User:', user);
       navigate(from, { replace: true });
     }
   }, [user, authLoading, navigate, location.state, roleRedirect]);
@@ -109,7 +109,13 @@ export default function Login() {
     try {
       const result = await login(email.trim().toLowerCase(), password);
 
+      console.log('🔐 Login result:', {
+        success: result.success,
+        error: result.error
+      });
+
       if (result.success) {
+        console.log('✅ Login successful, waiting for redirect...');
         try {
           if (rememberMe) {
             localStorage.setItem(REMEMBER_EMAIL_KEY, email.trim().toLowerCase());

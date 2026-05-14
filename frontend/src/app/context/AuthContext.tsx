@@ -105,7 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Initialize auth from Redis session via /api/auth/me endpoint
+  // Initialize auth from Redis session via /api/auth/me endpoint - ONLY on mount
   useEffect(() => {
     let cancelled = false;
 
@@ -200,11 +200,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await finish();
     };
 
-    void initializeAuth();
+    // Only initialize on mount, not after login
+    if (!isInitialized) {
+      void initializeAuth();
+    }
+
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isInitialized]);
 
   // Session check interval — attempt refresh before forcing logout when access token expires
   useEffect(() => {
@@ -258,7 +262,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
 
     try {
+      console.log('🔐 LOGIN START - Email:', email);
       const result = await AuthService.login(email, password);
+      
+      console.log('🔐 LOGIN RESULT:', {
+        success: result.success,
+        userEmail: result.user?.email,
+        userRole: result.user?.role,
+        userRoleType: typeof result.user?.role,
+        fullUser: result.user
+      });
       
       if (result.success && result.user) {
         // Verify role is present and valid
@@ -272,7 +285,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Validate role is one of the expected values
         const validRoles = ['super_admin', 'admin', 'hr', 'manager', 'accountant', 'employee'];
         if (!validRoles.includes(result.user.role)) {
-          console.error('❌ Invalid role received:', result.user.role);
+          console.error('❌ Invalid role received:', result.user.role, 'Type:', typeof result.user.role);
           toast.error('Login failed: Invalid user role');
           setLoading(false);
           return { success: false, error: 'Invalid user role' };
@@ -282,11 +295,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           id: result.user.id,
           email: result.user.email,
           role: result.user.role,
+          roleType: typeof result.user.role,
           name: result.user.name
         });
 
         // Update user state - this will trigger RoleBasedRedirect
+        console.log('🔐 Setting user state with role:', result.user.role);
         setUser(result.user);
+        setLoading(false);
+        setIsInitialized(true); // Mark as initialized so we don't re-fetch
         toast.success(`Welcome back, ${result.user.name}!`);
         
         // Return success - RoleBasedRedirect will handle navigation

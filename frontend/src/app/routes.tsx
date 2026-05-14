@@ -1,5 +1,5 @@
 import { createBrowserRouter, Navigate } from 'react-router';
-import React, { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { MainLayout } from './layouts/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -14,7 +14,13 @@ function RoleBasedRedirect() {
   const [redirectPath, setRedirectPath] = useState<string | null>(null);
   
   useEffect(() => {
-    console.log('🔍 RoleBasedRedirect - Auth state:', { user: user?.email, role: user?.role, loading });
+    console.log('🔍 RoleBasedRedirect - Auth state changed:', { 
+      userEmail: user?.email, 
+      userRole: user?.role,
+      userRoleType: typeof user?.role,
+      loading,
+      fullUser: user
+    });
 
     if (loading) {
       console.log('⏳ Still loading auth, waiting...');
@@ -43,7 +49,7 @@ function RoleBasedRedirect() {
       // Validate role is one of the expected values
       const validRoles = ['super_admin', 'admin', 'hr', 'manager', 'accountant', 'employee'];
       if (!validRoles.includes(user.role)) {
-        console.error('❌ Invalid role:', user.role);
+        console.error('❌ Invalid role:', user.role, 'Type:', typeof user.role);
         setRedirectPath('/login');
         setVerifying(false);
         return;
@@ -55,18 +61,31 @@ function RoleBasedRedirect() {
       switch (user.role) {
         case 'super_admin':
           path = '/super-admin';
+          console.log('✅ Role is super_admin, redirecting to /super-admin');
           break;
         case 'admin':
           path = '/admin';
+          console.log('✅ Role is admin, redirecting to /admin');
           break;
         case 'employee':
+          path = '/employee';
+          console.log('✅ Role is employee, redirecting to /employee');
+          break;
         case 'hr':
+          path = '/employee';
+          console.log('✅ Role is hr, redirecting to /employee');
+          break;
         case 'manager':
+          path = '/employee';
+          console.log('✅ Role is manager, redirecting to /employee');
+          break;
         case 'accountant':
           path = '/employee';
+          console.log('✅ Role is accountant, redirecting to /employee');
           break;
         default:
           path = '/employee';
+          console.warn('⚠️ Unknown role, defaulting to /employee');
       }
 
       console.log('✅ RoleBasedRedirect - User role:', user.role, 'Redirecting to:', path);

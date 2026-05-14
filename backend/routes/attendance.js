@@ -1097,7 +1097,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     res.json({
       success: true,
       message: 'Break ended successfully',
-      data: updatedAttendance
+      data: { attendance: updatedAttendance, liveStatus }
     });
 
   } catch (err) {

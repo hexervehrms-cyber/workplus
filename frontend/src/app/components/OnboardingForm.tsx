@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Upload, Check, AlertCircle, Lock } from 'lucide-react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
@@ -21,6 +21,7 @@ interface FormData {
   gender: string;
   address: string;
   avatar: File | null;
+  password: string;
   
   // Official Information
   employeeId: string;
@@ -55,6 +56,16 @@ const OnboardingForm: React.FC<{
   onSubmit?: (data: any) => void;
 }> = ({ isHRMode = false, employeeId = '', onSubmit }) => {
   const [currentSection, setCurrentSection] = useState(0);
+  const [token, setToken] = useState<string>('');
+  
+  // Extract token from URL on mount
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlToken = urlParams.get('token') || window.location.pathname.split('/').pop();
+    if (urlToken) {
+      setToken(urlToken);
+    }
+  }, []);
   const [formData, setFormData] = useState<FormData>({
     firstName: '',
     lastName: '',
@@ -64,6 +75,7 @@ const OnboardingForm: React.FC<{
     gender: '',
     address: '',
     avatar: null,
+    password: '',
     employeeId: employeeId,
     joiningDate: '',
     department: '',
@@ -159,15 +171,41 @@ const OnboardingForm: React.FC<{
     // Create FormData for file uploads
     const formDataToSend = new FormData();
     
-    // Add all form fields
-    Object.keys(formData).forEach(key => {
-      if (key === 'avatar' && formData[key]) {
-        // Handle avatar file separately
-        formDataToSend.append('avatar', formData[key]);
-      } else if (key !== 'avatar') {
-        formDataToSend.append(key, formData[key]);
-      }
-    });
+    // Add token
+    if (token) {
+      formDataToSend.append('token', token);
+    }
+    
+    // Add password (required)
+    if (!formData.password) {
+      alert('Password is required');
+      return;
+    }
+    formDataToSend.append('password', formData.password);
+    
+    // Add personal info fields
+    formDataToSend.append('firstName', formData.firstName);
+    formDataToSend.append('lastName', formData.lastName);
+    formDataToSend.append('phone', formData.phone);
+    formDataToSend.append('dateOfBirth', formData.dateOfBirth);
+    formDataToSend.append('gender', formData.gender);
+    formDataToSend.append('address', formData.address);
+    
+    // Add sensitive info fields
+    formDataToSend.append('aadharNumber', formData.aadharNumber);
+    formDataToSend.append('panNumber', formData.panNumber);
+    formDataToSend.append('bankAccount', formData.bankAccount);
+    formDataToSend.append('ifscCode', formData.ifscCode);
+    
+    // Add emergency contact fields
+    formDataToSend.append('emergencyName', formData.emergencyName);
+    formDataToSend.append('emergencyRelation', formData.emergencyRelation);
+    formDataToSend.append('emergencyPhone', formData.emergencyPhone);
+    
+    // Add avatar if present
+    if (formData.avatar) {
+      formDataToSend.append('avatar', formData.avatar);
+    }
     
     // Add documents
     documents.forEach((doc, index) => {
@@ -311,6 +349,19 @@ const OnboardingForm: React.FC<{
             placeholder="Enter complete address"
             rows={3}
           />
+        </div>
+        <div className="col-span-2">
+          <Label>Password * (For Login)</Label>
+          <Input 
+            type="password"
+            value={formData.password} 
+            onChange={(e) => handleInputChange('password', e.target.value)}
+            className="mt-2 rounded-xl" 
+            placeholder="Enter a secure password (minimum 6 characters)"
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            You'll use this password to log in to your account
+          </p>
         </div>
       </div>
     </Card>

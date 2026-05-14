@@ -299,7 +299,8 @@ router.post('/send-email',
         to: employeeEmail,
         subject: emailSubject,
         html: emailHtml,
-        from: process.env.FROM_EMAIL || process.env.SMTP_USER
+        from: process.env.FROM_EMAIL || process.env.SMTP_USER,
+        fromName: `${req.user.orgName || 'WorkPlus'} HR Team`
       });
 
       logger.info('Onboarding email sent successfully', {
@@ -392,7 +393,69 @@ router.get('/validate/:token',
  */
 router.post('/submit',
   asyncHandler(async (req, res) => {
-    const { token, profilePhoto, personalInfo, sensitiveInfo, emergencyContact, educationalDocuments, employmentDocuments, password } = req.body;
+    // Handle both JSON and FormData submissions
+    let token, profilePhoto, personalInfo, sensitiveInfo, emergencyContact, educationalDocuments, employmentDocuments, password;
+    
+    // Check if this is FormData (multipart/form-data) by checking for files
+    if (req.files || req.body.firstName) {
+      // FormData submission - extract fields from req.body
+      token = req.body.token;
+      password = req.body.password;
+      
+      // Parse personal info from individual fields
+      personalInfo = {
+        firstName: req.body.firstName,
+        lastName: req.body.lastName,
+        dateOfBirth: req.body.dateOfBirth,
+        gender: req.body.gender,
+        address: req.body.address,
+        phone: req.body.phone
+      };
+      
+      // Parse sensitive info
+      sensitiveInfo = {
+        aadharNumber: req.body.aadharNumber,
+        panNumber: req.body.panNumber,
+        bankAccount: req.body.bankAccount,
+        ifscCode: req.body.ifscCode
+      };
+      
+      // Parse emergency contact
+      emergencyContact = {
+        name: req.body.emergencyName,
+        relation: req.body.emergencyRelation,
+        phone: req.body.emergencyPhone
+      };
+      
+      // Handle file uploads
+      profilePhoto = req.files?.avatar?.[0] || null;
+      employmentDocuments = [];
+      
+      // Collect uploaded documents
+      if (req.files) {
+        Object.keys(req.files).forEach(key => {
+          if (key.startsWith('document_')) {
+            const file = req.files[key][0];
+            employmentDocuments.push({
+              name: file.originalname,
+              type: req.body[key.replace('document_', 'document_') + '_type'] || 'document',
+              url: file.path || file.filename,
+              size: file.size
+            });
+          }
+        });
+      }
+    } else {
+      // JSON submission
+      token = req.body.token;
+      profilePhoto = req.body.profilePhoto;
+      personalInfo = req.body.personalInfo;
+      sensitiveInfo = req.body.sensitiveInfo;
+      emergencyContact = req.body.emergencyContact;
+      educationalDocuments = req.body.educationalDocuments;
+      employmentDocuments = req.body.employmentDocuments;
+      password = req.body.password;
+    }
 
     try {
       logger.info('Onboarding submit request received', {
@@ -689,7 +752,8 @@ router.post('/submit',
             to: tokenData.employeeEmail,
             subject: emailSubject,
             html: emailHtml,
-            from: process.env.FROM_EMAIL || process.env.SMTP_USER
+            from: process.env.FROM_EMAIL || process.env.SMTP_USER,
+            fromName: `${tokenData.organizationName || 'WorkPlus'} HR Team`
           });
 
           logger.info('Onboarding confirmation email sent successfully', {

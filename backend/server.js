@@ -659,7 +659,8 @@ app.use("/api/users", authenticate, usersRoutes);
 app.use("/api/roles", authenticate, rolesRoutes);
 
 // Onboarding routes (mixed authentication - some public, some protected)
-app.use("/api/onboarding", onboardingRoutes);
+// Use multer for file uploads on onboarding routes
+app.use("/api/onboarding", upload.any(), onboardingRoutes);
 
 // Sales routes (with authentication)
 app.use("/api/sales/calls", authenticate, callsRoutes);

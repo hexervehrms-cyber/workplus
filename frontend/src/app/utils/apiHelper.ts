@@ -71,16 +71,20 @@ export const buildApiUrl = (endpoint: string): string => {
  */
 export const apiRequest = async <T = any>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit & { skipContentType?: boolean } = {}
 ): Promise<T> => {
   const url = buildApiUrl(endpoint);
   const token = TokenManager.get();
 
   const headers: HeadersInit = {
-    'Content-Type': 'application/json',
     ...(token && { Authorization: `Bearer ${token}` }),
     ...options.headers
   };
+
+  // Only set Content-Type if not FormData and not skipped
+  if (!options.skipContentType && !(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   const config: RequestInit = {
     ...options,
@@ -145,6 +149,16 @@ export const clearApiCache = (endpoint?: string) => {
 export const apiPost = async <T = any>(endpoint: string, data?: any): Promise<T> => {
   // Clear cache on POST (data mutation)
   clearApiCache();
+  
+  // Handle FormData separately - don't stringify it
+  if (data instanceof FormData) {
+    return apiRequest<T>(endpoint, {
+      method: 'POST',
+      body: data,
+      skipContentType: true // Don't set Content-Type header for FormData
+    });
+  }
+  
   return apiRequest<T>(endpoint, {
     method: 'POST',
     body: data ? JSON.stringify(data) : undefined

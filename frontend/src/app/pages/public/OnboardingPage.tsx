@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Textarea } from '../../components/ui/textarea';
 import { Badge } from '../../components/ui/badge';
 import { toast } from 'sonner';
+import { buildApiUrl } from '../../utils/apiHelper';
 
 interface FormData {
   // Personal Information
@@ -203,15 +204,28 @@ const OnboardingPage: React.FC = () => {
       }
 
       try {
-        const response = await fetch(`/api/onboarding/validate/${token}`);
+        // Use buildApiUrl to ensure correct API endpoint
+        const apiUrl = buildApiUrl(`/onboarding/validate/${token}`);
+        console.log('🔗 [ONBOARDING] Validating link:', { token: token.substring(0, 10) + '...', apiUrl });
+        
+        const response = await fetch(apiUrl, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include'
+        });
+        
         const data = await response.json();
 
         if (!response.ok) {
+          console.error('❌ [ONBOARDING] Validation failed:', { status: response.status, message: data.message });
           setError(data.message || 'Invalid or expired onboarding link');
           setValidating(false);
           return;
         }
 
+        console.log('✅ [ONBOARDING] Link validated successfully:', { employeeName: data.data?.employeeName });
         setOnboardingData(data.data);
         setFormData(prev => ({
           ...prev,
@@ -219,8 +233,8 @@ const OnboardingPage: React.FC = () => {
         }));
         setValidating(false);
       } catch (err) {
-        console.error('Validation error:', err);
-        setError('Failed to validate onboarding link');
+        console.error('❌ [ONBOARDING] Validation error:', err);
+        setError('Failed to validate onboarding link. Please check your connection and try again.');
         setValidating(false);
       }
     };
@@ -479,11 +493,15 @@ const OnboardingPage: React.FC = () => {
         category: selectedCategory
       }));
 
-      const response = await fetch('/api/onboarding/submit', {
+      const apiUrl = buildApiUrl('/onboarding/submit');
+      console.log('📤 [ONBOARDING] Submitting form:', { token: token.substring(0, 10) + '...', apiUrl });
+
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
+        credentials: 'include',
         body: JSON.stringify({
           token,
           profilePhoto: photoPreview, // Send the base64 photo

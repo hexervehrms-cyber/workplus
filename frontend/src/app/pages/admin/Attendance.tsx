@@ -6,7 +6,7 @@ import { Clock, Search, Filter, Calendar, CheckCircle, AlertCircle, Activity, Co
 import { Badge } from '../../components/ui/badge';
 import { apiClient } from '../../utils/api';
 import { toast } from 'sonner';
-import { apiGet, apiPost, buildFileUrl } from '../../utils/apiHelper';
+import { apiGet, apiPost, buildApiUrl } from '../../utils/apiHelper';
 import { TokenManager } from '../../utils/api';
 import realTimeSocket from '../../utils/realTimeSocket';
 
@@ -169,24 +169,51 @@ export default function AttendanceAdmin() {
         return;
       }
       
-      // Call the new bulk-export endpoint
-      const fileUrl = buildFileUrl(`/attendance/bulk-export?startDate=${exportStartDate}&endDate=${exportEndDate}`);
+      // Call the bulk-export endpoint with proper API URL
+      const apiUrl = buildApiUrl(`/attendance/bulk-export?startDate=${exportStartDate}&endDate=${exportEndDate}`);
       const token = TokenManager.get();
       
-      const response = await fetch(fileUrl, {
+      console.log('🔄 [EXPORT] Starting attendance export', {
+        url: apiUrl,
+        hasToken: !!token,
+        startDate: exportStartDate,
+        endDate: exportEndDate,
+        token: token ? token.substring(0, 20) + '...' : 'NO_TOKEN'
+      });
+      
+      if (!token) {
+        console.warn('⚠️ [EXPORT] No token found, attempting to refresh auth');
+        toast.error('Authentication required. Please log in again.');
+        return;
+      }
+      
+      const response = await fetch(apiUrl, {
+        method: 'GET',
         headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Accept': 'text/csv'
         },
         credentials: 'include'
+      });
+      
+      console.log('📊 [EXPORT] Response received', {
+        status: response.status,
+        statusText: response.statusText,
+        contentType: response.headers.get('content-type')
       });
       
       if (response.ok) {
         // Get the CSV content
         const csvContent = await response.text();
         
+        console.log('✅ [EXPORT] CSV content received', {
+          length: csvContent.length,
+          preview: csvContent.substring(0, 100)
+        });
+        
         // Create and download CSV file
-        const blob = new Blob([csvContent], { type: 'text/csv' });
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = window.URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
@@ -196,13 +223,27 @@ export default function AttendanceAdmin() {
         document.body.removeChild(link);
         window.URL.revokeObjectURL(url);
         
+        console.log('✅ [EXPORT] File downloaded successfully');
         toast.success('Attendance data exported successfully');
       } else {
-        throw new Error('Failed to export');
+        const errorText = await response.text();
+        console.error('❌ [EXPORT] Export error response:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText
+        });
+        
+        // Try to parse as JSON for better error message
+        try {
+          const errorJson = JSON.parse(errorText);
+          throw new Error(errorJson.message || 'Failed to export');
+        } catch {
+          throw new Error(`Export failed: ${response.status} ${response.statusText}`);
+        }
       }
     } catch (error) {
-      console.error('Export error:', error);
-      toast.error('Failed to export attendance data');
+      console.error('❌ [EXPORT] Export error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to export attendance data');
     } finally {
       setExportLoading(false);
     }

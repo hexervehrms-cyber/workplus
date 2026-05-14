@@ -15,7 +15,10 @@ function RoleBasedRedirect() {
   
   useEffect(() => {
     const verifyAndRedirect = async () => {
+      console.log('🔍 RoleBasedRedirect - Checking user:', user);
+
       if (!user) {
+        console.log('❌ No user found, redirecting to login');
         setRedirectPath('/login');
         setVerifying(false);
         return;
@@ -23,24 +26,42 @@ function RoleBasedRedirect() {
 
       // Verify role is valid
       if (!user.role) {
-        console.error('User object missing role field');
+        console.error('❌ User object missing role field:', user);
         setRedirectPath('/login');
         setVerifying(false);
         return;
       }
 
-      // Determine redirect path based on role
-      let path = '/employee'; // Default fallback
-      
-      if (user.role === 'super_admin') {
-        path = '/super-admin';
-      } else if (user.role === 'admin') {
-        path = '/admin';
-      } else if (['employee', 'hr', 'manager', 'accountant'].includes(user.role)) {
-        path = '/employee';
+      // Validate role is one of the expected values
+      const validRoles = ['super_admin', 'admin', 'hr', 'manager', 'accountant', 'employee'];
+      if (!validRoles.includes(user.role)) {
+        console.error('❌ Invalid role:', user.role);
+        setRedirectPath('/login');
+        setVerifying(false);
+        return;
       }
 
-      console.log('RoleBasedRedirect - User role:', user.role, 'Redirecting to:', path);
+      // Determine redirect path based on role - CRITICAL: Must match role exactly
+      let path = '/employee'; // Default fallback
+      
+      switch (user.role) {
+        case 'super_admin':
+          path = '/super-admin';
+          break;
+        case 'admin':
+          path = '/admin';
+          break;
+        case 'employee':
+        case 'hr':
+        case 'manager':
+        case 'accountant':
+          path = '/employee';
+          break;
+        default:
+          path = '/employee';
+      }
+
+      console.log('✅ RoleBasedRedirect - User role:', user.role, 'Redirecting to:', path);
       setRedirectPath(path);
       setVerifying(false);
     };
@@ -53,9 +74,11 @@ function RoleBasedRedirect() {
   }
 
   if (!redirectPath) {
+    console.log('⚠️ No redirect path determined, going to login');
     return <Navigate to="/login" replace />;
   }
 
+  console.log('🔄 Navigating to:', redirectPath);
   return <Navigate to={redirectPath} replace />;
 }
 

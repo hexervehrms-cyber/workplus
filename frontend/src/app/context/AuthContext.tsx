@@ -304,31 +304,57 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (result.success && result.user) {
         // Verify role is present and valid
         if (!result.user.role) {
-          console.error('Login response missing role field');
+          console.error('❌ Login response missing role field', result.user);
           toast.error('Login failed: Invalid user data');
           setLoading(false);
           return { success: false, error: 'Invalid user data' };
         }
 
+        // Validate role is one of the expected values
+        const validRoles = ['super_admin', 'admin', 'hr', 'manager', 'accountant', 'employee'];
+        if (!validRoles.includes(result.user.role)) {
+          console.error('❌ Invalid role received:', result.user.role);
+          toast.error('Login failed: Invalid user role');
+          setLoading(false);
+          return { success: false, error: 'Invalid user role' };
+        }
+
+        console.log('✅ Login successful - User data:', {
+          id: result.user.id,
+          email: result.user.email,
+          role: result.user.role,
+          name: result.user.name
+        });
+
+        // Update user state
         setUser(result.user);
         toast.success(`Welcome back, ${result.user.name}!`);
         
-        // Determine redirect path based on role
+        // Determine redirect path based on role - CRITICAL: Must match role exactly
         let redirectPath = '/employee'; // Default fallback
         
-        if (result.user.role === 'super_admin') {
-          redirectPath = '/super-admin';
-        } else if (result.user.role === 'admin') {
-          redirectPath = '/admin';
-        } else if (['employee', 'hr', 'manager', 'accountant'].includes(result.user.role)) {
-          redirectPath = '/employee';
+        switch (result.user.role) {
+          case 'super_admin':
+            redirectPath = '/super-admin';
+            break;
+          case 'admin':
+            redirectPath = '/admin';
+            break;
+          case 'employee':
+          case 'hr':
+          case 'manager':
+          case 'accountant':
+            redirectPath = '/employee';
+            break;
+          default:
+            redirectPath = '/employee';
         }
         
-        console.log('Login successful - redirecting to:', redirectPath, 'Role:', result.user.role);
+        console.log('🔄 Redirecting to:', redirectPath, 'for role:', result.user.role);
         
         // Use a small delay to ensure the UI updates before redirect
         setTimeout(() => {
-          // Use window.location.href with a hash to force navigation while keeping the app state
+          // Use window.location.href to force a full page navigation
           window.location.href = redirectPath;
         }, 100);
         
@@ -339,7 +365,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
       return { success: false, error: 'Login failed' };
     } catch (error: any) {
-      console.error('Login error:', error);
+      console.error('❌ Login error:', error);
       
       let errorMessage = 'Login failed. Please try again.';
       
@@ -412,18 +438,31 @@ export function useHasRole(roles: UserRole | UserRole[]): boolean {
 export function useRoleRedirect(): string {
   const { user } = useAuth();
   
-  if (!user) return '/login';
+  if (!user) {
+    console.log('⚠️ useRoleRedirect - No user, returning /login');
+    return '/login';
+  }
+  
+  let path = '/employee'; // Default fallback
   
   switch (user.role) {
     case 'super_admin':
-      return '/super-admin';
+      path = '/super-admin';
+      break;
     case 'admin':
-      return '/admin';
+      path = '/admin';
+      break;
     case 'employee':
     case 'hr':
     case 'manager':
     case 'accountant':
+      path = '/employee';
+      break;
     default:
-      return '/employee';
+      console.warn('⚠️ useRoleRedirect - Unknown role:', user.role);
+      path = '/employee';
   }
+  
+  console.log('✅ useRoleRedirect - Role:', user.role, 'Path:', path);
+  return path;
 }

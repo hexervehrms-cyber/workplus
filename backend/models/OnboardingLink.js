@@ -10,7 +10,9 @@ const onboardingLinkSchema = new mongoose.Schema(
     organizationId: { type: String, default: "ORG-DEFAULT" },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     expiresAt: { type: Date },
-    isUsed: { type: Boolean, default: false }
+    isUsed: { type: Boolean, default: false },
+    emailSentAt: { type: Date, default: null },
+    emailSentBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }
   },
   { timestamps: true }
 );

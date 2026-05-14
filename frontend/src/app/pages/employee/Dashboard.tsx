@@ -30,6 +30,45 @@ import {
 } from '../../components/ui/table';
 
 // ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+interface AttendanceEvent {
+  employeeId: string;
+  checkInTime?: string;
+  checkOutTime?: string;
+}
+
+interface AttendanceRecord {
+  date: string;
+  checkIn?: string;
+  checkOut?: string;
+  hoursWorked?: number;
+  status?: string;
+  breaks?: BreakRecord[];
+}
+
+interface BreakRecord {
+  date?: string;
+  startTime: string;
+  endTime: string;
+  duration: number;
+  type?: string;
+  breakType?: string;
+}
+
+// ============================================================================
+// DEBUG UTILITY - Conditional logging based on environment
+// ============================================================================
+const DEBUG_ENABLED = import.meta.env.VITE_ENABLE_DEBUG === 'true';
+const debug = {
+  log: (...args: any[]) => DEBUG_ENABLED && console.log(...args),
+  error: (...args: any[]) => DEBUG_ENABLED && console.error(...args),
+  warn: (...args: any[]) => DEBUG_ENABLED && console.warn(...args),
+  group: (label: string) => DEBUG_ENABLED && console.group(label),
+  groupEnd: () => DEBUG_ENABLED && console.groupEnd(),
+};
+
+// ============================================================================
 // ATTENDANCE STATE MACHINE - Deterministic state transitions
 // ============================================================================
 type AttendanceUIState = 'IDLE' | 'WORKING' | 'ON_BREAK' | 'IN_MEETING' | 'SYNCING' | 'CHECKING_OUT';
@@ -148,18 +187,18 @@ export default function EmployeeDashboard() {
 
   // Debug: Log todayAttendance changes
   useEffect(() => {
-    console.group('[ATTENDANCE STATE]');
-    console.log('🔍 [DASHBOARD] todayAttendance changed:', {
+    debug.group('[ATTENDANCE STATE]');
+    debug.log('🔍 [DASHBOARD] todayAttendance changed:', {
       isOnBreak: todayAttendance.isOnBreak,
       isCheckedIn: todayAttendance.isCheckedIn,
       breakType: todayAttendance.breakType,
       uiState: attendanceUIState
     });
-    console.log('⏱️ Sync timing:', {
+    debug.log('⏱️ Sync timing:', {
       lastSocketEventTime,
       timeSinceSocket: Date.now() - lastSocketEventTime
     });
-    console.groupEnd();
+    debug.groupEnd();
   }, [todayAttendance, attendanceUIState, lastSocketEventTime]);
 
   // ============================================================================
@@ -174,7 +213,7 @@ export default function EmployeeDashboard() {
     const recentSocket = timeSinceSocket < SYNC_CONFIG.SOCKET_PROTECTION_MS;
 
     if (recentAction || recentSocket) {
-      console.log('🛡️ [STALE PROTECTION] Blocking refresh:', {
+      debug.log('🛡️ [STALE PROTECTION] Blocking refresh:', {
         recentAction,
         recentSocket,
         timeSinceAction,
@@ -192,13 +231,13 @@ export default function EmployeeDashboard() {
     if (!user) return;
 
     if (!_forceRefresh && isRecentlyUpdated()) {
-      console.log('⏸️ [FETCH] Skipping due to recent update');
+      debug.log('⏸️ [FETCH] Skipping due to recent update');
       return;
     }
 
     // FIX #2: Use ref (not state) to read live actionInProgress value
     if (!_forceRefresh && actionInProgressRef.current) {
-      console.log('⏸️ [FETCH] Skipping because action is in progress');
+      debug.log('⏸️ [FETCH] Skipping because action is in progress');
       return;
     }
 
@@ -210,8 +249,8 @@ export default function EmployeeDashboard() {
         setLoading(false);
       }, SYNC_CONFIG.ACTION_TIMEOUT_MS);
 
-      console.group('[FETCH DASHBOARD]');
-      console.log('⚡ Fetching all dashboard data in parallel...');
+      debug.group('[FETCH DASHBOARD]');
+      debug.log('⚡ Fetching all dashboard data in parallel...');
 
       const [attendanceResult, holidaysResult] = await Promise.allSettled([
         apiGet('/attendance/today'),
@@ -242,7 +281,7 @@ export default function EmployeeDashboard() {
         }
       }
 
-      console.log('📊 Attendance API Result:', {
+      debug.log('📊 Attendance API Result:', {
         status: attendanceResult.status,
         success: attendanceResult.status === 'fulfilled' ? attendanceResult.value?.success : false,
         hasData: attendanceResult.status === 'fulfilled' ? !!attendanceResult.value?.data : false,
@@ -257,7 +296,7 @@ export default function EmployeeDashboard() {
       const attendanceData = attendanceApiOk ? attendanceResult.value.data : null;
 
       if (!attendanceApiOk) {
-        console.warn('📊 Attendance sync skipped — no definitive server response; keeping cached/local state', {
+        debug.warn('📊 Attendance sync skipped — no definitive server response; keeping cached/local state', {
           status: attendanceResult.status,
           success: attendanceResult.status === 'fulfilled' ? attendanceResult.value?.success : undefined,
           error: attendanceResult.status === 'rejected' ? String((attendanceResult.reason as Error)?.message || attendanceResult.reason) : undefined
@@ -304,7 +343,7 @@ export default function EmployeeDashboard() {
           }
         }
 
-        console.log('✅ Updating attendance from API:', {
+        debug.log('✅ Updating attendance from API:', {
           isCheckedIn: isCurrentlyCheckedIn,
           isOnBreak: calculatedIsOnBreak,
           breakType: calculatedBreakType
@@ -362,9 +401,9 @@ export default function EmployeeDashboard() {
         performance: "85%"
       });
 
-      console.groupEnd();
+      debug.groupEnd();
     } catch (err) {
-      console.error('Failed to fetch dashboard data:', err);
+      debug.error('Failed to fetch dashboard data:', err);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
       setLoading(false);
@@ -402,7 +441,7 @@ export default function EmployeeDashboard() {
         }
       }
     } catch (err) {
-      console.error('Error fetching employee data:', err);
+      debug.error('Error fetching employee data:', err);
     }
 
     return null;
@@ -411,21 +450,21 @@ export default function EmployeeDashboard() {
   const safeRefresh = useCallback(
     async (forceRefresh = false) => {
       if (disableRefreshRef.current && !forceRefresh) {
-        console.log('⏸️ [SAFE REFRESH] Refresh disabled, skipping');
+        debug.log('⏸️ [SAFE REFRESH] Refresh disabled, skipping');
         return;
       }
 
       if (isRecentlyUpdated() && !forceRefresh) {
-        console.log('⏸️ [SAFE REFRESH] Recently updated, skipping');
+        debug.log('⏸️ [SAFE REFRESH] Recently updated, skipping');
         return;
       }
 
       if (actionInProgressRef.current) {
-        console.log('⏸️ [SAFE REFRESH] Action in progress, skipping to avoid overwriting optimistic state');
+        debug.log('⏸️ [SAFE REFRESH] Action in progress, skipping to avoid overwriting optimistic state');
         return;
       }
 
-      console.log('🔄 [SAFE REFRESH] Starting safe refresh');
+      debug.log('🔄 [SAFE REFRESH] Starting safe refresh');
       setDisableRefresh(true);
 
       try {
@@ -468,15 +507,15 @@ export default function EmployeeDashboard() {
     // Match realTimeSocket: org can be orgId or tenantId; listeners only need employeeId + user session
     if (!user?.id || !employeeIdRef.current) return;
 
-    console.group('[SOCKET LISTENERS SETUP]');
-    console.log('📡 [EMPLOYEE-DASHBOARD] Setting up Socket.IO listeners with employeeId:', employeeIdRef.current);
+    debug.group('[SOCKET LISTENERS SETUP]');
+    debug.log('📡 [EMPLOYEE-DASHBOARD] Setting up Socket.IO listeners with employeeId:', employeeIdRef.current);
 
     // CRITICAL FIX: Use refs instead of state to prevent stale closures
     const handleBreakStarted = (data: any) => {
-      console.log('📡 [EMPLOYEE-DASHBOARD] break:started event received:', data);
+      debug.log('📡 [EMPLOYEE-DASHBOARD] break:started event received:', data);
       // Use ref, not state - always has current value
       if (String(data.employeeId) === String(employeeIdRef.current)) {
-        console.log('📡 [EMPLOYEE-DASHBOARD] Break started for current employee, updating state');
+        debug.log('📡 [EMPLOYEE-DASHBOARD] Break started for current employee, updating state');
         setLastSocketEventTime(Date.now());
         updateAttendance({
           isOnBreak: true,
@@ -499,10 +538,10 @@ export default function EmployeeDashboard() {
       }
     };
 
-    const handleCheckedIn = (data: any) => {
-      console.log('📡 [EMPLOYEE-DASHBOARD] attendance:checked_in event received:', data);
+    const handleCheckedIn = (data: AttendanceEvent) => {
+      debug.log('📡 [EMPLOYEE-DASHBOARD] attendance:checked_in event received:', data);
       if (String(data.employeeId) === String(employeeIdRef.current)) {
-        console.log('📡 [EMPLOYEE-DASHBOARD] Check-in for current employee, updating state');
+        debug.log('📡 [EMPLOYEE-DASHBOARD] Check-in for current employee, updating state');
         setLastSocketEventTime(Date.now());
         updateAttendance({
           isCheckedIn: true,
@@ -513,15 +552,14 @@ export default function EmployeeDashboard() {
       }
     };
 
-    const handleCheckedOut = (data: any) => {
-      console.log('📡 [EMPLOYEE-DASHBOARD] attendance:checked_out event received:', data);
+    const handleCheckedOut = (data: AttendanceEvent) => {
+      debug.log('📡 [EMPLOYEE-DASHBOARD] attendance:checked_out event received:', data);
       if (String(data.employeeId) === String(employeeIdRef.current)) {
-        console.log('📡 [EMPLOYEE-DASHBOARD] Check-out for current employee, updating state');
+        debug.log('📡 [EMPLOYEE-DASHBOARD] Check-out for current employee, updating state');
         setLastSocketEventTime(Date.now());
         updateAttendance({
           isCheckedIn: false,
           checkOutTime: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-          hoursWorked: data.hoursWorked || 0,
           isOnBreak: false
         }, 'socket');
       }
@@ -533,11 +571,11 @@ export default function EmployeeDashboard() {
     realTimeSocket.on('attendance:checked_in', handleCheckedIn);
     realTimeSocket.on('attendance:checked_out', handleCheckedOut);
 
-    console.groupEnd();
+    debug.groupEnd();
 
     // CRITICAL FIX: Clean up all listeners on unmount
     return () => {
-      console.log('📡 [EMPLOYEE-DASHBOARD] Cleaning up Socket.IO listeners');
+      debug.log('📡 [EMPLOYEE-DASHBOARD] Cleaning up Socket.IO listeners');
       unsubscribeBreakStarted?.();
       unsubscribeBreakEnded?.();
       realTimeSocket.off('attendance:checked_in', handleCheckedIn);
@@ -558,18 +596,18 @@ export default function EmployeeDashboard() {
       if (result.success && Array.isArray(result.data)) {
         setAttendanceHistory(result.data);
 
-        const breaks: any[] = [];
-        result.data.forEach((record: any) => {
+        const breaks: BreakRecord[] = [];
+        result.data.forEach((record: AttendanceRecord) => {
           if (record.breaks && Array.isArray(record.breaks)) {
-            record.breaks.forEach((breakItem: any) => {
+            record.breaks.forEach((breakItem: BreakRecord) => {
               breaks.push({
                 date: record.date,
                 breakType: breakItem.breakType || 'regular',
                 startTime: breakItem.startTime,
                 endTime: breakItem.endTime,
                 duration: breakItem.endTime && breakItem.startTime
-                  ? ((new Date(breakItem.endTime).getTime() - new Date(breakItem.startTime).getTime()) / (1000 * 60)).toFixed(0)
-                  : 'In Progress'
+                  ? Math.round((new Date(breakItem.endTime).getTime() - new Date(breakItem.startTime).getTime()) / (1000 * 60))
+                  : 0
               });
             });
           }
@@ -577,7 +615,7 @@ export default function EmployeeDashboard() {
         setBreakHistory(breaks);
       }
     } catch (err) {
-      console.warn('Failed to fetch attendance history:', err);
+      debug.warn('Failed to fetch attendance history:', err);
     } finally {
       setAttendanceLoading(false);
     }
@@ -600,7 +638,7 @@ export default function EmployeeDashboard() {
 
       // Use refs directly to avoid dependency array issues
       if (!actionInProgressRef.current && !disableRefreshRef.current && !isRecentlyUpdated()) {
-        console.log('⏰ Periodic refresh triggered');
+        debug.log('⏰ Periodic refresh triggered');
         safeRefresh();
       }
     }, SYNC_CONFIG.PERIODIC_REFRESH_MS);
@@ -675,7 +713,7 @@ export default function EmployeeDashboard() {
     
     // Prevent starting break if already on break
     if (todayAttendance.isOnBreak) {
-      console.log('⏸️ [BREAK START] Already on break, skipping');
+      debug.log('⏸️ [BREAK START] Already on break, skipping');
       return;
     }
     
@@ -687,14 +725,14 @@ export default function EmployeeDashboard() {
       const token = TokenManager.get();
       const idempotencyKey = `break-start-${resolvedEmployeeId || 'me'}-${Date.now()}`;
       
-      const payload: any = {
+      const payload: { breakType: string; notes: string; idempotencyKey: string; employeeId?: string | null } = {
         breakType,
         notes: `Break started`,
         idempotencyKey
       };
       if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
       
-      console.log('🔄 [BREAK START] Sending request:', { breakType, employeeId: resolvedEmployeeId });
+      debug.log('🔄 [BREAK START] Sending request:', { breakType, employeeId: resolvedEmployeeId });
       
       // Optimistic update - immediately show break started
       updateAttendance({
@@ -727,12 +765,12 @@ export default function EmployeeDashboard() {
           } catch (e) {
             // Response body is not JSON
           }
-          console.error('❌ [BREAK START] API Error:', errorMessage);
+          debug.error('❌ [BREAK START] API Error:', errorMessage);
           throw new Error(errorMessage);
         }
 
         const result = await response.json();
-        console.log('✅ [BREAK START] Success:', result);
+        debug.log('✅ [BREAK START] Success:', result);
 
         // Confirm optimistic update with server response
         const liveStatus = result.data?.liveStatus;
@@ -754,7 +792,7 @@ export default function EmployeeDashboard() {
         clearTimeout(timeoutId);
       }
     } catch (error) {
-      console.error('❌ [BREAK START] Error:', error);
+      debug.error('❌ [BREAK START] Error:', error);
       // Rollback optimistic update on error
       updateAttendance({
         isOnBreak: false,
@@ -779,25 +817,25 @@ export default function EmployeeDashboard() {
       return;
     }
     
+    let wasOnBreak = todayAttendance.isOnBreak;
+    let prevBreakType = todayAttendance.breakType;
+    let prevBreakDuration = todayAttendance.currentBreakDuration;
+
     try {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
-
-      const wasOnBreak = todayAttendance.isOnBreak;
-      const prevBreakType = todayAttendance.breakType;
-      const prevBreakDuration = todayAttendance.currentBreakDuration;
       
       const resolvedEmployeeId = await ensureEmployeeId();
       const token = TokenManager.get();
       const idempotencyKey = `break-end-${resolvedEmployeeId || 'me'}-${Date.now()}`;
       
-      const payload: any = {
+      const payload: { notes: string; idempotencyKey: string; employeeId?: string | null } = {
         notes: 'Break ended',
         idempotencyKey
       };
       if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
       
-      console.log('🔄 [BREAK END] Sending request:', { employeeId: resolvedEmployeeId });
+      debug.log('🔄 [BREAK END] Sending request:', { employeeId: resolvedEmployeeId });
       
       // Optimistic update - immediately show break ended
       updateAttendance({
@@ -830,12 +868,12 @@ export default function EmployeeDashboard() {
           } catch (e) {
             // Response body is not JSON
           }
-          console.error('❌ [BREAK END] API Error:', errorMessage);
+          debug.error('❌ [BREAK END] API Error:', errorMessage);
           throw new Error(errorMessage);
         }
 
         const result = await response.json();
-        console.log('✅ [BREAK END] Success:', result);
+        debug.log('✅ [BREAK END] Success:', result);
 
         // Confirm optimistic update with server response
         const liveStatus = result.data?.liveStatus;
@@ -857,7 +895,7 @@ export default function EmployeeDashboard() {
         clearTimeout(timeoutId);
       }
     } catch (error) {
-      console.error('❌ [BREAK END] Error:', error);
+      debug.error('❌ [BREAK END] Error:', error);
       // Rollback optimistic update on error - restore previous state
       updateAttendance({
         isOnBreak: wasOnBreak,
@@ -879,7 +917,7 @@ export default function EmployeeDashboard() {
 
       const resolvedEmployeeId = await ensureEmployeeId();
       const token = TokenManager.get();
-      const payload: any = {
+      const payload: { notes: string; employeeId?: string | null } = {
         notes: 'Checked in'
       };
       if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
@@ -949,7 +987,7 @@ export default function EmployeeDashboard() {
 
       const resolvedEmployeeId = await ensureEmployeeId();
       const token = TokenManager.get();
-      const payload: any = {
+      const payload: { notes: string; employeeId?: string | null } = {
         notes: 'Checked out'
       };
       if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
@@ -1265,7 +1303,7 @@ export default function EmployeeDashboard() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {attendanceHistory.slice(0, 10).map((record: any, index: number) => (
+                    {attendanceHistory.slice(0, 10).map((record: AttendanceRecord, index: number) => (
                       <TableRow key={index}>
                         <TableCell className="font-medium">
                           {new Date(record.date).toLocaleDateString('en-US', {
@@ -1349,14 +1387,14 @@ export default function EmployeeDashboard() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {breakHistory.slice(0, 10).map((breakRecord: any, index: number) => (
+                    {breakHistory.slice(0, 10).map((breakRecord: BreakRecord, index: number) => (
                       <TableRow key={index}>
                         <TableCell className="font-medium">
-                          {new Date(breakRecord.date).toLocaleDateString('en-US', {
+                          {breakRecord.date ? new Date(breakRecord.date).toLocaleDateString('en-US', {
                             weekday: 'short',
                             month: 'short',
                             day: 'numeric'
-                          })}
+                          }) : 'N/A'}
                         </TableCell>
                         <TableCell>
                           <Badge

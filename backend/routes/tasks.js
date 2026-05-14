@@ -250,6 +250,87 @@ router.post("/", asyncHandler(async (req, res) => {
     });
   }
   
+  // Validate title is string and not empty
+  if (typeof title !== 'string' || title.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Task title must be a non-empty string"
+    });
+  }
+  
+  // Validate title length
+  if (title.length > 255) {
+    return res.status(400).json({
+      success: false,
+      message: "Task title must not exceed 255 characters"
+    });
+  }
+  
+  // Validate description if provided
+  if (description && typeof description !== 'string') {
+    return res.status(400).json({
+      success: false,
+      message: "Description must be a string"
+    });
+  }
+  
+  // Validate priority
+  const validPriorities = ['low', 'medium', 'high', 'urgent'];
+  if (!validPriorities.includes(priority)) {
+    return res.status(400).json({
+      success: false,
+      message: `Priority must be one of: ${validPriorities.join(', ')}`
+    });
+  }
+  
+  // Validate category
+  const validCategories = ['general', 'bug', 'feature', 'improvement', 'documentation'];
+  if (!validCategories.includes(category)) {
+    return res.status(400).json({
+      success: false,
+      message: `Category must be one of: ${validCategories.join(', ')}`
+    });
+  }
+  
+  // Validate visibility
+  const validVisibility = ['private', 'team', 'public'];
+  if (!validVisibility.includes(visibility)) {
+    return res.status(400).json({
+      success: false,
+      message: `Visibility must be one of: ${validVisibility.join(', ')}`
+    });
+  }
+  
+  // Validate tags array
+  if (!Array.isArray(tags)) {
+    return res.status(400).json({
+      success: false,
+      message: "Tags must be an array"
+    });
+  }
+  
+  // Validate dueDate if provided
+  if (dueDate) {
+    const parsedDate = new Date(dueDate);
+    if (isNaN(parsedDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid due date format"
+      });
+    }
+  }
+  
+  // Validate estimatedHours if provided
+  if (estimatedHours) {
+    const hours = parseFloat(estimatedHours);
+    if (isNaN(hours) || hours < 0 || hours > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: "Estimated hours must be a positive number not exceeding 1000"
+      });
+    }
+  }
+  
   // Validate assignedTo user exists and is in same organization
   const assignee = await User.findOne({ 
     _id: assignedTo, 
@@ -471,10 +552,19 @@ router.post("/:id/comments", asyncHandler(async (req, res) => {
   const userId = req.user?.userId;
   const { content } = req.body;
   
-  if (!content || !content.trim()) {
+  // Validate content
+  if (!content || typeof content !== 'string' || !content.trim()) {
     return res.status(400).json({
       success: false,
-      message: "Comment content is required"
+      message: "Comment content is required and must be a non-empty string"
+    });
+  }
+  
+  // Validate content length
+  if (content.length > 5000) {
+    return res.status(400).json({
+      success: false,
+      message: "Comment content must not exceed 5000 characters"
     });
   }
   

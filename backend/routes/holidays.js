@@ -131,6 +131,48 @@ router.post("/", asyncHandler(async (req, res) => {
     });
   }
   
+  // Validate name is string and not empty
+  if (typeof name !== 'string' || name.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Holiday name must be a non-empty string"
+    });
+  }
+  
+  // Validate date is valid
+  const parsedDate = new Date(date);
+  if (isNaN(parsedDate.getTime())) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid date format"
+    });
+  }
+  
+  // Validate type is one of allowed values
+  const validTypes = ['public', 'optional', 'restricted'];
+  if (!validTypes.includes(type)) {
+    return res.status(400).json({
+      success: false,
+      message: `Type must be one of: ${validTypes.join(', ')}`
+    });
+  }
+  
+  // Validate description if provided
+  if (description && typeof description !== 'string') {
+    return res.status(400).json({
+      success: false,
+      message: "Description must be a string"
+    });
+  }
+  
+  // Validate departments array if provided
+  if (departments && !Array.isArray(departments)) {
+    return res.status(400).json({
+      success: false,
+      message: "Departments must be an array"
+    });
+  }
+  
   // Check if holiday already exists on this date
   const existingHoliday = await Holiday.findOne({
     organizationId: orgId,

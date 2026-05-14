@@ -113,25 +113,23 @@ export default function PayrollCalculation() {
 
       const data = await apiPost('/payroll/calculate', {
         employeeId: formData.employeeId,
-          fromDate: formData.fromDate,
-          toDate: formData.toDate,
-          baseSalary: parseFloat(formData.baseSalary),
-          components: {},
-          deductions: {
-            advance: parseFloat(formData.advance) || 0,
-            loan: parseFloat(formData.loan) || 0
-          },
-          earnings: {
-            bonus: parseFloat(formData.bonus) || 0,
-            incentive: parseFloat(formData.incentive) || 0
-          },
-          notes: formData.notes
-        })
+        fromDate: formData.fromDate,
+        toDate: formData.toDate,
+        baseSalary: parseFloat(formData.baseSalary),
+        components: {},
+        deductions: {
+          advance: parseFloat(formData.advance) || 0,
+          loan: parseFloat(formData.loan) || 0
+        },
+        earnings: {
+          bonus: parseFloat(formData.bonus) || 0,
+          incentive: parseFloat(formData.incentive) || 0
+        },
+        notes: formData.notes
       });
 
-      if (!response.ok) throw new Error('Failed to calculate payroll');
+      if (!data.success) throw new Error('Failed to calculate payroll');
 
-      const data = await response.json();
       setPayrolls([data.data, ...payrolls]);
       setShowCalculateForm(false);
       setFormData({

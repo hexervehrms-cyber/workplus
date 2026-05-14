@@ -240,7 +240,7 @@ const OnboardingPage: React.FC = () => {
     };
 
     validateLink();
-  }, [token]);
+  }, [token, buildApiUrl]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;

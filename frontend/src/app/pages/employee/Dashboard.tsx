@@ -661,7 +661,16 @@ export default function EmployeeDashboard() {
   
   const handleBreakStart = async (breakType: 'regular' = 'regular') => {
     // Debounce: prevent multiple clicks
-    if (actionInProgressRef.current) return;
+    if (actionInProgressRef.current) {
+      console.log('⏸️ [BREAK START] Action already in progress, skipping');
+      return;
+    }
+    
+    // Prevent starting break if already on break
+    if (todayAttendance.isOnBreak) {
+      console.log('⏸️ [BREAK START] Already on break, skipping');
+      return;
+    }
     
     try {
       actionInProgressRef.current = true;
@@ -679,6 +688,13 @@ export default function EmployeeDashboard() {
       if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
       
       console.log('🔄 [BREAK START] Sending request:', { breakType, employeeId: resolvedEmployeeId });
+      
+      // Optimistic update - immediately show break started
+      updateAttendance({
+        isOnBreak: true,
+        breakType: breakType,
+        currentBreakDuration: 0
+      }, 'action');
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
@@ -711,23 +727,28 @@ export default function EmployeeDashboard() {
         const result = await response.json();
         console.log('✅ [BREAK START] Success:', result);
 
-        // Update state immediately - SAME PATTERN AS CHECK-IN
-        updateAttendance({
-          isOnBreak: true,
-          breakType: breakType,
-          currentBreakDuration: 0
-        }, 'action');
+        // Confirm optimistic update with server response
+        const liveStatus = result.data?.liveStatus;
+        if (liveStatus) {
+          updateAttendance({
+            isOnBreak: liveStatus.isOnBreak || true,
+            breakType: liveStatus.breakType || breakType,
+            currentBreakDuration: liveStatus.currentBreakDuration || 0
+          }, 'action');
+        }
 
         clearApiCache('/attendance/today');
+        
+        // Wait for socket event before refreshing
         setTimeout(() => {
           void safeRefresh(true);
-        }, 600);
+        }, SYNC_CONFIG.SOCKET_WAIT_MS);
       } finally {
         clearTimeout(timeoutId);
       }
     } catch (error) {
       console.error('❌ [BREAK START] Error:', error);
-      // Rollback optimistic update on error - SAME PATTERN AS CHECK-IN
+      // Rollback optimistic update on error
       updateAttendance({
         isOnBreak: false,
         breakType: 'regular',
@@ -740,7 +761,16 @@ export default function EmployeeDashboard() {
 
   const handleBreakEnd = async () => {
     // Debounce: prevent multiple clicks
-    if (actionInProgressRef.current) return;
+    if (actionInProgressRef.current) {
+      console.log('⏸️ [BREAK END] Action already in progress, skipping');
+      return;
+    }
+    
+    // Prevent ending break if not on break
+    if (!todayAttendance.isOnBreak) {
+      console.log('⏸️ [BREAK END] Not on break, skipping');
+      return;
+    }
     
     try {
       actionInProgressRef.current = true;
@@ -748,6 +778,7 @@ export default function EmployeeDashboard() {
 
       const wasOnBreak = todayAttendance.isOnBreak;
       const prevBreakType = todayAttendance.breakType;
+      const prevBreakDuration = todayAttendance.currentBreakDuration;
       
       const resolvedEmployeeId = await ensureEmployeeId();
       const token = TokenManager.get();
@@ -760,6 +791,13 @@ export default function EmployeeDashboard() {
       if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
       
       console.log('🔄 [BREAK END] Sending request:', { employeeId: resolvedEmployeeId });
+      
+      // Optimistic update - immediately show break ended
+      updateAttendance({
+        isOnBreak: false,
+        breakType: 'regular',
+        currentBreakDuration: 0
+      }, 'action');
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
@@ -792,33 +830,38 @@ export default function EmployeeDashboard() {
         const result = await response.json();
         console.log('✅ [BREAK END] Success:', result);
 
-        const newBreakType = result?.data?.liveStatus?.breakType || prevBreakType || 'regular';
-
-        // Update state immediately - SAME PATTERN AS CHECK-OUT
-        updateAttendance({
-          isOnBreak: false,
-          breakType: newBreakType,
-          currentBreakDuration: 0
-        }, 'action');
+        // Confirm optimistic update with server response
+        const liveStatus = result.data?.liveStatus;
+        if (liveStatus) {
+          updateAttendance({
+            isOnBreak: liveStatus.isOnBreak || false,
+            breakType: liveStatus.breakType || 'regular',
+            currentBreakDuration: liveStatus.currentBreakDuration || 0
+          }, 'action');
+        }
 
         clearApiCache('/attendance/today');
+        
+        // Wait for socket event before refreshing
         setTimeout(() => {
           void safeRefresh(true);
-        }, 600);
+        }, SYNC_CONFIG.SOCKET_WAIT_MS);
       } finally {
         clearTimeout(timeoutId);
       }
     } catch (error) {
       console.error('❌ [BREAK END] Error:', error);
-      // Rollback optimistic update on error - SAME PATTERN AS CHECK-OUT
+      // Rollback optimistic update on error - restore previous state
       updateAttendance({
-        isOnBreak: todayAttendance.isOnBreak,
-        breakType: todayAttendance.breakType || 'regular'
+        isOnBreak: wasOnBreak,
+        breakType: prevBreakType || 'regular',
+        currentBreakDuration: prevBreakDuration || 0
       }, 'action');
     } finally {
       actionInProgressRef.current = false;
     }
   };
+
   const handleCheckIn = async () => {
     // Debounce: prevent multiple clicks
     if (actionInProgressRef.current) return;

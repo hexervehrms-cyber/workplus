@@ -37,14 +37,8 @@ export function ProtectedRoute({
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center max-w-sm px-4">
-          <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto" aria-hidden />
-          <p className="mt-4 text-muted-foreground">Verifying session...</p>
-          {slowAuthHint && (
-            <p className="mt-3 text-sm text-muted-foreground">
-              This is taking longer than usual. Check your connection; we will keep trying to restore your session.
-            </p>
-          )}
+        <div className="text-center">
+          <Loader2 className="w-6 h-6 animate-spin text-primary mx-auto" aria-hidden />
         </div>
       </div>
     );

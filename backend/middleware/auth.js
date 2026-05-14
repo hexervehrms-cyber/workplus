@@ -97,11 +97,21 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     
     next();
   } catch (error) {
-    logger.warn('Authentication failed', { 
-      error: error.message,
-      token: typeof token === 'string' ? token.substring(0, 20) + '...' : '',
-      ip: req.ip
-    });
+    // Only log as debug for invalid token errors (expected for expired/invalid tokens)
+    // Don't log as warning to avoid noise in production logs
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      logger.debug('Auth failed', { 
+        error: error.message,
+        token: typeof token === 'string' ? token.substring(0, 20) + '...' : '',
+        path: req.path
+      });
+    } else {
+      logger.warn('Authentication failed', { 
+        error: error.message,
+        token: typeof token === 'string' ? token.substring(0, 20) + '...' : '',
+        ip: req.ip
+      });
+    }
     
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({

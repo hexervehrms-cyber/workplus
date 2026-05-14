@@ -281,6 +281,13 @@ export default function Attendance() {
 
   // Break Start
   const handleBreakStart = async (kind: 'regular' = 'regular') => {
+    // Prevent starting break if not checked in
+    if (!liveAttendance.isCheckedIn) {
+      console.log('⏸️ [BREAK START] Not checked in, cannot start break');
+      alert('Please check in first before starting a break');
+      return;
+    }
+    
     // Prevent starting break if already on break
     if (liveAttendance.isOnBreak) {
       console.log('⏸️ [BREAK START] Already on break, skipping');

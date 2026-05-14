@@ -7,6 +7,7 @@ import { Badge } from '../../components/ui/badge';
 import { apiClient } from '../../utils/api';
 import { toast } from 'sonner';
 import { apiGet, apiPost, buildFileUrl } from '../../utils/apiHelper';
+import { TokenManager } from '../../utils/api';
 import realTimeSocket from '../../utils/realTimeSocket';
 
 interface AttendanceRecord {
@@ -170,8 +171,15 @@ export default function AttendanceAdmin() {
       
       // Call the new bulk-export endpoint
       const fileUrl = buildFileUrl(`/attendance/bulk-export?startDate=${exportStartDate}&endDate=${exportEndDate}`);
+      const token = TokenManager.get();
       
-      const response = await fetch(fileUrl);
+      const response = await fetch(fileUrl, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          'Content-Type': 'application/json'
+        },
+        credentials: 'include'
+      });
       
       if (response.ok) {
         // Get the CSV content

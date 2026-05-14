@@ -1715,18 +1715,30 @@ router.get('/bulk-export', authorize('super_admin', 'admin', 'hr'), asyncHandler
       .lean();
 
     // Convert to CSV format
-    const csvHeaders = ['Employee ID', 'Employee Name', 'Email', 'Date', 'Check In', 'Check Out', 'Status', 'Hours Worked', 'Notes'];
-    const csvRows = records.map(record => [
-      record.employeeId?.employeeCode || '',
-      record.employeeName || '',
-      record.employeeId?.email || '',
-      new Date(record.date).toISOString().split('T')[0],
-      record.checkIn ? new Date(record.checkIn).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '',
-      record.checkOut ? new Date(record.checkOut).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '',
-      record.status || '',
-      record.hoursWorked || '',
-      record.notes || ''
-    ]);
+    const csvHeaders = ['Employee ID', 'Employee Name', 'Email', 'Date', 'Check In', 'Check Out', 'Status', 'Hours Worked', 'Break Count', 'Total Break Minutes', 'Notes'];
+    const csvRows = records.map(record => {
+      const breaks = record.breaks || [];
+      const completedBreaks = breaks.filter(b => b.startTime && b.endTime);
+      const totalBreakMinutes = completedBreaks.reduce((sum, b) => {
+        const start = new Date(b.startTime);
+        const end = new Date(b.endTime);
+        return sum + Math.round((end.getTime() - start.getTime()) / (1000 * 60));
+      }, 0);
+      
+      return [
+        record.employeeId?.employeeCode || '',
+        record.employeeName || '',
+        record.employeeId?.email || '',
+        new Date(record.date).toISOString().split('T')[0],
+        record.checkIn ? new Date(record.checkIn).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '',
+        record.checkOut ? new Date(record.checkOut).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '',
+        record.status || '',
+        record.hoursWorked || '',
+        completedBreaks.length || 0,
+        totalBreakMinutes || 0,
+        record.notes || ''
+      ];
+    });
 
     // Create CSV content
     const csvContent = [

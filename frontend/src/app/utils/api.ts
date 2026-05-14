@@ -391,6 +391,11 @@ export class AuthService {
           TokenManager.setRefreshToken(refreshToken);
         }
 
+        // Store access token for API calls (needed for exports and other requests)
+        if (token) {
+          TokenManager.set(token);
+        }
+
         const userData = {
           id: String(userId),
           userId,
@@ -407,7 +412,7 @@ export class AuthService {
 
         TokenManager.setUser(userData);
 
-        console.log('Login successful (httpOnly cookie session; access token not stored in localStorage):', userData);
+        console.log('Login successful - token stored in localStorage:', userData);
 
         return {
           success: true,

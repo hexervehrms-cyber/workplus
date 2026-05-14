@@ -109,10 +109,40 @@ try {
 
     try {
       setLoading(true);
-      // TODO: Implement email sending
+      const token = TokenManager.get();
+
+      const response = await fetch(buildApiUrl('/onboarding/send-email'), {
+        method: 'POST',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          'Content-Type': 'application/json'
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          linkId: generatedLink.token,
+          employeeEmail: generatedLink.employeeEmail,
+          employeeName: generatedLink.employeeName,
+          onboardingUrl: generatedLink.onboardingUrl
+        })
+      });
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        console.error('Parse error:', parseError);
+        throw new Error(`Server returned invalid response (${response.status})`);
+      }
+
+      if (!response.ok) {
+        throw new Error(data.message || `Failed to send email (${response.status})`);
+      }
+
       toast.success('Email sent successfully!');
+      handleSuccess();
     } catch (error) {
-      toast.error('Failed to send email');
+      console.error('Send email error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to send email');
     } finally {
       setLoading(false);
     }

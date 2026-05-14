@@ -53,6 +53,20 @@ router.post("/login",
         });
       }
 
+      // Log user role for debugging
+      console.log('🔍 LOGIN DEBUG:', {
+        email: user.email,
+        role: user.role,
+        roleType: typeof user.role,
+        userId: user._id
+      });
+      logger.info('User login attempt', {
+        email: user.email,
+        role: user.role,
+        userId: user._id,
+        roleType: typeof user.role
+      });
+
       // Generate access token (short-lived)
       const sessionId = crypto.randomBytes(16).toString('hex');
       const token = jwt.sign(
@@ -159,6 +173,12 @@ router.post("/login",
           refreshToken,
           expiresIn: '24h'
         }
+      });
+
+      console.log('✅ LOGIN RESPONSE:', {
+        email: user.email,
+        role: user.role,
+        token: token.substring(0, 20) + '...'
       });
     } catch (error) {
       logger.error('Login error', { 

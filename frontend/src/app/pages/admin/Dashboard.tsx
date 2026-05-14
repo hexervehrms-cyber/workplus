@@ -129,6 +129,20 @@ export default function AdminDashboard() {
     }
   }, [filterType, customStartDate, customEndDate]);
 
+  // Refresh employees on break data
+  const refreshEmployeesOnBreak = useCallback(async () => {
+    try {
+      console.log('☕ [REFRESH] Fetching employees on break...');
+      const response = await apiClient.get('/attendance/on-break');
+      if (response.data?.success) {
+        setEmployeesOnBreak(response.data.data || []);
+        console.log('☕ [REFRESH] Employees on break updated:', response.data.data?.length || 0);
+      }
+    } catch (error) {
+      console.error('Error refreshing employees on break:', error);
+    }
+  }, []);
+
   // Fetch dashboard data
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -263,11 +277,15 @@ export default function AdminDashboard() {
       socket.on('break:started', (data) => {
         console.log('☕ [DIRECT] break:started event received:', data);
         handleAttendanceUpdate({ type: 'break_started', ...data });
+        // Refresh employees on break list
+        refreshEmployeesOnBreak();
       });
       
       socket.on('break:ended', (data) => {
         console.log('☕ [DIRECT] break:ended event received:', data);
         handleAttendanceUpdate({ type: 'break_ended', ...data });
+        // Refresh employees on break list
+        refreshEmployeesOnBreak();
       });
       
       socket.on('kpi:update', (data) => {

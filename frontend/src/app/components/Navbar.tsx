@@ -308,8 +308,14 @@ export function Navbar() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-destructive" onClick={async () => {
-                await logout();
-                navigate('/login');
+                try {
+                  await logout();
+                } catch (error) {
+                  console.error('Logout error:', error);
+                } finally {
+                  // Force redirect to login regardless of logout result
+                  window.location.href = '/login';
+                }
               }}>
                 <LogOut className="w-4 h-4 mr-2" />
                 Logout

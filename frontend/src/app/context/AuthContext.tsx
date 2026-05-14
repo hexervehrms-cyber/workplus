@@ -56,23 +56,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
+      // Clear all state immediately
       setUser(null);
-      socketService.disconnect();
       setSocketConnected(false);
+      socketService.disconnect();
       
-      // Clear only in-memory state, not localStorage (no localStorage used)
-      // Backend clears httpOnly cookies and Redis session
-
+      // Clear localStorage
       localStorage.removeItem('dashboardCache');
       localStorage.removeItem('userPreferences');
       localStorage.removeItem('user');
       localStorage.removeItem('authToken');
       localStorage.removeItem('token');
       localStorage.removeItem('refreshToken');
+      localStorage.removeItem('cached_holidays');
 
       setLoading(false);
       toast.info('You have been logged out.');
 
+      // Force redirect to login
       window.location.href = '/login';
     }
   }, []);
@@ -373,7 +374,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user,
     setUser,
     login,
-    logout: handleLogout,
+    logout: performLogout,
     switchRole,
     loading,
     socketConnected,

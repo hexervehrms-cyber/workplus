@@ -106,14 +106,6 @@ router.post('/generate-link',
       // Priority: 1) organizationId from request body, 2) user's orgId, 3) user's company
       let finalOrgId = organizationId || req.user.orgId;
       
-      // If still no orgId and user is super_admin, try to get from company
-      if (!finalOrgId || finalOrgId === 'system') {
-        const user = await User.findById(createdBy).lean();
-        if (user?.company) {
-          finalOrgId = user.company;
-        }
-      }
-
       // Fallback: use a default if still not set
       if (!finalOrgId) {
         finalOrgId = 'ORG-DEFAULT';

@@ -1698,7 +1698,7 @@ router.get('/activity-logs/today', authorize('super_admin', 'admin', 'hr', 'mana
  * GET /api/attendance/export
  * Export attendance data as CSV
  */
-router.get('/export', authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+router.get('/export', authenticate, authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   const { startDate, endDate } = req.query;
   const userOrgId = req.user.orgId;
   

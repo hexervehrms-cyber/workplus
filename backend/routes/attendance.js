@@ -1678,7 +1678,7 @@ router.post('/bulk-import', authorize('super_admin', 'admin', 'hr'), asyncHandle
  * Export attendance records as CSV
  * Query params: startDate, endDate, employeeId, status
  */
-router.get('/bulk-export', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+router.get('/bulk-export', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   try {
     const { startDate, endDate, employeeId, status } = req.query;
     const userOrgId = req.user.orgId;

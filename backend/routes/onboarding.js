@@ -411,6 +411,25 @@ router.post('/submit',
         employeeName: onboardingLink.employeeName
       });
 
+      // Emit real-time employee creation event
+      if (req.emitEmployeeUpdate) {
+        req.emitEmployeeUpdate('created', {
+          _id: employee._id,
+          userId: user._id,
+          employeeCode: employee.employeeCode,
+          firstName: employee.firstName,
+          lastName: employee.lastName,
+          designation: employee.designation,
+          department: employee.department,
+          status: employee.status,
+          createdViaOnboarding: true
+        }, onboardingLink.organizationId);
+        logger.info('Employee creation event emitted', { 
+          employeeId: employee._id,
+          orgId: onboardingLink.organizationId
+        });
+      }
+
       res.status(201).json({
         success: true,
         message: 'Onboarding form submitted successfully and employee profile created',

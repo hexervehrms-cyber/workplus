@@ -134,21 +134,21 @@ function DynamicGreetingHeader({ userName }: { userName: string }) {
   }, [userName]);
 
   return (
-    <div className={`bg-gradient-to-r ${greeting.bgGradient} rounded-2xl p-8 flex-1 border border-opacity-20 border-current`}>
+    <div className="bg-slate-50 rounded-2xl p-8 flex-1 shadow-sm">
       <div className="space-y-3">
         <div className="flex items-center gap-3">
           <span className="text-5xl">{greeting.emoji}</span>
-          <h1 className={`text-4xl font-bold ${greeting.textColor}`}>
+          <h1 className="text-4xl font-bold text-slate-900">
             {greeting.message}
           </h1>
         </div>
         
-        <p className={`text-lg ${greeting.textColor} opacity-90`}>
+        <p className="text-lg text-slate-700">
           {greeting.subMessage}
         </p>
         
-        <div className={`pt-4 border-t border-current border-opacity-20`}>
-          <p className={`text-sm italic ${greeting.textColor} opacity-75`}>
+        <div className="pt-4">
+          <p className="text-sm italic text-slate-500">
             💡 {quote}
           </p>
         </div>

@@ -171,8 +171,8 @@ export default function Login() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-primary/5 p-4">
-      <Card className="w-full max-w-md shadow-xl border-primary/10">
-        <CardHeader className="text-center space-y-4">
+      <Card className="w-full max-w-md shadow-2xl border-0">
+        <CardHeader className="text-center space-y-4 pb-6">
           <div className="flex justify-center">
             <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-primary/80 flex items-center justify-center shadow-lg shadow-primary/25">
               <Briefcase className="w-8 h-8 text-primary-foreground" />
@@ -186,7 +186,7 @@ export default function Login() {
           </div>
         </CardHeader>
         
-        <CardContent>
+        <CardContent className="pb-6">
           <form onSubmit={handleSubmit} className="space-y-4">
             <p className="sr-only">
               Sign-in uses your email and password. CSRF for API routes is optional when using JWT; the backend may enable it with ENABLE_CSRF.
@@ -276,7 +276,7 @@ export default function Login() {
           </form>
         </CardContent>
 
-        <CardFooter className="pt-0">
+        <CardFooter className="pt-0 pb-4">
           <p className="text-xs text-center text-muted-foreground w-full">
             Contact your administrator for account access
           </p>

@@ -1215,8 +1215,8 @@ export default function EmployeeDashboard() {
                         <div
                           key={holiday._id || holiday.id}
                           className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d ${isUpcoming
-                            ? 'bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300'
-                            : 'bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
+                            ? 'dark:bg-green-950 dark:border-green-800 dark:text-green-200 bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300'
+                            : 'dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
                             }`}
                         >
                           <div className="flex items-start justify-between">
@@ -1224,7 +1224,7 @@ export default function EmployeeDashboard() {
                               <div className="flex items-center gap-2">
                                 <p className="font-medium text-sm">{holiday.name}</p>
                                 {isUpcoming && (
-                                  <span className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded-full">
+                                  <span className="px-2 py-1 text-xs dark:bg-green-900 dark:text-green-200 bg-green-100 text-green-700 rounded-full">
                                     Upcoming
                                   </span>
                                 )}

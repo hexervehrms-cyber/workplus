@@ -359,12 +359,12 @@ export default function InteractiveCalendar() {
                       w-full aspect-square p-2 text-xs font-medium transition-all duration-500 border-r border-b border-foreground/10 relative overflow-visible
                       ${isLastInRow ? 'border-r-0' : ''}
                       ${isLastRow ? 'border-b-0' : ''}
-                      ${weekend ? 'bg-gradient-to-br from-red-50 to-red-100 text-red-700 cursor-not-allowed font-semibold' : ''}
-                      ${holiday ? 'bg-gradient-to-br from-green-50 to-green-100 text-green-700 cursor-not-allowed font-semibold' : ''}
-                      ${leave && leaveStatus === 'approved' ? 'bg-gradient-to-br from-blue-50 to-blue-100 text-blue-700 border-blue-200 font-semibold' : ''}
-                      ${leave && leaveStatus === 'pending' ? 'bg-gradient-to-br from-yellow-50 to-yellow-100 text-yellow-700 font-semibold' : ''}
-                      ${leave && leaveStatus === 'rejected' ? 'bg-gradient-to-br from-red-50 to-red-100 text-red-700 font-semibold' : ''}
-                      ${!weekend && !holiday && !leave ? 'text-foreground cursor-pointer bg-gradient-to-br from-slate-50 to-slate-100 hover:from-slate-100 hover:to-slate-200 hover:text-slate-900 hover:font-semibold' : ''}
+                      ${weekend ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold' : ''}
+                      ${holiday ? 'dark:bg-green-950 dark:text-green-200 bg-green-50 text-green-700 cursor-not-allowed font-semibold' : ''}
+                      ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950 dark:text-blue-200 bg-blue-50 text-blue-700 border-blue-200 font-semibold' : ''}
+                      ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold' : ''}
+                      ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 font-semibold' : ''}
+                      ${!weekend && !holiday && !leave ? 'dark:text-foreground dark:bg-slate-800 dark:hover:bg-slate-700 text-foreground cursor-pointer bg-slate-50 hover:from-slate-100 hover:to-slate-200 hover:text-slate-900 hover:font-semibold' : ''}
                       focus:outline-none focus:ring-2 focus:ring-slate-300 focus:ring-inset rounded-sm
                     `}
                     style={{

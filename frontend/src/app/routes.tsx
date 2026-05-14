@@ -9,11 +9,19 @@ import { useAuth } from './context/AuthContext';
 
 // Role-based redirect component
 function RoleBasedRedirect() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const [verifying, setVerifying] = useState(true);
   const [redirectPath, setRedirectPath] = useState<string | null>(null);
   
   useEffect(() => {
+    console.log('🔍 RoleBasedRedirect - Auth state:', { user: user?.email, role: user?.role, loading });
+
+    if (loading) {
+      console.log('⏳ Still loading auth, waiting...');
+      setVerifying(true);
+      return;
+    }
+
     const verifyAndRedirect = async () => {
       console.log('🔍 RoleBasedRedirect - Checking user:', user);
 
@@ -67,9 +75,10 @@ function RoleBasedRedirect() {
     };
 
     verifyAndRedirect();
-  }, [user]);
+  }, [user, loading]);
 
   if (verifying) {
+    console.log('⏳ RoleBasedRedirect - Still verifying...');
     return null; // Show nothing while verifying
   }
 

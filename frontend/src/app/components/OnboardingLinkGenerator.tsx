@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Card } from './ui/card';
 import { Copy, Check, Loader, Mail, Link as LinkIcon } from 'lucide-react';
 import { toast } from 'sonner';
+import { TokenManager } from '../app/utils/api';
 
 interface OnboardingLinkGeneratorProps {
   isOpen: boolean;
@@ -56,16 +57,17 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
       return;
     }
 
-    try {
+try {
       setLoading(true);
-      const token = localStorage.getItem('authToken');
+      const token = TokenManager.get();
 
       const response = await fetch('/api/onboarding/generate-link', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'Content-Type': 'application/json'
         },
+        credentials: 'include',
         body: JSON.stringify(formData)
       });
 

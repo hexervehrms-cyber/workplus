@@ -8,6 +8,7 @@ import { Card } from './ui/card';
 import { Copy, Check, Loader, Mail, Link as LinkIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { TokenManager } from '../utils/api';
+import { buildApiUrl } from '../utils/apiHelper';
 
 interface OnboardingLinkGeneratorProps {
   isOpen: boolean;
@@ -61,7 +62,7 @@ try {
       setLoading(true);
       const token = TokenManager.get();
 
-      const response = await fetch('/api/onboarding/generate-link', {
+      const response = await fetch(buildApiUrl('/onboarding/generate-link'), {
         method: 'POST',
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -71,10 +72,16 @@ try {
         body: JSON.stringify(formData)
       });
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        console.error('Parse error:', parseError);
+        throw new Error(`Server returned invalid response (${response.status})`);
+      }
 
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to generate onboarding link');
+        throw new Error(data.message || `Failed to generate onboarding link (${response.status})`);
       }
 
       setGeneratedLink(data.data);

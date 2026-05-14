@@ -7,6 +7,8 @@ import { Label } from '../../components/ui/label';
 import { Textarea } from '../../components/ui/textarea';
 import { Separator } from '../../components/ui/separator';
 import { Progress } from '../../components/ui/progress';
+import { buildApiUrl } from '../../utils/apiHelper';
+import { toast } from 'sonner';
 import { 
   User, 
   Mail, 
@@ -144,42 +146,59 @@ export default function Onboarding() {
     'Documents'
   ];
 
-  // Validate token and fetch employee data on component mount
-  useEffect(() => {
-    const validateToken = async () => {
-      if (!token) {
-        setIsLoading(false);
-        return;
-      }
+// Validate token and fetch employee data on component mount
+   useEffect(() => {
+     const validateToken = async () => {
+       if (!token) {
+         setIsLoading(false);
+         return;
+       }
 
-      try {
-        const response = await fetch(`/api/onboarding/validate/${token}`);
-        const data = await response.json();
+       try {
+         const response = await fetch(buildApiUrl(`/onboarding/validate/${token}`));
+         
+         // Handle empty response
+         const rawText = await response.text();
+         if (!rawText) {
+           console.error('Empty response from server');
+           setLinkValid(false);
+           return;
+         }
+         
+         let data;
+         try {
+           data = JSON.parse(rawText);
+         } catch (parseError) {
+           console.error('Invalid JSON response:', rawText);
+           setLinkValid(false);
+           return;
+         }
 
-        if (response.ok && data.success) {
-          setLinkValid(true);
-          // Use actual employee data from the validation response
-          setEmployeeData(data.data);
-          
-          // Pre-fill form with employee data
-          const nameParts = data.data.employeeName.split(' ');
-          setFormData(prev => ({
-            ...prev,
-            firstName: nameParts[0] || '',
-            lastName: nameParts.slice(1).join(' ') || '',
-            email: data.data.employeeEmail,
-            department: data.data.department
-          }));
-        } else {
-          setLinkValid(false);
-        }
-      } catch (error) {
-        console.error('Error validating token:', error);
-        setLinkValid(false);
-      } finally {
-        setIsLoading(false);
-      }
-    };
+         if (response.ok && data.success) {
+           setLinkValid(true);
+           // Use actual employee data from the validation response
+           setEmployeeData(data.data);
+           
+           // Pre-fill form with employee data
+           const nameParts = data.data.employeeName.split(' ');
+           setFormData(prev => ({
+             ...prev,
+             firstName: nameParts[0] || '',
+             lastName: nameParts.slice(1).join(' ') || '',
+             email: data.data.employeeEmail,
+             department: data.data.department
+           }));
+         } else {
+           console.log('Validation failed:', data.message || rawText);
+           setLinkValid(false);
+         }
+       } catch (error) {
+         console.error('Error validating token:', error);
+         setLinkValid(false);
+       } finally {
+         setIsLoading(false);
+       }
+     };
 
     validateToken();
   }, [token]);
@@ -295,21 +314,29 @@ export default function Onboarding() {
         password: 'TempPassword123!' // Temporary password - should be set by user
       };
 
-      // Submit to backend API
-      const response = await fetch('/api/onboarding/submit', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(submissionData),
-      });
+// Submit to backend API
+       const response = await fetch(buildApiUrl('/onboarding/submit'), {
+         method: 'POST',
+         headers: {
+           'Content-Type': 'application/json',
+         },
+         body: JSON.stringify(submissionData),
+       });
 
-      if (response.ok) {
-        console.log('Form submitted successfully:', submissionData);
-        setCurrentStep(6); // Success step
-      } else {
-        const errorData = await response.json();
-        console.error('Error submitting form:', errorData);
+       let responseData;
+       try {
+         responseData = await response.json();
+       } catch (parseError) {
+         // Handle empty or non-JSON response
+         throw new Error(response.ok ? 'Invalid server response. Please try again.' : 'Authentication failed. Please check your credentials and try again.');
+       }
+
+       if (response.ok) {
+         console.log('Form submitted successfully:', submissionData);
+         setCurrentStep(6); // Success step
+       } else {
+         console.error('Error submitting form:', responseData);
+         toast.error(responseData.message || 'Failed to submit onboarding form');
         // Still show success for demo purposes
         setCurrentStep(6);
       }

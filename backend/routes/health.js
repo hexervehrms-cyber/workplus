@@ -7,6 +7,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import os from 'os';
 import { connectionMonitor } from '../utils/connectionMonitor.js';
+import redis from '../utils/redis.js';
 
 const router = express.Router();
 
@@ -32,6 +33,7 @@ router.get('/', (req, res) => {
 router.get('/detailed', async (req, res) => {
   try {
     const dbConnected = mongoose.connection.readyState === 1;
+    const redisConnected = redis.isRedisConnected();
     
     const health = {
       status: dbConnected ? 'healthy' : 'degraded',
@@ -42,6 +44,12 @@ router.get('/detailed', async (req, res) => {
         connected: dbConnected,
         readyState: mongoose.connection.readyState,
         host: mongoose.connection.host || 'unknown'
+      },
+      cache: {
+        redis: {
+          connected: redisConnected,
+          configured: !!process.env.REDIS_URL
+        }
       },
       system: {
         memory: {
@@ -125,10 +133,17 @@ router.get('/live', (req, res) => {
 router.get('/metrics', (req, res) => {
   const connectionStatus = connectionMonitor.getStatus();
   const metrics = connectionMonitor.getMetrics();
+  const redisConnected = redis.isRedisConnected();
   
   res.status(200).json({
     timestamp: new Date().toISOString(),
     connection: connectionStatus,
+    cache: {
+      redis: {
+        connected: redisConnected,
+        configured: !!process.env.REDIS_URL
+      }
+    },
     metrics,
     system: {
       memory: {

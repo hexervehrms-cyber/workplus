@@ -3,11 +3,12 @@ import { asyncHandler } from "./errorHandler.js";
 import User from "../models/User.js";
 import logger from "../utils/logger.js";
 import { getBearerOrCookieAccessToken } from "../utils/httpAuth.js";
+import JWTCache from "../utils/jwtCache.js";
 
 /**
  * Authentication middleware
  * Verifies JWT token from Bearer header or HTTP-only cookie
- * Integrates with Redis session management
+ * Uses Redis caching for improved performance
  */
 export const authenticate = asyncHandler(async (req, res, next) => {
   // Validate JWT_SECRET is configured
@@ -39,6 +40,34 @@ export const authenticate = asyncHandler(async (req, res, next) => {
   }
   
   try {
+    // Check if token is blacklisted
+    const isBlacklisted = await JWTCache.isTokenBlacklisted(token);
+    if (isBlacklisted) {
+      return res.status(401).json({
+        success: false,
+        message: "Token has been revoked. Please log in again.",
+        code: "TOKEN_REVOKED"
+      });
+    }
+
+    // Try to get from cache first
+    let cachedData = await JWTCache.getTokenCache(token);
+    if (cachedData) {
+      req.user = {
+        userId: cachedData.userData.userId,
+        email: cachedData.userData.email,
+        name: cachedData.userData.name,
+        role: cachedData.userData.role,
+        orgId: cachedData.userData.orgId || 'system',
+        tenantId: cachedData.userData.orgId || 'system',
+        departmentId: cachedData.userData.departmentId,
+        permissions: cachedData.userData.permissions || [],
+        sessionId: cachedData.userData.sessionId,
+        fromCache: true
+      };
+      return next();
+    }
+
     // Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
@@ -82,17 +111,29 @@ export const authenticate = asyncHandler(async (req, res, next) => {
       });
     }
     
-    // Attach user info to request (use consistent orgId naming)
-    req.user = {
+    // Prepare user data for caching
+    const userData = {
       userId: user._id,
       email: user.email,
       name: user.name,
       role: user.role,
       orgId: user.orgId || 'system',
-      tenantId: user.orgId || 'system', // Alias for compatibility
       departmentId: user.departmentId,
       permissions: user.permissions || [],
-      sessionId: decoded.sessionId // For Redis session tracking
+      sessionId: decoded.sessionId
+    };
+
+    // Cache the token and user session
+    await Promise.all([
+      JWTCache.cacheToken(token, user._id, userData),
+      JWTCache.cacheUserSession(user._id, userData)
+    ]);
+    
+    // Attach user info to request (use consistent orgId naming)
+    req.user = {
+      ...userData,
+      tenantId: userData.orgId, // Alias for compatibility
+      fromCache: false
     };
     
     next();

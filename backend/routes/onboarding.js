@@ -1031,21 +1031,21 @@ router.post('/send-email',
   authenticate,
   authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
-    const { linkId, employeeEmail, employeeName, onboardingUrl } = req.body;
+    const { token, employeeEmail, employeeName, onboardingUrl } = req.body;
     const sentBy = req.user.userId;
     const orgId = req.user.orgId;
 
     try {
       // Validate required fields
-      if (!linkId || !employeeEmail || !employeeName || !onboardingUrl) {
+      if (!token || !employeeEmail || !employeeName || !onboardingUrl) {
         return res.status(400).json({
           success: false,
-          message: 'Missing required fields: linkId, employeeEmail, employeeName, onboardingUrl'
+          message: 'Missing required fields: token, employeeEmail, employeeName, onboardingUrl'
         });
       }
 
-      // Verify the onboarding link exists
-      const onboardingLink = await OnboardingLink.findById(linkId);
+      // Verify the onboarding link exists by token
+      const onboardingLink = await OnboardingLink.findOne({ token });
       if (!onboardingLink) {
         return res.status(404).json({
           success: false,

@@ -119,7 +119,7 @@ try {
         },
         credentials: 'include',
         body: JSON.stringify({
-          linkId: generatedLink.token,
+          token: generatedLink.token,
           employeeEmail: generatedLink.employeeEmail,
           employeeName: generatedLink.employeeName,
           onboardingUrl: generatedLink.onboardingUrl

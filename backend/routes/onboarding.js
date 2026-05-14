@@ -23,6 +23,65 @@ import logger from '../utils/logger.js';
 const router = express.Router();
 
 /**
+ * GET /api/onboarding/debug/check-employee
+ * Debug endpoint to check if employee was created with correct orgId
+ */
+router.get('/debug/check-employee',
+  authenticate,
+  authorize('super_admin', 'admin', 'hr'),
+  asyncHandler(async (req, res) => {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email parameter required'
+      });
+    }
+
+    try {
+      const user = await User.findOne({ email }).lean();
+      const employee = await Employee.findOne({ 
+        $or: [
+          { email },
+          { userId: user?._id }
+        ]
+      }).lean();
+
+      res.json({
+        success: true,
+        data: {
+          user: user ? {
+            id: user._id,
+            email: user.email,
+            orgId: user.orgId,
+            role: user.role,
+            status: user.status
+          } : null,
+          employee: employee ? {
+            id: employee._id,
+            firstName: employee.firstName,
+            lastName: employee.lastName,
+            orgId: employee.orgId,
+            status: employee.status,
+            employeeCode: employee.employeeCode
+          } : null,
+          adminOrgId: req.user.orgId,
+          match: employee?.orgId === req.user.orgId
+        }
+      });
+    } catch (error) {
+      logger.error('Debug check error', { error: error.message, email });
+      res.status(500).json({
+        success: false,
+        message: 'Debug check failed',
+        error: error.message
+      });
+    }
+  })
+);
+
+/**
  * POST /api/onboarding/generate-link
  * Generate a shareable onboarding link for a new employee
  * Only accessible by Super Admin, Admin, and HR

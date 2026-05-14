@@ -50,7 +50,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const performLogout = useCallback(async () => {
     setLoading(true);
-    const attendanceUserId = TokenManager.getUser()?.id;
 
     try {
       await AuthService.logout();
@@ -60,15 +59,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       socketService.disconnect();
       setSocketConnected(false);
-      if (attendanceUserId) {
-        try {
-          await clearPersistedAttendance(String(attendanceUserId));
-        } catch (e) {
-          console.warn('Attendance cache clear on logout', e);
-        }
-      }
-      TokenManager.clear();
-      clearApiCache();
+      
+      // Clear only in-memory state, not localStorage (no localStorage used)
+      // Backend clears httpOnly cookies and Redis session
 
       localStorage.removeItem('dashboardCache');
       localStorage.removeItem('userPreferences');
@@ -112,7 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Initialize auth from storage and await initial socket connect before exposing ready state.
+  // Initialize auth from Redis session via /api/auth/me endpoint
   useEffect(() => {
     let cancelled = false;
 
@@ -151,87 +144,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
 
       try {
-        let token = TokenManager.get();
-        const storedUser = TokenManager.getUser();
-
-        if (token && storedUser) {
-          try {
-            const payload = JSON.parse(atob(token.split('.')[1]));
-            const exp = payload.exp * 1000;
-
-            if (Date.now() >= exp) {
-              const refreshed = await tryRefreshAccessToken();
-              if (!refreshed) {
-                TokenManager.clear();
+        // Try to get current user from backend (uses httpOnly cookie + Redis session)
+        try {
+          const currentUser = await AuthService.getCurrentUser();
+          if (currentUser) {
+            console.log('✅ User restored from Redis session:', {
+              id: currentUser.id,
+              email: currentUser.email,
+              role: currentUser.role
+            });
+            setUser(currentUser);
+            userForSocket = currentUser;
+            await finish();
+            return;
+          }
+        } catch (error) {
+          if (error instanceof ApiError && (error.code === 'TOKEN_EXPIRED' || error.code === 'INVALID_TOKEN')) {
+            const recovered = await tryRefreshAccessToken();
+            if (recovered) {
+              try {
+                const retryUser = await AuthService.getCurrentUser();
+                if (retryUser) {
+                  console.log('✅ User restored after token refresh:', {
+                    id: retryUser.id,
+                    email: retryUser.email,
+                    role: retryUser.role
+                  });
+                  setUser(retryUser);
+                  userForSocket = retryUser;
+                  await finish();
+                  return;
+                }
+              } catch {
+                console.log('No valid session found');
+                setUser(null);
                 userForSocket = null;
                 await finish();
                 return;
               }
-              token = TokenManager.get();
-            }
-
-            setUser(storedUser);
-            userForSocket = storedUser;
-
-            try {
-              const currentUser = await AuthService.getCurrentUser();
-              if (currentUser) {
-                setUser(currentUser);
-                TokenManager.setUser(currentUser);
-                userForSocket = currentUser;
-              }
-            } catch (error) {
-              if (error instanceof ApiError && (error.code === 'TOKEN_EXPIRED' || error.code === 'INVALID_TOKEN')) {
-                const recovered = await tryRefreshAccessToken();
-                if (recovered) {
-                  try {
-                    const retryUser = await AuthService.getCurrentUser();
-                    if (retryUser) {
-                      setUser(retryUser);
-                      TokenManager.setUser(retryUser);
-                      userForSocket = retryUser;
-                    }
-                  } catch {
-                    TokenManager.clear();
-                    setUser(null);
-                    userForSocket = null;
-                    await finish();
-                    return;
-                  }
-                } else {
-                  TokenManager.clear();
-                  setUser(null);
-                  userForSocket = null;
-                  await finish();
-                  return;
-                }
-              } else {
-                console.warn('Could not verify session with backend:', error);
-              }
-            }
-          } catch (error) {
-            console.error('Error parsing token:', error);
-            TokenManager.clear();
-            setUser(null);
-            userForSocket = null;
-          }
-        } else if (storedUser) {
-          try {
-            const currentUser = await AuthService.getCurrentUser();
-            if (currentUser) {
-              setUser(currentUser);
-              TokenManager.setUser(currentUser);
-              userForSocket = currentUser;
             } else {
-              TokenManager.clear();
+              console.log('Token refresh failed, no session');
               setUser(null);
               userForSocket = null;
+              await finish();
+              return;
             }
-          } catch (error) {
-            console.warn('Cookie session invalid or expired:', error);
-            TokenManager.clear();
-            setUser(null);
-            userForSocket = null;
+          } else {
+            console.warn('Could not verify session with backend:', error);
           }
         }
       } catch (error) {
@@ -326,39 +285,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           name: result.user.name
         });
 
-        // Update user state
+        // Update user state - this will trigger RoleBasedRedirect
         setUser(result.user);
         toast.success(`Welcome back, ${result.user.name}!`);
         
-        // Determine redirect path based on role - CRITICAL: Must match role exactly
-        let redirectPath = '/employee'; // Default fallback
-        
-        switch (result.user.role) {
-          case 'super_admin':
-            redirectPath = '/super-admin';
-            break;
-          case 'admin':
-            redirectPath = '/admin';
-            break;
-          case 'employee':
-          case 'hr':
-          case 'manager':
-          case 'accountant':
-            redirectPath = '/employee';
-            break;
-          default:
-            redirectPath = '/employee';
-        }
-        
-        console.log('🔄 Redirecting to:', redirectPath, 'for role:', result.user.role);
-        
-        // Use a small delay to ensure the UI updates before redirect
-        setTimeout(() => {
-          // Use window.location.href to force a full page navigation
-          window.location.href = redirectPath;
-        }, 100);
-        
-        // Don't reset loading state - keep it true during redirect
+        // Return success - RoleBasedRedirect will handle navigation
         return { success: true };
       }
 

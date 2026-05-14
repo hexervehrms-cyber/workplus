@@ -93,61 +93,47 @@ const USER_KEY = 'user';
 
 export const TokenManager = {
   get(): string | null {
-    const primary = localStorage.getItem(TOKEN_KEY);
-    if (primary) return primary;
-    const legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
-    if (legacy) {
-      localStorage.setItem(TOKEN_KEY, legacy);
-      return legacy;
-    }
-    return null;
+    // Only get from cookies (httpOnly), never from localStorage
+    // Cookies are automatically sent with requests
+    return null; // Token is in httpOnly cookie, not accessible from JS
   },
   
   set(token: string): void {
-    localStorage.setItem(TOKEN_KEY, token);
+    // Token is set as httpOnly cookie by backend
+    // Frontend doesn't store it
   },
   
   getRefreshToken(): string | null {
-    return localStorage.getItem(REFRESH_TOKEN_KEY);
+    // Refresh token is in httpOnly cookie
+    return null;
   },
   
   setRefreshToken(refreshToken: string): void {
-    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+    // Refresh token is set as httpOnly cookie by backend
   },
   
   remove(): void {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
+    // Cookies are cleared by backend on logout
   },
   
   getUser(): any {
-    const userStr = localStorage.getItem(USER_KEY);
-    if (userStr) {
-      try {
-        return JSON.parse(userStr);
-      } catch {
-        return null;
-      }
-    }
+    // Extract user data from JWT token in httpOnly cookie
+    // This is done via the /api/auth/me endpoint
     return null;
   },
   
   setUser(user: any): void {
-    localStorage.setItem(USER_KEY, JSON.stringify(user));
+    // User data is stored in Redis on backend
+    // Frontend doesn't store it locally
   },
   
   clear(): void {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
+    // Cookies are cleared by backend
   },
 
   /** Remove only access tokens (keep user + refresh) — use when session uses httpOnly access cookie. */
   clearAccessTokens(): void {
-    localStorage.removeItem(TOKEN_KEY);
+    // Handled by backend
     localStorage.removeItem(LEGACY_TOKEN_KEY);
   }
 };
@@ -365,54 +351,42 @@ export class AuthService {
 
       console.log('Login response:', response);
 
-      // Backend can return token and user in two formats:
-      // 1. Nested in data: response.data.token, response.data.user
-      // 2. At top level: response.token, response.user
+      // Backend returns token and user in response.data
       const token = response.data?.token || response.token;
       const user = response.data?.user || response.user;
       const refreshToken = response.data?.refreshToken || response.refreshToken;
 
       if (response.success && user) {
-        TokenManager.clearAccessTokens();
-
-        let userId = user.id || user.userId;
-        let orgId = user.orgId || user.tenantId || 'system';
-        if (token) {
+        // Extract role from JWT token
+        let role = user.role;
+        if (token && !role) {
           try {
             const tokenPayload = JSON.parse(atob(token.split('.')[1]));
-            userId = userId || tokenPayload.userId;
-            orgId = tokenPayload.orgId || orgId;
+            role = tokenPayload.role;
           } catch {
             /* ignore */
           }
         }
 
-        if (refreshToken) {
-          TokenManager.setRefreshToken(refreshToken);
-        }
+        console.log('✅ Login successful - Role from JWT:', role);
 
-        // Store access token for API calls (needed for exports and other requests)
-        if (token) {
-          TokenManager.set(token);
-        }
-
+        // Return user data with role from JWT
+        // Do NOT store in localStorage - only in memory
         const userData = {
-          id: String(userId),
-          userId,
+          id: String(user.id || user.userId),
+          userId: user.userId || user.id,
           name: user.name,
           email: user.email,
-          role: user.role,
+          role: role || user.role, // Use role from JWT
           avatar: user.avatar,
           organization: user.organization,
-          tenantId: user.tenantId || orgId,
-          orgId: orgId,
+          tenantId: user.tenantId || user.orgId,
+          orgId: user.orgId || user.tenantId,
           employeeId: user.employeeId,
           employeeCode: user.employeeCode
         };
 
-        TokenManager.setUser(userData);
-
-        console.log('Login successful - token stored in localStorage:', userData);
+        console.log('User data to return:', userData);
 
         return {
           success: true,

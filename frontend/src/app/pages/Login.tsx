@@ -54,6 +54,7 @@ export default function Login() {
   useEffect(() => {
     if (user && !authLoading) {
       const from = (location.state as any)?.from?.pathname || roleRedirect;
+      console.log('🔄 User already logged in, redirecting to:', from, 'Role:', user.role);
       navigate(from, { replace: true });
     }
   }, [user, authLoading, navigate, location.state, roleRedirect]);

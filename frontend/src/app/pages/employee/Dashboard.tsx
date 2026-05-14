@@ -123,7 +123,7 @@ function parseTodayCheckInTime(checkInTime: string): Date | null {
 // ============================================================================
 function DynamicGreetingHeader({ userName }: { userName: string }) {
   const [greeting, setGreeting] = useState(getDynamicGreeting(userName));
-  const [quote, setQuote] = useState(getMotivationalQuote());
+  const quote = getMotivationalQuote();
 
   useEffect(() => {
     // Update greeting every minute

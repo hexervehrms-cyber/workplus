@@ -721,6 +721,7 @@ io.on('connection', (socket) => {
 
     // Handle user authentication with JWT
     socket.on('authenticate', async (data) => {
+      let sessionError = null;
       try {
         const { userId, role, tenantId } = data;
         
@@ -728,7 +729,8 @@ io.on('connection', (socket) => {
         
         if (!userId || !role) {
           logger.warn(`Invalid authentication data from ${socket.id}`);
-          socket.emit('auth_error', { message: 'Invalid authentication data' });
+          socket.emit('auth_error', { message: 'Invalid authentication data', code: 'INVALID_AUTH_DATA' });
+          socket.disconnect(true);
           return;
         }
 
@@ -737,7 +739,7 @@ io.on('connection', (socket) => {
         socket.role = role;
         socket.tenantId = tenantId || 'system';
 
-        // Create or update session record
+        // Create or update session record with proper error handling
         try {
           console.log('📝 Updating session for user:', userId);
           
@@ -747,13 +749,17 @@ io.on('connection', (socket) => {
             orgId: tenantId || 'system',
             isActive: true,
             socketId: null // Session created during login without socketId
+          }).catch(err => {
+            throw new Error(`Failed to query session: ${err.message}`);
           });
           
           if (session) {
             // Update existing session with socketId
             session.socketId = socket.id;
             session.connectTime = new Date();
-            await session.save();
+            await session.save().catch(err => {
+              throw new Error(`Failed to save session: ${err.message}`);
+            });
             console.log('✅ Session updated with socketId:', session._id);
             logger.info(`Session updated for user ${userId}`, { sessionId: session._id, socketId: socket.id });
           } else {
@@ -765,15 +771,20 @@ io.on('connection', (socket) => {
               role,
               isActive: true,
               connectTime: new Date()
+            }).catch(err => {
+              throw new Error(`Failed to create session: ${err.message}`);
             });
             console.log('✅ New session created:', session._id);
             logger.info(`New session created for user ${userId}`, { sessionId: session._id });
           }
           
           socket.sessionId = session._id;
-        } catch (sessionError) {
-          console.error('❌ Session update error:', sessionError.message);
-          logger.warn(`Failed to update session: ${sessionError.message}`);
+        } catch (err) {
+          sessionError = err;
+          console.error('❌ Session update error:', err.message);
+          logger.error(`Failed to update session: ${err.message}`, { userId, socketId: socket.id });
+          // Don't disconnect on session error - allow connection but log the issue
+          socket.emit('session_warning', { message: 'Session update failed', code: 'SESSION_UPDATE_FAILED' });
         }
 
         // Join role-based rooms

@@ -130,15 +130,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         if (userForSocket) {
           try {
-            await socketService.connect(
+            // Connect to Socket.IO with proper error handling and timeout
+            const connectionPromise = socketService.connect(
               userForSocket.id,
               userForSocket.role,
               userForSocket.tenantId || userForSocket.orgId
             );
-            if (!cancelled) setSocketConnected(socketService.getState() === 'connected');
+            
+            // Add timeout to prevent hanging
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Socket connection timeout')), 10000)
+            );
+            
+            await Promise.race([connectionPromise, timeoutPromise]);
+            
+            if (!cancelled) {
+              const state = socketService.getState();
+              setSocketConnected(state === 'connected');
+              console.log('✅ [AUTH] Socket.IO connected successfully, state:', state);
+            }
           } catch (error) {
             console.error('❌ [AUTH] Failed to connect to Socket.IO during bootstrap:', error);
-            if (!cancelled) setSocketConnected(false);
+            if (!cancelled) {
+              setSocketConnected(false);
+              // Show warning but don't block app initialization
+              toast.warning('Real-time updates unavailable. Some features may be limited.');
+            }
           }
         }
         if (!cancelled) {

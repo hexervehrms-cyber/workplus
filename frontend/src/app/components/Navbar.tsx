@@ -43,11 +43,10 @@ export function Navbar() {
   const fetchNotifications = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
       
       const response = await fetch(buildApiUrl('/notifications?limit=10&status=all'), {
+        credentials: 'include',  // ✅ Send httpOnly cookies
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
       });
@@ -58,6 +57,9 @@ export function Navbar() {
           setNotifications(result.data.notifications || []);
           setUnreadCount(result.data.unreadCount || 0);
         }
+      } else if (response.status === 401) {
+        // Unauthorized - user session expired
+        console.warn('Notifications: Session expired');
       }
     } catch (error) {
       console.error('Failed to fetch notifications:', error);
@@ -69,12 +71,10 @@ export function Navbar() {
   // Mark notification as read
   const markAsRead = async (notificationId: string) => {
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      
       const response = await fetch(buildApiUrl(`/notifications/${notificationId}/read`), {
         method: 'PATCH',
+        credentials: 'include',  // ✅ Send httpOnly cookies
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
       });
@@ -94,12 +94,10 @@ export function Navbar() {
   // Mark all as read
   const markAllAsRead = async () => {
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      
       const response = await fetch(buildApiUrl('/notifications/mark-all-read'), {
         method: 'PATCH',
+        credentials: 'include',  // ✅ Send httpOnly cookies
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
       });

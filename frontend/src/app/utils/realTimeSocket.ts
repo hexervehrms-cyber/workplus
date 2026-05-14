@@ -6,19 +6,45 @@ class RealTimeSocket {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
+  private isConnecting = false;
+  private connectionAttempted = false;
 
   constructor() {
-    this.connect();
+    // Don't connect immediately - wait for user to be available
+    // Connection will be triggered when needed
   }
 
-  private connect() {
+  /**
+   * Lazy connect - only connect when user data is available
+   */
+  private ensureConnected() {
+    if (this.socket?.connected || this.isConnecting) {
+      return;
+    }
+
     const user = TokenManager.getUser();
     const token = TokenManager.get() || '';
 
     if (!user?.id) {
-      console.warn('No user data found for socket connection');
+      // User not yet loaded, skip connection
       return;
     }
+
+    // Only attempt connection once per session
+    if (this.connectionAttempted && !this.socket) {
+      return;
+    }
+
+    this.connectionAttempted = true;
+    this.connect(user, token);
+  }
+
+  private connect(user: any, token: string) {
+    if (this.isConnecting || this.socket?.connected) {
+      return;
+    }
+
+    this.isConnecting = true;
 
     if (!token) {
       console.log('🔐 [SOCKET] No Bearer token in storage — relying on httpOnly session cookie (withCredentials)');
@@ -44,6 +70,7 @@ class RealTimeSocket {
     // Handle connection
     this.socket.on('connect', () => {
       console.log('✅ Socket connected:', this.socket?.id);
+      this.isConnecting = false;
       this.reconnectAttempts = 0;
       
       // Get orgId from user or localStorage
@@ -90,11 +117,13 @@ class RealTimeSocket {
 
     this.socket.on('auth_error', (error) => {
       console.error('❌ Socket authentication failed:', error);
+      this.isConnecting = false;
     });
 
     // Handle disconnection
     this.socket.on('disconnect', (reason) => {
       console.warn('⚠️ Socket disconnected:', reason);
+      this.isConnecting = false;
       
       if (reason === 'io server disconnect') {
         // Server disconnected, try to reconnect
@@ -105,6 +134,7 @@ class RealTimeSocket {
     // Handle connection errors
     this.socket.on('connect_error', (error) => {
       console.error('❌ Socket connection error:', error);
+      this.isConnecting = false;
       this.handleReconnect();
     });
 
@@ -280,6 +310,7 @@ class RealTimeSocket {
 
   // Public methods to subscribe to updates
   onDashboardUpdate(callback: (data: any) => void) {
+    this.ensureConnected();
     this.dashboardUpdateCallbacks.push(callback);
     return () => {
       const index = this.dashboardUpdateCallbacks.indexOf(callback);
@@ -290,6 +321,7 @@ class RealTimeSocket {
   }
 
   onActivityUpdate(callback: (activity: any) => void) {
+    this.ensureConnected();
     this.activityUpdateCallbacks.push(callback);
     return () => {
       const index = this.activityUpdateCallbacks.indexOf(callback);
@@ -300,6 +332,7 @@ class RealTimeSocket {
   }
 
   onEmployeeUpdate(callback: (type: string, employee: any) => void) {
+    this.ensureConnected();
     this.employeeUpdateCallbacks.push(callback);
     return () => {
       const index = this.employeeUpdateCallbacks.indexOf(callback);
@@ -310,6 +343,7 @@ class RealTimeSocket {
   }
 
   onLeaveUpdate(callback: (type: string, leave: any) => void) {
+    this.ensureConnected();
     this.leaveUpdateCallbacks.push(callback);
     return () => {
       const index = this.leaveUpdateCallbacks.indexOf(callback);
@@ -320,6 +354,7 @@ class RealTimeSocket {
   }
 
   onAttendanceUpdate(callback: (attendance: any) => void) {
+    this.ensureConnected();
     this.attendanceUpdateCallbacks.push(callback);
     return () => {
       const index = this.attendanceUpdateCallbacks.indexOf(callback);
@@ -330,6 +365,7 @@ class RealTimeSocket {
   }
 
   onExpenseUpdate(callback: (type: string, expense: any) => void) {
+    this.ensureConnected();
     this.expenseUpdateCallbacks.push(callback);
     return () => {
       const index = this.expenseUpdateCallbacks.indexOf(callback);
@@ -340,6 +376,7 @@ class RealTimeSocket {
   }
 
   onNotification(callback: (notification: any) => void) {
+    this.ensureConnected();
     this.notificationCallbacks.push(callback);
     return () => {
       const index = this.notificationCallbacks.indexOf(callback);
@@ -350,6 +387,7 @@ class RealTimeSocket {
   }
 
   onBreakStarted(callback: (data: any) => void) {
+    this.ensureConnected();
     this.breakStartedCallbacks.push(callback);
     return () => {
       const index = this.breakStartedCallbacks.indexOf(callback);
@@ -360,6 +398,7 @@ class RealTimeSocket {
   }
 
   onBreakEnded(callback: (data: any) => void) {
+    this.ensureConnected();
     this.breakEndedCallbacks.push(callback);
     return () => {
       const index = this.breakEndedCallbacks.indexOf(callback);
@@ -370,6 +409,7 @@ class RealTimeSocket {
   }
 
   onMeetingStarted(callback: (data: any) => void) {
+    this.ensureConnected();
     this.meetingStartedCallbacks.push(callback);
     return () => {
       const index = this.meetingStartedCallbacks.indexOf(callback);
@@ -380,6 +420,7 @@ class RealTimeSocket {
   }
 
   onMeetingEnded(callback: (data: any) => void) {
+    this.ensureConnected();
     this.meetingEndedCallbacks.push(callback);
     return () => {
       const index = this.meetingEndedCallbacks.indexOf(callback);
@@ -390,6 +431,7 @@ class RealTimeSocket {
   }
 
   onKPIUpdate(callback: (data: any) => void) {
+    this.ensureConnected();
     this.kpiUpdateCallbacks.push(callback);
     return () => {
       const index = this.kpiUpdateCallbacks.indexOf(callback);
@@ -462,10 +504,12 @@ class RealTimeSocket {
 
   // Emit events to server
   emitDashboardRefresh(dashboardType: string) {
+    this.ensureConnected();
     this.socket?.emit('dashboard_refresh_request', { dashboardType });
   }
 
   emitActivityLogRequest(filters: any) {
+    this.ensureConnected();
     this.socket?.emit('activity_log_request', filters);
   }
 
@@ -484,11 +528,13 @@ class RealTimeSocket {
 
   // Get socket instance for custom events
   getSocket(): Socket | null {
+    this.ensureConnected();
     return this.socket;
   }
 
   // Add .on() and .off() methods for compatibility
   on(event: string, callback: (...args: any[]) => void) {
+    this.ensureConnected();
     if (this.socket) {
       this.socket.on(event, callback);
     }

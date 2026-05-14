@@ -21,10 +21,10 @@ export const authenticate = asyncHandler(async (req, res, next) => {
   }
 
   // Try to get token from multiple sources (priority order):
-  // 1. HTTP-only cookie (most secure)
-  // 2. Authorization header (Bearer token)
-  // 3. Legacy token from getBearerOrCookieAccessToken
-  let token = req.cookies?.accessToken || req.cookies?.token;
+  // 1. HTTP-only cookie (wp_at - set by httpAuth.js)
+  // 2. Legacy cookies (accessToken, token)
+  // 3. Authorization header (Bearer token) via getBearerOrCookieAccessToken
+  let token = req.cookies?.wp_at || req.cookies?.accessToken || req.cookies?.token;
   
   if (!token) {
     token = getBearerOrCookieAccessToken(req);

@@ -84,6 +84,14 @@ try {
         throw new Error(data.message || `Failed to generate onboarding link (${response.status})`);
       }
 
+      console.log('Generate link response:', data);
+      console.log('Generated link data:', data.data);
+      
+      if (!data.data || !data.data.token) {
+        console.error('Missing token in response:', data.data);
+        throw new Error('Invalid response: missing token or onboarding URL');
+      }
+
       setGeneratedLink(data.data);
       setStep('result');
       toast.success('Onboarding link generated successfully!');
@@ -110,6 +118,13 @@ try {
     try {
       setLoading(true);
       const token = TokenManager.get();
+
+      console.log('Sending email with data:', {
+        token: generatedLink.token,
+        employeeEmail: generatedLink.employeeEmail,
+        employeeName: generatedLink.employeeName,
+        onboardingUrl: generatedLink.onboardingUrl
+      });
 
       const response = await fetch(buildApiUrl('/onboarding/send-email'), {
         method: 'POST',

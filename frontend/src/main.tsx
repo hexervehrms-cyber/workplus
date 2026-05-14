@@ -2,7 +2,7 @@ import { createRoot } from "react-dom/client";
 import App from "./app/App.tsx";
 import "./styles/index.css";
 
-// Clear corrupted localStorage
+// Clear corrupted localStorage and remove stale legacy session data
 try {
   const user = localStorage.getItem('user');
   if (user) {
@@ -12,6 +12,10 @@ try {
       localStorage.clear();
     }
   }
+  localStorage.removeItem('user');
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('token');
+  localStorage.removeItem('refreshToken');
 } catch (e) {
   console.error('Error checking localStorage:', e);
 }

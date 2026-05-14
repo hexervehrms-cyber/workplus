@@ -65,6 +65,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       localStorage.removeItem('dashboardCache');
       localStorage.removeItem('userPreferences');
+      localStorage.removeItem('user');
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('token');
+      localStorage.removeItem('refreshToken');
 
       setLoading(false);
       toast.info('You have been logged out.');

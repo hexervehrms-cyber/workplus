@@ -592,6 +592,92 @@ router.post('/submit',
         });
       }
 
+      // Send confirmation email to employee (async, non-blocking)
+      (async () => {
+        try {
+          const EmailNotificationService = (await import('../utils/emailNotificationService.js')).default;
+
+          const emailSubject = `Welcome to ${onboardingLink.organizationName || 'WorkPlus'}! Your Account is Ready`;
+          
+          const emailHtml = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <div style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+                <h1 style="color: white; margin: 0;">✓ Welcome Aboard!</h1>
+              </div>
+              
+              <div style="padding: 30px; background-color: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 0 0 8px 8px;">
+                <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
+                  Hi <strong>${personalInfo.firstName} ${personalInfo.lastName}</strong>,
+                </p>
+                
+                <p style="font-size: 14px; color: #666; line-height: 1.6; margin-bottom: 20px;">
+                  Congratulations! Your onboarding has been completed successfully. Your employee account is now active and ready to use.
+                </p>
+                
+                <div style="background: #d4edda; border-left: 4px solid #28a745; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                  <p style="margin: 0; color: #155724;"><strong>✓ Account Created Successfully</strong></p>
+                  <p style="margin: 5px 0 0 0; color: #155724; font-size: 12px;">Your profile has been added to the employee directory.</p>
+                </div>
+                
+                <div style="background: #f0f0f0; padding: 20px; margin: 20px 0; border-radius: 8px;">
+                  <h3 style="margin-top: 0; color: #333;">Your Account Details:</h3>
+                  <div style="font-size: 14px; color: #666; line-height: 1.8;">
+                    <p><strong>Name:</strong> ${personalInfo.firstName} ${personalInfo.lastName}</p>
+                    <p><strong>Email:</strong> ${onboardingLink.employeeEmail}</p>
+                    <p><strong>Department:</strong> ${onboardingLink.department}</p>
+                    <p><strong>Organization:</strong> ${onboardingLink.organizationName || 'WorkPlus'}</p>
+                  </div>
+                </div>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                  <a href="${process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://hexerve.online'}/login" style="display: inline-block; background-color: #28a745; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
+                    Login to Your Account
+                  </a>
+                </div>
+                
+                <div style="background: #e7f3ff; border-left: 4px solid #0066cc; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                  <p style="margin: 0; color: #004085;"><strong>📋 Next Steps:</strong></p>
+                  <ul style="margin: 10px 0 0 0; padding-left: 20px; color: #004085; font-size: 13px;">
+                    <li>Log in with your email and password</li>
+                    <li>Complete your profile information</li>
+                    <li>Review company policies and documents</li>
+                    <li>Start tracking your attendance</li>
+                  </ul>
+                </div>
+                
+                <p style="font-size: 12px; color: #999; margin-top: 30px;">
+                  If you have any questions, please contact our HR team at <a href="mailto:${process.env.HR_EMAIL || process.env.FROM_EMAIL}" style="color: #0066cc; text-decoration: none;">${process.env.HR_EMAIL || process.env.FROM_EMAIL}</a>
+                </p>
+                
+                <p style="font-size: 12px; color: #999; margin-top: 20px;">
+                  Best regards,<br>
+                  <strong>${onboardingLink.organizationName || 'WorkPlus'} HR Team</strong>
+                </p>
+              </div>
+            </div>
+          `;
+
+          await EmailNotificationService.sendEmail({
+            to: onboardingLink.employeeEmail,
+            subject: emailSubject,
+            html: emailHtml,
+            from: process.env.FROM_EMAIL || process.env.SMTP_USER
+          });
+
+          logger.info('Onboarding confirmation email sent successfully', {
+            employeeEmail: onboardingLink.employeeEmail,
+            employeeName: `${personalInfo.firstName} ${personalInfo.lastName}`,
+            employeeId: employee._id
+          });
+        } catch (emailError) {
+          logger.error('Failed to send onboarding confirmation email', {
+            error: emailError.message,
+            employeeEmail: onboardingLink.employeeEmail
+          });
+          // Don't fail the entire request if email fails - employee is already created
+        }
+      })();  // Execute immediately but don't await
+
       res.status(201).json({
         success: true,
         message: 'Onboarding form submitted successfully and employee profile created',

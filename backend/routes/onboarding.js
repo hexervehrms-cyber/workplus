@@ -118,17 +118,30 @@ router.post('/generate-link',
         createdBy
       });
 
-      // Check if employee already has an active onboarding link
-      const existingLink = await OnboardingLink.findOne({
+      // Invalidate any existing active onboarding links for this employee
+      // This allows regenerating links if needed
+      const existingLinks = await OnboardingLink.find({
         employeeEmail,
         isUsed: false,
         expiresAt: { $gt: new Date() }
       });
 
-      if (existingLink) {
-        return res.status(400).json({
-          success: false,
-          message: 'An active onboarding link already exists for this employee'
+      if (existingLinks.length > 0) {
+        // Expire all existing links by setting expiration to now
+        await OnboardingLink.updateMany(
+          {
+            employeeEmail,
+            isUsed: false,
+            expiresAt: { $gt: new Date() }
+          },
+          {
+            expiresAt: new Date() // Set expiration to now
+          }
+        );
+        
+        logger.info('Invalidated existing onboarding links', {
+          employeeEmail,
+          count: existingLinks.length
         });
       }
 

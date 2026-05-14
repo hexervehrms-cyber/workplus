@@ -28,6 +28,7 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import jwt from "jsonwebtoken";
 import multer from "multer";
+import cookieParser from "cookie-parser";
 
 // Import database connection
 import connectDB, { isDBConnected, getDBStatus } from "./config/db.js";
@@ -260,6 +261,9 @@ app.use(morgan('combined', {
 
 // Request ID middleware
 app.use(requestIdMiddleware);
+
+// Cookie parser middleware (for HTTP-only cookies)
+app.use(cookieParser());
 
 // Body parsing with size limits
 app.use(express.json({ limit: '10mb' }));

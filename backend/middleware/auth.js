@@ -6,7 +6,8 @@ import { getBearerOrCookieAccessToken } from "../utils/httpAuth.js";
 
 /**
  * Authentication middleware
- * Verifies JWT token and attaches user to request
+ * Verifies JWT token from Bearer header or HTTP-only cookie
+ * Integrates with Redis session management
  */
 export const authenticate = asyncHandler(async (req, res, next) => {
   // Validate JWT_SECRET is configured
@@ -19,7 +20,15 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     });
   }
 
-  const token = getBearerOrCookieAccessToken(req);
+  // Try to get token from multiple sources (priority order):
+  // 1. HTTP-only cookie (most secure)
+  // 2. Authorization header (Bearer token)
+  // 3. Legacy token from getBearerOrCookieAccessToken
+  let token = req.cookies?.accessToken || req.cookies?.token;
+  
+  if (!token) {
+    token = getBearerOrCookieAccessToken(req);
+  }
 
   if (!token) {
     return res.status(401).json({
@@ -82,7 +91,8 @@ export const authenticate = asyncHandler(async (req, res, next) => {
       orgId: user.orgId || 'system',
       tenantId: user.orgId || 'system', // Alias for compatibility
       departmentId: user.departmentId,
-      permissions: user.permissions || []
+      permissions: user.permissions || [],
+      sessionId: decoded.sessionId // For Redis session tracking
     };
     
     next();

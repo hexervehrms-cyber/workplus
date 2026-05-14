@@ -281,8 +281,25 @@ export default function Attendance() {
 
   // Break Start
   const handleBreakStart = async (kind: 'regular' = 'regular') => {
+    // Prevent starting break if already on break
+    if (liveAttendance.isOnBreak) {
+      console.log('⏸️ [BREAK START] Already on break, skipping');
+      return;
+    }
+    
     try {
       setActionLoading(true);
+      
+      // Optimistic update
+      syncAttendance(
+        {
+          isOnBreak: true,
+          breakType: kind,
+          currentBreakDuration: 0
+        },
+        'action'
+      );
+      
       const token = TokenManager.get();
       const payload: any = {
         breakType: kind,
@@ -290,6 +307,7 @@ export default function Attendance() {
       };
       if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
       if (getOrgId()) payload.orgId = getOrgId();
+      
       const response = await fetch(buildApiUrl('/attendance/break-start'), {
         method: 'POST',
         credentials: 'include',
@@ -305,17 +323,25 @@ export default function Attendance() {
         throw new Error(error.message || 'Break start failed');
       }
 
-      syncAttendance(
-        {
-          isOnBreak: true,
-          breakType: kind,
-          currentBreakDuration: 0
-        },
-        'action'
-      );
+      const result = await response.json();
+      const liveStatus = result.data?.liveStatus;
+      
+      // Confirm with server response
+      if (liveStatus) {
+        syncAttendance(
+          {
+            isOnBreak: liveStatus.isOnBreak || true,
+            breakType: liveStatus.breakType || kind,
+            currentBreakDuration: liveStatus.currentBreakDuration || 0
+          },
+          'action'
+        );
+      }
+      
       addActivityLog('Started Break', 'break');
     } catch (error) {
       console.error('Break start error:', error);
+      // Rollback on error
       syncAttendance(
         {
           isOnBreak: false,
@@ -331,16 +357,35 @@ export default function Attendance() {
 
   // Break End
   const handleBreakEnd = async () => {
+    // Prevent ending break if not on break
+    if (!liveAttendance.isOnBreak) {
+      console.log('⏸️ [BREAK END] Not on break, skipping');
+      return;
+    }
+    
     const wasOnBreak = liveAttendance.isOnBreak;
     const prevBreakType = liveAttendance.breakType;
+    
     try {
       setActionLoading(true);
+      
+      // Optimistic update
+      syncAttendance(
+        {
+          isOnBreak: false,
+          breakType: 'regular',
+          currentBreakDuration: 0
+        },
+        'action'
+      );
+      
       const token = TokenManager.get();
       const payload: any = {
         notes: 'Break ended'
       };
       if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
       if (getOrgId()) payload.orgId = getOrgId();
+      
       const response = await fetch(buildApiUrl('/attendance/break-end'), {
         method: 'POST',
         credentials: 'include',
@@ -356,18 +401,24 @@ export default function Attendance() {
         throw new Error(responseData.message || 'Break end failed');
       }
 
-      const newBreakType = responseData?.data?.liveStatus?.breakType || prevBreakType || 'regular';
-      syncAttendance(
-        {
-          isOnBreak: false,
-          breakType: newBreakType,
-          currentBreakDuration: 0
-        },
-        'action'
-      );
+      const liveStatus = responseData?.data?.liveStatus;
+      
+      // Confirm with server response
+      if (liveStatus) {
+        syncAttendance(
+          {
+            isOnBreak: liveStatus.isOnBreak || false,
+            breakType: liveStatus.breakType || 'regular',
+            currentBreakDuration: liveStatus.currentBreakDuration || 0
+          },
+          'action'
+        );
+      }
+      
       addActivityLog('Ended Break', 'working');
     } catch (error) {
       console.error('Break end error:', error);
+      // Rollback on error
       syncAttendance(
         {
           isOnBreak: wasOnBreak,

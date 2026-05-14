@@ -52,29 +52,32 @@ router.post("/login",
         });
       }
 
+      // Generate access token (short-lived)
       const token = jwt.sign(
         { 
           userId: user._id,
           email: user.email,
           role: user.role,
-          orgId: user.orgId || 'system'
+          orgId: user.orgId || 'system',
+          sessionId: crypto.randomBytes(16).toString('hex')
         },
         process.env.JWT_SECRET,
-        { expiresIn: '24h' }
+        { expiresIn: '15m' } // Short-lived access token
       );
 
-      // Generate refresh token
+      // Generate refresh token (long-lived)
       const refreshToken = jwt.sign(
         { 
           userId: user._id,
-          type: 'refresh'
+          type: 'refresh',
+          sessionId: crypto.randomBytes(16).toString('hex')
         },
         process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
 
       // Store refresh token in database
-      await AuthToken.create({
+      const authToken = await AuthToken.create({
         userId: user._id,
         orgId: user.orgId || 'system',
         tokenType: 'refresh',
@@ -87,6 +90,28 @@ router.post("/login",
           ip: req.ip
         }
       });
+
+      // Set HTTP-only cookies for enhanced security
+      const isProduction = process.env.NODE_ENV === 'production';
+      const cookieOptions = {
+        httpOnly: true,
+        secure: isProduction, // HTTPS only in production
+        sameSite: isProduction ? 'none' : 'lax',
+        maxAge: 15 * 60 * 1000, // 15 minutes for access token
+        path: '/'
+      };
+
+      const refreshCookieOptions = {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? 'none' : 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days for refresh token
+        path: '/'
+      };
+
+      // Set cookies
+      res.cookie('accessToken', token, cookieOptions);
+      res.cookie('refreshToken', refreshToken, refreshCookieOptions);
 
       await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
 

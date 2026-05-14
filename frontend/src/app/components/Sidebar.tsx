@@ -27,7 +27,8 @@ import {
   FolderOpen,
   ChevronDown,
   Phone,
-  Zap
+  Zap,
+  ChevronLeft
 } from 'lucide-react';
 
 interface NavItem {
@@ -109,6 +110,7 @@ export function Sidebar() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const filteredNavItems = navigationItems.filter(item => 
     user && item.roles.includes(user.role)
@@ -127,7 +129,7 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="w-64 bg-card border-r border-border h-screen sticky top-0 flex flex-col">
+    <aside className={`${isCollapsed ? 'w-20' : 'w-64'} bg-card border-r border-border h-screen sticky top-0 flex flex-col transition-all duration-300`}>
       {/* Logo */}
       <div className="p-6 border-b border-border">
         <Link 
@@ -144,16 +146,18 @@ export function Sidebar() {
             }
           }}
         >
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-secondary flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-secondary flex items-center justify-center flex-shrink-0">
             <Briefcase className="w-6 h-6 text-white" />
           </div>
-          <div>
-            <h1 className="text-xl font-bold text-foreground">WorkPlus Pro</h1>
-            <p className="text-xs text-muted-foreground">
-              {user?.role === 'super_admin' ? 'Super Admin' : 
-               user?.role === 'admin' ? 'Admin Panel' : 'Employee Portal'}
-            </p>
-          </div>
+          {!isCollapsed && (
+            <div>
+              <h1 className="text-xl font-bold text-foreground">WorkPlus Pro</h1>
+              <p className="text-xs text-muted-foreground">
+                {user?.role === 'super_admin' ? 'Super Admin' : 
+                 user?.role === 'admin' ? 'Admin Panel' : 'Employee Portal'}
+              </p>
+            </div>
+          )}
         </Link>
       </div>
 
@@ -188,15 +192,20 @@ export function Sidebar() {
                     navigate(item.path);
                   }
                 }}
+                title={isCollapsed ? item.label : ''}
               >
-                <Icon className="w-5 h-5" />
-                <span className="font-medium flex-1">{item.label}</span>
-                {hasChildren && (
-                  <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                <Icon className="w-5 h-5 flex-shrink-0" />
+                {!isCollapsed && (
+                  <>
+                    <span className="font-medium flex-1">{item.label}</span>
+                    {hasChildren && (
+                      <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                    )}
+                  </>
                 )}
               </div>
               
-              {hasChildren && isExpanded && (
+              {!isCollapsed && hasChildren && isExpanded && (
                 <div className="ml-4 mt-1 space-y-1">
                   {item.children!.map((child) => {
                     const ChildIcon = child.icon;
@@ -239,9 +248,20 @@ export function Sidebar() {
             }
           }}
           className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-all"
+          title={isCollapsed ? 'Settings' : ''}
         >
-          <Settings className="w-5 h-5" />
-          <span className="font-medium">Settings</span>
+          <Settings className="w-5 h-5 flex-shrink-0" />
+          {!isCollapsed && <span className="font-medium">Settings</span>}
+        </button>
+        
+        {/* Collapse Button */}
+        <button
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-all"
+          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          <ChevronLeft className={`w-5 h-5 flex-shrink-0 transition-transform duration-300 ${isCollapsed ? 'rotate-180' : ''}`} />
+          {!isCollapsed && <span className="font-medium">Collapse</span>}
         </button>
       </div>
     </aside>

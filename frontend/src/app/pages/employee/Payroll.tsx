@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Download, Loader, FileText, Calendar, RefreshCw } from 'lucide-react';
+import { Download, Loader, FileText, Calendar, RefreshCw, Eye } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -52,6 +52,7 @@ export default function Payroll() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [expandedSlip, setExpandedSlip] = useState<string | null>(null);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
+  const [viewingSlipId, setViewingSlipId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchEmployeeAndSlips();
@@ -117,25 +118,35 @@ export default function Payroll() {
     try {
       const fileUrl = buildFileUrl(`/salary/slip/${slipId}/download`);
       
-      const response = await fetch(fileUrl);
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `salary-slip-${slipId}.html`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-        toast.success('Salary slip downloaded');
-      } else {
-        toast.error('Failed to download salary slip');
+      const response = await fetch(fileUrl, {
+        credentials: 'include',
+        headers: {
+          'Accept': 'application/pdf,text/html'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Download failed with status ${response.status}`);
       }
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `salary-slip-${slipId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast.success('Salary slip downloaded successfully');
     } catch (error) {
       console.error('Error downloading salary slip:', error);
-      toast.error('Failed to download salary slip');
+      toast.error('Failed to download salary slip. Please try again.');
     }
+  };
+
+  const handleViewSalarySlip = (slipId: string) => {
+    setViewingSlipId(viewingSlipId === slipId ? null : slipId);
   };
 
   const currentSlip = salarySlips.find(
@@ -420,8 +431,19 @@ export default function Payroll() {
                   <Button
                     size="sm"
                     variant="outline"
+                    onClick={() => handleViewSalarySlip(slip._id)}
+                    className="rounded-lg"
+                    title="View salary slip details"
+                  >
+                    <Eye className="w-4 h-4 mr-2" />
+                    View
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
                     onClick={() => handleDownloadSalarySlip(slip._id)}
                     className="rounded-lg"
+                    title="Download salary slip as PDF"
                   >
                     <Download className="w-4 h-4 mr-2" />
                     Download

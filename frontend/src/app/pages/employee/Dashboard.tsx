@@ -9,6 +9,7 @@ import { apiGet, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
 import { clearPersistedAttendance, writePersistedAttendance } from '../../utils/attendancePersistence';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useAttendance } from '../../../context/AttendanceContext';
+import { getDynamicGreeting, getMotivationalQuote } from '../../utils/greetingUtils';
 import {
   Calendar,
   Clock,
@@ -114,6 +115,46 @@ function parseTodayCheckInTime(checkInTime: string): Date | null {
     return Number.isNaN(d.getTime()) ? null : d;
   }
   return null;
+}
+
+// ============================================================================
+// DYNAMIC GREETING HEADER COMPONENT
+// ============================================================================
+function DynamicGreetingHeader({ userName }: { userName: string }) {
+  const [greeting, setGreeting] = useState(getDynamicGreeting(userName));
+  const [quote, setQuote] = useState(getMotivationalQuote());
+
+  useEffect(() => {
+    // Update greeting every minute
+    const interval = setInterval(() => {
+      setGreeting(getDynamicGreeting(userName));
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [userName]);
+
+  return (
+    <div className={`bg-gradient-to-r ${greeting.bgGradient} rounded-2xl p-8 flex-1 border border-opacity-20 border-current`}>
+      <div className="space-y-3">
+        <div className="flex items-center gap-3">
+          <span className="text-5xl">{greeting.emoji}</span>
+          <h1 className={`text-4xl font-bold ${greeting.textColor}`}>
+            {greeting.message}
+          </h1>
+        </div>
+        
+        <p className={`text-lg ${greeting.textColor} opacity-90`}>
+          {greeting.subMessage}
+        </p>
+        
+        <div className={`pt-4 border-t border-current border-opacity-20`}>
+          <p className={`text-sm italic ${greeting.textColor} opacity-75`}>
+            💡 {quote}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function EmployeeDashboard() {
@@ -1065,12 +1106,7 @@ export default function EmployeeDashboard() {
       <div className="p-8 space-y-8">
         {/* Welcome Header with Attendance Buttons */}
         <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground mb-2">
-              Welcome back, {user?.name || 'Employee'}! 👋
-            </h1>
-            <p className="text-muted-foreground">Here's what's happening with your work today</p>
-          </div>
+          <DynamicGreetingHeader userName={user?.name || 'Employee'} />
 
           {/* Attendance Status and Action Buttons - Top Right Corner */}
           <div className="flex flex-col items-end gap-4">

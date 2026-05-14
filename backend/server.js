@@ -73,7 +73,7 @@ import redis from "./utils/redis.js";
 
 // Import KPI updater
 import { emitKPIUpdate, emitAttendanceKPIUpdate, emitLeaveKPIUpdate, emitExpenseKPIUpdate, emitEmployeeKPIUpdate } from "./utils/kpiUpdater.js";
-import { setAccessTokenCookie, clearAccessTokenCookie, parseCookies, ACCESS_TOKEN_COOKIE } from "./utils/httpAuth.js";
+import { setAccessTokenCookie, clearAccessTokenCookie, clearLegacyAuthCookies, parseCookies, ACCESS_TOKEN_COOKIE } from "./utils/httpAuth.js";
 
 // Import seeders
 import seedSuperAdmin from "./seeders/superAdminSeeder.js";
@@ -98,6 +98,7 @@ import holidaysRoutes from "./routes/holidays.js";
 import profileRoutes from "./routes/profile.js";
 import rolesRoutes from "./routes/roles.js";
 import chatRoutes from "./routes/chat.js";
+import currencyRoutes from "./routes/currency.js";
 import onboardingRoutes from "./routes/onboarding.js";
 import salaryRoutes from "./routes/salary.js";
 import payrollRoutes from "./routes/payroll.js";
@@ -670,6 +671,9 @@ app.use("/api/sales/revenue", authenticate, revenueRoutes);
 // Chat routes (with authentication)
 app.use("/api/chat", authenticate, chatRoutes);
 
+// Currency routes (with authentication)
+app.use("/api/currency", authenticate, currencyRoutes);
+
 // Salary routes (with authentication)
 app.use("/api/salary", authenticate, salaryRoutes);
 
@@ -1224,6 +1228,8 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
 
     const employee = await Employee.findOne({ userId: user._id, orgId }).lean();
 
+    clearLegacyAuthCookies(res);
+    clearAccessTokenCookie(res);
     // httpOnly access cookie (Bearer still accepted for API clients)
     setAccessTokenCookie(res, token, 24 * 60 * 60);
 
@@ -1358,6 +1364,7 @@ app.get("/api/auth/me", authenticate, asyncHandler(async (req, res) => {
 
 app.post("/api/auth/logout", authenticate, asyncHandler(async (req, res) => {
   clearAccessTokenCookie(res);
+  clearLegacyAuthCookies(res);
   res.json({
     success: true,
     message: "Logout successful"

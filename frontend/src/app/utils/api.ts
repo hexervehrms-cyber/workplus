@@ -3,6 +3,13 @@
  * Features: Auto auth header, timeout, retry, error handling
  */
 
+import {
+  loadAccessTokenFromIndexedDB,
+  getAccessTokenMirror,
+  setAccessTokenMirror,
+  clearAccessTokenMirror
+} from './sessionAccessMirror';
+
 // API Configuration - Production Ready
 // In production, VITE_API_URL should be the full backend URL (e.g., https://workplus-backend-sg3a.onrender.com)
 // In development, it falls back to /api which uses Vite proxy
@@ -84,23 +91,23 @@ export class ApiError extends Error {
   }
 }
 
-// Token management
-const TOKEN_KEY = 'authToken';
-/** Legacy key used by older code paths; must be honored so session checks match API calls. */
+// Token management (httpOnly cookie + optional IndexedDB mirror for Authorization header)
 const LEGACY_TOKEN_KEY = 'token';
 const REFRESH_TOKEN_KEY = 'refreshToken';
 const USER_KEY = 'user';
 
 export const TokenManager = {
   get(): string | null {
-    // Only get from cookies (httpOnly), never from localStorage
-    // Cookies are automatically sent with requests
-    return null; // Token is in httpOnly cookie, not accessible from JS
+    return getAccessTokenMirror();
+  },
+
+  /** Prime memory from IndexedDB — call once during app bootstrap before API calls. */
+  async hydrateFromIndexedDB(): Promise<void> {
+    await loadAccessTokenFromIndexedDB();
   },
   
   set(token: string): void {
-    // Token is set as httpOnly cookie by backend
-    // Frontend doesn't store it
+    setAccessTokenMirror(token || null);
   },
   
   getRefreshToken(): string | null {
@@ -128,12 +135,12 @@ export const TokenManager = {
   },
   
   clear(): void {
-    // Cookies are cleared by backend
+    clearAccessTokenMirror();
   },
 
   /** Remove only access tokens (keep user + refresh) — use when session uses httpOnly access cookie. */
   clearAccessTokens(): void {
-    // Handled by backend
+    clearAccessTokenMirror();
     localStorage.removeItem(LEGACY_TOKEN_KEY);
   }
 };
@@ -387,6 +394,10 @@ export class AuthService {
         };
 
         console.log('User data to return:', userData);
+
+        if (token) {
+          TokenManager.set(token);
+        }
 
         return {
           success: true,
@@ -1010,10 +1021,16 @@ export class LeaveTypeSettingsService {
     return response;
   }
 
-  static async updateSettings(orgId: string, enabledLeaveTypes: any, updatedBy: string) {
+  static async updateSettings(
+    orgId: string,
+    enabledLeaveTypes: any,
+    updatedBy: string,
+    balanceKpiVisibility?: Record<string, boolean>
+  ) {
     const response = await apiClient.put<any>(`/leave-type-settings/${orgId}`, {
       enabledLeaveTypes,
-      updatedBy
+      updatedBy,
+      ...(balanceKpiVisibility ? { balanceKpiVisibility } : {})
     });
     return response;
   }

@@ -4,6 +4,7 @@
  * Includes token blacklisting for logout functionality
  */
 
+import crypto from "crypto";
 import redis from './redis.js';
 import logger from './logger.js';
 
@@ -11,6 +12,11 @@ const TOKEN_CACHE_PREFIX = 'jwt_token:';
 const USER_SESSION_PREFIX = 'user_session:';
 const TOKEN_BLACKLIST_PREFIX = 'token_blacklist:';
 const TOKEN_TTL = 24 * 60 * 60; // 24 hours
+
+/** Full-token hash — NEVER use token.substring(0,20): HS256 JWTs share an identical prefix, causing cross-user cache collisions. */
+function tokenFingerprint(token) {
+  return crypto.createHash("sha256").update(String(token), "utf8").digest("hex");
+}
 
 class JWTCache {
   /**
@@ -23,7 +29,7 @@ class JWTCache {
     }
 
     try {
-      const key = `${TOKEN_CACHE_PREFIX}${token.substring(0, 20)}`;
+      const key = `${TOKEN_CACHE_PREFIX}${tokenFingerprint(token)}`;
       const cacheData = {
         userId,
         userData,
@@ -59,7 +65,7 @@ class JWTCache {
     }
 
     try {
-      const key = `${TOKEN_CACHE_PREFIX}${token.substring(0, 20)}`;
+      const key = `${TOKEN_CACHE_PREFIX}${tokenFingerprint(token)}`;
       const cachedData = await redis.get(key);
       
       if (cachedData) {
@@ -145,7 +151,7 @@ class JWTCache {
     }
 
     try {
-      const key = `${TOKEN_BLACKLIST_PREFIX}${token.substring(0, 20)}`;
+      const key = `${TOKEN_BLACKLIST_PREFIX}${tokenFingerprint(token)}`;
       const success = await redis.set(key, { blacklistedAt: new Date().toISOString() }, expiresIn);
       
       if (success) {
@@ -172,7 +178,7 @@ class JWTCache {
     }
 
     try {
-      const key = `${TOKEN_BLACKLIST_PREFIX}${token.substring(0, 20)}`;
+      const key = `${TOKEN_BLACKLIST_PREFIX}${tokenFingerprint(token)}`;
       const blacklisted = await redis.get(key);
       
       if (blacklisted) {
@@ -199,7 +205,7 @@ class JWTCache {
     }
 
     try {
-      const key = `${TOKEN_CACHE_PREFIX}${token.substring(0, 20)}`;
+      const key = `${TOKEN_CACHE_PREFIX}${tokenFingerprint(token)}`;
       await redis.del(key);
       
       logger.debug('Token cache cleared', {

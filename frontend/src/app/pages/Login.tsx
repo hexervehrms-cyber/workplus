@@ -13,6 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Alert, AlertDescription } from '../components/ui/alert';
 import { Briefcase, Loader2, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { ApiError } from '../utils/api';
+import { isPathAllowedForRole } from '../utils/roleRouteGuard';
 
 const REMEMBER_EMAIL_KEY = 'workplus_login_email';
 const LOGIN_ATTEMPTS_KEY = 'workplus_login_attempts_ts';
@@ -53,9 +54,11 @@ export default function Login() {
   // Redirect if already logged in
   useEffect(() => {
     if (user && !authLoading) {
-      const from = (location.state as any)?.from?.pathname || roleRedirect;
-      console.log('🔄 User already logged in, redirecting to:', from, 'Role:', user.role, 'User:', user);
-      navigate(from, { replace: true });
+      const rawFrom = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname;
+      const target =
+        rawFrom && isPathAllowedForRole(rawFrom, user.role) ? rawFrom : roleRedirect;
+      console.log('🔄 User already logged in, redirecting to:', target, 'Role:', user.role);
+      navigate(target, { replace: true });
     }
   }, [user, authLoading, navigate, location.state, roleRedirect]);
 

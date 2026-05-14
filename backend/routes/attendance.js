@@ -6,6 +6,7 @@
 
 import express from 'express';
 import Attendance from '../models/Attendance.js';
+import AttendanceHistory from '../models/AttendanceHistory.js';
 import Employee from '../models/Employee.js';
 import ActivityLog from '../models/ActivityLog.js';
 import { authorize, authenticate } from '../middleware/auth.js';
@@ -15,6 +16,7 @@ import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
 import { emitAttendanceKPIUpdate } from '../utils/kpiUpdater.js';
 import { dashboardCache } from '../utils/dashboardCache.js';
+import { getUserTimezone } from '../utils/timezoneHelper.js';
 
 const router = express.Router();
 
@@ -47,6 +49,28 @@ const findEmployeeForSelfService = async (currentUserId, authOrgId) => {
       .sort({ updatedAt: -1 })
       .lean();
   }
+  
+  // If still no employee found, create one
+  if (!employee) {
+    console.log('🔍 [ATTENDANCE] Creating employee record for user:', currentUserId);
+    try {
+      const newEmployee = await Employee.create({
+        userId: currentUserId,
+        orgId: authOrgId,
+        status: 'active'
+      });
+      employee = newEmployee.toObject();
+      console.log('✅ [ATTENDANCE] Created new employee record:', {
+        employeeId: employee._id,
+        userId: currentUserId,
+        orgId: authOrgId
+      });
+    } catch (createError) {
+      console.error('❌ [ATTENDANCE] Failed to create employee record:', createError.message);
+      return null;
+    }
+  }
+  
   return employee;
 };
 
@@ -288,6 +312,17 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   const authOrgId = req.user?.orgId;
   const authRole = req.user?.role;
   
+  // DEBUG: Log incoming request
+  console.log('🔍 [CHECK-IN] Request received:', {
+    authRole,
+    authUserId,
+    authOrgId,
+    bodyUserId: userId,
+    bodyEmployeeId: employeeId,
+    bodyOrgId: orgId,
+    fullReqUser: req.user
+  });
+  
   // Enforce tenant/user isolation. Employee check-in is always for authenticated user.
   let effectiveUserId = userId;
   let effectiveEmployeeId = employeeId;
@@ -295,31 +330,94 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId, status: 'active' }).select('_id firstName lastName userId').lean();
+    console.log('🔍 [CHECK-IN] Employee role detected, looking up employee record...');
+    let employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId, status: 'active' }).select('_id firstName lastName userId').lean();
+    
     if (!employee) {
-      return res.status(403).json({
-        success: false,
-        message: 'Employee profile not found or inactive for authenticated user'
-      });
+      console.log('❌ [CHECK-IN] Employee profile not found, attempting to create one...');
+      
+      // Try to find ANY employee record for this user to debug
+      const anyEmployee = await Employee.findOne({ userId: authUserId }).select('_id firstName lastName userId orgId status').lean();
+      console.log('🔍 [CHECK-IN] Any employee record found:', anyEmployee);
+      
+      // Create employee record if it doesn't exist
+      try {
+        const newEmployee = await Employee.create({
+          userId: authUserId,
+          orgId: authOrgId,
+          status: 'active'
+        });
+        employee = newEmployee.toObject();
+        console.log('✅ [CHECK-IN] Created new employee record:', {
+          employeeId: employee._id,
+          userId: authUserId,
+          orgId: authOrgId
+        });
+      } catch (createError) {
+        console.error('❌ [CHECK-IN] Failed to create employee record:', createError.message);
+        logger.error('Failed to create employee record on check-in', {
+          userId: authUserId,
+          orgId: authOrgId,
+          error: createError.message
+        });
+        return res.status(403).json({
+          success: false,
+          message: 'Employee profile not found or inactive for authenticated user',
+          code: 'EMPLOYEE_NOT_FOUND',
+          details: {
+            userId: authUserId,
+            orgId: authOrgId
+          }
+        });
+      }
     }
+    
+    console.log('✅ [CHECK-IN] Employee found/created, using employee data:', {
+      employeeId: employee._id,
+      firstName: employee.firstName,
+      lastName: employee.lastName
+    });
     effectiveUserId = authUserId;
     effectiveEmployeeId = employee._id;
     effectiveOrgId = authOrgId;
     effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employeeName || 'Employee';
   } else {
+    console.log('❌ [CHECK-IN] Non-employee role detected:', authRole);
     if (!effectiveUserId || !effectiveEmployeeId || !effectiveOrgId) {
+      console.log('❌ [CHECK-IN] Missing required fields for non-employee:', {
+        effectiveUserId,
+        effectiveEmployeeId,
+        effectiveOrgId,
+        authRole
+      });
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields: userId, employeeId, orgId'
+        message: 'Missing required fields: userId, employeeId, orgId',
+        code: 'MISSING_FIELDS'
       });
     }
     // Non-employee actors cannot write attendance for another org
     if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
       return res.status(403).json({
         success: false,
-        message: 'Unauthorized org access'
+        message: 'Unauthorized org access',
+        code: 'UNAUTHORIZED_ORG'
       });
     }
+  }
+
+  // Validate effective values
+  if (!effectiveUserId || !effectiveEmployeeId || !effectiveOrgId) {
+    logger.error('Check-in validation failed - missing effective values', {
+      effectiveUserId,
+      effectiveEmployeeId,
+      effectiveOrgId
+    });
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid check-in request - missing required data',
+      code: 'INVALID_REQUEST'
+    });
   }
 
   const today = new Date();
@@ -380,39 +478,70 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   }
 
   // Create new attendance record
-  const attendance = await Attendance.create({
-    userId: effectiveUserId,
-    employeeId: effectiveEmployeeId,
-    employeeName: effectiveEmployeeName,
-    date: today,
-    checkIn: new Date(),
-    status: 'present',
-    orgId: effectiveOrgId,
-    checkInLocation: location || 'Office',
-    checkInIP: req.ip || req.connection.remoteAddress,
-    checkInNotes: notes
-  });
+  let attendance;
+  try {
+    const timezone = getUserTimezone(req) || 'Asia/Kolkata';
+    
+    attendance = await Attendance.create({
+      userId: effectiveUserId,
+      employeeId: effectiveEmployeeId,
+      employeeName: effectiveEmployeeName,
+      date: today,
+      checkIn: new Date(),
+      timezone,
+      status: 'present',
+      orgId: effectiveOrgId,
+      checkInLocation: location || 'Office',
+      checkInIP: req.ip || req.connection.remoteAddress,
+      checkInNotes: notes
+    });
+
+    logger.info('Attendance check-in created successfully', {
+      attendanceId: attendance._id,
+      userId: effectiveUserId,
+      employeeId: effectiveEmployeeId,
+      orgId: effectiveOrgId,
+      timezone
+    });
+  } catch (createError) {
+    logger.error('Failed to create attendance record', {
+      userId: effectiveUserId,
+      employeeId: effectiveEmployeeId,
+      orgId: effectiveOrgId,
+      error: createError.message
+    });
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create attendance record',
+      code: 'ATTENDANCE_CREATE_FAILED',
+      details: createError.message
+    });
+  }
 
   // Log activity
-  await ActivityLog.logActivity({
-    userId: effectiveUserId,
-    orgId: effectiveOrgId,
-    action: 'attendance_checkin',
-    entity: {
-      entityType: 'attendance',
-      entityId: attendance._id,
-      entityName: `${effectiveEmployeeName} - Check In`
-    },
-    details: {
-      location: location || 'Office',
-      notes,
-      employeeName: effectiveEmployeeName
-    },
-    ipAddress: req.ip,
-    userAgent: req.get('User-Agent'),
-    severity: 'low',
-    category: 'user'
-  });
+  try {
+    await ActivityLog.logActivity({
+      userId: effectiveUserId,
+      orgId: effectiveOrgId,
+      action: 'attendance_checkin',
+      entity: {
+        entityType: 'attendance',
+        entityId: attendance._id,
+        entityName: `${effectiveEmployeeName} - Check In`
+      },
+      details: {
+        location: location || 'Office',
+        notes,
+        employeeName: effectiveEmployeeName
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      severity: 'low',
+      category: 'user'
+    });
+  } catch (logError) {
+    logger.warn('Failed to log check-in activity', { error: logError.message });
+  }
 
   // Emit real-time update (this also emits KPI update internally)
   if (req.emitAttendanceUpdate) {
@@ -436,7 +565,8 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
       employeeId: effectiveEmployeeId,
       userId: effectiveUserId,
       timestamp: new Date().toISOString(),
-      checkInTime: attendance.checkIn
+      checkInTime: attendance.checkIn,
+      employeeName: effectiveEmployeeName
     });
   }
 
@@ -473,13 +603,31 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId, status: 'active' }).select('_id firstName lastName').lean();
+    let employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId, status: 'active' }).select('_id firstName lastName').lean();
+    
     if (!employee) {
-      return res.status(403).json({
-        success: false,
-        message: 'Employee profile not found or inactive for authenticated user'
-      });
+      // Create employee record if it doesn't exist
+      try {
+        const newEmployee = await Employee.create({
+          userId: authUserId,
+          orgId: authOrgId,
+          status: 'active'
+        });
+        employee = newEmployee.toObject();
+        console.log('✅ [CHECK-OUT] Created new employee record:', {
+          employeeId: employee._id,
+          userId: authUserId,
+          orgId: authOrgId
+        });
+      } catch (createError) {
+        console.error('❌ [CHECK-OUT] Failed to create employee record:', createError.message);
+        return res.status(403).json({
+          success: false,
+          message: 'Employee profile not found or inactive for authenticated user'
+        });
+      }
     }
+    
     effectiveUserId = authUserId;
     effectiveEmployeeId = employee._id;
     effectiveOrgId = authOrgId;
@@ -560,6 +708,64 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     { new: true }
   ).populate('userId', 'name email avatar')
    .populate('employeeId', 'employeeCode department');
+
+  // Sync to AttendanceHistory for admin reporting
+  try {
+    const totalBreakDuration = attendance.breaks?.reduce((total, breakItem) => {
+      if (breakItem.startTime && breakItem.endTime) {
+        return total + ((new Date(breakItem.endTime) - new Date(breakItem.startTime)) / (1000 * 60));
+      }
+      return total;
+    }, 0) || 0;
+
+    await AttendanceHistory.findOneAndUpdate(
+      {
+        employeeId: effectiveEmployeeId,
+        date: attendance.date
+      },
+      {
+        userId: effectiveUserId,
+        orgId: effectiveOrgId,
+        date: attendance.date,
+        checkInTime: attendance.checkIn,
+        checkOutTime: checkOutTime,
+        hoursWorked: Math.round(hoursWorked * 100) / 100,
+        status: 'present',
+        breaks: attendance.breaks?.map(breakItem => ({
+          breakType: breakItem.breakType || 'regular',
+          startTime: breakItem.startTime,
+          endTime: breakItem.endTime,
+          duration: breakItem.duration || 0,
+          reason: breakItem.notes || ''
+        })) || [],
+        totalBreakDuration: Math.round(totalBreakDuration),
+        breakCount: attendance.breaks?.length || 0,
+        isLate: attendance.isLate || false,
+        lateMinutes: attendance.lateMinutes || 0,
+        notes: notes || attendance.notes || '',
+        isApproved: true,
+        createdBy: effectiveUserId,
+        updatedBy: effectiveUserId
+      },
+      { 
+        upsert: true, 
+        new: true,
+        setDefaultsOnInsert: true
+      }
+    );
+
+    logger.info('Synced attendance to history', {
+      employeeId: effectiveEmployeeId,
+      date: attendance.date,
+      hoursWorked: Math.round(hoursWorked * 100) / 100
+    });
+  } catch (historyError) {
+    logger.error('Failed to sync attendance to history', {
+      employeeId: effectiveEmployeeId,
+      error: historyError.message
+    });
+    // Don't fail the check-out if history sync fails
+  }
 
   // Log activity
   await ActivityLog.logActivity({
@@ -1107,184 +1313,6 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       message: 'Failed to end break. Please try again.'
     });
   }
-}));
-
-/**
- * POST /api/attendance/meeting-start
- * Start meeting mode for today's attendance
- */
-router.post('/meeting-start', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const { employeeId, meetingTitle = 'Meeting', meetingType = 'internal', notes, orgId } = req.body;
-  const currentUserId = req.user.userId;
-  const authOrgId = req.user.orgId;
-  const authRole = req.user.role;
-
-  let effectiveEmployeeId = employeeId;
-  let effectiveOrgId = orgId;
-
-  if (authRole === 'employee') {
-    const employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId, status: 'active' })
-      .select('_id')
-      .lean();
-    if (!employee) {
-      return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
-    }
-    effectiveEmployeeId = employee._id;
-    effectiveOrgId = authOrgId;
-  } else if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
-    return res.status(403).json({ success: false, message: 'Unauthorized org access' });
-  }
-
-  if (!effectiveEmployeeId || !effectiveOrgId) {
-    return res.status(400).json({ success: false, message: 'Missing required fields: employeeId, orgId' });
-  }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-
-  // Find today's attendance record
-  const attendance = await Attendance.findOne({
-    employeeId: effectiveEmployeeId,
-    orgId: effectiveOrgId,
-    date: { $gte: today, $lt: tomorrow }
-  }).sort({ _id: -1 });
-
-  if (!attendance || !attendance.checkIn) {
-    return res.status(400).json({
-      success: false,
-      message: 'No check-in found for today. Please check in first.'
-    });
-  }
-
-  if (attendance.checkOut) {
-    return res.status(400).json({
-      success: false,
-      message: 'Already checked out. Cannot start meeting.'
-    });
-  }
-
-  // Check if already in meeting
-  if (attendance.meetingMode?.isActive) {
-    return res.status(200).json({
-      success: true,
-      message: 'Already in a meeting.',
-      data: attendance
-    });
-  }
-
-  // Check if on break - cannot start meeting while on break
-  const currentBreak = attendance.breaks?.find(b => b.startTime && !b.endTime);
-  if (currentBreak) {
-    // Try to auto-end the break
-    const endTime = new Date();
-    const breakDuration = (endTime - currentBreak.startTime) / (1000 * 60);
-    
-    const breakIndex = attendance.breaks.findIndex(b => b.startTime && !b.endTime);
-    if (breakIndex !== -1) {
-      const updateQuery = {
-        $set: {
-          [`breaks.${breakIndex}.endTime`]: endTime,
-          [`breaks.${breakIndex}.duration`]: Math.round(breakDuration),
-          [`breaks.${breakIndex}.endNotes`]: 'Auto-ended to start meeting'
-        }
-      };
-      
-      try {
-        await Attendance.findByIdAndUpdate(attendance._id, updateQuery);
-      } catch (error) {
-        return res.status(400).json({
-          success: false,
-          message: 'Cannot start meeting while on break. Failed to auto-end break.'
-        });
-      }
-    }
-  }
-
-  // Start meeting
-  const meetingMode = {
-    isActive: true,
-    meetingTitle,
-    meetingType,
-    notes,
-    startTime: new Date(),
-    startedBy: currentUserId
-  };
-
-  // Send response immediately
-  res.status(201).json({
-    success: true,
-    message: 'Meeting started successfully',
-    data: {
-      meetingMode: {
-        isActive: true,
-        meetingTitle
-      }
-    }
-  });
-
-  // Update database asynchronously
-  setImmediate(async () => {
-    try {
-      const updatedAttendance = await Attendance.findByIdAndUpdate(
-        attendance._id,
-        { 
-          $set: { meetingMode },
-          $push: {
-            meetings: {
-              startTime: meetingMode.startTime,
-              title: meetingTitle,
-              type: meetingType,
-              ipAddress: req.ip || req.connection.remoteAddress
-            }
-          }
-        },
-        { new: true }
-      ).select('_id employeeId orgId meetingMode');
-
-      // Log activity asynchronously
-      ActivityLog.logActivity({
-        userId: currentUserId,
-        orgId: effectiveOrgId,
-        action: 'attendance_meeting_start',
-        entity: {
-          entityType: 'attendance',
-          entityId: attendance._id,
-          entityName: `Meeting Started - ${meetingTitle}`
-        },
-        details: {
-          meetingTitle,
-          meetingType,
-          notes
-        },
-        ipAddress: req.ip,
-        userAgent: req.get('User-Agent'),
-        severity: 'low',
-        category: 'user'
-      }).catch(err => logger.error('Failed to log meeting start activity', { error: err.message }));
-
-      // Emit real-time event to notify admin dashboard
-      if (req.emitAttendanceUpdate) {
-        req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId).catch(err => 
-          logger.error('Failed to emit attendance update', { error: err.message })
-        );
-      }
-
-      // Emit specific meeting:started event for page synchronization
-      if (global.io) {
-        global.io.to(`tenant_${effectiveOrgId}`).emit('meeting:started', {
-          employeeId: effectiveEmployeeId,
-          meetingTitle: meetingMode.meetingTitle,
-          meetingType: meetingMode.meetingType,
-          timestamp: new Date().toISOString()
-        });
-        logger.info('Meeting started event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
-      }
-    } catch (err) {
-      logger.error('Error in async meeting start operations', { error: err.message, employeeId: effectiveEmployeeId });
-    }
-  });
 }));
 
 /**

@@ -98,3 +98,23 @@ export function clearAccessTokenCookie(res) {
   if (secure) parts.push('Secure');
   res.append('Set-Cookie', parts.join('; '));
 }
+
+/**
+ * Expire legacy auth cookies so they cannot override `wp_at` in middleware
+ * (authenticate checks wp_at || accessToken || token).
+ * @param {import('express').Response} res
+ */
+export function clearLegacyAuthCookies(res) {
+  const isProd = process.env.NODE_ENV === 'production';
+  const sameSite = normalizeSameSite(process.env.AUTH_COOKIE_SAMESITE, isProd);
+  const secure =
+    process.env.AUTH_COOKIE_SECURE !== 'false' && (isProd || sameSite === 'None');
+  const domain = process.env.AUTH_COOKIE_DOMAIN;
+  const baseParts = ['Path=/', 'Max-Age=0', 'HttpOnly', `SameSite=${sameSite}`];
+  if (domain) baseParts.push(`Domain=${domain}`);
+  if (secure) baseParts.push('Secure');
+  const suffix = baseParts.join('; ');
+  for (const name of ['accessToken', 'token', 'refreshToken']) {
+    res.append('Set-Cookie', `${name}=;${suffix}`);
+  }
+}

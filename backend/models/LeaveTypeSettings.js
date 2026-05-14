@@ -17,6 +17,21 @@ const leaveTypeSettingsSchema = new mongoose.Schema(
       ncns: { type: Boolean, default: false },
       sandwichLeave: { type: Boolean, default: false }
     },
+    /** When false, hide that leave balance KPI on the employee leave page (type can still be enabled for requests). */
+    balanceKpiVisibility: {
+      vacation: { type: Boolean },
+      sickLeave: { type: Boolean },
+      casualLeave: { type: Boolean },
+      earnedLeave: { type: Boolean },
+      medicalLeave: { type: Boolean },
+      maternityLeave: { type: Boolean },
+      paternityLeave: { type: Boolean },
+      compensatoryOff: { type: Boolean },
+      personal: { type: Boolean },
+      emergency: { type: Boolean },
+      ncns: { type: Boolean },
+      sandwichLeave: { type: Boolean }
+    },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     updatedAt: { type: Date, default: Date.now }
   },

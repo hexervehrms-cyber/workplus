@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Calendar as CalendarIcon, CheckCircle, XCircle, Clock, Plus, Edit2, Download, Trash2, AlertCircle } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -35,11 +35,28 @@ interface LeaveRequest {
   days?: number;
 }
 
+const DEFAULT_ENABLED_LEAVE_TYPES: Record<string, boolean> = {
+  vacation: true,
+  sickLeave: true,
+  casualLeave: true,
+  earnedLeave: true,
+  medicalLeave: true,
+  maternityLeave: false,
+  paternityLeave: false,
+  compensatoryOff: true,
+  personal: false,
+  emergency: false,
+  ncns: false,
+  sandwichLeave: false
+};
+
 export default function Leave() {
   const { user } = useAuth();
   const [leaveHistory, setLeaveHistory] = useState<LeaveRequest[]>([]);
   const [leaveBalance, setLeaveBalance] = useState<any>(null);
-  const [enabledLeaveTypes, setEnabledLeaveTypes] = useState<any>(null);
+  const [enabledLeaveTypes, setEnabledLeaveTypes] = useState<Record<string, boolean> | null>(null);
+  const [balanceKpiVisibility, setBalanceKpiVisibility] = useState<Record<string, boolean> | null>(null);
+  const [leaveKpiReady, setLeaveKpiReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showLeaveForm, setShowLeaveForm] = useState(false);
   const [editingLeaveId, setEditingLeaveId] = useState<string | null>(null);
@@ -50,25 +67,16 @@ export default function Leave() {
     startTime: '',
     endTime: '',
     reason: '',
-    isShortLeave: false
+    leaveDuration: 'full' as 'full' | 'first_half' | 'second_half' | 'hourly'
   });
 
-  // Clear any stale state on mount and ensure loading skeleton is shown
-  useEffect(() => {
-    console.log('🔄 [LEAVE] Component mounted, clearing stale state and showing loading skeleton');
-    setLoading(true); // Ensure loading is true
-    setLeaveBalance(null); // Clear stale balance data
-    setLeaveHistory([]); // Clear stale history
-    setEnabledLeaveTypes(null); // Clear stale leave types
-  }, []);
-
-  // Fetch leave requests and balance
   useEffect(() => {
     const fetchData = async () => {
       if (!user?.id) return;
       
       try {
         setLoading(true);
+        setLeaveKpiReady(false);
         
         // Clear any cached data to force fresh fetch
         console.log('🔄 [LEAVE] Fetching fresh leave data...');
@@ -149,28 +157,20 @@ export default function Leave() {
           const enabledTypesResponse = await LeaveTypeSettingsService.getEnabledLeaveTypes(orgId);
           if (enabledTypesResponse.success && enabledTypesResponse.data) {
             setEnabledLeaveTypes(enabledTypesResponse.data.settings);
+            setBalanceKpiVisibility(enabledTypesResponse.data.balanceKpiVisibility ?? null);
+          } else {
+            setEnabledLeaveTypes({ ...DEFAULT_ENABLED_LEAVE_TYPES });
+            setBalanceKpiVisibility(null);
           }
         } catch (error) {
           console.error('Error fetching enabled leave types:', error);
-          // Set default enabled types if fetch fails
-          setEnabledLeaveTypes({
-            vacation: true,
-            sickLeave: true,
-            casualLeave: true,
-            earnedLeave: true,
-            medicalLeave: true,
-            maternityLeave: false,
-            paternityLeave: false,
-            compensatoryOff: true,
-            personal: false,
-            emergency: false,
-            ncns: false,
-            sandwichLeave: false
-          });
+          setEnabledLeaveTypes({ ...DEFAULT_ENABLED_LEAVE_TYPES });
+          setBalanceKpiVisibility(null);
         }
       } catch (error) {
         console.error('Error fetching data:', error);
       } finally {
+        setLeaveKpiReady(true);
         setLoading(false);
       }
     };
@@ -178,15 +178,24 @@ export default function Leave() {
     fetchData();
   }, [user]);
 
-  // Calculate leave balance - only show enabled leave types (excluding vacation)
-  const allLeaveBalanceCards = [
+  const leaveBalanceCards = useMemo(() => {
+    const all: Array<{
+      type: string;
+      key: string;
+      total: number;
+      used: number;
+      pending: number;
+      color: string;
+      remaining: number;
+    }> = [
     { 
       type: 'Sick Leave', 
       key: 'sickLeave',
       total: leaveBalance?.sickLeave?.allocated || 0, 
       used: leaveBalance?.sickLeave?.used || 0, 
       pending: leaveBalance?.sickLeave?.pending || 0,
-      color: 'bg-secondary' 
+      color: 'bg-secondary',
+      remaining: 0
     },
     { 
       type: 'Casual Leave', 
@@ -194,7 +203,8 @@ export default function Leave() {
       total: leaveBalance?.casualLeave?.allocated || 0, 
       used: leaveBalance?.casualLeave?.used || 0, 
       pending: leaveBalance?.casualLeave?.pending || 0,
-      color: 'bg-accent' 
+      color: 'bg-accent',
+      remaining: 0
     },
     { 
       type: 'Earned Leave', 
@@ -202,7 +212,8 @@ export default function Leave() {
       total: leaveBalance?.earnedLeave?.allocated || 0, 
       used: leaveBalance?.earnedLeave?.used || 0, 
       pending: leaveBalance?.earnedLeave?.pending || 0,
-      color: 'bg-yellow-500' 
+      color: 'bg-yellow-500',
+      remaining: 0
     },
     { 
       type: 'Medical Leave', 
@@ -210,7 +221,8 @@ export default function Leave() {
       total: leaveBalance?.medicalLeave?.allocated || 0, 
       used: leaveBalance?.medicalLeave?.used || 0, 
       pending: leaveBalance?.medicalLeave?.pending || 0,
-      color: 'bg-red-500' 
+      color: 'bg-red-500',
+      remaining: 0
     },
     { 
       type: 'Maternity Leave', 
@@ -218,7 +230,8 @@ export default function Leave() {
       total: leaveBalance?.maternityLeave?.allocated || 0, 
       used: leaveBalance?.maternityLeave?.used || 0, 
       pending: leaveBalance?.maternityLeave?.pending || 0,
-      color: 'bg-pink-500' 
+      color: 'bg-pink-500',
+      remaining: 0
     },
     { 
       type: 'Paternity Leave', 
@@ -226,7 +239,8 @@ export default function Leave() {
       total: leaveBalance?.paternityLeave?.allocated || 0, 
       used: leaveBalance?.paternityLeave?.used || 0, 
       pending: leaveBalance?.paternityLeave?.pending || 0,
-      color: 'bg-blue-500' 
+      color: 'bg-blue-500',
+      remaining: 0
     },
     { 
       type: 'Compensatory Off', 
@@ -234,7 +248,8 @@ export default function Leave() {
       total: leaveBalance?.compensatoryOff?.allocated || 0, 
       used: leaveBalance?.compensatoryOff?.used || 0, 
       pending: leaveBalance?.compensatoryOff?.pending || 0,
-      color: 'bg-green-500' 
+      color: 'bg-green-500',
+      remaining: 0
     },
     { 
       type: 'Personal', 
@@ -242,7 +257,8 @@ export default function Leave() {
       total: leaveBalance?.personal?.allocated || 0, 
       used: leaveBalance?.personal?.used || 0, 
       pending: leaveBalance?.personal?.pending || 0,
-      color: 'bg-purple-500' 
+      color: 'bg-purple-500',
+      remaining: 0
     },
     { 
       type: 'Emergency', 
@@ -250,7 +266,8 @@ export default function Leave() {
       total: leaveBalance?.emergency?.allocated || 0, 
       used: leaveBalance?.emergency?.used || 0, 
       pending: leaveBalance?.emergency?.pending || 0,
-      color: 'bg-orange-500' 
+      color: 'bg-orange-500',
+      remaining: 0
     },
     { 
       type: 'NCNS', 
@@ -258,7 +275,8 @@ export default function Leave() {
       total: leaveBalance?.ncns?.allocated || 0, 
       used: leaveBalance?.ncns?.used || 0, 
       pending: leaveBalance?.ncns?.pending || 0,
-      color: 'bg-gray-500' 
+      color: 'bg-gray-500',
+      remaining: 0
     },
     { 
       type: 'Sandwich Leave', 
@@ -266,20 +284,25 @@ export default function Leave() {
       total: leaveBalance?.sandwichLeave?.allocated || 0, 
       used: leaveBalance?.sandwichLeave?.used || 0, 
       pending: leaveBalance?.sandwichLeave?.pending || 0,
-      color: 'bg-indigo-500' 
+      color: 'bg-indigo-500',
+      remaining: 0
     },
   ];
 
-  // Filter leave balance cards based on enabled leave types (vacation is excluded)
-  const leaveBalanceCards = enabledLeaveTypes 
-    ? allLeaveBalanceCards.filter(card => 
-        card.key !== 'vacation' && enabledLeaveTypes[card.key] === true
-      )
-    : allLeaveBalanceCards.filter(card => card.key !== 'vacation');
+    if (!leaveKpiReady || !enabledLeaveTypes) return [];
 
-  leaveBalanceCards.forEach(leave => {
-    leave['remaining'] = leave.total - leave.used - leave.pending;
-  });
+    return all
+      .filter((card) => {
+        if (card.key === 'vacation') return false;
+        if (enabledLeaveTypes[card.key] !== true) return false;
+        if (balanceKpiVisibility && balanceKpiVisibility[card.key] === false) return false;
+        return true;
+      })
+      .map((leave) => ({
+        ...leave,
+        remaining: leave.total - leave.used - leave.pending
+      }));
+  }, [leaveBalance, enabledLeaveTypes, balanceKpiVisibility, leaveKpiReady]);
 
   // Submit or update leave request
   const handleSubmitLeave = async () => {
@@ -298,21 +321,19 @@ export default function Leave() {
       return;
     }
 
-    // Validate short leave
-    if (formData.isShortLeave) {
+    const isHourly = formData.leaveDuration === 'hourly';
+    const isHalf = formData.leaveDuration === 'first_half' || formData.leaveDuration === 'second_half';
+
+    if (isHourly) {
       if (!formData.startTime || !formData.endTime) {
-        toast.error('Please select start and end times for short leave');
+        toast.error('Please select start and end times for hourly leave');
         return;
       }
-      // For short leave, end date should be same as start date or not required
-      if (!formData.endDate) {
-        setFormData(prev => ({ ...prev, endDate: prev.startDate }));
-      }
-    } else {
-      if (!formData.endDate) {
-        toast.error('Please select end date');
-        return;
-      }
+    }
+
+    if (!isHourly && !isHalf && !formData.endDate) {
+      toast.error('Please select end date');
+      return;
     }
 
     try {
@@ -342,38 +363,29 @@ export default function Leave() {
       const orgId = user.orgId || 'system';
 
       const startDate = new Date(formData.startDate);
-      const endDate = new Date(formData.endDate || formData.startDate);
+      const endDate =
+        isHalf || isHourly ? new Date(formData.startDate) : new Date(formData.endDate || formData.startDate);
 
       let days = 0;
       let hours = 0;
 
-      // Calculate days or hours based on leave type
-      if (formData.isShortLeave && formData.startTime && formData.endTime) {
-        // Parse time strings (HH:MM format)
+      if (isHourly && formData.startTime && formData.endTime) {
         const [startHour, startMinute] = formData.startTime.split(':').map(Number);
         const [endHour, endMinute] = formData.endTime.split(':').map(Number);
-        
-        // Calculate hours
         const startMinutes = startHour * 60 + startMinute;
         const endMinutes = endHour * 60 + endMinute;
         const totalMinutes = endMinutes - startMinutes;
-        
+
         if (totalMinutes <= 0) {
           toast.error('End time must be after start time');
           return;
         }
-        
+
         hours = totalMinutes / 60;
-        days = hours / 8; // Convert hours to fractional days (assuming 8-hour workday)
-        
-        console.log('Short leave calculation:', {
-          startTime: formData.startTime,
-          endTime: formData.endTime,
-          hours,
-          days
-        });
+        days = hours / 8;
+      } else if (isHalf) {
+        days = 0.5;
       } else {
-        // Calculate number of days for full-day leave
         days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
       }
 
@@ -402,7 +414,7 @@ export default function Leave() {
         balance,
         daysRequested: days,
         hoursRequested: hours,
-        isShortLeave: formData.isShortLeave,
+        leaveDuration: formData.leaveDuration,
         isEditing: !!editingLeaveId
       });
 
@@ -422,11 +434,19 @@ export default function Leave() {
         endDate: endDate.toISOString(),
         reason: formData.reason,
         orgId: orgId,
-        isShortLeave: formData.isShortLeave
+        leaveDuration: formData.leaveDuration,
+        isHalfDay: isHalf,
+        halfDaySession:
+          formData.leaveDuration === 'first_half'
+            ? 'first_half'
+            : formData.leaveDuration === 'second_half'
+              ? 'second_half'
+              : 'none',
+        isHourlyLeave: isHourly,
+        isShortLeave: isHourly
       };
 
-      // Add time fields if it's a short leave
-      if (formData.isShortLeave) {
+      if (isHourly) {
         leaveData.startTime = formData.startTime;
         leaveData.endTime = formData.endTime;
         leaveData.hours = hours;
@@ -446,8 +466,8 @@ export default function Leave() {
           await LeaveAllocationService.deductLeaves(employeeId, formData.type, days, response.data?.leaveRequest?._id);
         }
         
-        if (formData.isShortLeave) {
-          toast.success(`Short leave request submitted successfully (${hours.toFixed(1)} hours)`);
+        if (isHourly) {
+          toast.success(`Hourly leave submitted successfully (${hours.toFixed(1)} hours)`);
         } else {
           toast.success('Leave request submitted successfully');
         }
@@ -456,7 +476,15 @@ export default function Leave() {
       if (response.success) {
         setShowLeaveForm(false);
         setEditingLeaveId(null);
-        setFormData({ type: '', startDate: '', endDate: '', startTime: '', endTime: '', reason: '', isShortLeave: false });
+        setFormData({
+          type: '',
+          startDate: '',
+          endDate: '',
+          startTime: '',
+          endTime: '',
+          reason: '',
+          leaveDuration: 'full'
+        });
         
         const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
         if (updatedLeaves.success && updatedLeaves.data) {
@@ -520,9 +548,9 @@ export default function Leave() {
       </div>
 
       {/* Leave Balance KPI Cards - Optimized for mobile */}
-      {loading ? (
+      {loading || !leaveKpiReady ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-          {[1, 2, 3, 4].map((i) => (
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
             <Card key={i} className="p-4 sm:p-6 rounded-2xl animate-pulse">
               <div className="h-4 bg-muted rounded w-3/4 mb-4"></div>
               <div className="space-y-2">
@@ -550,8 +578,8 @@ export default function Leave() {
           )}
           
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-        {leaveBalanceCards.map((leave, index) => (
-          <Card key={index} className="p-4 sm:p-6 rounded-2xl">
+        {leaveBalanceCards.map((leave) => (
+          <Card key={leave.key} className="p-4 sm:p-6 rounded-2xl">
             <div className="flex items-center justify-between mb-3 sm:mb-4">
               <h3 className="font-semibold text-sm sm:text-base">{leave.type}</h3>
               <div className={`w-3 h-3 rounded-full ${leave.color}`} />
@@ -594,11 +622,17 @@ export default function Leave() {
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2 mb-2">
                       <h4 className="font-semibold text-sm sm:text-base text-foreground truncate">{leave.leaveType || leave.type || 'Leave'}</h4>
-                      {(leave as any).isShortLeave && (
+                      {((leave as any).isHourlyLeave || (leave as any).isShortLeave) && (
                         <Badge variant="outline" className="rounded-lg text-xs flex-shrink-0">
                           <Clock className="w-3 h-3 mr-1" />
-                          Short Leave
+                          Hourly
                         </Badge>
+                      )}
+                      {((leave as any).isHalfDay && (leave as any).halfDaySession === 'first_half') && (
+                        <Badge variant="outline" className="rounded-lg text-xs flex-shrink-0">First half</Badge>
+                      )}
+                      {((leave as any).isHalfDay && (leave as any).halfDaySession === 'second_half') && (
+                        <Badge variant="outline" className="rounded-lg text-xs flex-shrink-0">Second half</Badge>
                       )}
                       <Badge
                         variant={
@@ -617,9 +651,9 @@ export default function Leave() {
                     <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2">{leave.reason}</p>
                   </div>
                   <span className="text-xs sm:text-sm font-bold text-primary flex-shrink-0">
-                    {(leave as any).isShortLeave && (leave as any).hours 
+                    {((leave as any).isHourlyLeave || (leave as any).isShortLeave) && (leave as any).hours 
                       ? `${(leave as any).hours.toFixed(1)} hrs` 
-                      : `${leave.days || 1} days`}
+                      : `${leave.days || (((leave as any).isHalfDay) ? 0.5 : 1)} days`}
                   </span>
                 </div>
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4 text-xs sm:text-sm text-muted-foreground pt-3 border-t border-foreground/10 mb-3">
@@ -627,7 +661,7 @@ export default function Leave() {
                     <CalendarIcon className="w-4 h-4 text-primary/60 flex-shrink-0" />
                     <span>{new Date(leave.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
                   </div>
-                  {(leave as any).isShortLeave && (leave as any).startTime && (leave as any).endTime ? (
+                  {((leave as any).isHourlyLeave || (leave as any).isShortLeave) && (leave as any).startTime && (leave as any).endTime ? (
                     <>
                       <span className="text-foreground/40 hidden sm:inline">•</span>
                       <div className="flex items-center gap-1">
@@ -653,15 +687,21 @@ export default function Leave() {
                     onClick={() => {
                       // Edit functionality - populate form with leave data
                       setEditingLeaveId(leave._id);
-                      setFormData({
-                        type: leave.leaveType || leave.type || '',
-                        startDate: new Date(leave.startDate).toISOString().split('T')[0],
-                        endDate: new Date(leave.endDate).toISOString().split('T')[0],
-                        startTime: (leave as any).startTime || '',
-                        endTime: (leave as any).endTime || '',
-                        reason: leave.reason || '',
-                        isShortLeave: (leave as any).isShortLeave || false
-                      });
+                  setFormData({
+                    type: leave.leaveType || leave.type || '',
+                    startDate: new Date(leave.startDate).toISOString().split('T')[0],
+                    endDate: new Date(leave.endDate).toISOString().split('T')[0],
+                    startTime: (leave as any).startTime || '',
+                    endTime: (leave as any).endTime || '',
+                    reason: leave.reason || '',
+                    leaveDuration: (() => {
+                      const l = leave as any;
+                      if (l.isHourlyLeave || l.isShortLeave) return 'hourly' as const;
+                      if (l.isHalfDay && l.halfDaySession === 'first_half') return 'first_half' as const;
+                      if (l.isHalfDay && l.halfDaySession === 'second_half') return 'second_half' as const;
+                      return 'full' as const;
+                    })()
+                  });
                       setShowLeaveForm(true);
                     }}
                     disabled={leave.status !== 'pending'}
@@ -815,31 +855,38 @@ Reason: ${leave.reason}
               </Select>
             </div>
 
-            {/* Short Leave Toggle */}
-            <div className="flex items-center space-x-2 p-3 rounded-xl bg-muted/30 border border-foreground/10">
-              <input
-                type="checkbox"
-                id="shortLeave"
-                checked={formData.isShortLeave}
-                onChange={(e) => {
-                  const isShort = e.target.checked;
+            <div>
+              <Label className="text-sm font-medium text-foreground">Duration</Label>
+              <Select
+                value={formData.leaveDuration}
+                onValueChange={(value: 'full' | 'first_half' | 'second_half' | 'hourly') => {
+                  const isHourly = value === 'hourly';
+                  const isHalf = value === 'first_half' || value === 'second_half';
                   setFormData({
-                    ...formData, 
-                    isShortLeave: isShort,
-                    endDate: isShort ? formData.startDate : formData.endDate
+                    ...formData,
+                    leaveDuration: value,
+                    endDate: isHourly || isHalf ? formData.startDate : formData.endDate
                   });
                 }}
-                className="w-4 h-4 rounded border-foreground/20 text-primary focus:ring-2 focus:ring-primary/20"
-              />
-              <Label htmlFor="shortLeave" className="text-sm font-medium text-foreground cursor-pointer">
-                Short Leave (Hourly)
-              </Label>
+              >
+                <SelectTrigger className="rounded-xl mt-2 border-foreground/20 focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-200">
+                  <SelectValue placeholder="Select duration" />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl border-foreground/20">
+                  <SelectItem value="full" className="rounded-lg">Full day</SelectItem>
+                  <SelectItem value="first_half" className="rounded-lg">First half</SelectItem>
+                  <SelectItem value="second_half" className="rounded-lg">Second half</SelectItem>
+                  <SelectItem value="hourly" className="rounded-lg">Hourly</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label className="text-sm font-medium text-foreground">
-                  {formData.isShortLeave ? 'Date' : 'From Date'}
+                  {formData.leaveDuration === 'hourly' || formData.leaveDuration === 'first_half' || formData.leaveDuration === 'second_half'
+                    ? 'Date'
+                    : 'From Date'}
                 </Label>
                 <Input 
                   type="date" 
@@ -847,15 +894,19 @@ Reason: ${leave.reason}
                   value={formData.startDate}
                   onChange={(e) => {
                     const newStartDate = e.target.value;
+                    const syncEnd =
+                      formData.leaveDuration === 'hourly' ||
+                      formData.leaveDuration === 'first_half' ||
+                      formData.leaveDuration === 'second_half';
                     setFormData({
                       ...formData, 
                       startDate: newStartDate,
-                      endDate: formData.isShortLeave ? newStartDate : formData.endDate
+                      endDate: syncEnd ? newStartDate : formData.endDate
                     });
                   }}
                 />
               </div>
-              {!formData.isShortLeave && (
+              {formData.leaveDuration === 'full' && (
                 <div>
                   <Label className="text-sm font-medium text-foreground">To Date</Label>
                   <Input 
@@ -868,8 +919,8 @@ Reason: ${leave.reason}
               )}
             </div>
 
-            {/* Time Pickers for Short Leave */}
-            {formData.isShortLeave && (
+            {/* Time pickers for hourly leave */}
+            {formData.leaveDuration === 'hourly' && (
               <div className="grid grid-cols-2 gap-4 p-3 rounded-xl bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800">
                 <div>
                   <Label className="text-sm font-medium text-foreground flex items-center gap-1">
@@ -931,7 +982,15 @@ Reason: ${leave.reason}
                 onClick={() => {
                   setShowLeaveForm(false);
                   setEditingLeaveId(null);
-                  setFormData({ type: '', startDate: '', endDate: '', startTime: '', endTime: '', reason: '', isShortLeave: false });
+                  setFormData({
+                    type: '',
+                    startDate: '',
+                    endDate: '',
+                    startTime: '',
+                    endTime: '',
+                    reason: '',
+                    leaveDuration: 'full'
+                  });
                 }}
               >
                 Cancel

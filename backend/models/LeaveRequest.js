@@ -40,6 +40,12 @@ const leaveRequestSchema = new mongoose.Schema(
     rejectedDate: { type: Date },
     rejectionReason: { type: String },
     orgId: { type: String, required: true, index: true },
+    isHalfDay: { type: Boolean, default: false },
+    halfDaySession: {
+      type: String,
+      enum: ["none", "first_half", "second_half"],
+      default: "none"
+    },
     isHourlyLeave: { type: Boolean, default: false },
     startTime: { type: String }, // HH:MM format
     endTime: { type: String } // HH:MM format

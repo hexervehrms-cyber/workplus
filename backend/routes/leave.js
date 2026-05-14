@@ -143,7 +143,19 @@ router.delete('/:id', asyncHandler(async (req, res) => {
  */
 router.patch('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { leaveType, startDate, endDate, reason } = req.body;
+  const {
+    leaveType,
+    startDate,
+    endDate,
+    reason,
+    isHalfDay,
+    halfDaySession,
+    isHourlyLeave,
+    isShortLeave,
+    leaveDuration,
+    startTime,
+    endTime
+  } = req.body;
 
   // CRITICAL: Enforce orgId validation - users can only update their organization's data
   const leaveRequest = await LeaveRequest.findOne({
@@ -166,11 +178,52 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     });
   }
 
-  // Update the leave request
+  let resolvedHourly =
+    typeof isHourlyLeave === 'boolean'
+      ? isHourlyLeave
+      : typeof isShortLeave === 'boolean'
+        ? isShortLeave
+        : leaveRequest.isHourlyLeave;
+  let resolvedHalfDay =
+    typeof isHalfDay === 'boolean' ? isHalfDay : leaveRequest.isHalfDay;
+  let resolvedHalfSession =
+    halfDaySession === 'first_half' || halfDaySession === 'second_half'
+      ? halfDaySession
+      : leaveRequest.halfDaySession || 'none';
+
+  if (leaveDuration === 'first_half') {
+    resolvedHalfDay = true;
+    resolvedHalfSession = 'first_half';
+    resolvedHourly = false;
+  } else if (leaveDuration === 'second_half') {
+    resolvedHalfDay = true;
+    resolvedHalfSession = 'second_half';
+    resolvedHourly = false;
+  } else if (leaveDuration === 'hourly') {
+    resolvedHourly = true;
+    resolvedHalfDay = false;
+    resolvedHalfSession = 'none';
+  } else if (leaveDuration === 'full') {
+    resolvedHalfDay = false;
+    resolvedHalfSession = 'none';
+    resolvedHourly = false;
+  }
+
   if (leaveType) leaveRequest.type = leaveType;
   if (startDate) leaveRequest.startDate = new Date(startDate);
   if (endDate) leaveRequest.endDate = new Date(endDate);
   if (reason) leaveRequest.reason = reason;
+
+  leaveRequest.isHalfDay = resolvedHalfDay;
+  leaveRequest.halfDaySession = resolvedHalfSession;
+  leaveRequest.isHourlyLeave = resolvedHourly;
+  if (resolvedHourly) {
+    if (startTime) leaveRequest.startTime = startTime;
+    if (endTime) leaveRequest.endTime = endTime;
+  } else {
+    leaveRequest.startTime = undefined;
+    leaveRequest.endTime = undefined;
+  }
 
   await leaveRequest.save();
 
@@ -726,10 +779,38 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     reason,
     isHalfDay = false,
     isHourlyLeave = false,
+    isShortLeave = false,
+    halfDaySession: bodyHalfDaySession,
+    leaveDuration,
     startTime,
     endTime,
     orgId
   } = req.body;
+
+  let resolvedHourly = Boolean(isHourlyLeave) || Boolean(isShortLeave);
+  let resolvedHalfDay = Boolean(isHalfDay);
+  let resolvedHalfSession =
+    bodyHalfDaySession === "first_half" || bodyHalfDaySession === "second_half"
+      ? bodyHalfDaySession
+      : "none";
+
+  if (leaveDuration === "first_half") {
+    resolvedHalfDay = true;
+    resolvedHalfSession = "first_half";
+    resolvedHourly = false;
+  } else if (leaveDuration === "second_half") {
+    resolvedHalfDay = true;
+    resolvedHalfSession = "second_half";
+    resolvedHourly = false;
+  } else if (leaveDuration === "hourly") {
+    resolvedHourly = true;
+    resolvedHalfDay = false;
+    resolvedHalfSession = "none";
+  } else if (leaveDuration === "full") {
+    resolvedHalfDay = false;
+    resolvedHalfSession = "none";
+    resolvedHourly = false;
+  }
 
   // Validate required fields
   if (!userId || !employeeId || !leaveType || !startDate || !endDate || !reason || !orgId) {
@@ -739,8 +820,7 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     });
   }
 
-  // Validate hourly leave fields if applicable
-  if (isHourlyLeave && (!startTime || !endTime)) {
+  if (resolvedHourly && (!startTime || !endTime)) {
     return res.status(400).json({
       success: false,
       message: 'Start time and end time are required for hourly leave'
@@ -767,8 +847,9 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
         startDate,
         endDate,
         reason,
-        isHalfDay,
-        isHourlyLeave,
+        isHalfDay: resolvedHalfDay,
+        halfDaySession: resolvedHalfSession,
+        isHourlyLeave: resolvedHourly,
         startTime,
         endTime,
         orgId,
@@ -823,11 +904,34 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   if (end < start) {
     return res.status(400).json({
       success: false,
-      message: 'End date must be after start date'
+      message: 'End date must be on or after start date'
     });
   }
 
-  const days = isHalfDay ? 0.5 : Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+  if (resolvedHalfDay && !resolvedHourly && start.toDateString() !== end.toDateString()) {
+    return res.status(400).json({
+      success: false,
+      message: 'First-half or second-half leave must use the same start and end date'
+    });
+  }
+
+  let days;
+  if (resolvedHourly) {
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    const totalMinutes = eh * 60 + em - (sh * 60 + sm);
+    if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'End time must be after start time for hourly leave'
+      });
+    }
+    days = totalMinutes / 60 / 8;
+  } else if (resolvedHalfDay) {
+    days = 0.5;
+  } else {
+    days = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+  }
 
   // Check for overlapping leave requests - FIXED for half-day leaves
   let overlapQuery = {
@@ -836,7 +940,7 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     status: { $in: ['pending', 'approved'] }
   };
 
-  if (isHalfDay) {
+  if (resolvedHalfDay) {
     // For half-day leaves, only check for overlaps on the same date
     overlapQuery.$or = [
       {
@@ -909,9 +1013,11 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     reason,
     status: 'pending',
     orgId,
-    isHourlyLeave,
-    startTime: isHourlyLeave ? startTime : undefined,
-    endTime: isHourlyLeave ? endTime : undefined
+    isHalfDay: resolvedHalfDay,
+    halfDaySession: resolvedHalfSession,
+    isHourlyLeave: resolvedHourly,
+    startTime: resolvedHourly ? startTime : undefined,
+    endTime: resolvedHourly ? endTime : undefined
   });
 
   // Emit business event for workflow automation

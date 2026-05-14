@@ -148,6 +148,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
 
       try {
+        await TokenManager.hydrateFromIndexedDB();
         // Try to get current user from backend (uses httpOnly cookie + Redis session)
         try {
           const currentUser = await AuthService.getCurrentUser();

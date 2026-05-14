@@ -52,7 +52,7 @@ router.get('/:orgId', asyncHandler(async (req, res) => {
  */
 router.put('/:orgId', asyncHandler(async (req, res) => {
   const { orgId } = req.params;
-  const { enabledLeaveTypes, updatedBy } = req.body;
+  const { enabledLeaveTypes, balanceKpiVisibility, updatedBy } = req.body;
 
   if (!enabledLeaveTypes) {
     return res.status(400).json({
@@ -67,11 +67,18 @@ router.put('/:orgId', asyncHandler(async (req, res) => {
     settings = await LeaveTypeSettings.create({
       orgId,
       enabledLeaveTypes,
+      balanceKpiVisibility: balanceKpiVisibility || undefined,
       updatedBy,
       updatedAt: new Date()
     });
   } else {
     settings.enabledLeaveTypes = enabledLeaveTypes;
+    if (balanceKpiVisibility && typeof balanceKpiVisibility === "object") {
+      settings.balanceKpiVisibility = {
+        ...settings.balanceKpiVisibility,
+        ...balanceKpiVisibility
+      };
+    }
     settings.updatedBy = updatedBy;
     settings.updatedAt = new Date();
     await settings.save();
@@ -128,7 +135,8 @@ router.get('/:orgId/enabled', asyncHandler(async (req, res) => {
     success: true,
     data: {
       enabledLeaveTypes,
-      settings: settings.enabledLeaveTypes
+      settings: settings.enabledLeaveTypes,
+      balanceKpiVisibility: settings.balanceKpiVisibility || null
     }
   });
 }));

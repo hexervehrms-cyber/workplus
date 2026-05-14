@@ -50,31 +50,44 @@ export const authenticate = asyncHandler(async (req, res, next) => {
       });
     }
 
-    // Try to get from cache first
+    // Try to get from cache first (must still match verified JWT subject — legacy keys used token.substring(0,20) and collided)
     let cachedData = await JWTCache.getTokenCache(token);
-    if (cachedData) {
-      // Validate role is present in cached data
-      if (!cachedData.userData.role) {
-        logger.warn('Cached token missing role field', {
-          userId: cachedData.userData.userId,
-          tokenPrefix: token.substring(0, 20)
-        });
-        // Continue to JWT verification instead of using incomplete cache
-      } else {
-        req.user = {
-          userId: cachedData.userData.userId,
-          email: cachedData.userData.email,
-          name: cachedData.userData.name,
-          role: cachedData.userData.role,
-          orgId: cachedData.userData.orgId || 'system',
-          tenantId: cachedData.userData.orgId || 'system',
-          departmentId: cachedData.userData.departmentId,
-          permissions: cachedData.userData.permissions || [],
-          sessionId: cachedData.userData.sessionId,
-          fromCache: true
-        };
-        return next();
+    if (cachedData?.userData?.role) {
+      try {
+        const decodedForCache = jwt.verify(token, process.env.JWT_SECRET);
+        if (String(decodedForCache.userId) !== String(cachedData.userData.userId)) {
+          logger.warn('JWT cache userId mismatch with token; ignoring cache entry', {
+            tokenUserId: decodedForCache.userId,
+            cacheUserId: cachedData.userData.userId
+          });
+          cachedData = null;
+        }
+      } catch {
+        cachedData = null;
       }
+    }
+
+    if (cachedData?.userData?.role) {
+      req.user = {
+        userId: cachedData.userData.userId,
+        email: cachedData.userData.email,
+        name: cachedData.userData.name,
+        role: cachedData.userData.role,
+        orgId: cachedData.userData.orgId || 'system',
+        tenantId: cachedData.userData.orgId || 'system',
+        departmentId: cachedData.userData.departmentId,
+        permissions: cachedData.userData.permissions || [],
+        sessionId: cachedData.userData.sessionId,
+        fromCache: true
+      };
+      return next();
+    }
+
+    if (cachedData && !cachedData.userData?.role) {
+      logger.warn('Cached token missing role field', {
+        userId: cachedData.userData?.userId,
+        tokenPrefix: token.substring(0, 20)
+      });
     }
 
     // Verify JWT token

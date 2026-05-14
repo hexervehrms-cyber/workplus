@@ -8,6 +8,11 @@ const attendanceSchema = new mongoose.Schema(
     date: { type: Date, required: true, index: true },
     checkIn: { type: Date },
     checkOut: { type: Date },
+    timezone: { 
+      type: String, 
+      default: 'Asia/Kolkata',
+      description: "User's timezone for date calculations (e.g., 'Asia/Kolkata', 'America/New_York')"
+    },
     status: { 
       type: String, 
       enum: ["present", "absent", "on-leave", "half-day", "late"], 

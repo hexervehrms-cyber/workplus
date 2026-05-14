@@ -14,6 +14,7 @@ import LeaveRequest from "../models/LeaveRequest.js";
 import { sendSuccess, sendError, sendPaginated } from "../utils/apiResponse.js";
 import EmailNotificationService from "../utils/emailNotificationService.js";
 import logger from "../utils/logger.js";
+import { aggregateStructureMoney } from "../utils/payrollMoney.js";
 
 const router = express.Router();
 
@@ -46,20 +47,7 @@ router.post(
         return sendError(res, "Employee not found", 404, "NOT_FOUND");
       }
 
-      // Calculate totals - ensure all values are properly handled
-      const grossEarnings = Object.values(earnings || {}).reduce((sum, val) => {
-        if (typeof val === 'number') return sum + Math.max(0, val);
-        if (Array.isArray(val)) return sum + val.reduce((s, item) => s + Math.max(0, item.amount || 0), 0);
-        return sum;
-      }, 0);
-
-      const totalDeductions = Object.values(deductions || {}).reduce((sum, val) => {
-        if (typeof val === 'number') return sum + Math.max(0, val);
-        if (Array.isArray(val)) return sum + val.reduce((s, item) => s + Math.max(0, item.amount || 0), 0);
-        return sum;
-      }, 0);
-
-      const netSalary = grossEarnings - totalDeductions;
+      const { grossEarnings, totalDeductions, netSalary } = aggregateStructureMoney(earnings, deductions);
       const costToCompany = grossEarnings + (deductions?.providentFund || 0) * 0.12; // Employer PF contribution
 
       const salaryStructure = await SalaryStructure.create({
@@ -122,20 +110,7 @@ router.put(
         return sendError(res, "Salary structure not found", 404, "NOT_FOUND");
       }
 
-      // Calculate totals - ensure all values are properly handled
-      const grossEarnings = Object.values(earnings || {}).reduce((sum, val) => {
-        if (typeof val === 'number') return sum + Math.max(0, val);
-        if (Array.isArray(val)) return sum + val.reduce((s, item) => s + Math.max(0, item.amount || 0), 0);
-        return sum;
-      }, 0);
-
-      const totalDeductions = Object.values(deductions || {}).reduce((sum, val) => {
-        if (typeof val === 'number') return sum + Math.max(0, val);
-        if (Array.isArray(val)) return sum + val.reduce((s, item) => s + Math.max(0, item.amount || 0), 0);
-        return sum;
-      }, 0);
-
-      const netSalary = grossEarnings - totalDeductions;
+      const { grossEarnings, totalDeductions, netSalary } = aggregateStructureMoney(earnings, deductions);
       const costToCompany = grossEarnings + (deductions?.providentFund || 0) * 0.12;
 
       // Update structure
@@ -169,6 +144,39 @@ router.put(
         userId: req.user.userId
       });
       return sendError(res, "Failed to update salary structure", 500, "UPDATE_ERROR");
+    }
+  })
+);
+
+/**
+ * GET /api/salary/structures/by-id/:structureId
+ * Single structure for admin edit (avoids pagination and ambiguous /structure/:id routes)
+ */
+router.get(
+  "/structures/by-id/:structureId",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    try {
+      const { structureId } = req.params;
+      const structure = await SalaryStructure.findOne({
+        _id: structureId,
+        orgId: req.user.orgId
+      })
+        .populate("employeeId", "firstName lastName employeeCode")
+        .lean();
+
+      if (!structure) {
+        return sendError(res, "Salary structure not found", 404, "NOT_FOUND");
+      }
+
+      return sendSuccess(res, structure, "Salary structure fetched successfully");
+    } catch (error) {
+      logger.error("Get salary structure by id error", {
+        error: error.message,
+        structureId: req.params.structureId
+      });
+      return sendError(res, "Failed to fetch salary structure", 500, "FETCH_ERROR");
     }
   })
 );
@@ -414,29 +422,16 @@ router.post(
         otherEarnings: salaryStructure.earnings.otherEarnings || []
       };
 
-      const grossEarnings = Object.values(earnings).reduce((sum, val) => {
-        if (typeof val === 'number') return sum + Math.max(0, val);
-        if (Array.isArray(val)) return sum + val.reduce((s, item) => s + Math.max(0, item.amount || 0), 0);
-        return sum;
-      }, 0);
-
-      // Calculate deductions - ensure all are numbers and handle zero values properly
       const deductions = {
         providentFund: salaryStructure.deductions.providentFund || 0,
         employeeStateInsurance: salaryStructure.deductions.employeeStateInsurance || 0,
         professionalTax: salaryStructure.deductions.professionalTax || 0,
         incomeTax: salaryStructure.deductions.incomeTax || 0,
-        leaveDeduction: leaveDeduction > 0 ? Math.round(leaveDeduction) : 0,
+        leaveDeduction: leaveDeduction > 0 ? Math.round(leaveDeduction * 100) / 100 : 0,
         otherDeductions: salaryStructure.deductions.otherDeductions || []
       };
 
-      const totalDeductions = Object.values(deductions).reduce((sum, val) => {
-        if (typeof val === 'number') return sum + Math.max(0, val); // Ensure no negative values
-        if (Array.isArray(val)) return sum + val.reduce((s, item) => s + Math.max(0, item.amount || 0), 0);
-        return sum;
-      }, 0);
-
-      const netSalary = grossEarnings - totalDeductions;
+      const { grossEarnings, totalDeductions, netSalary } = aggregateStructureMoney(earnings, deductions);
 
       // Create or update salary slip
       let salarySlip = await SalarySlip.findOne({

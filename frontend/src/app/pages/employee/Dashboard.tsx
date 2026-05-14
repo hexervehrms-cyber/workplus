@@ -10,6 +10,7 @@ import { clearPersistedAttendance, writePersistedAttendance } from '../../utils/
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useAttendance } from '../../../context/AttendanceContext';
 import { getDynamicGreeting, getMotivationalQuote } from '../../utils/greetingUtils';
+import { toast } from 'sonner';
 import {
   Calendar,
   Clock,
@@ -748,7 +749,7 @@ export default function EmployeeDashboard() {
     // Prevent starting break if not checked in
     if (!todayAttendance.isCheckedIn) {
       console.log('⏸️ [BREAK START] Not checked in, cannot start break');
-      alert('Please check in first before starting a break');
+      toast.warning('Please check in first before starting a break');
       return;
     }
     
@@ -834,6 +835,7 @@ export default function EmployeeDashboard() {
       }
     } catch (error) {
       debug.error('❌ [BREAK START] Error:', error);
+      toast.error(error instanceof Error ? error.message : 'Could not start break');
       // Rollback optimistic update on error
       updateAttendance({
         isOnBreak: false,
@@ -937,6 +939,7 @@ export default function EmployeeDashboard() {
       }
     } catch (error) {
       debug.error('❌ [BREAK END] Error:', error);
+      toast.error(error instanceof Error ? error.message : 'Could not end break');
       // Rollback optimistic update on error - restore previous state
       updateAttendance({
         isOnBreak: wasOnBreak,
@@ -1006,6 +1009,7 @@ export default function EmployeeDashboard() {
       }
     } catch (error) {
       console.error('Check-in error:', error);
+      toast.error(error instanceof Error ? error.message : 'Check-in failed');
       // Rollback optimistic update on error
       updateAttendance({
         isCheckedIn: false,
@@ -1078,6 +1082,7 @@ export default function EmployeeDashboard() {
       }
     } catch (error) {
       console.error('Check-out error:', error);
+      toast.error(error instanceof Error ? error.message : 'Check-out failed');
       // Rollback optimistic update on error
       updateAttendance({
         isCheckedIn: true,

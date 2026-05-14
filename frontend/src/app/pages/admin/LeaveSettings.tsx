@@ -24,6 +24,7 @@ interface LeaveTypeSettings {
     ncns: boolean;
     sandwichLeave: boolean;
   };
+  balanceKpiVisibility?: Partial<Record<string, boolean>>;
 }
 
 const LEAVE_TYPE_OPTIONS = [
@@ -40,6 +41,9 @@ const LEAVE_TYPE_OPTIONS = [
   { key: 'ncns', label: 'NCNS (No Call No Show)', description: 'Unplanned absences' },
   { key: 'sandwichLeave', label: 'Sandwich Leave', description: 'Leave between holidays' }
 ];
+
+const defaultKpiVisibility = (): Record<string, boolean> =>
+  LEAVE_TYPE_OPTIONS.reduce((acc, o) => ({ ...acc, [o.key]: true }), {} as Record<string, boolean>);
 
 export default function LeaveSettings() {
   const { user } = useAuth();
@@ -60,6 +64,9 @@ export default function LeaveSettings() {
     ncns: false,
     sandwichLeave: false
   });
+  const [balanceKpiVisibility, setBalanceKpiVisibility] = useState<Record<string, boolean>>(() =>
+    defaultKpiVisibility()
+  );
 
   useEffect(() => {
     fetchSettings();
@@ -88,6 +95,11 @@ export default function LeaveSettings() {
       if (response.success && response.data) {
         setSettings(response.data);
         setEnabledLeaveTypes(response.data.enabledLeaveTypes);
+        const base = defaultKpiVisibility();
+        if (response.data.balanceKpiVisibility) {
+          Object.assign(base, response.data.balanceKpiVisibility);
+        }
+        setBalanceKpiVisibility(base);
       }
     } catch (error) {
       console.error('Error fetching leave settings:', error);
@@ -100,6 +112,13 @@ export default function LeaveSettings() {
     setEnabledLeaveTypes(prev => ({
       ...prev,
       [leaveType]: !prev[leaveType as keyof typeof prev]
+    }));
+  };
+
+  const handleToggleKpi = (leaveType: string) => {
+    setBalanceKpiVisibility((prev) => ({
+      ...prev,
+      [leaveType]: !prev[leaveType]
     }));
   };
 
@@ -125,7 +144,8 @@ export default function LeaveSettings() {
       const response = await LeaveTypeSettingsService.updateSettings(
         orgId,
         enabledLeaveTypes,
-        user?.userId || user?.id
+        user?.userId || user?.id || '',
+        balanceKpiVisibility
       );
 
       if (response.success) {
@@ -192,6 +212,36 @@ export default function LeaveSettings() {
                   <div className="flex-1">
                     <label htmlFor={option.key} className="cursor-pointer">
                       <div className="font-medium text-foreground">{option.label}</div>
+                      <div className="text-sm text-muted-foreground">{option.description}</div>
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 mb-4 mt-10">
+              <Settings className="w-5 h-5 text-primary" />
+              <h3 className="text-lg font-semibold">Employee leave balance cards (KPI)</h3>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">
+              Control which balance KPI cards appear on the employee Leave page. Leave types can stay enabled above while hiding their KPI card.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {LEAVE_TYPE_OPTIONS.map((option) => (
+                <div
+                  key={`kpi-${option.key}`}
+                  className="flex items-start gap-3 p-4 border border-foreground/10 rounded-xl hover:bg-muted/30 transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    id={`kpi-${option.key}`}
+                    checked={balanceKpiVisibility[option.key] !== false}
+                    onChange={() => handleToggleKpi(option.key)}
+                    className="w-5 h-5 rounded cursor-pointer mt-0.5"
+                  />
+                  <div className="flex-1">
+                    <label htmlFor={`kpi-${option.key}`} className="cursor-pointer">
+                      <div className="font-medium text-foreground">Show KPI: {option.label}</div>
                       <div className="text-sm text-muted-foreground">{option.description}</div>
                     </label>
                   </div>

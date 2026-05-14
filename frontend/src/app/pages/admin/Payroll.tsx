@@ -240,12 +240,11 @@ export default function Payroll() {
   useEffect(() => {
     if (showStructureDialog || showGenerateSlipDialog) {
       fetchEmployees();
-      // Reset form when dialog opens
-      if (showStructureDialog) {
+      if (showStructureDialog && !editingStructureId) {
         resetForm();
       }
     }
-  }, [showStructureDialog, showGenerateSlipDialog]);
+  }, [showStructureDialog, showGenerateSlipDialog, editingStructureId]);
 
   // Handle create/edit salary structure
   const handleCreateStructure = async () => {
@@ -383,59 +382,60 @@ export default function Payroll() {
   };
 
   // Handle edit structure
-  const handleEditStructure = (structure: SalaryStructure) => {
+  const handleEditStructure = async (structure: SalaryStructure) => {
     try {
-      // Load the structure data into the form
-      setSelectedEmployee(structure.employeeId);
-      setEmployeeType(structure.employeeType);
-      
-      // Set effective from date - use createdAt if approvalDate is not available
-      const dateToUse = structure.approvalDate || new Date().toISOString();
-      setEffectiveFrom(new Date(dateToUse).toISOString().split('T')[0]);
-      
-      // Set earnings and deductions from the structure
-      // We need to fetch the full structure to get all details
-      const token = localStorage.getItem('authToken');
-      
-      // For now, set basic values and open dialog
-      // The backend will provide full details when we fetch
       setEditingStructureId(structure._id);
+      const data = await apiGet(`/salary/structures/by-id/${structure._id}`, false);
+      const fullStructure = data?.data ?? data;
+      if (!fullStructure || !fullStructure._id) {
+        toast.error('Could not load salary structure');
+        setEditingStructureId(null);
+        return;
+      }
+
+      setSelectedEmployee(
+        typeof fullStructure.employeeId === 'object' && fullStructure.employeeId?._id
+          ? fullStructure.employeeId._id
+          : String(fullStructure.employeeId)
+      );
+      setEmployeeType(fullStructure.employeeType || 'employee');
+      const eff = fullStructure.effectiveFrom
+        ? new Date(fullStructure.effectiveFrom).toISOString().split('T')[0]
+        : new Date().toISOString().split('T')[0];
+      setEffectiveFrom(eff);
+
+      setEarnings(
+        fullStructure.earnings || {
+          basic: 0,
+          hra: 0,
+          medicalExpenses: 0,
+          travel: 0,
+          internetCharges: 0,
+          nightShiftAllowance: 0,
+          incentives: 0,
+          bonus: 0,
+          commission: 0,
+          otherEarnings: []
+        }
+      );
+
+      setDeductions(
+        fullStructure.deductions || {
+          providentFund: 0,
+          employeeStateInsurance: 0,
+          professionalTax: 0,
+          incomeTax: 0,
+          otherDeductions: []
+        }
+      );
+
+      setCtc(0);
+      setAutoCalculateEnabled(false);
       setShowStructureDialog(true);
-      
-      // Fetch full structure details in background
-      apiGet('/salary/structures?limit=1000')
-        .then(data => {
-          const fullStructure = data.data?.find((s: any) => s._id === structure._id);
-          if (fullStructure) {
-            setEarnings(fullStructure.earnings || {
-              basic: 0,
-              hra: 0,
-              medicalExpenses: 0,
-              travel: 0,
-              internetCharges: 0,
-              nightShiftAllowance: 0,
-              incentives: 0,
-              bonus: 0,
-              commission: 0,
-              otherEarnings: []
-            });
-            
-            setDeductions(fullStructure.deductions || {
-              providentFund: 0,
-              employeeStateInsurance: 0,
-              professionalTax: 0,
-              incomeTax: 0,
-              otherDeductions: []
-            });
-          }
-        })
-        .catch(error => {
-          console.error('Error loading structure details:', error);
-          toast.error('Failed to load some structure details');
-        });
     } catch (error) {
       console.error('Error opening edit dialog:', error);
-      toast.error('Failed to open edit dialog');
+      setEditingStructureId(null);
+      toast.error('Failed to load salary structure for editing');
     }
   };
 
@@ -591,7 +591,13 @@ export default function Payroll() {
           <h1 className="text-3xl font-bold">Payroll Management</h1>
           <p className="text-muted-foreground">Manage salary structures and generate salary slips</p>
         </div>
-        <Button onClick={() => setShowStructureDialog(true)} className="rounded-xl">
+        <Button
+          onClick={() => {
+            setEditingStructureId(null);
+            setShowStructureDialog(true);
+          }}
+          className="rounded-xl"
+        >
           <Plus className="w-4 h-4 mr-2" />
           Create Salary Structure
         </Button>

@@ -7,7 +7,6 @@ import ChatMessage from '../models/ChatMessage.js';
 import User from '../models/User.js';
 import logger from './logger.js';
 import { sendTeamsMessage } from '../config/teamsConfig.js';
-import EmailNotificationService from './emailNotificationService.js';
 
 /**
  * Initialize chat socket handlers
@@ -77,7 +76,7 @@ export const initializeChatHandlers = (io) => {
           }
         }
 
-        // Send admin notification if employee sends message to admin
+        // Send admin notification via Teams if employee sends message to admin
         if (sender.role === 'employee' && (recipient.role === 'admin' || recipient.role === 'super_admin')) {
           try {
             // Send Teams notification to admin
@@ -88,29 +87,8 @@ export const initializeChatHandlers = (io) => {
               );
               logger.info(`Admin notification sent to Teams for message from ${sender.name}`);
             }
-
-            // Send email notification to admin
-            if (recipient.email) {
-              try {
-                await EmailNotificationService.sendAdminChatNotification(
-                  {
-                    name: recipient.name,
-                    email: recipient.email
-                  },
-                  {
-                    senderName: sender.name,
-                    senderEmail: sender.email,
-                    message: content,
-                    timestamp: new Date()
-                  }
-                );
-                logger.info(`Email notification sent to admin ${recipient.email}`);
-              } catch (emailError) {
-                logger.warn('Failed to send email notification to admin', emailError);
-              }
-            }
           } catch (notificationError) {
-            logger.warn('Failed to send admin notification', notificationError);
+            logger.warn('Failed to send admin Teams notification', notificationError);
           }
         }
 

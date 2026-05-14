@@ -1184,31 +1184,6 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       text: `Your password has been reset. Email: ${employee.email}, New Password: ${newPassword}`
     });
   }
-
-  // ============================================
-  // CHAT NOTIFICATIONS
-  // ============================================
-
-  static async sendAdminChatNotification(admin, messageData) {
-    const content = `<p>Dear <strong>${admin.name}</strong>,</p>
-<p>You have received a new message from <strong>${messageData.senderName}</strong>.</p>
-<div class="card"><h3 style="margin-top:0;color:#667eea">💬 Message</h3>
-<div class="info-row"><span class="label">From:</span><span class="value">${messageData.senderName} (${messageData.senderEmail})</span></div>
-<div class="info-row"><span class="label">Time:</span><span class="value">${new Date(messageData.timestamp).toLocaleString()}</span></div>
-<div style="background:#f5f5f5;padding:15px;border-radius:4px;margin-top:10px;border-left:4px solid #667eea">
-<p style="margin:0;color:#333"><strong>Message:</strong></p>
-<p style="margin:10px 0 0 0;color:#555">"${messageData.message}"</p>
-</div></div>
-<div style="text-align:center"><a href="${getFrontendUrl()}/admin/chat" class="button">📧 Reply in WorkPlus</a></div>
-<p style="color:#999;font-size:12px">This is an automated notification. Please do not reply to this email.</p>`;
-    
-    await this.sendEmail({
-      to: admin.email,
-      subject: `New message from ${messageData.senderName} - WorkPlus HRMS`,
-      html: this.getEmailTemplate(content, '💬 New Message'),
-      text: `New message from ${messageData.senderName}: "${messageData.message}"`
-    });
-  }
 }
 
 export default EmailNotificationService;

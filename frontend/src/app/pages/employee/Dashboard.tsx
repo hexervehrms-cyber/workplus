@@ -135,7 +135,7 @@ function DynamicGreetingHeader({ userName }: { userName: string }) {
   }, [userName]);
 
   return (
-    <div className="bg-slate-50 rounded-2xl p-8 flex-1 shadow-sm">
+    <div className="rounded-2xl p-8 flex-1">
       <div className="space-y-3">
         <div className="flex items-center gap-3">
           <span className="text-5xl">{greeting.emoji}</span>

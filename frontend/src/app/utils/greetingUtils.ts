@@ -17,14 +17,17 @@ export function getDynamicGreeting(userName: string): GreetingData {
   const now = new Date();
   const hour = now.getHours();
   const minute = now.getMinutes();
+  
+  // Capitalize first letter of name
+  const capitalizedName = userName.charAt(0).toUpperCase() + userName.slice(1);
 
   // Morning: 5 AM - 11:59 AM
   if (hour >= 5 && hour < 12) {
     const greetings = [
-      { message: `Good morning, ${userName}.`, emoji: '', subMessage: 'Your dashboard overview is ready.' },
-      { message: `Good morning, ${userName}.`, emoji: '', subMessage: 'Please review your priorities for today.' },
-      { message: `Good morning, ${userName}.`, emoji: '', subMessage: 'A focused start to the day is available.' },
-      { message: `Good morning, ${userName}.`, emoji: '', subMessage: 'Begin with your current assignments in view.' },
+      { message: `Good morning, ${capitalizedName}.`, emoji: '', subMessage: 'Your dashboard overview is ready.' },
+      { message: `Good morning, ${capitalizedName}.`, emoji: '', subMessage: 'Please review your priorities for today.' },
+      { message: `Good morning, ${capitalizedName}.`, emoji: '', subMessage: 'A focused start to the day is available.' },
+      { message: `Good morning, ${capitalizedName}.`, emoji: '', subMessage: 'Begin with your current assignments in view.' },
     ];
     const greeting = greetings[Math.floor(Math.random() * greetings.length)];
     
@@ -42,10 +45,10 @@ export function getDynamicGreeting(userName: string): GreetingData {
   // Afternoon: 12 PM - 4:59 PM
   if (hour >= 12 && hour < 17) {
     const greetings = [
-      { message: `Good afternoon, ${userName}.`, emoji: '', subMessage: 'Your dashboard summary is ready.' },
-      { message: `Good afternoon, ${userName}.`, emoji: '', subMessage: 'Review current tasks and progress.' },
-      { message: `Good afternoon, ${userName}.`, emoji: '', subMessage: 'Maintain focus for the remainder of the day.' },
-      { message: `Good afternoon, ${userName}.`, emoji: '', subMessage: 'Continue with your important priorities.' },
+      { message: `Good afternoon, ${capitalizedName}.`, emoji: '', subMessage: 'Your dashboard summary is ready.' },
+      { message: `Good afternoon, ${capitalizedName}.`, emoji: '', subMessage: 'Review current tasks and progress.' },
+      { message: `Good afternoon, ${capitalizedName}.`, emoji: '', subMessage: 'Maintain focus for the remainder of the day.' },
+      { message: `Good afternoon, ${capitalizedName}.`, emoji: '', subMessage: 'Continue with your important priorities.' },
     ];
     const greeting = greetings[Math.floor(Math.random() * greetings.length)];
     
@@ -63,10 +66,10 @@ export function getDynamicGreeting(userName: string): GreetingData {
   // Evening: 5 PM - 8:59 PM
   if (hour >= 17 && hour < 21) {
     const greetings = [
-      { message: `Good evening, ${userName}.`, emoji: '', subMessage: 'Review your progress and next steps.' },
-      { message: `Good evening, ${userName}.`, emoji: '', subMessage: 'Finish the day with a clear summary.' },
-      { message: `Good evening, ${userName}.`, emoji: '', subMessage: 'Your current status is available for review.' },
-      { message: `Good evening, ${userName}.`, emoji: '', subMessage: 'Prepare for tomorrow from the current overview.' },
+      { message: `Good evening, ${capitalizedName}.`, emoji: '', subMessage: 'Review your progress and next steps.' },
+      { message: `Good evening, ${capitalizedName}.`, emoji: '', subMessage: 'Finish the day with a clear summary.' },
+      { message: `Good evening, ${capitalizedName}.`, emoji: '', subMessage: 'Your current status is available for review.' },
+      { message: `Good evening, ${capitalizedName}.`, emoji: '', subMessage: 'Prepare for tomorrow from the current overview.' },
     ];
     const greeting = greetings[Math.floor(Math.random() * greetings.length)];
     
@@ -83,10 +86,10 @@ export function getDynamicGreeting(userName: string): GreetingData {
 
   // Night: 9 PM - 4:59 AM
   const greetings = [
-    { message: `Good evening, ${userName}.`, emoji: '', subMessage: 'Review your updates before closing the day.' },
-    { message: `Good evening, ${userName}.`, emoji: '', subMessage: 'Your night summary is available.' },
-    { message: `Good evening, ${userName}.`, emoji: '', subMessage: 'Keep track of your remaining items.' },
-    { message: `Good evening, ${userName}.`, emoji: '', subMessage: 'End the day with a clear task overview.' },
+    { message: `Good evening, ${capitalizedName}.`, emoji: '', subMessage: 'Review your updates before closing the day.' },
+    { message: `Good evening, ${capitalizedName}.`, emoji: '', subMessage: 'Your night summary is available.' },
+    { message: `Good evening, ${capitalizedName}.`, emoji: '', subMessage: 'Keep track of your remaining items.' },
+    { message: `Good evening, ${capitalizedName}.`, emoji: '', subMessage: 'End the day with a clear task overview.' },
   ];
   const greeting = greetings[Math.floor(Math.random() * greetings.length)];
   

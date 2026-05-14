@@ -68,6 +68,9 @@ const registerLimiter = (req, res, next) => next();
 // Import logger
 import logger from "./utils/logger.js";
 
+// Import Redis utility
+import redis from "./utils/redis.js";
+
 // Import KPI updater
 import { emitKPIUpdate, emitAttendanceKPIUpdate, emitLeaveKPIUpdate, emitExpenseKPIUpdate, emitEmployeeKPIUpdate } from "./utils/kpiUpdater.js";
 import { setAccessTokenCookie, clearAccessTokenCookie, parseCookies, ACCESS_TOKEN_COOKIE } from "./utils/httpAuth.js";
@@ -1444,6 +1447,15 @@ const startServer = async () => {
       // Seed super admin after database connection
       logger.info('🌱 Seeding super admin...');
       await seedSuperAdmin();
+    }
+
+    // Initialize Redis
+    logger.info('Initializing Redis...');
+    await redis.initializeRedis();
+    if (redis.isRedisConnected()) {
+      logger.info('✅ Redis connected successfully');
+    } else {
+      logger.warn('⚠️  Redis not available - caching disabled');
     }
 
     // Start server

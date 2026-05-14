@@ -102,6 +102,30 @@ router.post('/generate-link',
         });
       }
 
+      // Determine the correct orgId
+      // Priority: 1) organizationId from request body, 2) user's orgId, 3) user's company
+      let finalOrgId = organizationId || req.user.orgId;
+      
+      // If still no orgId and user is super_admin, try to get from company
+      if (!finalOrgId || finalOrgId === 'system') {
+        const user = await User.findById(createdBy).lean();
+        if (user?.company) {
+          finalOrgId = user.company;
+        }
+      }
+
+      // Fallback: use a default if still not set
+      if (!finalOrgId) {
+        finalOrgId = 'ORG-DEFAULT';
+      }
+
+      logger.info('Generating onboarding link', {
+        employeeEmail,
+        employeeName,
+        finalOrgId,
+        createdBy
+      });
+
       // Check if employee already has an active onboarding link
       const existingLink = await OnboardingLink.findOne({
         employeeEmail,
@@ -129,7 +153,7 @@ router.post('/generate-link',
         employeeEmail,
         employeeName,
         department: department || 'General',
-        organizationId: organizationId || req.user.orgId,
+        organizationId: finalOrgId,
         organizationName: req.user.orgName || 'WorkPlus',
         createdBy,
         expiresAt

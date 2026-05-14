@@ -1,12 +1,13 @@
 /**
  * Chat Socket.IO Event Handlers
- * Handles real-time messaging with Teams integration
+ * Handles real-time messaging with Teams integration and admin notifications
  */
 
 import ChatMessage from '../models/ChatMessage.js';
 import User from '../models/User.js';
 import logger from './logger.js';
 import { sendTeamsMessage } from '../config/teamsConfig.js';
+import EmailNotificationService from './emailNotificationService.js';
 
 /**
  * Initialize chat socket handlers
@@ -55,10 +56,13 @@ export const initializeChatHandlers = (io) => {
         await message.save();
         await message.populate('sender', 'name email avatar');
 
+        // Get sender and recipient info
+        const sender = await User.findById(userId).select('name email role').lean();
+        const recipient = await User.findById(recipientId).select('name email role').lean();
+
         // Send to Teams if enabled
         if (teamsIntegration?.enabled && teamsIntegration?.chatId) {
           try {
-            const sender = await User.findById(userId);
             const teamsMsg = await sendTeamsMessage(
               teamsIntegration.chatId,
               `${sender.name}: ${content}`
@@ -70,6 +74,43 @@ export const initializeChatHandlers = (io) => {
             logger.info(`Message synced to Teams: ${teamsMsg.id}`);
           } catch (teamsError) {
             logger.warn('Failed to sync to Teams', teamsError);
+          }
+        }
+
+        // Send admin notification if employee sends message to admin
+        if (sender.role === 'employee' && (recipient.role === 'admin' || recipient.role === 'super_admin')) {
+          try {
+            // Send Teams notification to admin
+            if (teamsIntegration?.enabled && teamsIntegration?.adminChatId) {
+              await sendTeamsMessage(
+                teamsIntegration.adminChatId,
+                `📧 New message from ${sender.name}:\n\n"${content}"\n\nReply in WorkPlus Pro Chat`
+              );
+              logger.info(`Admin notification sent to Teams for message from ${sender.name}`);
+            }
+
+            // Send email notification to admin
+            if (recipient.email) {
+              try {
+                await EmailNotificationService.sendAdminChatNotification(
+                  {
+                    name: recipient.name,
+                    email: recipient.email
+                  },
+                  {
+                    senderName: sender.name,
+                    senderEmail: sender.email,
+                    message: content,
+                    timestamp: new Date()
+                  }
+                );
+                logger.info(`Email notification sent to admin ${recipient.email}`);
+              } catch (emailError) {
+                logger.warn('Failed to send email notification to admin', emailError);
+              }
+            }
+          } catch (notificationError) {
+            logger.warn('Failed to send admin notification', notificationError);
           }
         }
 

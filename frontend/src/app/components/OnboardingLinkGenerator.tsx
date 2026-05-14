@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Card } from './ui/card';
 import { Copy, Check, Loader, Mail, Link as LinkIcon } from 'lucide-react';
 import { toast } from 'sonner';
-import { TokenManager } from '../app/utils/api';
+import { TokenManager } from '../utils/api';
 
 interface OnboardingLinkGeneratorProps {
   isOpen: boolean;

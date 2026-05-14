@@ -956,12 +956,11 @@ export default function EmployeeDashboard() {
       actionInProgressRef.current = true;
       lastActionTimeRef.current = Date.now();
 
-      const resolvedEmployeeId = await ensureEmployeeId();
       const token = TokenManager.get();
-      const payload: { notes: string; employeeId?: string | null } = {
+      // For employees, send minimal payload - backend extracts userId, employeeId, orgId from JWT
+      const payload: { notes: string } = {
         notes: 'Checked in'
       };
-      if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
       
       // CRITICAL FIX: Add timeout to fetch
       const controller = new AbortController();

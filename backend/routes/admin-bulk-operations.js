@@ -33,7 +33,7 @@ router.get('/employees/export/csv',
     const orgId = req.user.orgId;
 
     try {
-      const employees = await Employee.find({ orgId, isActive: true })
+      const employees = await Employee.find({ orgId, status: 'active' })
         .populate('userId', 'name email')
         .lean();
 
@@ -116,7 +116,7 @@ router.get('/employees/export/json',
     const orgId = req.user.orgId;
 
     try {
-      const employees = await Employee.find({ orgId, isActive: true })
+      const employees = await Employee.find({ orgId, status: 'active' })
         .populate('userId', 'name email')
         .lean();
 

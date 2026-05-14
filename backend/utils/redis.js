@@ -7,6 +7,7 @@ import logger from './logger.js';
 
 let redisClient = null;
 let isConnected = false;
+let connectionAttempted = false;
 
 /**
  * Initialize Redis client
@@ -19,9 +20,30 @@ async function initializeRedis() {
     return null;
   }
 
+  if (connectionAttempted) {
+    return redisClient;
+  }
+
+  connectionAttempted = true;
+
   try {
     const { createClient } = await import('redis');
-    redisClient = createClient({ url: redisUrl });
+    
+    logger.info('Attempting to connect to Redis...', { url: redisUrl.substring(0, 20) + '...' });
+    
+    redisClient = createClient({ 
+      url: redisUrl,
+      socket: {
+        reconnectStrategy: (retries) => {
+          if (retries > 10) {
+            logger.warn('Redis reconnection attempts exceeded');
+            return new Error('Redis max retries exceeded');
+          }
+          return retries * 100;
+        },
+        connectTimeout: 10000
+      }
+    });
 
     redisClient.on('error', (err) => {
       logger.error('Redis client error:', err.message);
@@ -38,12 +60,17 @@ async function initializeRedis() {
       isConnected = true;
     });
 
+    redisClient.on('reconnecting', () => {
+      logger.warn('Redis client reconnecting...');
+    });
+
     await redisClient.connect();
     isConnected = true;
-    logger.info('Redis client initialized successfully');
+    logger.info('✅ Redis client initialized successfully');
     return redisClient;
   } catch (error) {
-    logger.warn('Failed to initialize Redis client', { error: error.message });
+    logger.warn('⚠️  Failed to initialize Redis client', { error: error.message });
+    logger.warn('⚠️  Redis not available - caching disabled');
     isConnected = false;
     return null;
   }

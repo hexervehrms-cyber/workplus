@@ -212,7 +212,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [isInitialized]);
+  }, []);
 
   // Session check interval — attempt refresh before forcing logout when access token expires
   useEffect(() => {

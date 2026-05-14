@@ -1714,6 +1714,23 @@ router.get('/bulk-export', authenticate, authorize('super_admin', 'admin', 'hr')
       .sort({ date: -1 })
       .lean();
 
+    // Validate records exist
+    if (!records || records.length === 0) {
+      logger.warn('No attendance records found for export', {
+        userId: req.user.userId,
+        filters: { startDate, endDate, employeeId, status }
+      });
+      
+      // Still return CSV with just headers
+      const csvHeaders = ['Employee ID', 'Employee Name', 'Email', 'Date', 'Check In', 'Check Out', 'Status', 'Hours Worked', 'Break Count', 'Total Break Minutes', 'Notes'];
+      const csvContent = csvHeaders.join(',');
+      
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="attendance-export-${new Date().toISOString().split('T')[0]}-empty.csv"`);
+      res.send(csvContent);
+      return;
+    }
+
     // Convert to CSV format
     const csvHeaders = ['Employee ID', 'Employee Name', 'Email', 'Date', 'Check In', 'Check Out', 'Status', 'Hours Worked', 'Break Count', 'Total Break Minutes', 'Notes'];
     const csvRows = records.map(record => {

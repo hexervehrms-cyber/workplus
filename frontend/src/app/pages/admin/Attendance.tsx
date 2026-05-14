@@ -171,7 +171,7 @@ export default function AttendanceAdmin() {
       
       // Call the bulk-export endpoint with proper API URL
       const apiUrl = buildApiUrl(`/attendance/bulk-export?startDate=${exportStartDate}&endDate=${exportEndDate}`);
-      const token = TokenManager.get();
+      let token = TokenManager.get();  // Changed from const to let
       
       console.log('🔄 [EXPORT] Starting attendance export', {
         url: apiUrl,
@@ -187,7 +187,7 @@ export default function AttendanceAdmin() {
         const refreshToken = TokenManager.getRefreshToken();
         if (refreshToken) {
           try {
-            const refreshResponse = await fetch(buildApiUrl('/auth/refresh'), {
+            const refreshResponse = await fetch(buildApiUrl('/security/auth/refresh-token'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ refreshToken }),

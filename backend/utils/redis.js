@@ -24,12 +24,17 @@ async function initializeRedis() {
     redisClient = createClient({ url: redisUrl });
 
     redisClient.on('error', (err) => {
-      logger.error('Redis client error:', err);
+      logger.error('Redis client error:', err.message);
       isConnected = false;
     });
 
     redisClient.on('connect', () => {
       logger.info('Redis client connected');
+      isConnected = true;
+    });
+
+    redisClient.on('ready', () => {
+      logger.info('Redis client ready');
       isConnected = true;
     });
 

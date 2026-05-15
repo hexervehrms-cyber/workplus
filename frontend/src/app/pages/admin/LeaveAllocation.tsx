@@ -3,6 +3,7 @@ import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Calendar, Loader2, Plus, Edit2, Trash2, Download } from 'lucide-react';
 import { LeaveAllocationService, EmployeeService } from '../../utils/api';
+import { parseBalanceApiResponse, sumRemainingDays } from '../../utils/leaveBalance';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
 import {
@@ -66,7 +67,20 @@ const TABLE_LEAVE_KEYS = [
 
 function getAllocationTotal(allocations: LeaveAllocation['allocations'] | undefined): number {
   if (!allocations) return 0;
-  return TABLE_LEAVE_KEYS.reduce((sum, key) => sum + (Number(allocations[key]) || 0), 0);
+  return LEAVE_TYPES.reduce(
+    (sum, { key }) => sum + (Number((allocations as Record<string, number>)[key]) || 0),
+    0
+  );
+}
+
+function defaultAllocationForm(): Record<string, number> {
+  return LEAVE_TYPES.reduce(
+    (acc, { key }) => {
+      acc[key] = 0;
+      return acc;
+    },
+    {} as Record<string, number>
+  );
 }
 
 const LEAVE_TYPES = [
@@ -118,6 +132,7 @@ export default function LeaveAllocation() {
   const [showYearlyForm, setShowYearlyForm] = useState(false);
   const [selectedEmployeesForYearly, setSelectedEmployeesForYearly] = useState<string[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
+  const [availableByEmployee, setAvailableByEmployee] = useState<Record<string, number>>({});
 
   // Fetch data
   useEffect(() => {
@@ -182,11 +197,35 @@ export default function LeaveAllocation() {
           selectedMonth
         );
         
+        let rows: LeaveAllocation[] = [];
         if (Array.isArray(allocationsData)) {
-          setAllocations(allocationsData);
+          rows = allocationsData;
         } else if (allocationsData?.data) {
-          setAllocations(allocationsData.data);
+          rows = allocationsData.data;
         }
+        setAllocations(rows);
+
+        const balanceMap: Record<string, number> = {};
+        await Promise.all(
+          rows.map(async (row) => {
+            const empId = row.employeeId?._id;
+            if (!empId) return;
+            try {
+              const balanceRes = await LeaveAllocationService.getEmployeeBalance(
+                empId,
+                selectedYear,
+                selectedMonth
+              );
+              if (balanceRes?.success) {
+                const parsed = parseBalanceApiResponse(balanceRes);
+                balanceMap[empId] = sumRemainingDays(parsed.balances);
+              }
+            } catch {
+              /* non-fatal */
+            }
+          })
+        );
+        setAvailableByEmployee(balanceMap);
       }
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -198,10 +237,13 @@ export default function LeaveAllocation() {
   const handleOpenForm = (allocation?: LeaveAllocation) => {
     if (allocation) {
       setSelectedAllocation(allocation);
-      setSelectedEmployee(allocation.employeeId._id);
+      setSelectedEmployee(allocation.employeeId?._id || '');
       setSelectedEmployees([]);
       setIsMultiSelectMode(false);
-      setFormData(allocation.allocations);
+      setFormData({
+        ...defaultAllocationForm(),
+        ...(allocation.allocations as Record<string, number>),
+      });
     } else {
       setSelectedAllocation(null);
       setSelectedEmployee('');
@@ -459,7 +501,12 @@ export default function LeaveAllocation() {
                   <th className="p-4 text-center">Comp Off</th>
                   <th className="p-4 text-center">Personal</th>
                   <th className="p-4 text-center">Emergency</th>
-                  <th className="p-4 text-center font-semibold">Total Leaves</th>
+                  <th className="p-4 text-center font-semibold" title="Sum of all leave types allocated this month">
+                    Allocated
+                  </th>
+                  <th className="p-4 text-center font-semibold" title="Available balance (same as employee dashboard)">
+                    Available
+                  </th>
                   <th className="p-4 text-left">Actions</th>
                 </tr>
               </thead>
@@ -483,6 +530,9 @@ export default function LeaveAllocation() {
                     <td className="p-4 text-center">{allocation.allocations?.emergency ?? 0}</td>
                     <td className="p-4 text-center font-semibold">
                       {getAllocationTotal(allocation.allocations)}
+                    </td>
+                    <td className="p-4 text-center font-semibold text-primary">
+                      {availableByEmployee[allocation.employeeId?._id] ?? '—'}
                     </td>
                     <td className="p-4">
                       <div className="flex gap-2">
@@ -514,8 +564,8 @@ export default function LeaveAllocation() {
 
       {/* Allocation Form Dialog */}
       <Dialog open={showForm} onOpenChange={setShowForm}>
-        <DialogContent className="max-w-2xl rounded-2xl border-0 shadow-2xl">
-          <DialogHeader className="pb-4">
+        <DialogContent className="flex max-h-[min(90vh,820px)] w-[min(calc(100vw-2rem),42rem)] max-w-none flex-col gap-0 overflow-hidden rounded-2xl border-0 p-0 shadow-2xl sm:max-w-none">
+          <DialogHeader className="shrink-0 border-b px-6 py-4 text-left">
             <DialogTitle className="text-xl font-bold">
               {selectedAllocation ? 'Edit Leave Allocation' : 'Add Leave Allocation'}
             </DialogTitle>
@@ -524,7 +574,7 @@ export default function LeaveAllocation() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-6">
+          <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-4">
             {/* Multi-select Toggle */}
             {!selectedAllocation && (
               <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-xl">
@@ -620,32 +670,31 @@ export default function LeaveAllocation() {
                 </div>
               ))}
             </div>
+          </div>
 
-            {/* Action Buttons */}
-            <div className="flex gap-3 pt-4">
-              <Button
-                variant="outline"
-                className="flex-1 rounded-xl border-foreground/20"
-                onClick={() => setShowForm(false)}
-                disabled={actionLoading}
-              >
-                Cancel
-              </Button>
-              <Button
-                className="flex-1 rounded-xl bg-primary hover:bg-primary/90"
-                onClick={handleSaveAllocation}
-                disabled={actionLoading}
-              >
-                {actionLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  'Save Allocation'
-                )}
-              </Button>
-            </div>
+          <div className="flex shrink-0 gap-3 border-t px-6 py-4">
+            <Button
+              variant="outline"
+              className="flex-1 rounded-xl border-foreground/20"
+              onClick={() => setShowForm(false)}
+              disabled={actionLoading}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="flex-1 rounded-xl bg-primary hover:bg-primary/90"
+              onClick={handleSaveAllocation}
+              disabled={actionLoading}
+            >
+              {actionLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Save Allocation'
+              )}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

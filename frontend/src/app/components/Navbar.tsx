@@ -15,7 +15,7 @@ import {
 } from './ui/dropdown-menu';
 import { Badge } from './ui/badge';
 import CurrencyChanger from './CurrencyChanger';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { toast } from '../utils/portalToast';
 import { buildApiUrl } from '../utils/apiHelper';
 import { socketService } from '../utils/socket';
@@ -54,11 +54,19 @@ export function Navbar() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Fetch notifications
   const fetchNotifications = async () => {
     try {
-      setLoading(true);
+      if (mountedRef.current) setLoading(true);
       
       const response = await fetch(buildApiUrl('/notifications?limit=10&status=all'), {
         credentials: 'include',  // ✅ Send httpOnly cookies
@@ -69,7 +77,7 @@ export function Navbar() {
 
       if (response.ok) {
         const result = await response.json();
-        if (result.success && result.data) {
+        if (mountedRef.current && result.success && result.data) {
           setNotifications(result.data.notifications || []);
           setUnreadCount(result.data.unreadCount || 0);
         }
@@ -80,7 +88,7 @@ export function Navbar() {
     } catch (error) {
       console.error('Failed to fetch notifications:', error);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   };
 
@@ -205,6 +213,7 @@ export function Navbar() {
         fetchNotifications();
         return;
       }
+      if (!mountedRef.current) return;
       setNotifications((prev) => {
         if (prev.some((n) => n._id === String(id))) return prev;
         const entry: Notification = {

@@ -4,6 +4,7 @@ import { Card } from './ui/card';
 interface KPICardProps {
   title: string;
   value: string | number;
+  subtitle?: string;
   change?: number;
   icon: LucideIcon;
   color?: 'primary' | 'secondary' | 'accent' | 'destructive';
@@ -19,7 +20,7 @@ const colorClasses = {
   destructive: 'bg-destructive/10 text-destructive'
 };
 
-export function KPICard({ title, value, change, icon: Icon, color = 'primary', onClick, emphasize }: KPICardProps) {
+export function KPICard({ title, value, subtitle, change, icon: Icon, color = 'primary', onClick, emphasize }: KPICardProps) {
   const isPositive = change !== undefined && change >= 0;
   const numeric = typeof value === 'number' ? value : parseInt(String(value), 10);
   const showEmphasis =
@@ -36,6 +37,9 @@ export function KPICard({ title, value, change, icon: Icon, color = 'primary', o
         <div className="flex-1">
           <p className="text-sm text-muted-foreground mb-2">{title}</p>
           <h3 className="text-3xl font-bold text-foreground mb-2">{value}</h3>
+          {subtitle ? (
+            <p className="text-xs text-muted-foreground mb-2">{subtitle}</p>
+          ) : null}
           {change !== undefined && (
             <div className={`flex items-center gap-1 text-sm ${isPositive ? 'text-secondary' : 'text-destructive'}`}>
               {isPositive ? (

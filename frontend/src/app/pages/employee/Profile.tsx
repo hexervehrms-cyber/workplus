@@ -10,9 +10,14 @@ import { Progress } from '../../components/ui/progress';
 import { useCurrency } from '../../context/CurrencyContext';
 import CurrencySelector from '../../components/CurrencySelector';
 import { useState, useEffect } from 'react';
+import { useIsMounted } from '../../hooks/useIsMounted';
 import { toast } from '../../utils/portalToast';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog';
-import { apiGet, apiPost, apiPut, apiDelete, apiUpload, clearApiCache, buildFileUrl, buildApiUrl, getBearerToken } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, apiDelete, apiUpload, clearApiCache } from '../../utils/apiHelper';
+import {
+  downloadDocumentFile,
+  openDocumentInNewTab,
+} from '../../utils/documentFile';
 import { useAuth } from '../../context/AuthContext';
 
 // IndexedDB helper functions
@@ -141,6 +146,7 @@ interface Document {
   uploadedAt: string;
   status: string;
   filePath?: string;
+  fileName?: string;
   category?: string;
   fileBlob?: Blob;
 }
@@ -148,6 +154,7 @@ interface Document {
 export default function Profile() {
   const { user: authUser } = useAuth();
   const { selectedCurrency, formatCurrency } = useCurrency();
+  const mounted = useIsMounted();
   const [showCurrencySelector, setShowCurrencySelector] = useState(false);
   const [employee, setEmployee] = useState<EmployeeData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -227,45 +234,57 @@ export default function Profile() {
 
   const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-  const getDocumentFileUrl = (doc: Document) => {
-    if (!doc.filePath) return null;
-    return buildFileUrl(doc.filePath);
-  };
-
   const openDocument = async (doc: Document) => {
     if (!doc._id) {
-      const fallback = getDocumentFileUrl(doc);
-      if (fallback) {
-        window.open(fallback, '_blank', 'noopener,noreferrer');
-        return;
-      }
-      toast.error('File not available');
+      toast.error('Document is not available on the server yet');
       return;
     }
-
     try {
-      const token = getBearerToken();
-      const url = buildApiUrl(`/documents/download/${doc._id}`);
-      const response = await fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        credentials: 'include',
+      await openDocumentInNewTab(doc._id, {
+        fileName: doc.fileName,
+        name: doc.name,
       });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Could not open document';
+      toast.error(message);
+    }
+  };
 
-      if (!response.ok) {
-        throw new Error('Could not open document');
-      }
+  const downloadDocument = async (doc: Document) => {
+    if (!doc._id) {
+      toast.error('Document is not available on the server yet');
+      return;
+    }
+    try {
+      await downloadDocumentFile(doc._id, doc.fileName || doc.name);
+      toast.success('Download started');
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Could not download document';
+      toast.error(message);
+    }
+  };
 
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      window.open(blobUrl, '_blank', 'noopener,noreferrer');
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 120_000);
-    } catch {
-      const fallback = getDocumentFileUrl(doc);
-      if (fallback) {
-        window.open(fallback, '_blank', 'noopener,noreferrer');
-      } else {
-        toast.error('Could not open document');
+  const removeDocument = async (doc: Document) => {
+    if (!doc._id) {
+      toast.error('Document is not available on the server yet');
+      return;
+    }
+    try {
+      await apiDelete(`/documents/${doc._id}`);
+      try {
+        await deleteDocumentFromDB(doc._id);
+      } catch {
+        /* non-fatal */
       }
+      await loadDocuments();
+      toast.success('Document deleted');
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to delete document'
+      );
     }
   };
 
@@ -293,9 +312,12 @@ export default function Profile() {
           : new Date().toLocaleDateString(),
         status: String(d.status || 'uploaded'),
         filePath: d.filePath ? String(d.filePath) : d.fileUrl ? String(d.fileUrl) : undefined,
+        fileName: d.fileName ? String(d.fileName) : undefined,
         category: d.type ? String(d.type) : undefined,
       }));
-      setDocuments(mapped.filter((d) => d._id));
+      if (mounted.current) {
+        setDocuments(mapped.filter((d) => d._id));
+      }
     } catch (error) {
       console.error('Error loading documents from backend:', error);
     }
@@ -397,7 +419,13 @@ export default function Profile() {
     try {
       const data = await apiGet('/employee-dashboard/documents?type=education');
       
-      if (data.success && data.data && Array.isArray(data.data)) {
+      const docList = Array.isArray(data?.data)
+        ? data.data
+        : Array.isArray(data?.data?.documents)
+          ? data.data.documents
+          : [];
+
+      if (data.success && docList.length >= 0) {
         // Parse and organize documents by education level and type
         const organizedDocs: {
           [key: string]: { certificate?: Document; marksheet?: Document; others?: Document };
@@ -412,7 +440,7 @@ export default function Profile() {
         };
 
         // Process each document and place it in the correct category
-        data.data.forEach((doc: any) => {
+        docList.forEach((doc: any) => {
           const docType = doc.type || '';
           // Parse type like "education_10th_certificate"
           const match = docType.match(/education_(.+)_(certificate|marksheet|others)/);
@@ -428,12 +456,13 @@ export default function Profile() {
             
             if (educationLevel) {
               const document: Document = {
-                _id: doc._id || doc.id,
+                _id: String(doc._id || doc.id || ''),
                 name: doc.name,
                 size: doc.size || 'Unknown',
                 uploadedAt: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : 'Unknown',
                 status: doc.status || 'uploaded',
-                filePath: doc.filePath || doc.url
+                filePath: doc.filePath || doc.url,
+                fileName: doc.fileName,
               };
               
               organizedDocs[educationLevel][docTypeKey] = document;
@@ -488,11 +517,13 @@ export default function Profile() {
       };
       
       console.log('✅ Employee data fetched:', employeeData);
-      setEmployee(employeeData);
+      if (mounted.current) {
+        setEmployee(employeeData);
+      }
     } catch (error) {
       console.error('❌ Error fetching employee data:', error);
     } finally {
-      setLoading(false);
+      if (mounted.current) setLoading(false);
     }
   };
 
@@ -1610,8 +1641,20 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0"
+                              title="View document"
                               onClick={() => {
                                 if (docs.certificate) void openDocument(docs.certificate);
+                              }}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0"
+                              title="Download document"
+                              onClick={() => {
+                                if (docs.certificate) void downloadDocument(docs.certificate);
                               }}
                             >
                               <Download className="w-4 h-4" />
@@ -1620,16 +1663,22 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                              onClick={() => {
-                                // Delete functionality
+                              title="Delete document"
+                              onClick={async () => {
+                                if (!docs.certificate?._id) {
+                                  setEducationalDocuments((prev) => ({
+                                    ...prev,
+                                    [level]: { ...prev[level], certificate: undefined },
+                                  }));
+                                  toast.success('Certificate removed');
+                                  return;
+                                }
+                                await removeDocument(docs.certificate);
                                 setEducationalDocuments((prev) => ({
                                   ...prev,
-                                  [level]: {
-                                    ...prev[level],
-                                    certificate: undefined
-                                  }
+                                  [level]: { ...prev[level], certificate: undefined },
                                 }));
-                                toast.success('Certificate removed');
+                                void fetchEducationalDocuments();
                               }}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -1654,9 +1703,20 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0"
+                              title="View document"
                               onClick={() => {
-                                // Download functionality
                                 if (docs.marksheet) void openDocument(docs.marksheet);
+                              }}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0"
+                              title="Download document"
+                              onClick={() => {
+                                if (docs.marksheet) void downloadDocument(docs.marksheet);
                               }}
                             >
                               <Download className="w-4 h-4" />
@@ -1665,16 +1725,22 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                              onClick={() => {
-                                // Delete functionality
+                              title="Delete document"
+                              onClick={async () => {
+                                if (!docs.marksheet?._id) {
+                                  setEducationalDocuments((prev) => ({
+                                    ...prev,
+                                    [level]: { ...prev[level], marksheet: undefined },
+                                  }));
+                                  toast.success('Marksheet removed');
+                                  return;
+                                }
+                                await removeDocument(docs.marksheet);
                                 setEducationalDocuments((prev) => ({
                                   ...prev,
-                                  [level]: {
-                                    ...prev[level],
-                                    marksheet: undefined
-                                  }
+                                  [level]: { ...prev[level], marksheet: undefined },
                                 }));
-                                toast.success('Marksheet removed');
+                                void fetchEducationalDocuments();
                               }}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -1699,9 +1765,20 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0"
+                              title="View document"
                               onClick={() => {
-                                // Download functionality
                                 if (docs.others) void openDocument(docs.others);
+                              }}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0"
+                              title="Download document"
+                              onClick={() => {
+                                if (docs.others) void downloadDocument(docs.others);
                               }}
                             >
                               <Download className="w-4 h-4" />
@@ -1710,16 +1787,22 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                              onClick={() => {
-                                // Delete functionality
+                              title="Delete document"
+                              onClick={async () => {
+                                if (!docs.others?._id) {
+                                  setEducationalDocuments((prev) => ({
+                                    ...prev,
+                                    [level]: { ...prev[level], others: undefined },
+                                  }));
+                                  toast.success('Document removed');
+                                  return;
+                                }
+                                await removeDocument(docs.others);
                                 setEducationalDocuments((prev) => ({
                                   ...prev,
-                                  [level]: {
-                                    ...prev[level],
-                                    others: undefined
-                                  }
+                                  [level]: { ...prev[level], others: undefined },
                                 }));
-                                toast.success('Document removed');
+                                void fetchEducationalDocuments();
                               }}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -1900,21 +1983,7 @@ export default function Profile() {
                             variant="ghost"
                             className="h-8 w-8 p-0"
                             title="Download document"
-                            onClick={() => {
-                              const url = getDocumentFileUrl(doc);
-                              if (!url) {
-                                toast.error('File not available');
-                                return;
-                              }
-                              const link = document.createElement('a');
-                              link.href = url;
-                              link.download = doc.name;
-                              link.target = '_blank';
-                              link.rel = 'noopener noreferrer';
-                              document.body.appendChild(link);
-                              link.click();
-                              document.body.removeChild(link);
-                            }}
+                            onClick={() => void downloadDocument(doc)}
                           >
                             <Download className="w-4 h-4" />
                           </Button>
@@ -1923,16 +1992,7 @@ export default function Profile() {
                             variant="ghost"
                             className="h-8 w-8 p-0 text-destructive hover:text-destructive"
                             title="Delete document"
-                            onClick={async () => {
-                              try {
-                                await apiDelete(`/documents/${doc._id}`);
-                                await loadDocuments();
-                                toast.success('Document deleted');
-                              } catch (error) {
-                                console.error('Error deleting document:', error);
-                                toast.error('Failed to delete document');
-                              }
-                            }}
+                            onClick={() => void removeDocument(doc)}
                           >
                             <Trash2 className="w-4 h-4" />
                           </Button>

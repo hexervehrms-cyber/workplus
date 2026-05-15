@@ -596,12 +596,17 @@ class RealTimeSocket {
     return this.socket;
   }
 
-  // Add .on() and .off() methods for compatibility
-  on(event: string, callback: (...args: any[]) => void) {
+  // Add .on() and .off() methods for compatibility (returns unsubscribe for useEffect cleanup)
+  on(event: string, callback: (...args: any[]) => void): () => void {
     this.ensureConnected();
     if (this.socket) {
       this.socket.on(event, callback);
     }
+    return () => {
+      if (this.socket) {
+        this.socket.off(event, callback);
+      }
+    };
   }
 
   off(event: string, callback: (...args: any[]) => void) {

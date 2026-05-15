@@ -96,6 +96,29 @@ const resolveDocumentUserId = async (idParam) => {
   return id;
 };
 
+/** Resolve stored filePath to an absolute path on disk (multiple layouts). */
+const resolveDocumentAbsolutePath = (filePath) => {
+  if (!filePath) return null;
+
+  const rel = String(filePath).replace(/^\//, "");
+  const basename = path.basename(rel);
+  const candidates = [
+    path.resolve(__dirname, "..", rel),
+    path.join(__dirname, "..", "uploads", "documents", basename),
+    path.resolve(process.cwd(), rel),
+    path.join(process.cwd(), "uploads", "documents", basename),
+    path.join(process.cwd(), "backend", "uploads", "documents", basename),
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
 const resolveDocumentType = (rawType, name) => {
   if (rawType && DOCUMENT_TYPES.has(String(rawType))) {
     return String(rawType);
@@ -395,11 +418,15 @@ router.get(
         return sendError(res, "File path missing", 404, "NOT_FOUND");
       }
 
-      const relativePath = String(document.filePath).replace(/^\//, "");
-      const absolutePath = path.resolve(__dirname, "..", relativePath);
+      const absolutePath = resolveDocumentAbsolutePath(document.filePath);
 
-      if (!fs.existsSync(absolutePath)) {
-        return sendError(res, "File not found on server", 404, "NOT_FOUND");
+      if (!absolutePath) {
+        return sendError(
+          res,
+          "File not found on server. It may have been removed after a server restart — please re-upload.",
+          404,
+          "NOT_FOUND"
+        );
       }
 
       const ext = path.extname(document.fileName || document.filePath || "").toLowerCase();
@@ -416,9 +443,14 @@ router.get(
 
       const contentType = mimeByExt[ext] || "application/octet-stream";
       const fileName = document.fileName || document.name || "document";
+      const asDownload =
+        req.query.download === "1" || req.query.download === "true";
 
       res.setHeader("Content-Type", contentType);
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(fileName)}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `${asDownload ? "attachment" : "inline"}; filename="${encodeURIComponent(fileName)}"`
+      );
 
       return res.sendFile(absolutePath);
     } catch (error) {
@@ -492,6 +524,19 @@ router.delete(
         String(req.user.userId) !== String(document.userId)
       ) {
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      }
+
+      const absolutePath = resolveDocumentAbsolutePath(document.filePath);
+      if (absolutePath) {
+        try {
+          fs.unlinkSync(absolutePath);
+        } catch (unlinkErr) {
+          logger.warn("Could not delete document file from disk", {
+            documentId: id,
+            path: absolutePath,
+            error: unlinkErr.message,
+          });
+        }
       }
 
       await Document.findByIdAndDelete(id);

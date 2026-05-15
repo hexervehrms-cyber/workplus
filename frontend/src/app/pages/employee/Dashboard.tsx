@@ -5,7 +5,7 @@ import ChatWidget from '../../components/ChatWidget';
 import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useAuth } from '../../context/AuthContext';
 import { TokenManager, LeaveAllocationService } from '../../utils/api';
-import { parseBalanceApiResponse, sumRemainingDays } from '../../utils/leaveBalance';
+import { parseBalanceApiResponse, sumAllocatedDays, sumRemainingDays } from '../../utils/leaveBalance';
 import { apiGetSafe, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
 import { safeLocaleTime, safeFormatTime, runSafe } from '../../utils/safeUi';
 import { postAttendanceAction } from '../../utils/attendanceApi';
@@ -228,6 +228,7 @@ export default function EmployeeDashboard() {
 
   const [kpiMetrics, setKpiMetrics] = useState({
     leaveBalance: "0 days",
+    leaveBalanceSubtitle: "",
     hoursThisWeek: "0h",
     performance: "0%"
   });
@@ -588,6 +589,7 @@ export default function EmployeeDashboard() {
       }
 
       let leaveBalanceLabel = '0 days';
+      let leaveBalanceSubtitle = '';
       try {
         const empId = employeeIdRef.current || (await ensureEmployeeId());
         if (empId) {
@@ -600,7 +602,9 @@ export default function EmployeeDashboard() {
           if (balanceRes.success) {
             const parsed = parseBalanceApiResponse(balanceRes);
             const totalRemaining = sumRemainingDays(parsed.balances);
+            const totalAllocated = sumAllocatedDays(parsed.balances);
             leaveBalanceLabel = `${totalRemaining} day${totalRemaining === 1 ? '' : 's'}`;
+            leaveBalanceSubtitle = `${totalAllocated} allocated this month`;
           }
         }
       } catch {
@@ -609,6 +613,7 @@ export default function EmployeeDashboard() {
 
       setKpiMetrics((prev) => ({
         leaveBalance: leaveBalanceLabel,
+        leaveBalanceSubtitle,
         hoursThisWeek: prev.hoursThisWeek,
         performance: "85%",
       }));
@@ -671,12 +676,14 @@ export default function EmployeeDashboard() {
         now.getFullYear(),
         now.getMonth() + 1
       );
-      if (balanceRes.success) {
+      if (balanceRes.success && mountedRef.current) {
         const parsed = parseBalanceApiResponse(balanceRes);
         const totalRemaining = sumRemainingDays(parsed.balances);
+        const totalAllocated = sumAllocatedDays(parsed.balances);
         setKpiMetrics((prev) => ({
           ...prev,
           leaveBalance: `${totalRemaining} day${totalRemaining === 1 ? '' : 's'}`,
+          leaveBalanceSubtitle: `${totalAllocated} allocated this month`,
         }));
       }
     } catch (err) {
@@ -1531,6 +1538,7 @@ export default function EmployeeDashboard() {
           <KPICard
             title="Leave Balance"
             value={kpiMetrics.leaveBalance}
+            subtitle={kpiMetrics.leaveBalanceSubtitle || 'Available to use'}
             icon={Calendar}
             color="primary"
           />

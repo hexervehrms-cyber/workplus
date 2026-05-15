@@ -79,6 +79,11 @@ export function sumRemainingDays(balances: LeaveBalanceMap): number {
   return Object.values(balances).reduce((sum, b) => sum + (b.remaining || 0), 0);
 }
 
+/** Sum allocated days across all leave types (matches admin allocation form total). */
+export function sumAllocatedDays(balances: LeaveBalanceMap): number {
+  return Object.values(balances).reduce((sum, b) => sum + (b.allocated || 0), 0);
+}
+
 export function getTypeBalance(
   balances: LeaveBalanceMap,
   key: string

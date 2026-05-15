@@ -83,7 +83,9 @@ export default function Employees() {
     aadharNumber: '',
     panNumber: '',
     bankAccount: '',
-    ifscCode: ''
+    ifscCode: '',
+    employeeCode: '',
+    joiningDate: ''
   });
 
   useEffect(() => {
@@ -177,7 +179,9 @@ export default function Employees() {
         department: formData.department.trim(),
         baseSalary: parseFloat(formData.baseSalary) || 0,
         phone: formData.phone.trim(),
-        role: formData.role
+        role: formData.role,
+        employeeCode: formData.employeeCode.trim() || undefined,
+        joiningDate: formData.joiningDate || undefined
       });
       
       console.log('Employee created response:', response);
@@ -240,7 +244,9 @@ export default function Employees() {
         aadharNumber: formData.aadharNumber.trim(),
         panNumber: formData.panNumber.trim(),
         bankAccount: formData.bankAccount.trim(),
-        ifscCode: formData.ifscCode.trim()
+        ifscCode: formData.ifscCode.trim(),
+        employeeCode: formData.employeeCode.trim() || undefined,
+        joiningDate: formData.joiningDate ? new Date(formData.joiningDate).toISOString() : undefined
       });
       
       console.log('Employee updated response:', response);
@@ -257,7 +263,9 @@ export default function Employees() {
           designation: formData.designation.trim(),
           department: formData.department.trim(),
           baseSalary: parseFloat(formData.baseSalary) || 0,
-          phone: formData.phone.trim()
+          phone: formData.phone.trim(),
+          employeeCode: formData.employeeCode.trim(),
+          joiningDate: formData.joiningDate || emp.joiningDate
         } : emp)
       );
       
@@ -297,8 +305,8 @@ export default function Employees() {
     setEditingEmployee(employee);
     const shiftTiming = (employee as any)?.shiftTiming || {};
     setFormData({
-      name: employee.userId.name,
-      email: employee.userId.email,
+      name: employee.userId?.name || '',
+      email: employee.userId?.email || '',
       password: '',
       designation: employee.designation || '',
       department: employee.department || '',
@@ -315,7 +323,11 @@ export default function Employees() {
       aadharNumber: (employee as any)?.aadharNumber || '',
       panNumber: (employee as any)?.panNumber || '',
       bankAccount: (employee as any)?.bankAccount || '',
-      ifscCode: (employee as any)?.ifscCode || ''
+      ifscCode: (employee as any)?.ifscCode || '',
+      employeeCode: employee.employeeCode || '',
+      joiningDate: employee.joiningDate
+        ? new Date(employee.joiningDate).toISOString().split('T')[0]
+        : ''
     });
     setShowEditForm(true);
   };
@@ -587,8 +599,8 @@ export default function Employees() {
 
       {/* Edit Employee Modal */}
       {showEditForm && editingEmployee && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <Card className="w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-2xl mx-4 p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Edit Employee</h2>
               <Button variant="ghost" onClick={() => setShowEditForm(false)}>
@@ -617,24 +629,51 @@ export default function Employees() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label>Department</Label>
-                  <Input
-                    value={formData.department}
-                    onChange={(e) => setFormData({...formData, department: e.target.value})}
-                    placeholder="e.g. Engineering"
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label>Designation</Label>
-                  <Input
-                    value={formData.designation}
-                    onChange={(e) => setFormData({...formData, designation: e.target.value})}
-                    placeholder="e.g. Software Engineer"
-                    className="mt-1"
-                  />
+              <div className="border-t pt-4">
+                <h3 className="font-semibold text-sm mb-1 flex items-center gap-2">
+                  <Briefcase className="w-4 h-4" />
+                  Official Information
+                </h3>
+                <p className="text-xs text-muted-foreground mb-4">
+                  Synced to the employee&apos;s My Profile → Official Information (read-only for employees)
+                </p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Employee ID</Label>
+                    <Input
+                      value={formData.employeeCode}
+                      onChange={(e) => setFormData({...formData, employeeCode: e.target.value})}
+                      placeholder="e.g. EMP001"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label>Joining Date</Label>
+                    <Input
+                      type="date"
+                      value={formData.joiningDate}
+                      onChange={(e) => setFormData({...formData, joiningDate: e.target.value})}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label>Department</Label>
+                    <Input
+                      value={formData.department}
+                      onChange={(e) => setFormData({...formData, department: e.target.value})}
+                      placeholder="e.g. Engineering"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label>Designation</Label>
+                    <Input
+                      value={formData.designation}
+                      onChange={(e) => setFormData({...formData, designation: e.target.value})}
+                      placeholder="e.g. Software Engineer"
+                      className="mt-1"
+                    />
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">

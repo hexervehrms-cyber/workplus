@@ -7,6 +7,7 @@ import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Loader2, Package, Laptop, DollarSign, Calendar, MapPin, User, Image as ImageIcon, X, ChevronLeft, ChevronRight, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
+import { getBearerToken } from '../../utils/apiHelper';
 
 interface Asset {
   _id: string;
@@ -124,7 +125,7 @@ export default function EmployeeAssets() {
         return;
       }
 
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const token = getBearerToken() || '';
       if (!token) {
         toast.error('Authentication token not found. Please log in again.');
         setSubmitting(false);
@@ -239,7 +240,7 @@ export default function EmployeeAssets() {
       // Get current user's employee ID
       const userResponse = await fetch('/api/auth/me', {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 
@@ -251,7 +252,7 @@ export default function EmployeeAssets() {
       // Fetch employee record to get employeeId
       const employeeResponse = await fetch(`/api/employees?userId=${userId}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 
@@ -264,7 +265,7 @@ export default function EmployeeAssets() {
       // Fetch assets for this employee
       const response = await fetch(`/api/assets/employee/${employeeId}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 
@@ -285,7 +286,7 @@ export default function EmployeeAssets() {
     try {
       const response = await fetch(`/api/assets/${assetId}/photos`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 

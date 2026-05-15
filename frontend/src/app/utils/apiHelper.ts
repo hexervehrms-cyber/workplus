@@ -63,6 +63,20 @@ export const buildApiUrl = (endpoint: string): string => {
   return `${baseUrl}/${cleanEndpoint}`;
 };
 
+/** Access token from session mirror (IndexedDB + memory) — prefer over localStorage.authToken */
+export function getBearerToken(): string | null {
+  return TokenManager.get();
+}
+
+/** Fetch headers with Bearer token when available */
+export function bearerAuthHeaders(extra?: Record<string, string>): HeadersInit {
+  const token = getBearerToken();
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extra,
+  };
+}
+
 /**
  * Make an API request with proper headers and error handling
  * @param endpoint - API endpoint

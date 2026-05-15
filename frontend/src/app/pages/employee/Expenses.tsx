@@ -3,7 +3,7 @@ import { Receipt, Plus, Upload, Filter, Calendar, DollarSign, CheckCircle, Clock
 import { useCurrency } from '../../context/CurrencyContext';
 import { useAuth } from '../../context/AuthContext';
 import { socketService } from '../../utils/socket';
-import { apiGet, apiPost, apiPut, apiDelete, apiUpload, buildFileUrl } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, apiDelete, apiUpload, buildFileUrl, getBearerToken } from '../../utils/apiHelper';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -312,7 +312,7 @@ export default function Expenses() {
 
     try {
       setSubmitting(true);
-      const token = localStorage.getItem('authToken');
+      const token = getBearerToken();
       console.log(editingId ? 'Updating expense:' : 'Submitting expense for user:', user.id);
       console.log('Form data:', formData);
       
@@ -638,7 +638,7 @@ export default function Expenses() {
       }
 
       // Submit imported expenses
-      const token = localStorage.getItem('authToken');
+      const token = getBearerToken();
       let successCount = 0;
       let failureCount = 0;
       const submitErrors = [];

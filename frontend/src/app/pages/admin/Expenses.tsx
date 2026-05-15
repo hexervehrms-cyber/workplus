@@ -4,7 +4,7 @@ import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { Receipt, Search, Filter, Download, Eye, CheckCircle, AlertCircle, Tag, Car, Utensils, Home, Briefcase, Plane, Heart, Book, ShoppingCart, Coffee, IndianRupee, Edit, Trash2, XCircle, Loader, Train, Fuel, Hotel, Phone, Wifi, Laptop, Printer, FileText, Users, Lightbulb, Wrench, GraduationCap, Stethoscope, Building2, Truck, Package, FileDown, FileUp } from 'lucide-react';
 import { useCurrency } from '../../context/CurrencyContext';
-import { apiGet, apiPut, apiDelete, apiPost } from '../../utils/apiHelper';
+import { apiGet, apiPut, apiDelete, apiPost, getBearerToken } from '../../utils/apiHelper';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -382,7 +382,7 @@ export default function ExpensesAdmin() {
 
     try {
       setActionLoading(true);
-      const token = localStorage.getItem('authToken');
+      const token = getBearerToken();
 
       if (actionType === 'edit') {
         // Update expense
@@ -683,7 +683,7 @@ export default function ExpensesAdmin() {
       }
 
       // Submit imported expenses
-      const token = localStorage.getItem('authToken');
+      const token = getBearerToken();
       let successCount = 0;
       let failureCount = 0;
       const submitErrors = [];

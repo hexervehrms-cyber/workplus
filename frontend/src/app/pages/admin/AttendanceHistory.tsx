@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Loader, Download, Filter, X, Calendar, Clock, Coffee, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { apiGet } from '../../utils/apiHelper';
+import { apiGet, getBearerToken } from '../../utils/apiHelper';
 
 interface AttendanceRecord {
   _id: string;
@@ -304,7 +304,7 @@ export default function AttendanceHistory() {
 
     try {
       setLoading(true);
-      const token = localStorage.getItem('authToken');
+      const token = getBearerToken();
       
       let csvContent = '';
       

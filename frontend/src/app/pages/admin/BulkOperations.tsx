@@ -37,7 +37,7 @@ export default function BulkOperations() {
   const [importFormat, setImportFormat] = useState<'csv' | 'json'>('csv');
 
   const getBearer = () =>
-    TokenManager.get() || localStorage.getItem('authToken') || localStorage.getItem('token');
+    TokenManager.get();
 
   const handleExport = async (format: 'csv' | 'json') => {
     const token = getBearer();

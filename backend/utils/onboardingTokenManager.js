@@ -288,22 +288,26 @@ class OnboardingTokenManager {
    */
   static async isTokenValid(token) {
     try {
-      // Verify JWT signature and expiration
+      // Verify JWT signature and expiration (always required)
       this.verifyToken(token);
 
-      // Check if token exists in Redis and is not used
+      if (!redis.isRedisConnected()) {
+        return true;
+      }
+
       const tokenData = await this.getToken(token);
 
+      // JWT valid but not in Redis (e.g. store failed) — still allow send-email
       if (!tokenData) {
-        logger.warn('Token not found in Redis', {
-          tokenPrefix: token.substring(0, 20)
+        logger.warn('Token not found in Redis; accepting valid JWT', {
+          tokenPrefix: token.substring(0, 20),
         });
-        return false;
+        return true;
       }
 
       if (tokenData.isUsed) {
         logger.warn('Token already used', {
-          employeeEmail: tokenData.employeeEmail
+          employeeEmail: tokenData.employeeEmail,
         });
         return false;
       }
@@ -311,7 +315,7 @@ class OnboardingTokenManager {
       return true;
     } catch (error) {
       logger.warn('Token validation failed', {
-        error: error.message
+        error: error.message,
       });
       return false;
     }

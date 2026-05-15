@@ -13,7 +13,7 @@ import {
   Download, FileUp
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { apiGet, apiPost, apiPut, apiDelete, apiUpload, buildFileUrl } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, apiDelete, apiUpload, buildFileUrl, getBearerToken } from '../../utils/apiHelper';
 
 interface Asset {
   _id: string;
@@ -294,7 +294,7 @@ export default function Assets() {
       setLoading(true);
       const response = await fetch('/api/assets', {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 
@@ -314,7 +314,7 @@ export default function Assets() {
     try {
       const response = await fetch('/api/employees', {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 
@@ -337,7 +337,7 @@ export default function Assets() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         },
         body: JSON.stringify({
           assetName: formData.assetName,
@@ -372,7 +372,7 @@ export default function Assets() {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+              'Authorization': `Bearer ${getBearerToken() || ''}`
             },
             body: JSON.stringify({ photos: photosWithDescriptions })
           });
@@ -420,7 +420,7 @@ export default function Assets() {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         },
         body: JSON.stringify({
           assignedToId: assignData.assignedToId,
@@ -460,7 +460,7 @@ export default function Assets() {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         },
         body: JSON.stringify({
           condition: returnData.condition,
@@ -492,7 +492,7 @@ export default function Assets() {
       const response = await fetch(`/api/assets/${assetId}`, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 

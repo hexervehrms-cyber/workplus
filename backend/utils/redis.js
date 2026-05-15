@@ -181,6 +181,89 @@ async function increment(key) {
   }
 }
 
+/** List keys matching pattern (used by session/onboarding stats) */
+async function keys(pattern) {
+  if (!isRedisConnected()) {
+    return [];
+  }
+
+  try {
+    return await redisClient.keys(pattern);
+  } catch (error) {
+    logger.warn('Redis keys error', { pattern, error: error.message });
+    return [];
+  }
+}
+
+/** SET with TTL — accepts object (auto JSON) or pre-serialized string */
+async function setex(key, seconds, value) {
+  if (!isRedisConnected()) {
+    return false;
+  }
+
+  try {
+    const payload = typeof value === 'string' ? value : JSON.stringify(value);
+    await redisClient.set(key, payload, { EX: seconds });
+    return true;
+  } catch (error) {
+    logger.warn('Redis setex error', { key, error: error.message });
+    return false;
+  }
+}
+
+async function expire(key, seconds) {
+  if (!isRedisConnected()) {
+    return false;
+  }
+
+  try {
+    await redisClient.expire(key, seconds);
+    return true;
+  } catch (error) {
+    logger.warn('Redis expire error', { key, error: error.message });
+    return false;
+  }
+}
+
+async function sadd(key, ...members) {
+  if (!isRedisConnected() || members.length === 0) {
+    return 0;
+  }
+
+  try {
+    return await redisClient.sAdd(key, members);
+  } catch (error) {
+    logger.warn('Redis sadd error', { key, error: error.message });
+    return 0;
+  }
+}
+
+async function srem(key, ...members) {
+  if (!isRedisConnected() || members.length === 0) {
+    return 0;
+  }
+
+  try {
+    return await redisClient.sRem(key, members);
+  } catch (error) {
+    logger.warn('Redis srem error', { key, error: error.message });
+    return 0;
+  }
+}
+
+async function smembers(key) {
+  if (!isRedisConnected()) {
+    return [];
+  }
+
+  try {
+    return await redisClient.sMembers(key);
+  } catch (error) {
+    logger.warn('Redis smembers error', { key, error: error.message });
+    return [];
+  }
+}
+
 /**
  * Close Redis connection
  */
@@ -202,8 +285,14 @@ export default {
   isRedisConnected,
   get,
   set,
+  setex,
   del,
   deletePattern,
   increment,
+  keys,
+  expire,
+  sadd,
+  srem,
+  smembers,
   close
 };

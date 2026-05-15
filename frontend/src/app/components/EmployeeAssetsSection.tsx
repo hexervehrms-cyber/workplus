@@ -4,6 +4,7 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Loader2, Package, Laptop, DollarSign, Calendar, MapPin, Plus } from 'lucide-react';
 import { toast } from 'sonner';
+import { getBearerToken } from '../utils/apiHelper';
 
 interface Asset {
   _id: string;
@@ -47,7 +48,7 @@ export default function EmployeeAssetsSection({ employeeId, isAdmin = false, onA
 
       const response = await fetch(`/api/assets/employee/${employeeId}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 

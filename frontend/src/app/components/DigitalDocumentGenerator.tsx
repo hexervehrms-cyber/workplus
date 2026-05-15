@@ -18,6 +18,7 @@ import {
   User,
   Edit3
 } from 'lucide-react';
+import { getBearerToken } from '../utils/apiHelper';
 
 interface DigitalDocumentGeneratorProps {
   organizationId: string;
@@ -101,7 +102,7 @@ const DigitalDocumentGenerator: React.FC<DigitalDocumentGeneratorProps> = ({
     setSuccess('');
 
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const token = getBearerToken();
       
       const response = await fetch('/api/documents/digital-generate', {
         method: 'POST',

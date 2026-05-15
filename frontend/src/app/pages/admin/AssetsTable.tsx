@@ -8,6 +8,7 @@ import {
   Download, FileUp, Eye, ChevronUp, ChevronDown
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { getBearerToken } from '../../utils/apiHelper';
 
 interface Asset {
   _id: string;
@@ -58,7 +59,7 @@ export default function AssetsTable() {
       setLoading(true);
       const response = await fetch('/api/assets', {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 
@@ -105,7 +106,7 @@ export default function AssetsTable() {
     try {
       const response = await fetch('/api/assets/export/csv', {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 
@@ -135,7 +136,7 @@ export default function AssetsTable() {
       const response = await fetch(`/api/assets/${assetId}`, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 

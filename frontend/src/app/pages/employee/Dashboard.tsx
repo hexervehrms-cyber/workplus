@@ -1291,32 +1291,57 @@ export default function EmployeeDashboard() {
       <LoadingProgressBar isLoading={loading} color="bg-blue-500" />
       <div className="p-8 space-y-8">
         {/* Welcome Header with Attendance Buttons */}
-        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-2">
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-8 mb-2">
           <StaticGreetingHeader userName={user?.name || 'Employee'} />
 
-          <Card className="w-full lg:w-auto shrink-0 border-border/80 shadow-sm p-4 md:p-5">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">
-              Today&apos;s attendance
-            </p>
-            {todayAttendance.isCheckedIn && (
-              <Badge
-                className={`mb-3 px-3 py-1 text-xs font-semibold rounded-full ${
-                  todayAttendance.isOnBreak
-                    ? 'bg-amber-100 text-amber-800'
-                    : 'bg-emerald-100 text-emerald-800'
-                }`}
+          <div className="w-full lg:min-w-[340px] lg:max-w-[420px] shrink-0 rounded-2xl bg-muted/35 px-5 py-4 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Today&apos;s attendance
+              </p>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-9 w-9 shrink-0 border-0 shadow-none text-muted-foreground hover:text-foreground hover:bg-background/60"
+                disabled={loading || disableRefresh || !!attendanceBusy}
+                onClick={() => safeRefresh(true)}
+                title="Refresh attendance"
+                aria-label="Refresh attendance from server"
               >
-                {todayAttendance.isOnBreak
-                  ? `On break · ${formatTime(currentBreakDuration * 60)}`
-                  : `Working · ${formatTime(workingHours * 3600)}`}
-              </Badge>
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              </Button>
+            </div>
+
+            {todayAttendance.isCheckedIn ? (
+              <div className="space-y-1">
+                <Badge
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-full border-0 ${
+                    todayAttendance.isOnBreak
+                      ? 'bg-amber-100 text-amber-900'
+                      : 'bg-emerald-100 text-emerald-900'
+                  }`}
+                >
+                  {todayAttendance.isOnBreak
+                    ? `On break · ${formatTime(currentBreakDuration * 60)}`
+                    : `Working · ${formatTime(workingHours * 3600)}`}
+                </Badge>
+                {todayAttendance.checkInTime && (
+                  <p className="text-xs text-muted-foreground">
+                    Checked in at {todayAttendance.checkInTime}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Not checked in yet today</p>
             )}
-            <div className="flex flex-wrap items-center gap-2">
+
+            <div className="flex flex-wrap items-center gap-3">
               {!todayAttendance.isCheckedIn ? (
                 <Button
                   type="button"
                   size="default"
-                  className="h-10 min-w-[120px] bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-sm"
+                  className="h-11 flex-1 min-w-[140px] border-0 shadow-none bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl"
                   disabled={loading || !!attendanceBusy}
                   onClick={handleCheckIn}
                   aria-label="Check in to work for today"
@@ -1333,8 +1358,7 @@ export default function EmployeeDashboard() {
                   <Button
                     type="button"
                     size="default"
-                    variant="destructive"
-                    className="h-10 min-w-[120px] font-semibold shadow-sm"
+                    className="h-11 flex-1 min-w-[120px] border-0 shadow-none bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl"
                     disabled={loading || !!attendanceBusy}
                     onClick={handleCheckOut}
                     aria-label="Check out from work for today"
@@ -1351,7 +1375,7 @@ export default function EmployeeDashboard() {
                     <Button
                       type="button"
                       size="default"
-                      className="h-10 min-w-[100px] bg-amber-600 hover:bg-amber-700 text-white font-semibold shadow-sm"
+                      className="h-11 flex-1 min-w-[100px] border-0 shadow-none bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-xl"
                       onClick={() => handleBreakStart('regular')}
                       disabled={loading || !!attendanceBusy}
                       aria-label="Start a break"
@@ -1367,7 +1391,7 @@ export default function EmployeeDashboard() {
                     <Button
                       type="button"
                       size="default"
-                      className="h-10 min-w-[120px] bg-amber-600 hover:bg-amber-700 text-white font-semibold shadow-sm"
+                      className="h-11 flex-1 min-w-[120px] border-0 shadow-none bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-xl"
                       onClick={handleBreakEnd}
                       disabled={loading || !!attendanceBusy}
                       aria-label="End break"
@@ -1383,21 +1407,8 @@ export default function EmployeeDashboard() {
 
                 </>
               )}
-              
-              <Button
-                type="button"
-                size="icon"
-                variant="outline"
-                className="h-10 w-10 shrink-0"
-                disabled={loading || disableRefresh || !!attendanceBusy}
-                onClick={() => safeRefresh(true)}
-                title="Refresh attendance"
-                aria-label="Refresh attendance from server"
-              >
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              </Button>
             </div>
-          </Card>
+          </div>
         </div>
 
         {/* KPI Cards */}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Plus, Edit2, Trash2, Search, TrendingUp } from 'lucide-react';
+import { getBearerToken } from '../../utils/apiHelper';
 
 const Deals = () => {
   const [deals, setDeals] = useState([]);
@@ -22,7 +23,7 @@ const Deals = () => {
     notes: ''
   });
 
-  const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+  const token = getBearerToken();
   const headers = { Authorization: `Bearer ${token}` };
 
   useEffect(() => {

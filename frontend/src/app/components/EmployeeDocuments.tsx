@@ -15,6 +15,7 @@ import {
   Building2,
   User
 } from 'lucide-react';
+import { getBearerToken } from '../utils/apiHelper';
 
 interface Document {
   id: string;
@@ -72,7 +73,7 @@ const EmployeeDocuments: React.FC<{ employeeId?: string }> = ({ employeeId = 'EM
 
       // Fetch from onboarding documents endpoint
       try {
-        const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+        const token = getBearerToken();
         console.log('Fetching from /api/onboarding/documents/employee with token:', !!token);
         
         const response = await fetch(`/api/onboarding/documents/employee/${employeeId}`, {

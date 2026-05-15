@@ -25,6 +25,7 @@ import {
   Save,
   FileText
 } from 'lucide-react';
+import { getBearerToken } from '../utils/apiHelper';
 
 interface Holiday {
   id: string;
@@ -85,7 +86,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
   const loadHolidays = async () => {
     try {
       // Get holidays for the selected year
-      const token = localStorage.getItem('authToken');
+      const token = getBearerToken();
       if (!token) {
         console.error('No authentication token found');
         setHolidays([]);
@@ -114,7 +115,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
   const loadCalendars = async () => {
     try {
       // Get all holiday calendars
-      const token = localStorage.getItem('authToken');
+      const token = getBearerToken();
       if (!token) {
         console.error('No authentication token found');
         setCalendars([]);
@@ -185,7 +186,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       return;
     }
 
-    const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+    const token = getBearerToken();
     if (!token) {
       alert('Authentication token not found. Please log in again.');
       return;
@@ -222,7 +223,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       return;
     }
 
-    const token = localStorage.getItem('authToken');
+    const token = getBearerToken();
     if (!token) {
       alert('Authentication token not found. Please log in again.');
       return;

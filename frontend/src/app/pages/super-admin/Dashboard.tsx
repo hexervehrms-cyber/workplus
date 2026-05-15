@@ -59,6 +59,7 @@ export default function SuperAdminDashboard() {
   const [revenueData, setRevenueData] = useState<any[]>([]);
   const [organizations, setOrganizations] = useState<any[]>([]);
   const [liveUsers, setLiveUsers] = useState<any[]>([]);
+  const [showOnboardingGenerator, setShowOnboardingGenerator] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
   // Real-time dashboard integration
@@ -180,8 +181,12 @@ export default function SuperAdminDashboard() {
   };
 
   if (loading) {
-    // Don't show loading spinner - let content load in background
-    return null;
+    return (
+      <div className="min-h-[40vh] flex flex-col items-center justify-center gap-3">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground">Loading control room…</p>
+      </div>
+    );
   }
 
   return (
@@ -212,13 +217,13 @@ export default function SuperAdminDashboard() {
             <Activity className="w-4 h-4 mr-2" />
             Refresh
           </Button>
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             className="rounded-xl"
-            onClick={() => window.location.href = '/admin/employee-onboarding'}
+            onClick={() => setShowOnboardingGenerator(true)}
           >
             <FileText className="w-4 h-4 mr-2" />
-            Employee Onboarding
+            Generate Onboarding Link
           </Button>
           <Button className="rounded-xl">Add Organization</Button>
         </div>
@@ -230,8 +235,10 @@ export default function SuperAdminDashboard() {
       {/* Feature Showcase */}
       <FeatureShowcase />
 
-      {/* Onboarding Link Generator */}
-      <OnboardingLinkGenerator isSuperAdmin={true} />
+      <OnboardingLinkGenerator
+        isOpen={showOnboardingGenerator}
+        onClose={() => setShowOnboardingGenerator(false)}
+      />
 
       {/* Document Generator */}
       <DocumentGenerator isSuperAdmin={true} />

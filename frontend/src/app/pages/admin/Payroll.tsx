@@ -11,7 +11,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '
 import { Plus, Edit, Trash2, Download, Check, X, Loader, ChevronsUpDown, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '../../components/ui/utils';
-import { apiGet, apiPost, apiPut, apiDelete, buildApiUrl } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, apiDelete, buildApiUrl, getBearerToken } from '../../utils/apiHelper';
 import { TokenManager } from '../../utils/api';
 
 interface SalaryStructure {
@@ -308,7 +308,7 @@ export default function Payroll() {
 
     try {
       setSubmitting(true);
-      const token = localStorage.getItem('authToken');
+      const token = getBearerToken();
       
       const endpoint = editingStructureId 
         ? `/salary/structure/${editingStructureId}`

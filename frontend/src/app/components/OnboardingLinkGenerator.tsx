@@ -150,10 +150,16 @@ try {
       }
 
       if (!response.ok) {
-        throw new Error(data.message || `Failed to send email (${response.status})`);
+        const hint =
+          data.code === 'SMTP_NOT_CONFIGURED'
+            ? ' Configure SMTP (hr@hexerve.com) in server environment or Admin Settings.'
+            : '';
+        throw new Error((data.message || `Failed to send email (${response.status})`) + hint);
       }
 
-      toast.success('Email sent successfully!');
+      toast.success(
+        data.message || `Onboarding email sent to ${generatedLink.employeeEmail}`
+      );
       handleSuccess();
     } catch (error) {
       console.error('Send email error:', error);

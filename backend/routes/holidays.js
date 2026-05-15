@@ -30,7 +30,7 @@ router.get("/", authenticate, asyncHandler(async (req, res) => {
     cachedHolidays = await redis.get(cacheKey);
     if (cachedHolidays) {
       logger.info('Holidays retrieved from cache', { orgId, year, month });
-      return res.json(JSON.parse(cachedHolidays));
+      return res.json(cachedHolidays);
     }
   } catch (cacheError) {
     logger.warn('Cache retrieval failed, falling back to database', { error: cacheError.message });
@@ -85,7 +85,7 @@ router.get("/", authenticate, asyncHandler(async (req, res) => {
   
   // Cache the response for 1 hour
   try {
-    await redis.setex(cacheKey, 3600, JSON.stringify(response));
+    await redis.set(cacheKey, response, 3600);
     logger.info('Holidays cached successfully', { orgId, year, month });
   } catch (cacheError) {
     logger.warn('Failed to cache holidays', { error: cacheError.message });
@@ -115,7 +115,7 @@ router.get("/:id", authenticate, asyncHandler(async (req, res) => {
     const cached = await redis.get(cacheKey);
     if (cached) {
       logger.info('Holiday retrieved from cache', { holidayId: id });
-      return res.json(JSON.parse(cached));
+      return res.json(cached);
     }
   } catch (cacheError) {
     logger.warn('Cache retrieval failed', { error: cacheError.message });
@@ -148,7 +148,7 @@ router.get("/:id", authenticate, asyncHandler(async (req, res) => {
   
   // Cache for 1 hour
   try {
-    await redis.setex(cacheKey, 3600, JSON.stringify(response));
+    await redis.set(cacheKey, response, 3600);
   } catch (cacheError) {
     logger.warn('Failed to cache holiday', { error: cacheError.message });
   }
@@ -453,7 +453,7 @@ router.get("/upcoming/:days", authenticate, asyncHandler(async (req, res) => {
     const cached = await redis.get(cacheKey);
     if (cached) {
       logger.info('Upcoming holidays retrieved from cache', { orgId, daysAhead });
-      return res.json(JSON.parse(cached));
+      return res.json(cached);
     }
   } catch (cacheError) {
     logger.warn('Cache retrieval failed', { error: cacheError.message });
@@ -476,7 +476,7 @@ router.get("/upcoming/:days", authenticate, asyncHandler(async (req, res) => {
   
   // Cache for 6 hours
   try {
-    await redis.setex(cacheKey, 21600, JSON.stringify(response));
+    await redis.set(cacheKey, response, 21600);
   } catch (cacheError) {
     logger.warn('Failed to cache upcoming holidays', { error: cacheError.message });
   }
@@ -498,7 +498,7 @@ router.get("/calendar/:year", authenticate, asyncHandler(async (req, res) => {
     const cached = await redis.get(cacheKey);
     if (cached) {
       logger.info('Calendar retrieved from cache', { orgId, year });
-      return res.json(JSON.parse(cached));
+      return res.json(cached);
     }
   } catch (cacheError) {
     logger.warn('Cache retrieval failed', { error: cacheError.message });
@@ -535,7 +535,7 @@ router.get("/calendar/:year", authenticate, asyncHandler(async (req, res) => {
   
   // Cache for 24 hours
   try {
-    await redis.setex(cacheKey, 86400, JSON.stringify(response));
+    await redis.set(cacheKey, response, 86400);
     logger.info('Calendar cached successfully', { orgId, year });
   } catch (cacheError) {
     logger.warn('Failed to cache calendar', { error: cacheError.message });

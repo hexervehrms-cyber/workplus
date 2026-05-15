@@ -358,6 +358,61 @@ export const initializeChatHandlers = (io) => {
     });
 
     /**
+     * WebRTC call signaling (in-app audio/video when Teams is unavailable)
+     */
+    const relayToUser = (recipientId, event, payload) => {
+      if (!recipientId) return;
+      io.to(`user_${recipientId}`).emit(event, payload);
+    };
+
+    socket.on('call:offer', (data) => {
+      const { recipientId, sdp, withVideo, callerName } = data || {};
+      if (!recipientId || !sdp) {
+        socket.emit('chat:error', { message: 'Invalid call offer' });
+        return;
+      }
+      relayToUser(recipientId, 'call:incoming', {
+        callerId: userId,
+        callerName: callerName || 'User',
+        sdp,
+        withVideo: !!withVideo,
+      });
+    });
+
+    socket.on('call:answer', (data) => {
+      const { recipientId, sdp } = data || {};
+      if (!recipientId || !sdp) {
+        socket.emit('chat:error', { message: 'Invalid call answer' });
+        return;
+      }
+      relayToUser(recipientId, 'call:answered', {
+        answererId: userId,
+        sdp,
+      });
+    });
+
+    socket.on('call:ice-candidate', (data) => {
+      const { recipientId, candidate } = data || {};
+      if (!recipientId || !candidate) return;
+      relayToUser(recipientId, 'call:ice-candidate', {
+        fromUserId: userId,
+        candidate,
+      });
+    });
+
+    socket.on('call:end', (data) => {
+      const { recipientId } = data || {};
+      if (!recipientId) return;
+      relayToUser(recipientId, 'call:ended', { fromUserId: userId });
+    });
+
+    socket.on('call:decline', (data) => {
+      const { recipientId } = data || {};
+      if (!recipientId) return;
+      relayToUser(recipientId, 'call:declined', { fromUserId: userId });
+    });
+
+    /**
      * Disconnect handler
      */
     socket.on('disconnect', () => {

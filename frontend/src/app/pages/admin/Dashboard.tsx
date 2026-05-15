@@ -309,25 +309,9 @@ export default function AdminDashboard() {
       }
     };
 
-    const onSocketExpense = () => {
-      refreshDashboardData().catch(console.error);
-    };
-    const onSocketEmployee = (payload: { action?: string }) => {
-      const action = payload?.action;
-      if (action === 'created' || action === 'deleted' || action === 'updated') {
-        refreshDashboardData().catch(console.error);
-      }
-    };
-
     const unsubscribeBreakStart = realTimeSocket.onBreakStarted(onBreakStarted);
     const unsubscribeBreakEnd = realTimeSocket.onBreakEnded(onBreakEnded);
     const unsubscribeKpi = realTimeSocket.onKPIUpdate(onKpiUpdate);
-
-    socketService.on('break:started', onBreakStarted);
-    socketService.on('break:ended', onBreakEnded);
-    socketService.on('kpi:update', onKpiUpdate);
-    socketService.on('expense:update', onSocketExpense);
-    socketService.on('employee:update', onSocketEmployee);
 
     return () => {
       unsubscribeEmployee();
@@ -338,11 +322,6 @@ export default function AdminDashboard() {
       unsubscribeBreakStart();
       unsubscribeBreakEnd();
       unsubscribeKpi();
-      socketService.off('break:started', onBreakStarted);
-      socketService.off('break:ended', onBreakEnded);
-      socketService.off('kpi:update', onKpiUpdate);
-      socketService.off('expense:update', onSocketExpense);
-      socketService.off('employee:update', onSocketEmployee);
     };
   }, [refreshDashboardData, refreshEmployeesOnBreak, applyKpiPayload]);
 

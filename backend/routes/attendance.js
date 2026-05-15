@@ -1774,6 +1774,55 @@ router.get('/bulk-export', authenticate, authorize('super_admin', 'admin', 'hr')
   }
 }));
 
+/**
+ * GET /api/attendance/record/:id
+ * Full attendance record for admin view dialog
+ */
+router.get('/record/:id', authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+  const userOrgId = req.user.orgId;
+  const record = await Attendance.findOne({ _id: req.params.id, orgId: userOrgId })
+    .populate('userId', 'name email')
+    .populate('employeeId', 'employeeCode department')
+    .lean();
+
+  if (!record) {
+    return res.status(404).json({
+      success: false,
+      message: 'Attendance record not found',
+    });
+  }
+
+  let hoursWorked = record.hoursWorked ?? 0;
+  if (record.checkIn && record.checkOut) {
+    let calculatedHours =
+      (new Date(record.checkOut) - new Date(record.checkIn)) / (1000 * 60 * 60);
+    if (record.breaks?.length) {
+      record.breaks.forEach((breakItem) => {
+        if (breakItem.startTime && breakItem.endTime) {
+          calculatedHours -=
+            (new Date(breakItem.endTime) - new Date(breakItem.startTime)) / (1000 * 60 * 60);
+        }
+      });
+    }
+    hoursWorked = Math.max(0, Math.round(calculatedHours * 100) / 100);
+  }
+
+  res.json({
+    success: true,
+    data: {
+      ...record,
+      employeeName:
+        record.employeeName ||
+        record.userId?.name ||
+        'Employee',
+      employeeEmail: record.userId?.email,
+      department: record.employeeId?.department,
+      employeeCode: record.employeeId?.employeeCode,
+      hoursWorked,
+    },
+  });
+}));
+
 export default router;
 
 

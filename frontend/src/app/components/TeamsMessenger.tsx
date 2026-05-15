@@ -28,6 +28,12 @@ import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { TeamsCallPanel } from './TeamsCallPanel';
 import {
+  NativeCallPanel,
+  type IncomingCallOffer,
+  type NativeCallRole,
+} from './NativeCallPanel';
+import { ApiError } from '../utils/api';
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -113,6 +119,11 @@ export default function TeamsMessenger() {
   const [callSubject, setCallSubject] = useState('');
   const [callWithVideo, setCallWithVideo] = useState(true);
   const [callLoading, setCallLoading] = useState(false);
+  const [nativeCallOpen, setNativeCallOpen] = useState(false);
+  const [nativeCallRole, setNativeCallRole] = useState<NativeCallRole>('caller');
+  const [nativeCallPeer, setNativeCallPeer] = useState<{ id: string; name: string } | null>(null);
+  const [nativeIncomingOffer, setNativeIncomingOffer] = useState<IncomingCallOffer | null>(null);
+  const nativeCallBusyRef = useRef(false);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showProfileDialog, setShowProfileDialog] = useState(false);
@@ -300,6 +311,31 @@ export default function TeamsMessenger() {
           if (cancelled) return;
           setConversations(data.conversations);
         });
+
+        socketService.current.on(
+          'call:incoming',
+          (data: {
+            callerId: string;
+            callerName: string;
+            sdp: RTCSessionDescriptionInit;
+            withVideo: boolean;
+          }) => {
+            if (cancelled || nativeCallBusyRef.current) return;
+            nativeCallBusyRef.current = true;
+            const offer: IncomingCallOffer = {
+              callerId: String(data.callerId),
+              callerName: data.callerName || 'User',
+              sdp: data.sdp,
+              withVideo: !!data.withVideo,
+            };
+            setNativeIncomingOffer(offer);
+            setNativeCallRole('callee');
+            setNativeCallPeer({ id: offer.callerId, name: offer.callerName });
+            setCallWithVideo(offer.withVideo);
+            setNativeCallOpen(true);
+            toast.info(`Incoming call from ${offer.callerName}`);
+          }
+        );
       } catch (error) {
         console.error('Socket initialization failed:', error);
         toast.error('Could not connect to chat server');
@@ -528,6 +564,31 @@ export default function TeamsMessenger() {
     }, 3000);
   };
 
+  const startNativeCall = (withVideo: boolean, peer: User, role: NativeCallRole = 'caller') => {
+    nativeCallBusyRef.current = true;
+    setNativeIncomingOffer(null);
+    setNativeCallRole(role);
+    setNativeCallPeer({ id: peer.id, name: peer.name });
+    setCallWithVideo(withVideo);
+    setNativeCallOpen(true);
+  };
+
+  const closeNativeCall = () => {
+    nativeCallBusyRef.current = false;
+    setNativeCallOpen(false);
+    setNativeIncomingOffer(null);
+    setNativeCallPeer(null);
+  };
+
+  const shouldFallbackToNative = (error: unknown) => {
+    if (!(error instanceof ApiError)) return false;
+    return (
+      error.status === 503 ||
+      error.code === 'TEAMS_NOT_CONFIGURED' ||
+      (error.status !== undefined && error.status >= 500)
+    );
+  };
+
   const startTeamsCall = async (withVideo: boolean) => {
     if (!selectedUser) return;
     try {
@@ -542,23 +603,27 @@ export default function TeamsMessenger() {
         withVideo,
       });
 
-      const payload = res.data as
-        | { joinWebUrl?: string; subject?: string }
-        | undefined;
+      const payload = res.data;
       if (!payload?.joinWebUrl) {
         throw new Error(res.message || 'No meeting URL returned');
       }
 
       setCallJoinUrl(payload.joinWebUrl);
       setCallSubject(payload.subject || `Call with ${selectedUser.name}`);
-      setCallWithVideo(withVideo);
       setCallOpen(true);
     } catch (error: unknown) {
       console.error('Teams meeting error:', error);
+      if (shouldFallbackToNative(error)) {
+        toast.info('Using in-app call');
+        startNativeCall(withVideo, selectedUser, 'caller');
+        return;
+      }
       toast.error(
-        error instanceof Error
-          ? error.message
-          : 'Could not start Teams call. Check Microsoft Teams integration on the server.'
+        error instanceof ApiError
+          ? error.getUserMessage()
+          : error instanceof Error
+            ? error.message
+            : 'Could not start call.'
       );
     } finally {
       setCallLoading(false);
@@ -1070,6 +1135,20 @@ export default function TeamsMessenger() {
       withVideo={callWithVideo}
       peerName={selectedUser?.name || 'User'}
     />
+
+    {nativeCallPeer && (
+      <NativeCallPanel
+        open={nativeCallOpen}
+        onClose={closeNativeCall}
+        role={nativeCallRole}
+        peerId={nativeCallPeer.id}
+        peerName={nativeCallPeer.name}
+        withVideo={callWithVideo}
+        localUserName={user?.name || 'User'}
+        socket={socketService.current}
+        incomingOffer={nativeIncomingOffer}
+      />
+    )}
 
     <input
       ref={profileAvatarInputRef}

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { TrendingUp, TrendingDown, Users, Phone, Target, DollarSign, Award, AlertCircle } from 'lucide-react';
+import { getBearerToken } from '../../utils/apiHelper';
 
 const SalesDashboard = () => {
   const [loading, setLoading] = useState(true);
@@ -10,7 +11,7 @@ const SalesDashboard = () => {
   const [revenueData, setRevenueData] = useState([]);
   const [error, setError] = useState(null);
 
-  const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+  const token = getBearerToken();
 
   useEffect(() => {
     fetchDashboardData();

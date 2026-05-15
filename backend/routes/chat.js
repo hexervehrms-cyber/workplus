@@ -18,6 +18,7 @@ import {
   getTeamsChatMessages,
   createTeamsChat,
   createTeamsOnlineMeeting,
+  isTeamsConfigured,
 } from '../config/teamsConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -500,6 +501,17 @@ router.get('/conversations', authenticate, asyncHandler(async (req, res) => {
 }));
 
 /**
+ * Teams integration availability
+ * GET /api/chat/teams/status
+ */
+router.get('/teams/status', authenticate, asyncHandler(async (_req, res) => {
+  res.json({
+    success: true,
+    data: { configured: isTeamsConfigured() },
+  });
+}));
+
+/**
  * Create Microsoft Teams online meeting for in-platform voice/video
  * POST /api/chat/teams/meeting
  */
@@ -511,6 +523,15 @@ router.post('/teams/meeting', authenticate, asyncHandler(async (req, res) => {
     return res.status(400).json({
       success: false,
       message: 'recipientId is required',
+    });
+  }
+
+  if (!isTeamsConfigured()) {
+    return res.status(503).json({
+      success: false,
+      code: 'TEAMS_NOT_CONFIGURED',
+      message:
+        'Microsoft Teams is not configured on this server. In-app calling is available instead.',
     });
   }
 
@@ -555,6 +576,7 @@ router.post('/teams/meeting', authenticate, asyncHandler(async (req, res) => {
     res.status(500).json({
       success: false,
       message:
+        error.message ||
         error.response?.data?.error?.message ||
         'Failed to create Teams meeting. Ensure Teams app permissions (OnlineMeetings.ReadWrite.All) are granted.',
     });

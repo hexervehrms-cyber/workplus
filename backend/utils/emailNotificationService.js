@@ -142,7 +142,9 @@ class EmailNotificationService {
           user: authUser,
           pass: authPass
         },
+        requireTLS: !secure && port === 587,
         tls: {
+          minVersion: 'TLSv1.2',
           rejectUnauthorized: false
         }
       });
@@ -183,7 +185,10 @@ class EmailNotificationService {
     } catch (error) {
       logger.error('Email send failed', {
         error: error.message,
-        to: emailData.to
+        code: error.code,
+        response: error.response,
+        to: emailData.to,
+        host
       });
       return false;
     }
@@ -1165,6 +1170,38 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       subject: 'Welcome to WorkPlus HRMS',
       html: this.getEmailTemplate(content, '🎉 Welcome to WorkPlus'),
       text: `Welcome! Email: ${employee.email}, Password: ${tempPassword}`
+    });
+  }
+
+  /**
+   * Onboarding invite — from HR mailbox (e.g. hr@hexerve.com) to employee Outlook inbox
+   */
+  static async sendOnboardingInviteEmail({
+    to,
+    employeeName,
+    onboardingUrl,
+    orgName = 'WorkPlus',
+    organizationSmtp
+  }) {
+    const hrFrom = organizationSmtp?.fromEmail || process.env.FROM_EMAIL || process.env.SMTP_USER || 'hr@hexerve.com';
+    const content = `
+      <p>Hi <strong>${employeeName}</strong>,</p>
+      <p>We're excited to have you join <strong>${orgName}</strong>! Please complete your onboarding form using the link below. This link is valid for 30 days.</p>
+      <div style="text-align:center;margin:28px 0"><a href="${onboardingUrl}" class="button">Complete Your Onboarding</a></div>
+      <p style="font-size:13px;color:#666;margin-top:24px">Or copy this link into your browser:</p>
+      <p style="font-size:12px;word-break:break-all;background:#f5f5f5;padding:10px;border-radius:6px">${onboardingUrl}</p>
+      <p style="font-size:13px;color:#666;margin-top:20px">Questions? Reply to this email to reach our HR team.</p>
+    `;
+    const html = this.getEmailTemplate(content, `Welcome to ${orgName}`);
+
+    return this.sendEmail({
+      to: String(to).trim(),
+      subject: `Welcome to ${orgName} — complete your onboarding`,
+      html,
+      text: `Hi ${employeeName},\n\nComplete your onboarding: ${onboardingUrl}\n\n— ${orgName} HR`,
+      organizationSmtp,
+      fromName: organizationSmtp?.fromName || `${orgName} HR`,
+      replyTo: process.env.HR_EMAIL || hrFrom
     });
   }
 

@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { LeaveRequestService } from '../../utils/api';
-import { buildApiUrl } from '../../utils/apiHelper';
+import { buildApiUrl, getBearerToken } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from 'sonner';
 
@@ -80,7 +80,7 @@ export default function Calendar() {
         }
 
         // Fetch holidays with proper error handling
-        const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+        const token = getBearerToken();
         if (!token) {
           console.warn('No auth token found for holiday fetch');
           return;
@@ -129,7 +129,7 @@ export default function Calendar() {
   useEffect(() => {
     const refreshHolidays = async () => {
       try {
-        const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+        const token = getBearerToken();
         if (!token) return;
 
         const holidayResponse = await fetch(buildApiUrl('/holidays'), {
@@ -322,7 +322,7 @@ export default function Calendar() {
     }
 
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const token = getBearerToken();
       
       const response = await fetch('/api/holidays', {
         method: 'POST',
@@ -371,7 +371,7 @@ export default function Calendar() {
     if (!window.confirm('Are you sure you want to delete this holiday?')) return;
 
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const token = getBearerToken();
       
       const response = await fetch(`/api/holidays/${holidayId}`, {
         method: 'DELETE',

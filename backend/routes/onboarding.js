@@ -19,6 +19,12 @@ import User from '../models/User.js';
 import Employee from '../models/Employee.js';
 import logger from '../utils/logger.js';
 import OnboardingTokenManager from '../utils/onboardingTokenManager.js';
+import EmailNotificationService from '../utils/emailNotificationService.js';
+import {
+  resolveOrganizationSmtp,
+  buildEnvSmtp,
+  getHrInboxEmail,
+} from '../utils/workflowNotifications.js';
 
 const router = express.Router();
 
@@ -244,79 +250,67 @@ router.post('/send-email',
         });
       }
 
+      const orgName = req.user.orgName || 'WorkPlus';
+      const smtp =
+        (await resolveOrganizationSmtp(req.user.orgId)) || buildEnvSmtp();
+
+      if (!smtp) {
+        return res.status(503).json({
+          success: false,
+          code: 'SMTP_NOT_CONFIGURED',
+          message:
+            'Email is not configured. Set SMTP_HOST, SMTP_USER, and SMTP_PASS (e.g. hr@hexerve.com with a Microsoft 365 app password), or configure organization SMTP in Admin Settings.',
+        });
+      }
+
+      const normalizedEmail = String(employeeEmail).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid employee email address',
+        });
+      }
+
       logger.info('Sending onboarding email', {
-        employeeEmail,
+        employeeEmail: normalizedEmail,
         employeeName,
-        tokenPrefix: token.substring(0, 10) + '...'
+        from: smtp.fromEmail || smtp.user,
+        tokenPrefix: token.substring(0, 10) + '...',
       });
 
-      // Send email to employee with onboarding link
-      const EmailNotificationService = (await import('../utils/emailNotificationService.js')).default;
-
-      const emailSubject = `Welcome to ${req.user.orgName || 'WorkPlus'}! Complete Your Onboarding`;
-      
-      const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-            <h1 style="color: white; margin: 0;">Welcome to ${req.user.orgName || 'WorkPlus'}!</h1>
-          </div>
-          
-          <div style="padding: 30px; background-color: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 0 0 8px 8px;">
-            <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
-              Hi <strong>${employeeName}</strong>,
-            </p>
-            
-            <p style="font-size: 14px; color: #666; line-height: 1.6; margin-bottom: 20px;">
-              We're excited to have you join our team! To get started, please complete your onboarding form using the link below. This link will be valid for 30 days.
-            </p>
-            
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${onboardingUrl}" style="display: inline-block; background-color: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
-                Complete Your Onboarding
-              </a>
-            </div>
-          
-            <p style="font-size: 12px; color: #999; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
-              Or copy and paste this link in your browser:<br>
-              <code style="background-color: #f0f0f0; padding: 5px 10px; border-radius: 3px; word-break: break-all;">
-                ${onboardingUrl}
-              </code>
-            </p>
-            
-            <p style="font-size: 12px; color: #999; margin-top: 20px;">
-              If you have any questions, please contact our HR team.
-            </p>
-            
-            <p style="font-size: 12px; color: #999; margin-top: 30px;">
-              Best regards,<br>
-              <strong>${req.user.orgName || 'WorkPlus'} HR Team</strong>
-            </p>
-          </div>
-        </div>
-      `;
-
-      await EmailNotificationService.sendEmail({
-        to: employeeEmail,
-        subject: emailSubject,
-        html: emailHtml,
-        from: process.env.FROM_EMAIL || process.env.SMTP_USER,
-        fromName: `${req.user.orgName || 'WorkPlus'} HR Team`
+      const sent = await EmailNotificationService.sendOnboardingInviteEmail({
+        to: normalizedEmail,
+        employeeName,
+        onboardingUrl,
+        orgName,
+        organizationSmtp: smtp,
       });
+
+      if (!sent) {
+        return res.status(500).json({
+          success: false,
+          message:
+            'Failed to send email. Verify SMTP credentials for hr@hexerve.com (Microsoft 365 app password) on the server.',
+        });
+      }
 
       logger.info('Onboarding email sent successfully', {
-        employeeEmail,
+        employeeEmail: normalizedEmail,
         employeeName,
-        tokenPrefix: token.substring(0, 10) + '...'
+        from: smtp.fromEmail || smtp.user,
+        tokenPrefix: token.substring(0, 10) + '...',
       });
 
       res.json({
         success: true,
-        message: 'Onboarding email sent successfully to employee',
+        message: `Onboarding email sent to ${normalizedEmail} from ${smtp.fromEmail || smtp.user}`,
         data: {
-          employeeEmail,
+          employeeEmail: normalizedEmail,
           employeeName,
-          sentAt: new Date()
-        }
+          from: smtp.fromEmail || smtp.user,
+          replyTo: getHrInboxEmail(),
+          sentAt: new Date(),
+        },
       });
 
     } catch (error) {
@@ -327,10 +321,31 @@ router.post('/send-email',
       });
       res.status(500).json({
         success: false,
-        message: 'Failed to send onboarding email',
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        message: error.message || 'Failed to send onboarding email',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined,
       });
     }
+  })
+);
+
+/**
+ * GET /api/onboarding/email-status
+ * Check whether SMTP is configured for onboarding emails
+ */
+router.get('/email-status',
+  authenticate,
+  authorize('super_admin', 'admin', 'hr'),
+  asyncHandler(async (req, res) => {
+    const smtp =
+      (await resolveOrganizationSmtp(req.user.orgId)) || buildEnvSmtp();
+    res.json({
+      success: true,
+      data: {
+        configured: !!smtp,
+        from: smtp?.fromEmail || smtp?.user || process.env.FROM_EMAIL || null,
+        host: smtp?.host || process.env.SMTP_HOST || null,
+      },
+    });
   })
 );
 

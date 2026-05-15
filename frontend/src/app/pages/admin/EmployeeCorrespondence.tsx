@@ -27,7 +27,7 @@ import {
   Briefcase
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { apiGet, apiPut, apiPost, buildFileUrl } from '../../utils/apiHelper';
+import { apiGet, apiPut, apiPost, buildFileUrl, getBearerToken } from '../../utils/apiHelper';
 
 interface Employee {
   _id: string;
@@ -212,7 +212,7 @@ export default function EmployeeCorrespondence() {
     }
 
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const token = getBearerToken();
       const formData = new FormData();
       
       formData.append('title', issueFormData.title);

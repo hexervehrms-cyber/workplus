@@ -9,6 +9,7 @@ import {
   Package, Plus, Search, Loader2, Eye, ChevronUp, ChevronDown, X
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { getBearerToken } from '../../utils/apiHelper';
 
 interface Asset {
   _id: string;
@@ -88,7 +89,7 @@ export default function EmployeeAssetsTable() {
         return;
       }
 
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      const token = getBearerToken() || '';
       if (!token) {
         toast.error('Authentication token not found. Please log in again.');
         return;
@@ -158,7 +159,7 @@ export default function EmployeeAssetsTable() {
       // Get current user's employee ID
       const userResponse = await fetch('/api/auth/me', {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 
@@ -170,7 +171,7 @@ export default function EmployeeAssetsTable() {
       // Fetch employee record to get employeeId
       const employeeResponse = await fetch(`/api/employees?userId=${userId}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 
@@ -183,7 +184,7 @@ export default function EmployeeAssetsTable() {
       // Fetch assets for this employee
       const response = await fetch(`/api/assets/employee/${employeeId}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
+          'Authorization': `Bearer ${getBearerToken() || ''}`
         }
       });
 

@@ -15,6 +15,7 @@ import {
   Clock,
   AlertCircle
 } from 'lucide-react';
+import { getBearerToken } from '../utils/apiHelper';
 
 interface Holiday {
   id: string;
@@ -58,7 +59,7 @@ const EmployeeHolidayCalendar: React.FC<{ organizationId?: string }> = ({
   const loadCalendars = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem('authToken');
+      const token = getBearerToken();
       if (!token) {
         console.error('No authentication token found');
         setLoading(false);

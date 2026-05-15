@@ -102,8 +102,9 @@ const SYNC_CONFIG = {
   DEBOUNCE_MS: 1000,
   SOCKET_WAIT_MS: 1500,
   DB_SYNC_WAIT_MS: 2000,
-  PERIODIC_REFRESH_MS: 60_000,
-  ACTION_TIMEOUT_MS: 8000
+  PERIODIC_REFRESH_MS: 90_000,
+  ACTION_TIMEOUT_MS: 8000,
+  WEEK_HOURS_SYNC_MS: 60_000,
 };
 
 function isLikelyMongoObjectId(id: string | null | undefined): boolean {
@@ -111,6 +112,21 @@ function isLikelyMongoObjectId(id: string | null | undefined): boolean {
 }
 
 /** Parse values from toLocaleTimeString (e.g. "02:30 PM") for today's clock math */
+function safeLocaleTime(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  const d = new Date(value as string | number | Date);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+}
+
+function safeFormatTime(seconds: number): string {
+  const s = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const secs = Math.floor(s % 60);
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
 function parseTodayCheckInTime(checkInTime: string): Date | null {
   const raw = checkInTime?.trim();
   if (!raw) return null;
@@ -183,6 +199,10 @@ export default function EmployeeDashboard() {
   const disableRefreshRef = useRef(false);
   const actionInProgressRef = useRef(false);
   const lastUserActivityRef = useRef(Date.now());
+  const fetchDashboardDataRef = useRef<((_force?: boolean) => Promise<void>) | null>(null);
+  const safeRefreshRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
+  const lastWeekSyncRef = useRef(0);
+  const breakSecondsRef = useRef(0);
 
   // Update refs whenever state changes
   useEffect(() => {
@@ -240,6 +260,9 @@ export default function EmployeeDashboard() {
 
   const syncWeeklyHours = useCallback(async () => {
     if (!user?.id) return;
+    const now = Date.now();
+    if (now - lastWeekSyncRef.current < 15_000) return;
+    lastWeekSyncRef.current = now;
     try {
       clearApiCache('/attendance/today');
       const res = await apiGet<{ hoursThisWeek?: number; weekKey?: string; attendance?: unknown }>(
@@ -410,16 +433,11 @@ export default function EmployeeDashboard() {
         }
       } else if (attendanceData?.attendance) {
         const attendance = attendanceData.attendance;
-        const checkInTime = attendance.checkIn
-          ? new Date(attendance.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-          : null;
-        const checkOutTime = attendance.checkOut
-          ? new Date(attendance.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-          : null;
+        const checkInTime = safeLocaleTime(attendance.checkIn);
+        const checkOutTime = safeLocaleTime(attendance.checkOut);
 
         const ls = attendanceData.liveStatus;
-        const hasCheckOut =
-          attendance.checkOut != null && String(attendance.checkOut).trim() !== '';
+        const hasCheckOut = attendance.checkOut != null && checkOutTime != null;
 
         let isCurrentlyCheckedIn = false;
         if (hasCheckOut) {
@@ -443,6 +461,9 @@ export default function EmployeeDashboard() {
               ? Math.round(ls.currentBreakDuration)
               : 0;
         }
+
+        setCurrentBreakDuration(calculatedBreakDuration);
+        breakSecondsRef.current = calculatedBreakDuration * 60;
 
         if (attendance.breaks && attendance.breaks.length > 0) {
           const lastBreak = attendance.breaks[attendance.breaks.length - 1];
@@ -575,8 +596,9 @@ export default function EmployeeDashboard() {
       if (timeoutId) clearTimeout(timeoutId);
       setLoading(false);
     }
-  // FIX #6: updateAttendance added to deps
-  }, [user, isRecentlyUpdated, updateAttendance, loadFromLocalStorage, ingestWeekHoursFromServer]);
+  }, [user?.id, isRecentlyUpdated, updateAttendance, loadFromLocalStorage, ingestWeekHoursFromServer]);
+
+  fetchDashboardDataRef.current = fetchDashboardData;
 
   const ensureEmployeeId = async (): Promise<string | null> => {
     if (employeeIdRef.current) return employeeIdRef.current;
@@ -669,15 +691,17 @@ export default function EmployeeDashboard() {
     [isRecentlyUpdated, fetchDashboardData]
   );
 
+  safeRefreshRef.current = safeRefresh;
+
   // Fetch data on mount — cache hydrates via AttendanceContext when user is ready
   useEffect(() => {
     if (!user?.id) return;
     loadFromLocalStorage();
     const timeoutId = setTimeout(() => {
-      void fetchDashboardData(true);
+      void fetchDashboardDataRef.current?.(true);
     }, 300);
     return () => clearTimeout(timeoutId);
-  }, [user?.id, fetchDashboardData, loadFromLocalStorage]);
+  }, [user?.id, loadFromLocalStorage]);
 
   // Seed employeeId from auth profile (avoids 404 on strict org employee lookup)
   useEffect(() => {
@@ -838,14 +862,14 @@ export default function EmployeeDashboard() {
       // Use refs directly to avoid dependency array issues
       if (!actionInProgressRef.current && !disableRefreshRef.current && !isRecentlyUpdated()) {
         debug.log('⏰ Periodic refresh triggered');
-        safeRefresh();
+        void safeRefreshRef.current?.();
       }
     }, SYNC_CONFIG.PERIODIC_REFRESH_MS);
 
     return () => clearInterval(interval);
-  }, [todayAttendance.isCheckedIn, disableRefresh]);
+  }, [todayAttendance.isCheckedIn, disableRefresh, isRecentlyUpdated]);
 
-  // Refresh KPIs from server (hours + leave balance)
+  // Refresh KPIs from server (hours + leave balance) — single interval to reduce load
   useEffect(() => {
     if (!user?.id) return;
     void syncWeeklyHours();
@@ -854,7 +878,7 @@ export default function EmployeeDashboard() {
       if (document.visibilityState !== 'visible') return;
       void syncWeeklyHours();
       void refreshLeaveBalance();
-    }, 60_000);
+    }, SYNC_CONFIG.WEEK_HOURS_SYNC_MS);
     const unsubLeave = realTimeSocket.onLeaveUpdate(() => {
       void refreshLeaveBalance();
     });
@@ -862,6 +886,7 @@ export default function EmployeeDashboard() {
       void refreshLeaveBalance();
     });
     const unsubAttendance = realTimeSocket.on('attendance:update', () => {
+      lastWeekSyncRef.current = 0;
       void syncWeeklyHours();
     });
     return () => {
@@ -871,17 +896,6 @@ export default function EmployeeDashboard() {
       unsubAttendance();
     };
   }, [user?.id, syncWeeklyHours, refreshLeaveBalance]);
-
-  // Faster week-hours sync while checked in (server includes live open shift)
-  useEffect(() => {
-    if (!user?.id || !todayAttendance.isCheckedIn) return;
-    void syncWeeklyHours();
-    const interval = setInterval(() => {
-      if (document.visibilityState !== 'visible') return;
-      void syncWeeklyHours();
-    }, 45_000);
-    return () => clearInterval(interval);
-  }, [user?.id, todayAttendance.isCheckedIn, syncWeeklyHours]);
 
   // Refresh stale KPIs once when user returns to the tab
   useEffect(() => {
@@ -902,63 +916,48 @@ export default function EmployeeDashboard() {
     if (!todayAttendance.isCheckedIn) {
       setWorkingHours(0);
       setCurrentBreakDuration(0);
+      breakSecondsRef.current = 0;
       return;
     }
 
     const interval = setInterval(() => {
-      // Calculate working hours (excluding breaks and meetings)
-      if (todayAttendance.checkInTime) {
-        const checkInTime = parseTodayCheckInTime(todayAttendance.checkInTime);
-        if (!checkInTime) return;
+      if (!todayAttendance.checkInTime) return;
+      const checkInTime = parseTodayCheckInTime(todayAttendance.checkInTime);
+      if (!checkInTime) return;
 
-        const now = new Date();
-        let totalSeconds = (now.getTime() - checkInTime.getTime()) / 1000;
-        
-        // Subtract break time - accumulate all breaks taken so far
-        if (todayAttendance.isOnBreak) {
-          // Currently on break - add current break duration
-          setCurrentBreakDuration(prev => prev + 1);
-          totalSeconds -= (currentBreakDuration + 1) * 60;
-        } else {
-          // Not on break - keep current break duration as is
-          if (currentBreakDuration > 0) {
-            totalSeconds -= currentBreakDuration * 60;
-          }
-        }
-        
-        const hours_worked = totalSeconds / 3600;
-        setWorkingHours(Math.max(0, hours_worked));
+      if (todayAttendance.isOnBreak) {
+        breakSecondsRef.current += 1;
+        setCurrentBreakDuration(Math.floor(breakSecondsRef.current / 60));
       }
-    }, 1000); // Update every second
+
+      let totalSeconds = (Date.now() - checkInTime.getTime()) / 1000;
+      totalSeconds -= breakSecondsRef.current;
+      setWorkingHours(Math.max(0, totalSeconds / 3600));
+    }, 1000);
 
     return () => clearInterval(interval);
-  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.checkInTime, currentBreakDuration]);
+  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.checkInTime]);
 
-  // Live "Hours This Week" — server baseline + today's running timer
   useEffect(() => {
-    if (!todayAttendance.isCheckedIn || todayAttendance.isOnBreak) {
-      return;
-    }
+    if (!todayAttendance.isOnBreak) return;
+    breakSecondsRef.current = Math.max(
+      breakSecondsRef.current,
+      (todayAttendance.currentBreakDuration || 0) * 60
+    );
+  }, [todayAttendance.isOnBreak, todayAttendance.currentBreakDuration]);
+
+  // Live "Hours This Week" — server baseline + today's running timer (throttled)
+  useEffect(() => {
+    if (!todayAttendance.isCheckedIn || todayAttendance.isOnBreak) return;
     const tick = () => {
       applyWeekHours(weekHoursExclTodayRef.current + workingHours, calendarWeekKey(), true);
     };
     tick();
-    const interval = setInterval(tick, 1000);
+    const interval = setInterval(tick, 5000);
     return () => clearInterval(interval);
-  }, [
-    todayAttendance.isCheckedIn,
-    todayAttendance.isOnBreak,
-    workingHours,
-    applyWeekHours,
-  ]);
+  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, workingHours, applyWeekHours]);
 
-  // Format time display (HH:MM:SS)
-  const formatTime = (seconds: number): string => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  };
+  const formatTime = safeFormatTime;
 
   // ============================================================================
   // ATTENDANCE ACTION HANDLERS - Integrated from Attendance page
@@ -1203,12 +1202,10 @@ export default function EmployeeDashboard() {
           unknown
         >;
 
-        const checkInTime = serverAtt?.checkIn
-          ? new Date(serverAtt.checkIn as string | Date).toLocaleTimeString('en-US', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
-          : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const checkInTime =
+          safeLocaleTime(serverAtt?.checkIn) ||
+          safeLocaleTime(new Date()) ||
+          new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
         if (typeof responsePayload?.hoursThisWeek === 'number') {
           ingestWeekHoursFromServer(responsePayload.hoursThisWeek, responsePayload.weekKey, 0);
@@ -1303,12 +1300,10 @@ export default function EmployeeDashboard() {
           typeof serverAtt?.hoursWorked === 'number' && !Number.isNaN(serverAtt.hoursWorked)
             ? serverAtt.hoursWorked
             : 0;
-        const checkOutTime = serverAtt?.checkOut
-          ? new Date(serverAtt.checkOut as string | Date).toLocaleTimeString('en-US', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
-          : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const checkOutTime =
+          safeLocaleTime(serverAtt?.checkOut) ||
+          safeLocaleTime(new Date()) ||
+          new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
         if (typeof checkOutPayload?.hoursThisWeek === 'number') {
           ingestWeekHoursFromServer(checkOutPayload.hoursThisWeek, checkOutPayload.weekKey, 0);
@@ -1427,12 +1422,7 @@ export default function EmployeeDashboard() {
                 )}
               </div>
             ) : (
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground">Not checked in yet today</p>
-                <p className="text-xs text-muted-foreground/80">
-                  You can check in, check out, and start a new session multiple times per day.
-                </p>
-              </div>
+              <p className="text-sm text-muted-foreground">Not checked in yet today</p>
             )}
 
             <div className="flex flex-wrap items-center gap-3">

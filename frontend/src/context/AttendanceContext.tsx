@@ -46,6 +46,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [attendance, setAttendanceState] = useState<AttendanceState>(defaultState);
   const [lastUpdateSource, setLastUpdateSource] = useState('init');
   const lastUpdateTimeRef = useRef(Date.now());
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const resolveUserId = useCallback((): string | null => {
     const id = user?.id ?? user?.userId;
@@ -54,28 +55,37 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const persistToLocalStorage = useCallback(
     (state: AttendanceState) => {
-      try {
-        const userId = resolveUserId();
-        writePersistedAttendance(userId, {
-          userId,
-          checkedIn: state.isCheckedIn,
-          isCheckedIn: state.isCheckedIn,
-          checkInTime: state.checkInTime,
-          checkOutTime: state.checkOutTime,
-          currentHours: state.hoursWorked,
-          hoursWorked: state.hoursWorked,
-          status: state.status,
-          isOnBreak: state.isOnBreak,
-          currentBreakDuration: state.currentBreakDuration,
-          breakType: state.breakType,
-          timestamp: Date.now()
-        });
-      } catch (e) {
-        console.warn('Failed to save attendance cache:', e);
-      }
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = setTimeout(() => {
+        try {
+          const userId = resolveUserId();
+          writePersistedAttendance(userId, {
+            userId,
+            checkedIn: state.isCheckedIn,
+            isCheckedIn: state.isCheckedIn,
+            checkInTime: state.checkInTime,
+            checkOutTime: state.checkOutTime,
+            currentHours: state.hoursWorked,
+            hoursWorked: state.hoursWorked,
+            status: state.status,
+            isOnBreak: state.isOnBreak,
+            currentBreakDuration: state.currentBreakDuration,
+            breakType: state.breakType,
+            timestamp: Date.now(),
+          });
+        } catch (e) {
+          console.warn('Failed to save attendance cache:', e);
+        }
+      }, 120);
     },
     [resolveUserId]
   );
+
+  useEffect(() => {
+    return () => {
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+    };
+  }, []);
 
   const loadFromLocalStorage = useCallback(() => {
     void (async () => {

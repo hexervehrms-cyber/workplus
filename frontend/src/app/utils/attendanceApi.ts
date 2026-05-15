@@ -1,5 +1,6 @@
 import { buildApiUrl } from './apiHelper';
-import { ensureAccessToken, TokenRefreshService } from './api';
+import { ensureAccessToken, refreshAccessToken } from './sessionAuth';
+import { TokenManager } from './api';
 
 function authErrorMessage(
   status: number,
@@ -13,6 +14,22 @@ function authErrorMessage(
     return 'Employee profile not found. Contact HR to activate your account.';
   }
   return parsed.message || `Request failed (${status})`;
+}
+
+function mergeSuccessPayload(
+  parsed: { message?: string; data?: unknown }
+): unknown {
+  const data = parsed.data ?? parsed;
+  if (
+    parsed.message &&
+    data &&
+    typeof data === 'object' &&
+    !Array.isArray(data) &&
+    !(data instanceof Date)
+  ) {
+    return { ...(data as Record<string, unknown>), message: parsed.message };
+  }
+  return data;
 }
 
 async function doAttendancePost(
@@ -50,14 +67,11 @@ export async function postAttendanceAction(
   let response = await doAttendancePost(path, body, idempotencyKey, authToken);
 
   if (response.status === 401) {
-    try {
-      const refreshResult = await new TokenRefreshService().refreshToken();
-      if (refreshResult.success && refreshResult.data?.token) {
-        authToken = refreshResult.data.token;
-        response = await doAttendancePost(path, body, idempotencyKey, authToken);
-      }
-    } catch {
-      /* fall through to error handling */
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      TokenManager.set(refreshed);
+      authToken = refreshed;
+      response = await doAttendancePost(path, body, idempotencyKey, authToken);
     }
   }
 
@@ -69,15 +83,7 @@ export async function postAttendanceAction(
   }
 
   if (response.ok) {
-    const data = parsed.data ?? parsed;
-    if (parsed.message && typeof data === 'object' && data !== null && !('message' in data)) {
-      return {
-        ok: true,
-        data: { ...(data as Record<string, unknown>), message: parsed.message },
-        status: response.status,
-      };
-    }
-    return { ok: true, data, status: response.status };
+    return { ok: true, data: mergeSuccessPayload(parsed), status: response.status };
   }
 
   if (response.status === 409) {

@@ -3,7 +3,8 @@
  * Ensures all API calls use the correct base URL for production and development
  */
 
-import { TokenManager, ensureAccessToken, TokenRefreshService } from './api';
+import { TokenManager } from './api';
+import { ensureAccessToken, refreshAccessToken } from './sessionAuth';
 
 // Simple request cache for GET requests
 const requestCache = new Map<string, { data: any; timestamp: number }>();
@@ -120,14 +121,10 @@ export const apiRequest = async <T = any>(
     let response = await fetchWithTimeout(url, config, REQUEST_TIMEOUT_MS);
 
     if (response.status === 401 && !retriedAuth) {
-      try {
-        const refreshResult = await new TokenRefreshService().refreshToken();
-        if (refreshResult.success && refreshResult.data?.token) {
-          TokenManager.set(refreshResult.data.token);
-          return apiRequest<T>(endpoint, options, true);
-        }
-      } catch {
-        /* fall through */
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        TokenManager.set(refreshed);
+        return apiRequest<T>(endpoint, options, true);
       }
     }
 

@@ -64,7 +64,8 @@ const TABLE_LEAVE_KEYS = [
   'emergency',
 ] as const;
 
-function getAllocationTotal(allocations: LeaveAllocation['allocations']): number {
+function getAllocationTotal(allocations: LeaveAllocation['allocations'] | undefined): number {
+  if (!allocations) return 0;
   return TABLE_LEAVE_KEYS.reduce((sum, key) => sum + (Number(allocations[key]) || 0), 0);
 }
 
@@ -474,12 +475,12 @@ export default function LeaveAllocation() {
                     <td className="p-4 text-sm text-muted-foreground">
                       {allocation.employeeId?.department || '-'}
                     </td>
-                    <td className="p-4 text-center">{allocation.allocations.vacation}</td>
-                    <td className="p-4 text-center">{allocation.allocations.sickLeave}</td>
-                    <td className="p-4 text-center">{allocation.allocations.casualLeave}</td>
-                    <td className="p-4 text-center">{allocation.allocations.compensatoryOff}</td>
-                    <td className="p-4 text-center">{allocation.allocations.personal}</td>
-                    <td className="p-4 text-center">{allocation.allocations.emergency}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.vacation ?? 0}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.sickLeave ?? 0}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.casualLeave ?? 0}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.compensatoryOff ?? 0}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.personal ?? 0}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.emergency ?? 0}</td>
                     <td className="p-4 text-center font-semibold">
                       {getAllocationTotal(allocation.allocations)}
                     </td>

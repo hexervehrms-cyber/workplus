@@ -324,23 +324,32 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
   const currentUserId = req.user.userId;
   const userOrgId = req.user.orgId;
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  let effectiveEmployeeId = null;
+  let effectiveOrgId = userOrgId;
 
-  // Get today's attendance record - try with userId first
-  let attendance = await Attendance.findOne({
-    userId: currentUserId,
-    orgId: userOrgId,
-    date: { $gte: today, $lt: tomorrow }
-  })
-  .sort({ _id: -1 })
-  .populate('userId', 'name email avatar')
-  .populate('employeeId', 'employeeCode department')
-  .lean();
+  if (userRole === 'employee') {
+    const employee = await findEmployeeForSelfService(currentUserId, userOrgId);
+    if (employee) {
+      effectiveEmployeeId = employee._id;
+      effectiveOrgId = employee.orgId || userOrgId;
+    }
+  }
 
-  const hoursThisWeek = await sumHoursThisWeekForUser(currentUserId, userOrgId);
+  const todayQuery = buildTodayAttendanceQuery(
+    userRole === 'employee' ? 'employee' : 'admin',
+    currentUserId,
+    effectiveEmployeeId,
+    effectiveOrgId,
+    userOrgId
+  );
+
+  let attendance = await Attendance.findOne(todayQuery)
+    .sort({ _id: -1 })
+    .populate('userId', 'name email avatar')
+    .populate('employeeId', 'employeeCode department')
+    .lean();
+
+  const hoursThisWeek = await sumHoursThisWeekForUser(currentUserId, effectiveOrgId);
 
   res.json({
     success: true,
@@ -491,7 +500,7 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     });
     effectiveUserId = authUserId;
     effectiveEmployeeId = employee._id;
-    effectiveOrgId = authOrgId;
+    effectiveOrgId = String(employee.orgId || authOrgId);
     effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employeeName || 'Employee';
   } else {
     console.log('❌ [CHECK-IN] Non-employee role detected:', authRole);
@@ -537,12 +546,16 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
+  const todayQuery = buildTodayAttendanceQuery(
+    authRole === 'employee' ? 'employee' : 'admin',
+    effectiveUserId,
+    effectiveEmployeeId,
+    effectiveOrgId,
+    authOrgId
+  );
+
   // Check if already checked in today
-  const existingAttendance = await Attendance.findOne({
-    userId: effectiveUserId,
-    orgId: effectiveOrgId,
-    date: { $gte: today, $lt: tomorrow }
-  });
+  const existingAttendance = await Attendance.findOne(todayQuery);
 
   if (existingAttendance && existingAttendance.checkIn && !existingAttendance.checkOut) {
     return res.status(200).json({
@@ -742,7 +755,7 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     
     effectiveUserId = authUserId;
     effectiveEmployeeId = employee._id;
-    effectiveOrgId = authOrgId;
+    effectiveOrgId = String(employee.orgId || authOrgId);
     effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employeeName || 'Employee';
   } else {
     if (!effectiveUserId || !effectiveEmployeeId || !effectiveOrgId) {
@@ -759,17 +772,16 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     }
   }
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  const todayQuery = buildTodayAttendanceQuery(
+    authRole === 'employee' ? 'employee' : 'admin',
+    effectiveUserId,
+    effectiveEmployeeId,
+    effectiveOrgId,
+    authOrgId
+  );
 
   // Find today's attendance record
-  const attendance = await Attendance.findOne({
-    userId: effectiveUserId,
-    orgId: effectiveOrgId,
-    date: { $gte: today, $lt: tomorrow }
-  }).sort({ _id: -1 });
+  const attendance = await Attendance.findOne(todayQuery).sort({ _id: -1 });
 
   if (!attendance || !attendance.checkIn) {
     return res.status(400).json({
@@ -1049,7 +1061,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
       return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
     }
     effectiveEmployeeId = employee._id;
-    effectiveOrgId = employee.orgId || authOrgId;
+    effectiveOrgId = String(employee.orgId || authOrgId);
     effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || effectiveEmployeeName || 'Employee';
   } else if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
     return res.status(403).json({ success: false, message: 'Unauthorized org access' });
@@ -1062,37 +1074,32 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
     });
   }
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-
   // ATOMIC OPERATION: Find and update in one operation to prevent race conditions
-  // This ensures only one break can be started even with concurrent requests
   const newBreak = {
     startTime: new Date(),
     breakType,
     notes,
     ipAddress: req.ip || req.connection.remoteAddress,
-    idempotencyKey // Store key for deduplication
+    idempotencyKey
   };
 
   try {
-    const baseDay = {
-      orgId: effectiveOrgId,
-      date: { $gte: today, $lt: tomorrow },
-      checkIn: { $exists: true },
+    const dayQuery = buildTodayAttendanceQuery(
+      authRole,
+      currentUserId,
+      effectiveEmployeeId,
+      effectiveOrgId,
+      authOrgId
+    );
+
+    const attendanceMatch = {
+      ...dayQuery,
+      checkIn: { $exists: true, $ne: null },
       $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
       ...noOpenBreakFilter(),
       'meetingMode.isActive': { $ne: true }
     };
 
-    const attendanceMatch =
-      authRole === 'employee'
-        ? { ...baseDay, userId: currentUserId }
-        : { ...baseDay, employeeId: effectiveEmployeeId };
-
-    // Use findOneAndUpdate with atomic $push to prevent duplicate breaks
     const updatedAttendance = await Attendance.findOneAndUpdate(
       attendanceMatch,
       {
@@ -1102,12 +1109,9 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
     ).select('_id employeeId orgId breaks meetingMode checkIn checkOut');
 
     if (!updatedAttendance) {
-      // Check why update failed (same scope as GET /today for employees)
-      const attendance = await Attendance.findOne(
-        authRole === 'employee'
-          ? { userId: currentUserId, orgId: effectiveOrgId, date: { $gte: today, $lt: tomorrow } }
-          : { employeeId: effectiveEmployeeId, orgId: effectiveOrgId, date: { $gte: today, $lt: tomorrow } }
-      ).select('_id checkIn checkOut breaks meetingMode');
+      const attendance = await Attendance.findOne(dayQuery).select(
+        '_id checkIn checkOut breaks meetingMode'
+      );
 
       if (!attendance) {
         return res.status(400).json({

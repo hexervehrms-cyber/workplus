@@ -7,7 +7,13 @@ import { useAuth } from '../../context/AuthContext';
 import { TokenManager, LeaveAllocationService } from '../../utils/api';
 import { parseBalanceApiResponse, sumRemainingDays } from '../../utils/leaveBalance';
 import { apiGet, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
-import { clearPersistedAttendance, writePersistedAttendance, localDayKey } from '../../utils/attendancePersistence';
+import {
+  clearPersistedAttendance,
+  writePersistedAttendance,
+  readPersistedAttendance,
+  isPayloadFresh,
+  localDayKey,
+} from '../../utils/attendancePersistence';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useAttendance } from '../../../context/AttendanceContext';
 import { toast } from 'sonner';
@@ -419,20 +425,42 @@ export default function EmployeeDashboard() {
           timestamp: Date.now()
         });
       } else {
-        console.log('ℹ️ Server confirmed no attendance row for today — showing Check In');
+        const uid = user?.id ? String(user.id) : null;
+        const cached = await readPersistedAttendance(uid);
+        const hasFreshCheckedIn =
+          cached &&
+          isPayloadFresh(cached) &&
+          (cached.isCheckedIn || cached.checkedIn) &&
+          !cached.checkOutTime;
 
-        updateAttendance({
-          isCheckedIn: false,
-          checkInTime: null,
-          checkOutTime: null,
-          hoursWorked: 0,
-          status: 'absent',
-          isOnBreak: false,
-          currentBreakDuration: 0,
-          breakType: 'regular'
-        });
-
-        await clearPersistedAttendance(user?.id ? String(user.id) : null);
+        if (hasFreshCheckedIn) {
+          debug.warn(
+            'Server returned no attendance row but durable cache shows checked in — keeping local state'
+          );
+          updateAttendance({
+            isCheckedIn: true,
+            checkInTime: cached.checkInTime || null,
+            checkOutTime: cached.checkOutTime || null,
+            hoursWorked: cached.hoursWorked || cached.currentHours || 0,
+            status: cached.status || 'present',
+            isOnBreak: cached.isOnBreak || false,
+            currentBreakDuration: cached.currentBreakDuration || 0,
+            breakType: cached.breakType || 'regular',
+          });
+        } else {
+          debug.log('ℹ️ No attendance for today — showing Check In');
+          updateAttendance({
+            isCheckedIn: false,
+            checkInTime: null,
+            checkOutTime: null,
+            hoursWorked: 0,
+            status: 'absent',
+            isOnBreak: false,
+            currentBreakDuration: 0,
+            breakType: 'regular',
+          });
+          await clearPersistedAttendance(uid);
+        }
       }
 
       if (attendanceApiOk) {

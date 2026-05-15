@@ -350,15 +350,12 @@ export default function AdminDashboard() {
     try {
       console.log('✅ Approving leave request:', requestId);
       
-      // Get current user ID
-      const currentUser = TokenManager.getUser();
-      const userId = currentUser?.id || currentUser?.userId;
-      
+      const userId = user?.id || user?.userId;
       if (!userId) {
         alert('Unable to get user information. Please log in again.');
         return;
       }
-      
+
       const response = await apiClient.patch(`/leave-requests/${requestId}/approve`, {
         approvedBy: userId
       });
@@ -389,15 +386,12 @@ export default function AdminDashboard() {
     try {
       console.log('❌ Rejecting leave request:', requestId);
       
-      // Get current user ID
-      const currentUser = TokenManager.getUser();
-      const userId = currentUser?.id || currentUser?.userId;
-      
+      const userId = user?.id || user?.userId;
       if (!userId) {
         alert('Unable to get user information. Please log in again.');
         return;
       }
-      
+
       const response = await apiClient.patch(`/leave-requests/${requestId}/reject`, {
         rejectedBy: userId,
         rejectionReason: reason

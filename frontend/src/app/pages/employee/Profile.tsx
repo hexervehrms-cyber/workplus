@@ -12,7 +12,8 @@ import CurrencySelector from '../../components/CurrencySelector';
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog';
-import { apiGet, apiPost, apiPut, apiDelete, apiUpload } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, apiDelete, apiUpload, clearApiCache } from '../../utils/apiHelper';
+import { useAuth } from '../../context/AuthContext';
 
 // IndexedDB helper functions
 const DB_NAME = 'WorkplusDB';
@@ -107,7 +108,31 @@ interface EmployeeData {
     bankAccount?: number;
     ifscCode?: number;
   };
+  shiftTiming?: {
+    startTime?: string;
+    endTime?: string;
+    lateThreshold?: number;
+    workingDays?: string[];
+  };
 }
+
+const mapCategoryToDocumentType = (category: string): string => {
+  const map: Record<string, string> = {
+    'Letter of Intent': 'general',
+    'Offer Letter': 'offer_letter',
+    'Appointment Letter': 'general',
+    'Appraisal Letter': 'appraisal_letter',
+    'Salary Slips': 'salary_slips',
+    'Experience Letter': 'experience_letter',
+    'Relieving Letter': 'relieving_letter',
+  };
+  return map[category] || 'general';
+};
+
+const formatWorkingDays = (days?: string[]) => {
+  if (!days?.length) return 'Monday – Friday (default)';
+  return days.join(', ');
+};
 
 interface Document {
   _id: string;
@@ -121,6 +146,7 @@ interface Document {
 }
 
 export default function Profile() {
+  const { user: authUser } = useAuth();
   const { selectedCurrency, formatCurrency } = useCurrency();
   const [showCurrencySelector, setShowCurrencySelector] = useState(false);
   const [employee, setEmployee] = useState<EmployeeData | null>(null);
@@ -199,37 +225,40 @@ export default function Profile() {
     designation: ''
   });
 
+  const loadDocuments = async () => {
+    const userId = authUser?.id || authUser?.userId;
+    if (!userId) return;
+
+    try {
+      clearApiCache(`/documents/employee/${userId}`);
+      const data = await apiGet(`/documents/employee/${userId}`, false);
+      const list = Array.isArray(data?.data) ? data.data : [];
+      const mapped: Document[] = list.map((d: Record<string, unknown>) => ({
+        _id: String(d._id || ''),
+        name: String(d.name || d.fileName || 'Document'),
+        size: String(d.size || '—'),
+        uploadedAt: d.uploadedAt
+          ? new Date(String(d.uploadedAt)).toLocaleDateString()
+          : new Date().toLocaleDateString(),
+        status: String(d.status || 'uploaded'),
+        filePath: d.filePath ? String(d.filePath) : undefined,
+        category: d.type ? String(d.type) : undefined,
+      }));
+      setDocuments(mapped.filter((d) => d._id));
+    } catch (error) {
+      console.error('Error loading documents from backend:', error);
+    }
+  };
+
   useEffect(() => {
     fetchEmployeeData();
-    
-    // Load documents from backend
-    const loadDocuments = async () => {
-      try {
-        const token = localStorage.getItem('authToken');
-        const userId = localStorage.getItem('userId');
-        
-        if (!userId) {
-          console.warn('No userId found in localStorage');
-          return;
-        }
-
-        try {
-          const data = await apiGet(`/documents/employee/${userId}`);
-          const backendDocs = data.data || [];
-          
-          setDocuments(backendDocs);
-        } catch (error) {
-          console.error('Error loading documents from backend:', error);
-        }
-      } catch (error) {
-        console.error('Error loading documents from backend:', error);
-      }
-    };
-    
-    loadDocuments();
-    // Commented out until backend endpoint is created
-    // fetchEducationalDocuments();
   }, []);
+
+  useEffect(() => {
+    if (authUser?.id || authUser?.userId) {
+      void loadDocuments();
+    }
+  }, [authUser?.id, authUser?.userId]);
 
   // Update form when employee data changes
   useEffect(() => {
@@ -388,7 +417,13 @@ export default function Profile() {
         panNumber: employeeProfile?.panNumber || '',
         bankAccount: employeeProfile?.bankAccount || employeeProfile?.bankDetails?.accountNumber || '',
         ifscCode: employeeProfile?.ifscCode || employeeProfile?.bankDetails?.ifscCode || '',
-        sensitiveInfoLocks: employeeProfile?.sensitiveInfoLocks || {}
+        sensitiveInfoLocks: employeeProfile?.sensitiveInfoLocks || {},
+        shiftTiming: employeeProfile?.shiftTiming || {
+          startTime: '09:00',
+          endTime: '18:00',
+          lateThreshold: 0,
+          workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+        },
       };
       
       console.log('✅ Employee data fetched:', employeeData);
@@ -582,7 +617,7 @@ export default function Profile() {
       const formData = new FormData();
       formData.append('document', file);
       formData.append('name', selectedCategory);
-      formData.append('type', documentType);
+      formData.append('type', mapCategoryToDocumentType(selectedCategory));
 
       console.log('📤 FormData prepared, sending to backend...');
 
@@ -592,31 +627,23 @@ export default function Profile() {
         setTimeout(() => reject(new Error('Upload timeout - please try again')), 30000)
       );
 
-      const data = await Promise.race([uploadPromise, timeoutPromise]) as any;
+      const data = await Promise.race([uploadPromise, timeoutPromise]) as {
+        success?: boolean;
+        message?: string;
+        data?: Record<string, unknown>;
+      };
       console.log('✅ Upload response:', data);
-      
-      const uploadedDoc = data.data;
 
-      if (!uploadedDoc || !uploadedDoc._id) {
+      if (data?.success === false) {
+        throw new Error(data.message || 'Upload failed');
+      }
+
+      const uploadedDoc = data?.data;
+      if (!uploadedDoc?._id) {
         throw new Error('Invalid response from server - missing document ID');
       }
 
-      // Create document object with backend data
-      const newDoc: Document = {
-        _id: uploadedDoc._id,
-        name: uploadedDoc.name,
-        size: uploadedDoc.size,
-        uploadedAt: new Date(uploadedDoc.uploadedAt).toLocaleDateString(),
-        status: uploadedDoc.status,
-        filePath: uploadedDoc.filePath,
-        category: uploadedDoc.type
-      };
-
-      console.log('✅ Document object created:', newDoc);
-
-      // Update state
-      setDocuments([newDoc, ...documents]);
-
+      await loadDocuments();
       toast.success(`${selectedCategory} uploaded successfully`);
       
       // Reset file input
@@ -979,6 +1006,53 @@ export default function Profile() {
                   className={`mt-2 rounded-xl ${isEditingPersonal ? 'bg-background border-primary' : 'bg-muted'}`}
                   placeholder="Enter address"
                 />
+              </div>
+
+              <div className="col-span-2 border-t pt-4 mt-2">
+                <h4 className="font-semibold text-sm mb-4 flex items-center gap-2">
+                  <Clock className="w-4 h-4" />
+                  Shift Timing
+                  <span className="text-xs font-normal text-muted-foreground">(set by Admin/HR)</span>
+                </h4>
+                <div className="grid grid-cols-2 gap-6">
+                  <div>
+                    <Label>Shift Start Time</Label>
+                    <Input
+                      type="time"
+                      value={employee.shiftTiming?.startTime || '09:00'}
+                      disabled
+                      className="mt-2 rounded-xl bg-muted"
+                    />
+                  </div>
+                  <div>
+                    <Label>Shift End Time</Label>
+                    <Input
+                      type="time"
+                      value={employee.shiftTiming?.endTime || '18:00'}
+                      disabled
+                      className="mt-2 rounded-xl bg-muted"
+                    />
+                  </div>
+                  <div>
+                    <Label>Late Threshold (minutes)</Label>
+                    <Input
+                      value={String(employee.shiftTiming?.lateThreshold ?? 0)}
+                      disabled
+                      className="mt-2 rounded-xl bg-muted"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Grace period after shift start before marking as late
+                    </p>
+                  </div>
+                  <div>
+                    <Label>Working Days</Label>
+                    <Input
+                      value={formatWorkingDays(employee.shiftTiming?.workingDays)}
+                      disabled
+                      className="mt-2 rounded-xl bg-muted"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           </Card>

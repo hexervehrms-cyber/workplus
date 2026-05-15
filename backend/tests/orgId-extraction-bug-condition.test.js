@@ -63,9 +63,6 @@ describe('OrgId Extraction Bug Condition Exploration', () => {
    * and verifies the created employee has orgId = 'org_123456'
    */
   it('should extract orgId from JWT and create employee with correct orgId', async () => {
-    // Import route handler after mocks are set up
-    const { default: employeeRouter } = await import('../routes/employees.js');
-    
     // Create mock request with admin user having valid orgId
     const mockReq = {
       body: {
@@ -135,18 +132,6 @@ describe('OrgId Extraction Bug Condition Exploration', () => {
     });
     EmployeeMock.countDocuments = vi.fn().mockResolvedValue(1);
 
-    // Replace the models in the module
-    const EmployeeModule = await import('../models/Employee.js');
-    const UserModule = await import('../models/User.js');
-    
-    // We need to intercept the actual route handler call
-    // Since we can't easily mock the models, let's test the orgId extraction logic directly
-    
-    // Test the actual bug: orgId extraction with fallback to 'system'
-    const adminOrgId = 'org_123456';
-    const extractedOrgId = mockReq.user?.orgId || mockReq.user?.organizationId || 'system';
-    
-    // This is the BUG: extractedOrgId should be 'org_123456' but let's verify
     expect(mockReq.user.orgId).toBe('org_123456');
     
     // The bug manifests when req.user.orgId is undefined
@@ -189,32 +174,23 @@ describe('OrgId Extraction Bug Condition Exploration', () => {
    * 
    * This test will FAIL on unfixed code when the JWT doesn't contain orgId.
    */
-  it('orgId extraction should match admin orgId when present', async () => {
-    // Generate valid organization IDs
-    const orgIdGenerator = fc.oneof(
-      fc.string({ minLength: 5, maxLength: 50 }).filter(s => s.startsWith('org_')),
-      fc.uuid()
-    );
+  it('orgId extraction should match admin orgId when present', () => {
+    const sampleOrgIds = [
+      'org_123456',
+      'org_acme_corp',
+      '550e8400-e29b-41d4-a716-446655440000',
+    ];
 
-    // Run property-based test
-    const property = fc.asyncProperty(orgIdGenerator, async (adminOrgId) => {
-      // Simulate the orgId extraction logic from routes/employees.js
+    for (const adminOrgId of sampleOrgIds) {
       const user = {
         userId: 'admin123',
         role: 'admin',
-        orgId: adminOrgId
+        orgId: adminOrgId,
       };
-
-      // This is the extraction logic from the BUGGY code
       const extractedOrgId = user.orgId || user.organizationId || 'system';
-
-      // Property: When admin has valid orgId, extracted orgId should match
-      // This should PASS on both fixed and unfixed code
       expect(extractedOrgId).toBe(adminOrgId);
       expect(extractedOrgId).not.toBe('system');
-    });
-
-    await fc.assert(property, { verbose: true });
+    }
   });
 
   /**

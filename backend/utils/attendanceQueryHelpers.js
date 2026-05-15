@@ -3,6 +3,8 @@
  * Used by routes/attendance.js to tolerate JWT orgId vs Employee.orgId mismatch.
  */
 
+import mongoose from 'mongoose';
+
 /** Match attendance rows when JWT orgId and Employee.orgId differ. */
 export function buildOrgIdClause(effectiveOrgId, authOrgId) {
   const orgIds = [...new Set([String(effectiveOrgId), String(authOrgId)].filter(Boolean))];
@@ -14,6 +16,35 @@ export function isOpenBreak(b) {
     b?.startTime &&
       (b.endTime == null || b.endTime === undefined || b.endTime === '')
   );
+}
+
+/** Monday 00:00 – next Monday 00:00 (calendar week, resets weekly). */
+export function getCalendarWeekRange(now = new Date()) {
+  const weekStart = new Date(now);
+  const dow = weekStart.getDay();
+  const toMonday = dow === 0 ? -6 : 1 - dow;
+  weekStart.setDate(weekStart.getDate() + toMonday);
+  weekStart.setHours(0, 0, 0, 0);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+  return { weekStart, weekEnd };
+}
+
+/** Stable id for the current Mon–Sun week (for client cache). */
+export function calendarWeekKey(now = new Date()) {
+  const { weekStart } = getCalendarWeekRange(now);
+  const y = weekStart.getFullYear();
+  const m = String(weekStart.getMonth() + 1).padStart(2, '0');
+  const d = String(weekStart.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function buildUserIdClause(userId) {
+  const s = String(userId);
+  if (mongoose.Types.ObjectId.isValid(s)) {
+    return { userId: { $in: [s, new mongoose.Types.ObjectId(s)] } };
+  }
+  return { userId: s };
 }
 
 /** Today's attendance lookup — tolerates orgId string drift between JWT and Employee row. */
@@ -105,21 +136,40 @@ export function buildLiveStatus(attendance) {
   };
 }
 
-/** Hours credited for one row (completed vs open shift). */
-export function recordWorkedHoursForRow(r) {
+function breakHoursInRow(r, now = new Date()) {
+  let breakH = 0;
+  if (!Array.isArray(r?.breaks)) return 0;
+  for (const b of r.breaks) {
+    if (!b?.startTime) continue;
+    if (b.endTime) {
+      breakH += (new Date(b.endTime) - new Date(b.startTime)) / (1000 * 60 * 60);
+    } else if (isOpenBreak(b)) {
+      breakH += (now - new Date(b.startTime)) / (1000 * 60 * 60);
+    }
+  }
+  return breakH;
+}
+
+/** Hours credited for one row (completed vs open shift), breaks excluded. */
+export function recordWorkedHoursForRow(r, now = new Date()) {
   if (!r?.checkIn) return 0;
   if (r.checkOut) {
     let h = typeof r.hoursWorked === 'number' && !Number.isNaN(r.hoursWorked) ? r.hoursWorked : 0;
     if (h > 0) return h;
     let calc = (new Date(r.checkOut) - new Date(r.checkIn)) / (1000 * 60 * 60);
-    if (Array.isArray(r.breaks)) {
-      for (const b of r.breaks) {
-        if (b?.startTime && b?.endTime) {
-          calc -= (new Date(b.endTime) - new Date(b.startTime)) / (1000 * 60 * 60);
-        }
-      }
-    }
+    calc -= breakHoursInRow(r, new Date(r.checkOut));
     return Math.max(0, Math.round(calc * 100) / 100);
   }
-  return buildLiveStatus(r).currentHours || 0;
+  let calc = (now - new Date(r.checkIn)) / (1000 * 60 * 60);
+  calc -= breakHoursInRow(r, now);
+  return Math.max(0, Math.round(calc * 100) / 100);
+}
+
+/** Sum worked hours for attendance rows in the current calendar week. */
+export function sumHoursFromAttendanceRows(rows, now = new Date()) {
+  let sum = 0;
+  for (const r of rows || []) {
+    sum += recordWorkedHoursForRow(r, now);
+  }
+  return Math.round(sum * 100) / 100;
 }

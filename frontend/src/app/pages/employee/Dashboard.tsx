@@ -9,6 +9,12 @@ import { parseBalanceApiResponse, sumRemainingDays } from '../../utils/leaveBala
 import { apiGet, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
 import { postAttendanceAction } from '../../utils/attendanceApi';
 import {
+  formatWeekHours,
+  readCachedWeekHours,
+  writeCachedWeekHours,
+  calendarWeekKey,
+} from '../../utils/weekHours';
+import {
   clearPersistedAttendance,
   writePersistedAttendance,
   readPersistedAttendance,
@@ -210,6 +216,43 @@ export default function EmployeeDashboard() {
     hoursThisWeek: "0h",
     performance: "0%"
   });
+
+  const applyWeekHours = useCallback((hours: number, weekKey?: string) => {
+    const key = weekKey || calendarWeekKey();
+    if (key !== calendarWeekKey()) return;
+    setKpiMetrics((prev) => ({ ...prev, hoursThisWeek: formatWeekHours(hours) }));
+    const uid = user?.id ? String(user.id) : null;
+    writeCachedWeekHours(uid, hours);
+  }, [user?.id]);
+
+  const syncWeeklyHours = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      clearApiCache('/attendance/today');
+      const res = await apiGet<{ hoursThisWeek?: number; weekKey?: string; attendance?: unknown }>(
+        '/attendance/today',
+        false
+      );
+      const data = (res as { data?: { hoursThisWeek?: number; weekKey?: string } })?.data ?? res;
+      const weekHours =
+        typeof (data as { hoursThisWeek?: number })?.hoursThisWeek === 'number'
+          ? (data as { hoursThisWeek: number }).hoursThisWeek
+          : null;
+      if (weekHours !== null) {
+        applyWeekHours(weekHours, (data as { weekKey?: string }).weekKey);
+      }
+    } catch (err) {
+      debug.warn('syncWeeklyHours failed', err);
+    }
+  }, [user?.id, applyWeekHours]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const cached = readCachedWeekHours(String(user.id));
+    if (cached) {
+      setKpiMetrics((prev) => ({ ...prev, hoursThisWeek: formatWeekHours(cached.hours) }));
+    }
+  }, [user?.id]);
 
   const [holidays, setHolidays] = useState<any[]>([]);
   const [attendanceHistory, setAttendanceHistory] = useState<any[]>([]);
@@ -466,9 +509,10 @@ export default function EmployeeDashboard() {
 
       if (attendanceApiOk) {
         clearApiCache('/attendance/today');
+        if (typeof attendanceData?.hoursThisWeek === 'number') {
+          applyWeekHours(attendanceData.hoursThisWeek, attendanceData.weekKey);
+        }
       }
-
-      const weekHours = typeof attendanceData?.hoursThisWeek === 'number' ? attendanceData.hoursThisWeek : 0;
 
       let leaveBalanceLabel = '0 days';
       try {
@@ -490,11 +534,11 @@ export default function EmployeeDashboard() {
         /* keep default */
       }
 
-      setKpiMetrics({
+      setKpiMetrics((prev) => ({
         leaveBalance: leaveBalanceLabel,
-        hoursThisWeek: `${weekHours}h`,
-        performance: "85%"
-      });
+        hoursThisWeek: prev.hoursThisWeek,
+        performance: "85%",
+      }));
 
       debug.groupEnd();
     } catch (err) {
@@ -504,7 +548,7 @@ export default function EmployeeDashboard() {
       setLoading(false);
     }
   // FIX #6: updateAttendance added to deps
-  }, [user, isRecentlyUpdated, updateAttendance, loadFromLocalStorage]);
+  }, [user, isRecentlyUpdated, updateAttendance, loadFromLocalStorage, applyWeekHours]);
 
   const ensureEmployeeId = async (): Promise<string | null> => {
     if (employeeIdRef.current) return employeeIdRef.current;
@@ -749,6 +793,17 @@ export default function EmployeeDashboard() {
     return () => clearInterval(interval);
   }, [todayAttendance.isCheckedIn, disableRefresh]);
 
+  // Refresh "Hours This Week" KPI while checked in (server sums Mon–Sun from DB)
+  useEffect(() => {
+    if (!todayAttendance.isCheckedIn || !user?.id) return;
+    void syncWeeklyHours();
+    const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void syncWeeklyHours();
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [todayAttendance.isCheckedIn, user?.id, syncWeeklyHours]);
+
   // ============================================================================
   // TIMER SYSTEM - Track working hours, breaks, and meetings in real-time
   // ============================================================================
@@ -869,6 +924,7 @@ export default function EmployeeDashboard() {
         }
 
         clearApiCache('/attendance/today');
+        void syncWeeklyHours();
         toast.success('Break started');
         setLastSocketEventTime(Date.now());
       } catch (innerErr) {
@@ -943,7 +999,12 @@ export default function EmployeeDashboard() {
 
         debug.log('✅ [BREAK END] Success:', result);
 
-        const liveStatus = (result.data as { liveStatus?: Record<string, unknown> })?.liveStatus;
+        const breakPayload = result.data as {
+          liveStatus?: Record<string, unknown>;
+          hoursThisWeek?: number;
+          weekKey?: string;
+        };
+        const liveStatus = breakPayload?.liveStatus;
         updateAttendance(
           {
             isOnBreak: liveStatus?.isOnBreak === true,
@@ -953,6 +1014,12 @@ export default function EmployeeDashboard() {
           },
           'action'
         );
+
+        if (typeof breakPayload?.hoursThisWeek === 'number') {
+          applyWeekHours(breakPayload.hoursThisWeek, breakPayload.weekKey);
+        } else {
+          void syncWeeklyHours();
+        }
 
         const uid = user?.id ? String(user.id) : null;
         writePersistedAttendance(uid, {
@@ -1044,6 +1111,7 @@ export default function EmployeeDashboard() {
         });
 
         clearApiCache('/attendance/today');
+        void syncWeeklyHours();
         toast.success('Checked in successfully');
         setLastSocketEventTime(Date.now());
       } catch (innerErr) {
@@ -1094,14 +1162,28 @@ export default function EmployeeDashboard() {
           throw new Error(result.message);
         }
 
-        const serverAtt = result.data as Record<string, unknown> | undefined;
+        const checkOutPayload = result.data as {
+          attendance?: Record<string, unknown>;
+          hoursThisWeek?: number;
+          weekKey?: string;
+        };
+        const serverAtt = (checkOutPayload?.attendance ?? checkOutPayload) as Record<string, unknown>;
         const hoursWorked =
           typeof serverAtt?.hoursWorked === 'number' && !Number.isNaN(serverAtt.hoursWorked)
             ? serverAtt.hoursWorked
             : 0;
         const checkOutTime = serverAtt?.checkOut
-          ? new Date(serverAtt.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+          ? new Date(serverAtt.checkOut as string | Date).toLocaleTimeString('en-US', {
+              hour: '2-digit',
+              minute: '2-digit',
+            })
           : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+        if (typeof checkOutPayload?.hoursThisWeek === 'number') {
+          applyWeekHours(checkOutPayload.hoursThisWeek, checkOutPayload.weekKey);
+        } else {
+          void syncWeeklyHours();
+        }
         const prevCheckInTime = todayAttendance.checkInTime;
 
         // Update state immediately
@@ -1130,6 +1212,7 @@ export default function EmployeeDashboard() {
         });
 
         clearApiCache('/attendance/today');
+        void syncWeeklyHours();
         toast.success('Checked out successfully');
         setLastSocketEventTime(Date.now());
         setTimeout(() => {

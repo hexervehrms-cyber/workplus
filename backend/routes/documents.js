@@ -23,6 +23,29 @@ const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
+const MANAGE_DOC_ROLES = ["super_admin", "admin", "hr"];
+
+/** Resolve org id for reads — non–super-admins are limited to their tenant. */
+const resolveReadableOrgId = (req, requestedOrgId) => {
+  const userOrgId = String(req.user?.orgId || "system");
+  if (req.user?.role === "super_admin" && requestedOrgId) {
+    return String(requestedOrgId);
+  }
+  if (requestedOrgId && String(requestedOrgId) !== userOrgId) {
+    return null;
+  }
+  return userOrgId;
+};
+
+const findGeneratedDocumentForUser = async (documentId, userOrgId, role) => {
+  const doc = await GeneratedDocument.findOne({ id: documentId }).lean();
+  if (!doc) return { error: "NOT_FOUND" };
+  if (role !== "super_admin" && String(doc.organizationId) !== String(userOrgId)) {
+    return { error: "FORBIDDEN" };
+  }
+  return { doc };
+};
+
 // Configure multer for document uploads
 const documentStorage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -37,6 +60,43 @@ const documentStorage = multer.diskStorage({
     cb(null, `document-${req.user.userId}-${uniqueSuffix}${path.extname(file.originalname)}`);
   }
 });
+
+const DOCUMENT_TYPES = new Set([
+  "general",
+  "experience_letter",
+  "offer_letter",
+  "relieving_letter",
+  "appraisal_letter",
+  "salary_slips",
+  "bank_statement",
+  "education_10th_certificate",
+  "education_10th_marksheet",
+  "education_12th_certificate",
+  "education_12th_marksheet",
+  "education_graduation_certificate",
+  "education_graduation_marksheet",
+  "education_post_graduation_certificate",
+  "education_post_graduation_marksheet",
+  "education_diploma_certificate",
+  "education_diploma_marksheet",
+  "education_certificate_certificate",
+  "education_certificate_marksheet",
+  "education_drop_out_certificate",
+  "education_drop_out_marksheet",
+]);
+
+const resolveDocumentType = (rawType, name) => {
+  if (rawType && DOCUMENT_TYPES.has(String(rawType))) {
+    return String(rawType);
+  }
+  const label = String(name || "").toLowerCase();
+  if (label.includes("offer")) return "offer_letter";
+  if (label.includes("experience")) return "experience_letter";
+  if (label.includes("relieving")) return "relieving_letter";
+  if (label.includes("appraisal")) return "appraisal_letter";
+  if (label.includes("salary")) return "salary_slips";
+  return "general";
+};
 
 const documentUpload = multer({
   storage: documentStorage,
@@ -85,13 +145,15 @@ router.post(
       }
 
       const documentPath = `/uploads/documents/${req.file.filename}`;
+      const resolvedType = resolveDocumentType(type, name);
+      const orgId = String(req.user.orgId || req.user.tenantId || "system");
 
       // Create document record in database
       const document = await Document.create({
         userId: req.user.userId,
-        orgId: req.user.orgId,
+        orgId,
         name,
-        type: type || 'general',
+        type: resolvedType,
         fileName: req.file.originalname,
         filePath: documentPath,
         size: `${(req.file.size / 1024).toFixed(2)} KB`,
@@ -120,6 +182,87 @@ router.post(
       logger.error("Upload document error", {
         error: error.message,
         userId: req.user.userId
+      });
+      return sendError(res, "Failed to upload document", 500, "UPLOAD_ERROR");
+    }
+  })
+);
+
+/**
+ * POST /api/documents/company-upload
+ * Upload a company document file (appears in organization document list)
+ */
+router.post(
+  "/company-upload",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  documentUpload.single("file"),
+  asyncHandler(async (req, res) => {
+    try {
+      if (!req.file) {
+        return sendError(res, "No document file provided", 400, "VALIDATION_ERROR");
+      }
+
+      const { title, description, category, organizationId, isPublic } = req.body;
+
+      if (!title || !category) {
+        return sendError(res, "Title and category are required", 400, "VALIDATION_ERROR");
+      }
+
+      const orgId = organizationId || req.user.orgId;
+      if (!orgId) {
+        return sendError(res, "Organization ID is required", 400, "VALIDATION_ERROR");
+      }
+
+      const fileUrl = `/uploads/documents/${req.file.filename}`;
+      const docId = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
+      const generatedDocument = await GeneratedDocument.create({
+        id: docId,
+        title,
+        description: description || "",
+        documentType: category,
+        category,
+        content: description || title,
+        organizationId: String(orgId),
+        status: "generated",
+        fileUrl,
+        fileName: req.file.originalname,
+        createdBy: req.user.userId,
+        assignTo: "all",
+        requiresAcknowledgment: isPublic === "false" || isPublic === false ? false : true,
+      });
+
+      logger.info("Company document uploaded", {
+        documentId: generatedDocument.id,
+        organizationId: orgId,
+        userId: req.user.userId,
+      });
+
+      return sendSuccess(
+        res,
+        {
+          id: generatedDocument.id,
+          _id: generatedDocument._id,
+          title: generatedDocument.title,
+          description: generatedDocument.description,
+          category: generatedDocument.category,
+          organizationId: generatedDocument.organizationId,
+          createdBy: req.user.role,
+          createdAt: generatedDocument.createdAt,
+          updatedAt: generatedDocument.updatedAt,
+          status: "Published",
+          fileUrl: generatedDocument.fileUrl,
+          fileName: generatedDocument.fileName,
+          fileSize: `${(req.file.size / (1024 * 1024)).toFixed(2)} MB`,
+        },
+        "Document uploaded successfully",
+        201
+      );
+    } catch (error) {
+      logger.error("Company document upload error", {
+        error: error.message,
+        userId: req.user?.userId,
       });
       return sendError(res, "Failed to upload document", 500, "UPLOAD_ERROR");
     }
@@ -336,9 +479,12 @@ router.get(
   authenticate,
   asyncHandler(async (req, res) => {
     try {
-      const { organizationId } = req.params;
+      const scopedOrgId = resolveReadableOrgId(req, req.params.organizationId);
+      if (!scopedOrgId) {
+        return sendError(res, "Unauthorized org access", 403, "FORBIDDEN");
+      }
 
-      const documents = await GeneratedDocument.find({ organizationId })
+      const documents = await GeneratedDocument.find({ organizationId: scopedOrgId })
         .sort({ createdAt: -1 })
         .lean();
 
@@ -369,11 +515,18 @@ router.get(
     try {
       const { documentId } = req.params;
 
-      const document = await GeneratedDocument.findOne({ id: documentId }).lean();
-
-      if (!document) {
+      const lookup = await findGeneratedDocumentForUser(
+        documentId,
+        req.user.orgId,
+        req.user.role
+      );
+      if (lookup.error === "NOT_FOUND") {
         return sendError(res, "Document not found", 404, "NOT_FOUND");
       }
+      if (lookup.error === "FORBIDDEN") {
+        return sendError(res, "Unauthorized org access", 403, "FORBIDDEN");
+      }
+      const document = lookup.doc;
 
       logger.info("Generated document fetched", { documentId });
 
@@ -395,10 +548,23 @@ router.get(
 router.put(
   "/generated/:documentId",
   authenticate,
+  authorize(...MANAGE_DOC_ROLES),
   asyncHandler(async (req, res) => {
     try {
       const { documentId } = req.params;
       const { title, description, content, category, status } = req.body;
+
+      const lookup = await findGeneratedDocumentForUser(
+        documentId,
+        req.user.orgId,
+        req.user.role
+      );
+      if (lookup.error === "NOT_FOUND") {
+        return sendError(res, "Document not found", 404, "NOT_FOUND");
+      }
+      if (lookup.error === "FORBIDDEN") {
+        return sendError(res, "Unauthorized org access", 403, "FORBIDDEN");
+      }
 
       const document = await GeneratedDocument.findOneAndUpdate(
         { id: documentId },
@@ -437,9 +603,22 @@ router.put(
 router.delete(
   "/generated/:documentId",
   authenticate,
+  authorize(...MANAGE_DOC_ROLES),
   asyncHandler(async (req, res) => {
     try {
       const { documentId } = req.params;
+
+      const lookup = await findGeneratedDocumentForUser(
+        documentId,
+        req.user.orgId,
+        req.user.role
+      );
+      if (lookup.error === "NOT_FOUND") {
+        return sendError(res, "Document not found", 404, "NOT_FOUND");
+      }
+      if (lookup.error === "FORBIDDEN") {
+        return sendError(res, "Unauthorized org access", 403, "FORBIDDEN");
+      }
 
       const document = await GeneratedDocument.findOneAndDelete({ id: documentId });
 

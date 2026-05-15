@@ -332,8 +332,10 @@ export default function TeamsMessenger() {
         ]);
 
         const rawUsers = Array.isArray(usersRes.data) ? usersRes.data : [];
+        const hideSuperAdmin = user.role !== 'super_admin';
         const formattedUsers: User[] = rawUsers
           .filter((u: any) => String(u._id || u.id) !== myId)
+          .filter((u: any) => !hideSuperAdmin || u.role !== 'super_admin')
           .map(mapApiUser);
 
         const convList = Array.isArray(convRes.data) ? convRes.data : [];
@@ -689,7 +691,9 @@ export default function TeamsMessenger() {
   const canDeleteMessage = (message: Message) =>
     message.isOwn || user?.role === 'admin' || user?.role === 'super_admin';
 
-  const visibleUsers = users.filter((u) => !hiddenContactIds.has(u.id));
+  const visibleUsers = users
+    .filter((u) => !hiddenContactIds.has(u.id))
+    .filter((u) => user?.role === 'super_admin' || u.role !== 'super_admin');
   const hiddenUsers = users.filter((u) => hiddenContactIds.has(u.id));
 
   const filteredUsers = visibleUsers.filter(

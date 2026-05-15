@@ -744,19 +744,15 @@ router.get('/users', authenticate, asyncHandler(async (req, res) => {
       deletedAt: null
     };
 
-    // Role-based filtering
+    // Role-based filtering — employee/admin chat excludes super_admin
     if (currentUserRole === 'employee') {
-      // Employees can see: admins, super_admins, and other employees
-      filter.role = { $in: ['admin', 'super_admin', 'employee'] };
-    } else if (currentUserRole === 'admin') {
-      // Admins can see: employees, other admins, and super_admins
-      filter.role = { $in: ['employee', 'admin', 'super_admin'] };
+      filter.role = { $in: ['admin', 'hr', 'manager', 'employee'] };
+    } else if (currentUserRole === 'admin' || currentUserRole === 'hr' || currentUserRole === 'manager') {
+      filter.role = { $in: ['employee', 'admin', 'hr', 'manager'] };
     } else if (currentUserRole === 'super_admin') {
-      // Super admins can see: everyone
-      // No role filtering needed
+      // Super admins can see everyone in org
     } else {
-      // Other roles can see admins and super_admins
-      filter.role = { $in: ['admin', 'super_admin'] };
+      filter.role = { $in: ['admin', 'hr', 'manager', 'employee'] };
     }
 
     const users = await User.find(filter)

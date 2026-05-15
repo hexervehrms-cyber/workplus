@@ -20,10 +20,14 @@ import { getUserTimezone } from '../utils/timezoneHelper.js';
 import { findEmployeeForSelfService } from '../utils/employeeSelfService.js';
 import {
   buildOrgIdClause,
+  buildUserIdClause,
   isOpenBreak,
   buildTodayAttendanceQuery,
   buildLiveStatus,
   recordWorkedHoursForRow,
+  sumHoursFromAttendanceRows,
+  getCalendarWeekRange,
+  calendarWeekKey,
 } from '../utils/attendanceQueryHelpers.js';
 
 const router = express.Router();
@@ -82,30 +86,20 @@ const endOpenBreakOnDocument = async (attendanceDoc, endTime, notes) => {
   return attendanceDoc;
 };
 
-/** Sum worked hours Mon–Sun (calendar week, same midnight boundaries as /today). */
+/** Sum worked hours Mon–Sun (stored in MongoDB; resets each calendar week). */
 const sumHoursThisWeekForUser = async (userId, effectiveOrgId, authOrgId) => {
   const now = new Date();
-  const weekStart = new Date(now);
-  const dow = weekStart.getDay();
-  const toMonday = dow === 0 ? -6 : 1 - dow;
-  weekStart.setDate(weekStart.getDate() + toMonday);
-  weekStart.setHours(0, 0, 0, 0);
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekEnd.getDate() + 7);
+  const { weekStart, weekEnd } = getCalendarWeekRange(now);
 
   const rows = await Attendance.find({
-    userId,
+    ...buildUserIdClause(userId),
     ...buildOrgIdClause(effectiveOrgId, authOrgId),
-    date: { $gte: weekStart, $lt: weekEnd }
+    date: { $gte: weekStart, $lt: weekEnd },
   })
     .select('date checkIn checkOut hoursWorked breaks')
     .lean();
 
-  let sum = 0;
-  for (const r of rows) {
-    sum += recordWorkedHoursForRow(r);
-  }
-  return Math.round(sum * 100) / 100;
+  return sumHoursFromAttendanceRows(rows, now);
 };
 
 const queueHrAttendanceEmail = (type, payload) => {
@@ -220,8 +214,9 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
     data: {
       attendance,
       liveStatus: buildLiveStatus(attendance),
-      hoursThisWeek
-    }
+      hoursThisWeek,
+      weekKey: calendarWeekKey(),
+    },
   });
 }));
 
@@ -509,11 +504,20 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     req.emitAttendanceUpdate(attendance, effectiveOrgId);
   }
 
-  // Send response first to confirm check-in
+  const hoursThisWeek = await sumHoursThisWeekForUser(
+    effectiveUserId,
+    effectiveOrgId,
+    authOrgId
+  );
+
   res.status(201).json({
     success: true,
     message: 'Checked in successfully',
-    data: attendance
+    data: {
+      attendance,
+      hoursThisWeek,
+      weekKey: calendarWeekKey(),
+    },
   });
 
   // Invalidate dashboard cache for this organization
@@ -739,11 +743,20 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
   }
 
-  // Send response first to confirm check-out
+  const hoursThisWeekAfterCheckout = await sumHoursThisWeekForUser(
+    effectiveUserId,
+    effectiveOrgId,
+    authOrgId
+  );
+
   res.json({
     success: true,
     message: 'Checked out successfully',
-    data: updatedAttendance
+    data: {
+      attendance: updatedAttendance,
+      hoursThisWeek: hoursThisWeekAfterCheckout,
+      weekKey: calendarWeekKey(),
+    },
   });
 
   // Invalidate dashboard cache for this organization
@@ -1238,10 +1251,21 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       }
     });
 
+    const hoursThisWeekAfterBreak = await sumHoursThisWeekForUser(
+      currentUserId,
+      effectiveOrgId,
+      authOrgId
+    );
+
     res.json({
       success: true,
       message: 'Break ended successfully',
-      data: { attendance: updatedAttendance, liveStatus }
+      data: {
+        attendance: updatedAttendance,
+        liveStatus,
+        hoursThisWeek: hoursThisWeekAfterBreak,
+        weekKey: calendarWeekKey(),
+      },
     });
 
   } catch (err) {

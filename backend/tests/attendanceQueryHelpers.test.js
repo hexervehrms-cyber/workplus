@@ -5,6 +5,9 @@ import {
   buildTodayAttendanceQuery,
   buildLiveStatus,
   recordWorkedHoursForRow,
+  getCalendarWeekRange,
+  calendarWeekKey,
+  sumHoursFromAttendanceRows,
 } from '../utils/attendanceQueryHelpers.js';
 
 describe('buildOrgIdClause', () => {
@@ -128,12 +131,36 @@ describe('recordWorkedHoursForRow', () => {
     ).toBe(7.5);
   });
 
-  it('returns live hours for open shift', () => {
+  it('returns live hours for open shift minus open break', () => {
+    const checkIn = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const breakStart = new Date(Date.now() - 30 * 60 * 1000);
     const hours = recordWorkedHoursForRow({
-      checkIn: new Date(Date.now() - 2 * 60 * 60 * 1000),
-      breaks: [],
+      checkIn,
+      breaks: [{ startTime: breakStart, endTime: null }],
     });
-    expect(hours).toBeGreaterThan(1.9);
-    expect(hours).toBeLessThan(2.1);
+    expect(hours).toBeGreaterThan(2.4);
+    expect(hours).toBeLessThan(2.6);
+  });
+});
+
+describe('calendar week', () => {
+  it('weekKey resets on a new Monday week', () => {
+    const monday = new Date('2026-05-11T12:00:00');
+    const nextMonday = new Date('2026-05-18T12:00:00');
+    expect(calendarWeekKey(monday)).not.toBe(calendarWeekKey(nextMonday));
+  });
+
+  it('sumHoursFromAttendanceRows totals completed and open days', () => {
+    const rows = [
+      {
+        checkIn: new Date('2026-05-12T09:00:00Z'),
+        checkOut: new Date('2026-05-12T17:00:00Z'),
+        hoursWorked: 7.5,
+        breaks: [],
+      },
+    ];
+    expect(sumHoursFromAttendanceRows(rows)).toBe(7.5);
+    const { weekStart, weekEnd } = getCalendarWeekRange(new Date('2026-05-12T12:00:00Z'));
+    expect(weekEnd.getTime() - weekStart.getTime()).toBe(7 * 24 * 60 * 60 * 1000);
   });
 });

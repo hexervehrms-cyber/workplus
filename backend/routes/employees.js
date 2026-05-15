@@ -28,9 +28,20 @@ router.use(paginationMiddleware);
  * Get employee statistics
  */
 router.get('/stats/summary', asyncHandler(async (req, res) => {
-  const { orgId } = req.query;
+  const userOrgId = req.user?.orgId || 'system';
+  const requestedOrgId = req.query.orgId;
 
-  const query = orgId ? { orgId } : {};
+  let scopedOrgId = userOrgId;
+  if (req.user?.role === 'super_admin' && requestedOrgId) {
+    scopedOrgId = String(requestedOrgId);
+  } else if (requestedOrgId && String(requestedOrgId) !== String(userOrgId)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Unauthorized org access',
+    });
+  }
+
+  const query = { orgId: scopedOrgId };
 
   const [total, active, inactive, terminated, byDepartment] = await Promise.all([
     Employee.countDocuments(query),
@@ -182,40 +193,6 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
   });
 
   res.paginate(employees, total);
-}));
-
-/**
- * GET /api/employees/stats/summary
- * Get employee statistics
- */
-router.get('/stats/summary', asyncHandler(async (req, res) => {
-  const { orgId } = req.query;
-
-  const query = orgId ? { orgId } : {};
-
-  const [total, active, inactive, terminated, byDepartment] = await Promise.all([
-    Employee.countDocuments(query),
-    Employee.countDocuments({ ...query, status: 'active' }),
-    Employee.countDocuments({ ...query, status: 'inactive' }),
-    Employee.countDocuments({ ...query, status: 'terminated' }),
-    Employee.aggregate([
-      { $match: query },
-      { $group: { _id: '$department', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 10 }
-    ])
-  ]);
-
-  res.json({
-    success: true,
-    data: {
-      total,
-      active,
-      inactive,
-      terminated,
-      byDepartment
-    }
-  });
 }));
 
 /**

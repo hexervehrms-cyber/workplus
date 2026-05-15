@@ -269,7 +269,7 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
         className="fixed bottom-4 right-4 rounded-full w-14 h-14 shadow-lg"
         size="lg"
       >
-        <div.div className="relative">
+        <div className="relative">
           <MessageSquare className="w-6 h-6" />
           {unreadCount > 0 && (
             <Badge className="absolute -top-2 -right-2 w-5 h-5 p-0 flex items-center justify-center text-xs">

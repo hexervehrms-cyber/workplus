@@ -1,4 +1,6 @@
 import mongoose from "mongoose";
+import { resolveOrganizationObjectId } from "../utils/workflowNotifications.js";
+import logger from "../utils/logger.js";
 
 const announcementSchema = new mongoose.Schema(
   {
@@ -257,10 +259,13 @@ announcementSchema.methods.createNotifications = async function() {
   const Employee = mongoose.model('Employee');
 
   const orgIdStr = String(this.orgId || '');
-  if (!mongoose.Types.ObjectId.isValid(orgIdStr)) {
+  const orgOid = await resolveOrganizationObjectId(orgIdStr);
+  if (!orgOid) {
+    logger.warn('Could not resolve Organization id for announcement notifications', {
+      orgId: orgIdStr,
+    });
     return [];
   }
-  const orgOid = new mongoose.Types.ObjectId(orgIdStr);
 
   let targetUserIds = [];
 
@@ -269,6 +274,12 @@ announcementSchema.methods.createNotifications = async function() {
       .select('userId')
       .lean();
     targetUserIds = employees.map((emp) => emp.userId).filter(Boolean);
+    if (targetUserIds.length === 0) {
+      const users = await User.find({ orgId: orgIdStr, isActive: true })
+        .select('_id')
+        .lean();
+      targetUserIds = users.map((u) => u._id);
+    }
   } else if (this.visibility === 'department') {
     const employees = await Employee.find({
       orgId: orgIdStr,
@@ -293,9 +304,10 @@ announcementSchema.methods.createNotifications = async function() {
   }
 
   const authorIdStr = String(this.authorId || '');
-  const uniqueIds = [...new Set(targetUserIds.map((id) => String(id)))].filter(
-    (id) => id && id !== authorIdStr
-  );
+  const uniqueIds = [...new Set(targetUserIds.map((id) => String(id)))].filter(Boolean);
+  if (authorIdStr && !uniqueIds.includes(authorIdStr)) {
+    uniqueIds.push(authorIdStr);
+  }
   if (uniqueIds.length === 0) {
     return [];
   }

@@ -281,6 +281,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 
   await allocation.save();
 
+  if (req.emitLeaveUpdate) {
+    req.emitLeaveUpdate('allocation_created', allocation, allocation.orgId);
+  }
+
   logger.info('Leave allocation updated', {
     allocationId: id
   });

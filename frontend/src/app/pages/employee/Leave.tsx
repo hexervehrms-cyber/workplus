@@ -229,7 +229,6 @@ export default function Leave() {
       { type: 'Sick Leave', key: 'sickLeave', color: 'bg-secondary' },
       { type: 'Casual Leave', key: 'casualLeave', color: 'bg-accent' },
       { type: 'Earned Leave', key: 'earnedLeave', color: 'bg-yellow-500' },
-      { type: 'Medical Leave', key: 'medicalLeave', color: 'bg-red-500' },
       { type: 'Maternity Leave', key: 'maternityLeave', color: 'bg-pink-500' },
       { type: 'Paternity Leave', key: 'paternityLeave', color: 'bg-blue-500' },
       { type: 'Compensatory Off', key: 'compensatoryOff', color: 'bg-green-500' },
@@ -253,7 +252,7 @@ export default function Leave() {
     if (!leaveKpiReady || !enabledLeaveTypes) return [];
 
     return all.filter((card) => {
-      if (card.key === 'vacation') return false;
+      if (card.key === 'vacation' || card.key === 'medicalLeave') return false;
       if (enabledLeaveTypes[card.key] !== true) return false;
       if (balanceKpiVisibility && balanceKpiVisibility[card.key] === false) return false;
       return true;

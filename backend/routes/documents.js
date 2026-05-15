@@ -11,6 +11,7 @@ import { fileURLToPath } from "url";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, authorize } from "../middleware/auth.js";
 import Document from "../models/Document.js";
+import Employee from "../models/Employee.js";
 import GeneratedDocument from "../models/GeneratedDocument.js";
 import IssuedDocument from "../models/IssuedDocument.js";
 import DocumentAcknowledgment from "../models/DocumentAcknowledgment.js";
@@ -84,6 +85,16 @@ const DOCUMENT_TYPES = new Set([
   "education_drop_out_certificate",
   "education_drop_out_marksheet",
 ]);
+
+/** Route param may be User id or Employee Mongo id — documents are stored by userId. */
+const resolveDocumentUserId = async (idParam) => {
+  const id = String(idParam);
+  const asUser = await Document.findOne({ userId: id }).select("_id").lean();
+  if (asUser) return id;
+  const emp = await Employee.findById(id).select("userId").lean();
+  if (emp?.userId) return String(emp.userId);
+  return id;
+};
 
 const resolveDocumentType = (rawType, name) => {
   if (rawType && DOCUMENT_TYPES.has(String(rawType))) {
@@ -270,6 +281,39 @@ router.post(
 );
 
 /**
+ * POST /api/documents/submit-employment
+ * Mark uploaded employment documents as submitted for HR review
+ */
+router.post(
+  "/submit-employment",
+  authenticate,
+  authorize("employee", "admin", "hr", "manager", "super_admin"),
+  asyncHandler(async (req, res) => {
+    const userId = req.user.userId;
+    const orgId = String(req.user.orgId || req.user.tenantId || "system");
+
+    const result = await Document.updateMany(
+      { userId, orgId, status: { $in: ["uploaded", "Pending"] } },
+      { $set: { status: "Pending" } }
+    );
+
+    if (global.socketManager?.broadcastToOrganization) {
+      global.socketManager.broadcastToOrganization(orgId, "employee_documents_submitted", {
+        userId: String(userId),
+        count: result.modifiedCount,
+        timestamp: new Date(),
+      });
+    }
+
+    return sendSuccess(
+      res,
+      { updated: result.modifiedCount },
+      "Employment documents submitted successfully"
+    );
+  })
+);
+
+/**
  * GET /api/documents/employee/:employeeId
  * Get documents for an employee
  */
@@ -279,19 +323,23 @@ router.get(
   asyncHandler(async (req, res) => {
     try {
       const { employeeId } = req.params;
-      const { page = 1, limit = 10 } = req.query;
+      const { page = 1, limit = 50 } = req.query;
       const skip = (page - 1) * limit;
+      const userId = await resolveDocumentUserId(employeeId);
 
       // Check authorization - employees can only see their own documents
-      if (req.user.role === "employee" && req.user.userId.toString() !== employeeId) {
+      if (
+        req.user.role === "employee" &&
+        String(req.user.userId) !== String(userId)
+      ) {
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
       // Get total count
-      const total = await Document.countDocuments({ userId: employeeId });
+      const total = await Document.countDocuments({ userId });
 
       // Get documents with pagination
-      const documents = await Document.find({ userId: employeeId })
+      const documents = await Document.find({ userId })
         .sort({ uploadedAt: -1 })
         .skip(skip)
         .limit(parseInt(limit))
@@ -338,7 +386,10 @@ router.get(
       }
 
       // Check authorization
-      if (req.user.role === "employee" && req.user.userId !== document.userId) {
+      if (
+        req.user.role === "employee" &&
+        String(req.user.userId) !== String(document.userId)
+      ) {
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
@@ -373,7 +424,10 @@ router.delete(
       }
 
       // Check authorization
-      if (req.user.role === "employee" && req.user.userId !== document.userId) {
+      if (
+        req.user.role === "employee" &&
+        String(req.user.userId) !== String(document.userId)
+      ) {
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 

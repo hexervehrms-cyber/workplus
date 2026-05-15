@@ -223,6 +223,11 @@ class RealTimeSocket {
       this.notifyLeaveUpdate(data.action, data.leaveRequest);
     });
 
+    this.socket.on('leave_allocation_created', (data) => {
+      console.log('📅 Leave allocation created:', data);
+      this.notifyLeaveUpdate('allocation_created', data?.leave || data);
+    });
+
     // Expense updates
     this.socket.on('expense:created', (expense) => {
       console.log('💰 Expense created:', expense);

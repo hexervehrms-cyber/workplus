@@ -308,40 +308,43 @@ router.post(
       .populate("authorId", "name email avatar")
       .lean();
 
+    let notificationCount = 0;
     if (!isScheduled) {
-      setImmediate(async () => {
-        try {
-          const doc = await Announcement.findById(announcement._id);
-          if (doc) {
-            await doc.createNotifications();
-            const audienceLabel =
-              audience === "management"
-                ? "Management (admin, HR, manager)"
-                : audience === "all"
-                  ? "All employees"
-                  : String(audience);
-            await notifyTeamsOnAnnouncement(
-              orgId,
-              doc.title,
-              doc.content,
-              audienceLabel
-            );
-          }
-        } catch (err) {
-          logger.error("Announcement notification dispatch failed", {
-            error: err.message,
-            announcementId: announcement._id,
-          });
+      try {
+        const doc = await Announcement.findById(announcement._id);
+        if (doc) {
+          const created = await doc.createNotifications();
+          notificationCount = Array.isArray(created) ? created.length : 0;
+          const audienceLabel =
+            audience === "management"
+              ? "Management (admin, HR, manager)"
+              : audience === "all"
+                ? "All employees"
+                : String(audience);
+          await notifyTeamsOnAnnouncement(
+            orgId,
+            doc.title,
+            doc.content,
+            audienceLabel
+          );
         }
-      });
+      } catch (err) {
+        logger.error("Announcement notification dispatch failed", {
+          error: err.message,
+          announcementId: announcement._id,
+        });
+      }
     }
 
     res.status(201).json({
       success: true,
       message: isScheduled
         ? "Announcement scheduled successfully"
-        : "Announcement published successfully",
+        : notificationCount > 0
+          ? `Announcement published (${notificationCount} notifications sent)`
+          : "Announcement published successfully",
       data: populatedAnnouncement,
+      notificationCount,
     });
   })
 );

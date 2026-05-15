@@ -1,4 +1,4 @@
-import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Edit, Lock, Globe, Loader, X, Upload, Download, Trash2, Check, LockOpen, Clock } from 'lucide-react';
+import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Edit, Lock, Globe, Loader, X, Upload, Download, Trash2, Check, LockOpen, Clock, Eye } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
 import { Button } from '../../components/ui/button';
@@ -12,7 +12,7 @@ import CurrencySelector from '../../components/CurrencySelector';
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog';
-import { apiGet, apiPost, apiPut, apiDelete, apiUpload, clearApiCache } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, apiDelete, apiUpload, clearApiCache, buildFileUrl } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 
 // IndexedDB helper functions
@@ -218,6 +218,20 @@ export default function Profile() {
     address: ''
   });
 
+  const [shiftForm, setShiftForm] = useState({
+    shiftStartTime: '09:00',
+    shiftEndTime: '18:00',
+    lateThreshold: '0',
+    workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] as string[],
+  });
+
+  const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+  const getDocumentFileUrl = (doc: Document) => {
+    if (!doc.filePath) return null;
+    return buildFileUrl(doc.filePath);
+  };
+
   const [officialForm, setOfficialForm] = useState({
     employeeId: '',
     joiningDate: '',
@@ -277,6 +291,16 @@ export default function Profile() {
         joiningDate: employee.joiningDate ? (typeof employee.joiningDate === 'string' ? employee.joiningDate.split('T')[0] : new Date(employee.joiningDate).toISOString().split('T')[0]) : '',
         department: employee.department || '',
         designation: employee.designation || ''
+      });
+
+      const st = employee.shiftTiming || {};
+      setShiftForm({
+        shiftStartTime: st.startTime || '09:00',
+        shiftEndTime: st.endTime || '18:00',
+        lateThreshold: String(st.lateThreshold ?? 0),
+        workingDays: st.workingDays?.length
+          ? st.workingDays
+          : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
       });
     }
   }, [employee]);
@@ -562,6 +586,12 @@ export default function Profile() {
           address: personalForm.address.trim(),
           gender: personalForm.gender.trim(),
           ...(personalForm.dateOfBirth ? { dateOfBirth: personalForm.dateOfBirth } : {}),
+          shiftTiming: {
+            startTime: shiftForm.shiftStartTime,
+            endTime: shiftForm.shiftEndTime,
+            lateThreshold: Number(shiftForm.lateThreshold) || 0,
+            workingDays: shiftForm.workingDays,
+          },
         }
       });
 
@@ -577,6 +607,12 @@ export default function Profile() {
           address: personalForm.address.trim(),
           gender: personalForm.gender.trim(),
           dateOfBirth: personalForm.dateOfBirth,
+          shiftTiming: {
+            startTime: shiftForm.shiftStartTime,
+            endTime: shiftForm.shiftEndTime,
+            lateThreshold: Number(shiftForm.lateThreshold) || 0,
+            workingDays: shiftForm.workingDays,
+          },
         } : null);
 
         setIsEditingPersonal(false);
@@ -805,19 +841,16 @@ export default function Profile() {
   const handleSubmitEmploymentDocuments = async () => {
     try {
       setSubmittingDocuments(true);
-      
-      // Prepare employment documents data
-      const docsData = documents.map(doc => ({
-        id: doc._id,
-        name: doc.name,
-        category: selectedCategory
-      }));
 
-      await apiPut('/profile', {
-        employmentDocuments: docsData
-      });
+      const res = await apiPost<{ updated?: number }>('/documents/submit-employment', {});
+      const updated = (res as { data?: { updated?: number } })?.data?.updated ?? 0;
 
-      toast.success('Employment documents submitted successfully');
+      await loadDocuments();
+      toast.success(
+        updated > 0
+          ? `${updated} document(s) submitted for HR review`
+          : 'Employment documents submitted successfully'
+      );
     } catch (error) {
       console.error('Error submitting employment documents:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to submit employment documents');
@@ -1012,45 +1045,69 @@ export default function Profile() {
                 <h4 className="font-semibold text-sm mb-4 flex items-center gap-2">
                   <Clock className="w-4 h-4" />
                   Shift Timing
-                  <span className="text-xs font-normal text-muted-foreground">(set by Admin/HR)</span>
                 </h4>
                 <div className="grid grid-cols-2 gap-6">
                   <div>
                     <Label>Shift Start Time</Label>
                     <Input
                       type="time"
-                      value={employee.shiftTiming?.startTime || '09:00'}
-                      disabled
-                      className="mt-2 rounded-xl bg-muted"
+                      value={shiftForm.shiftStartTime}
+                      onChange={(e) => setShiftForm({ ...shiftForm, shiftStartTime: e.target.value })}
+                      disabled={!isEditingPersonal}
+                      className={`mt-2 rounded-xl ${isEditingPersonal ? 'bg-background border-primary' : 'bg-muted'}`}
                     />
                   </div>
                   <div>
                     <Label>Shift End Time</Label>
                     <Input
                       type="time"
-                      value={employee.shiftTiming?.endTime || '18:00'}
-                      disabled
-                      className="mt-2 rounded-xl bg-muted"
+                      value={shiftForm.shiftEndTime}
+                      onChange={(e) => setShiftForm({ ...shiftForm, shiftEndTime: e.target.value })}
+                      disabled={!isEditingPersonal}
+                      className={`mt-2 rounded-xl ${isEditingPersonal ? 'bg-background border-primary' : 'bg-muted'}`}
                     />
                   </div>
                   <div>
                     <Label>Late Threshold (minutes)</Label>
                     <Input
-                      value={String(employee.shiftTiming?.lateThreshold ?? 0)}
-                      disabled
-                      className="mt-2 rounded-xl bg-muted"
+                      type="number"
+                      min={0}
+                      value={shiftForm.lateThreshold}
+                      onChange={(e) => setShiftForm({ ...shiftForm, lateThreshold: e.target.value })}
+                      disabled={!isEditingPersonal}
+                      className={`mt-2 rounded-xl ${isEditingPersonal ? 'bg-background border-primary' : 'bg-muted'}`}
                     />
                     <p className="text-xs text-muted-foreground mt-1">
                       Grace period after shift start before marking as late
                     </p>
                   </div>
-                  <div>
+                  <div className="col-span-2">
                     <Label>Working Days</Label>
-                    <Input
-                      value={formatWorkingDays(employee.shiftTiming?.workingDays)}
-                      disabled
-                      className="mt-2 rounded-xl bg-muted"
-                    />
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+                      {WEEK_DAYS.map((day) => (
+                        <label key={day} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={shiftForm.workingDays.includes(day)}
+                            disabled={!isEditingPersonal}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setShiftForm({
+                                  ...shiftForm,
+                                  workingDays: [...shiftForm.workingDays, day],
+                                });
+                              } else {
+                                setShiftForm({
+                                  ...shiftForm,
+                                  workingDays: shiftForm.workingDays.filter((d) => d !== day),
+                                });
+                              }
+                            }}
+                          />
+                          {day}
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1803,26 +1860,34 @@ export default function Profile() {
                             size="sm"
                             variant="ghost"
                             className="h-8 w-8 p-0"
+                            title="View document"
                             onClick={() => {
-                              // Download functionality
-                              if (doc.filePath) {
-                                const apiUrl = (import.meta as any).env.VITE_API_URL || '';
-                                const baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
-                                let fullUrl = doc.filePath;
-                                if (doc.filePath.startsWith('/')) {
-                                  if (baseUrl.endsWith('/api')) {
-                                    fullUrl = baseUrl.slice(0, -4) + doc.filePath;
-                                  } else {
-                                    fullUrl = baseUrl + doc.filePath;
-                                  }
-                                }
-                                const link = document.createElement('a');
-                                link.href = fullUrl;
-                                link.download = doc.name;
-                                document.body.appendChild(link);
-                                link.click();
-                                document.body.removeChild(link);
+                              const url = getDocumentFileUrl(doc);
+                              if (url) window.open(url, '_blank', 'noopener,noreferrer');
+                              else toast.error('File not available');
+                            }}
+                          >
+                            <Eye className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 w-8 p-0"
+                            title="Download document"
+                            onClick={() => {
+                              const url = getDocumentFileUrl(doc);
+                              if (!url) {
+                                toast.error('File not available');
+                                return;
                               }
+                              const link = document.createElement('a');
+                              link.href = url;
+                              link.download = doc.name;
+                              link.target = '_blank';
+                              link.rel = 'noopener noreferrer';
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
                             }}
                           >
                             <Download className="w-4 h-4" />
@@ -1831,11 +1896,11 @@ export default function Profile() {
                             size="sm"
                             variant="ghost"
                             className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                            title="Delete document"
                             onClick={async () => {
-                              // Delete functionality
                               try {
                                 await apiDelete(`/documents/${doc._id}`);
-                                setDocuments(documents.filter(d => d._id !== doc._id));
+                                await loadDocuments();
                                 toast.success('Document deleted');
                               } catch (error) {
                                 console.error('Error deleting document:', error);

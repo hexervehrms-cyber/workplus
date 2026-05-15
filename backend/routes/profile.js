@@ -264,6 +264,18 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
     if (employeeDetails.address) employeeUpdateData.address = employeeDetails.address.trim();
     if (employeeDetails.department) employeeUpdateData.department = employeeDetails.department.trim();
     if (employeeDetails.designation) employeeUpdateData.designation = employeeDetails.designation.trim();
+
+    if (employeeDetails.shiftTiming && typeof employeeDetails.shiftTiming === 'object') {
+      const st = employeeDetails.shiftTiming;
+      employeeUpdateData.shiftTiming = {
+        startTime: st.startTime || '09:00',
+        endTime: st.endTime || '18:00',
+        lateThreshold: Number(st.lateThreshold) || 0,
+        workingDays: Array.isArray(st.workingDays) && st.workingDays.length > 0
+          ? st.workingDays
+          : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+      };
+    }
     
     if (employeeDetails.bankDetails) {
       if (employeeDetails.bankDetails.accountNumber) employeeUpdateData['bankDetails.accountNumber'] = employeeDetails.bankDetails.accountNumber.trim();

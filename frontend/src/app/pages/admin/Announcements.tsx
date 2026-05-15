@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Plus, Send, Calendar, Loader2 } from 'lucide-react';
@@ -19,12 +19,15 @@ interface AnnouncementRow {
 }
 
 export default function AnnouncementsAdmin() {
+  const formRef = useRef<HTMLDivElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState('');
   const [message, setMessage] = useState('');
   const [audience, setAudience] = useState<'all' | 'management'>('all');
   const [priority, setPriority] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium');
   const [submitting, setSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(true);
   const [rows, setRows] = useState<AnnouncementRow[]>([]);
   const [stats, setStats] = useState({
     totalAnnouncements: 0,
@@ -58,6 +61,14 @@ export default function AnnouncementsAdmin() {
     load();
   }, [load]);
 
+  const focusCreateForm = () => {
+    setShowForm(true);
+    requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      titleInputRef.current?.focus();
+    });
+  };
+
   const handleSend = async () => {
     if (!title.trim() || !message.trim()) {
       toast.error('Please enter a title and message');
@@ -78,7 +89,10 @@ export default function AnnouncementsAdmin() {
         setMessage('');
         setAudience('all');
         setPriority('medium');
+        window.dispatchEvent(new CustomEvent('notifications:refresh'));
         await load();
+      } else {
+        toast.error(res.message || 'Failed to send announcement');
       }
     } catch (e) {
       console.error(e);
@@ -95,7 +109,7 @@ export default function AnnouncementsAdmin() {
           <h1 className="text-3xl font-bold">Announcements</h1>
           <p className="text-muted-foreground">Manage organization announcements</p>
         </div>
-        <Button className="rounded-xl" type="button" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+        <Button className="rounded-xl" type="button" onClick={focusCreateForm}>
           <Plus className="w-4 h-4 mr-2" />
           New Announcement
         </Button>
@@ -103,84 +117,107 @@ export default function AnnouncementsAdmin() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          <Card className="p-6 rounded-xl">
-            <h2 className="text-xl font-semibold mb-4">Create New Announcement</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium" htmlFor="ann-title">
-                  Title
-                </label>
-                <input
-                  id="ann-title"
-                  type="text"
-                  placeholder="Enter announcement title..."
-                  className="w-full mt-1 px-3 py-2 border rounded-xl bg-background"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium" htmlFor="ann-msg">
-                  Message
-                </label>
-                <textarea
-                  id="ann-msg"
-                  placeholder="Enter your announcement message..."
-                  rows={4}
-                  className="w-full mt-1 px-3 py-2 border rounded-xl bg-background resize-none"
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                />
-              </div>
-              <div className="flex gap-4 flex-col sm:flex-row">
-                <div className="flex-1">
-                  <label className="text-sm font-medium" htmlFor="ann-audience">
-                    Target Audience
+          {showForm && (
+            <Card ref={formRef} className="p-6 rounded-xl border-primary/20">
+              <h2 className="text-xl font-semibold mb-4">Create New Announcement</h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-medium" htmlFor="ann-title">
+                    Title
                   </label>
-                  <select
-                    id="ann-audience"
+                  <input
+                    ref={titleInputRef}
+                    id="ann-title"
+                    type="text"
+                    placeholder="Enter announcement title..."
                     className="w-full mt-1 px-3 py-2 border rounded-xl bg-background"
-                    value={audience}
-                    onChange={(e) => setAudience(e.target.value as 'all' | 'management')}
-                  >
-                    <option value="all">All Employees</option>
-                    <option value="management">Management Only</option>
-                  </select>
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                  />
                 </div>
-                <div className="flex-1">
-                  <label className="text-sm font-medium" htmlFor="ann-priority">
-                    Priority
+                <div>
+                  <label className="text-sm font-medium" htmlFor="ann-msg">
+                    Message
                   </label>
-                  <select
-                    id="ann-priority"
-                    className="w-full mt-1 px-3 py-2 border rounded-xl bg-background"
-                    value={priority}
-                    onChange={(e) =>
-                      setPriority(e.target.value as 'low' | 'medium' | 'high' | 'urgent')
-                    }
+                  <textarea
+                    id="ann-msg"
+                    placeholder="Enter your announcement message..."
+                    rows={4}
+                    className="w-full mt-1 px-3 py-2 border rounded-xl bg-background resize-none"
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-4 flex-col sm:flex-row">
+                  <div className="flex-1">
+                    <label className="text-sm font-medium" htmlFor="ann-audience">
+                      Target Audience
+                    </label>
+                    <select
+                      id="ann-audience"
+                      className="w-full mt-1 px-3 py-2 border rounded-xl bg-background"
+                      value={audience}
+                      onChange={(e) => setAudience(e.target.value as 'all' | 'management')}
+                    >
+                      <option value="all">All Employees</option>
+                      <option value="management">Management Only</option>
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-sm font-medium" htmlFor="ann-priority">
+                      Priority
+                    </label>
+                    <select
+                      id="ann-priority"
+                      className="w-full mt-1 px-3 py-2 border rounded-xl bg-background"
+                      value={priority}
+                      onChange={(e) =>
+                        setPriority(e.target.value as 'low' | 'medium' | 'high' | 'urgent')
+                      }
+                    >
+                      <option value="medium">Normal</option>
+                      <option value="high">High</option>
+                      <option value="urgent">Urgent</option>
+                      <option value="low">Low</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    className="rounded-xl"
+                    type="button"
+                    onClick={handleSend}
+                    disabled={submitting}
                   >
-                    <option value="medium">Normal</option>
-                    <option value="high">High</option>
-                    <option value="urgent">Urgent</option>
-                    <option value="low">Low</option>
-                  </select>
+                    {submitting ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Send className="w-4 h-4 mr-2" />
+                    )}
+                    Send Announcement
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-xl"
+                    onClick={() => setShowForm(false)}
+                  >
+                    Cancel
+                  </Button>
                 </div>
               </div>
-              <Button
-                className="rounded-xl"
-                type="button"
-                onClick={handleSend}
-                disabled={submitting}
-              >
-                {submitting ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <Send className="w-4 h-4 mr-2" />
-                )}
-                Send Announcement
+            </Card>
+          )}
+
+          {!showForm && (
+            <Card className="p-6 rounded-xl text-center text-muted-foreground">
+              <p className="mb-3">Create a new announcement for your organization.</p>
+              <Button type="button" onClick={focusCreateForm}>
+                <Plus className="w-4 h-4 mr-2" />
+                New Announcement
               </Button>
-            </div>
-          </Card>
+            </Card>
+          )}
         </div>
 
         <div className="space-y-6">

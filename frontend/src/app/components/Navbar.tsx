@@ -225,8 +225,14 @@ export function Navbar() {
     socketService.on('notification', onSocketNotification);
     socketService.on('notification:received', onSocketNotification);
 
+    const onRefresh = () => {
+      void fetchNotifications();
+    };
+    window.addEventListener('notifications:refresh', onRefresh);
+
     return () => {
       clearInterval(interval);
+      window.removeEventListener('notifications:refresh', onRefresh);
       socketService.off('notification', onSocketNotification);
       socketService.off('notification:received', onSocketNotification);
     };

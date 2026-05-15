@@ -586,6 +586,30 @@ export default function EmployeeDashboard() {
     return null;
   };
 
+  const refreshLeaveBalance = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const empId = await ensureEmployeeId();
+      if (!empId) return;
+      const now = new Date();
+      const balanceRes = await LeaveAllocationService.getEmployeeBalance(
+        empId,
+        now.getFullYear(),
+        now.getMonth() + 1
+      );
+      if (balanceRes.success) {
+        const parsed = parseBalanceApiResponse(balanceRes);
+        const totalRemaining = sumRemainingDays(parsed.balances);
+        setKpiMetrics((prev) => ({
+          ...prev,
+          leaveBalance: `${totalRemaining} day${totalRemaining === 1 ? '' : 's'}`,
+        }));
+      }
+    } catch (err) {
+      debug.warn('refreshLeaveBalance failed', err);
+    }
+  }, [user?.id]);
+
   const safeRefresh = useCallback(
     async (forceRefresh = false) => {
       if (disableRefreshRef.current && !forceRefresh) {
@@ -793,16 +817,32 @@ export default function EmployeeDashboard() {
     return () => clearInterval(interval);
   }, [todayAttendance.isCheckedIn, disableRefresh]);
 
-  // Refresh "Hours This Week" KPI while checked in (server sums Mon–Sun from DB)
+  // Refresh KPIs from server (hours + leave balance)
   useEffect(() => {
-    if (!todayAttendance.isCheckedIn || !user?.id) return;
+    if (!user?.id) return;
     void syncWeeklyHours();
+    void refreshLeaveBalance();
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       void syncWeeklyHours();
+      void refreshLeaveBalance();
     }, 60_000);
-    return () => clearInterval(interval);
-  }, [todayAttendance.isCheckedIn, user?.id, syncWeeklyHours]);
+    const unsubLeave = realTimeSocket.onLeaveUpdate(() => {
+      void refreshLeaveBalance();
+    });
+    const unsubAlloc = realTimeSocket.on('leave_allocation_created', () => {
+      void refreshLeaveBalance();
+    });
+    const unsubAttendance = realTimeSocket.on('attendance:update', () => {
+      void syncWeeklyHours();
+    });
+    return () => {
+      clearInterval(interval);
+      unsubLeave();
+      unsubAlloc();
+      unsubAttendance();
+    };
+  }, [user?.id, syncWeeklyHours, refreshLeaveBalance]);
 
   // ============================================================================
   // TIMER SYSTEM - Track working hours, breaks, and meetings in real-time

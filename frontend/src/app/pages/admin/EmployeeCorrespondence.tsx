@@ -27,7 +27,7 @@ import {
   Briefcase
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { apiGet, apiPut } from '../../utils/apiHelper';
+import { apiGet, apiPut, apiPost, buildFileUrl } from '../../utils/apiHelper';
 
 interface Employee {
   _id: string;
@@ -110,9 +110,14 @@ export default function EmployeeCorrespondence() {
   useEffect(() => {
     if (employeeId) {
       fetchEmployeeData();
-      fetchDocuments();
     }
   }, [employeeId]);
+
+  useEffect(() => {
+    if (employeeId && employee) {
+      fetchDocuments();
+    }
+  }, [employeeId, employee?._id, employee?.userId]);
 
   const fetchEmployeeData = async () => {
     try {
@@ -145,9 +150,14 @@ export default function EmployeeCorrespondence() {
   const fetchDocuments = async () => {
     try {
       setLoading(true);
+      const docUserId =
+        (employee?.userId && typeof employee.userId === 'object'
+          ? employee.userId._id
+          : employee?.userId) || employeeId;
+
       // Fetch both submitted and issued documents for this employee
       const [submittedData, issuedData] = await Promise.all([
-        apiGet(`/documents/employee/${employeeId}`).catch(err => {
+        apiGet(`/documents/employee/${docUserId}`).catch(err => {
           console.warn('Failed to fetch submitted documents:', err);
           return { data: [] };
         }),
@@ -163,9 +173,17 @@ export default function EmployeeCorrespondence() {
       // Combine and format documents
       const allDocuments: Document[] = [
         ...(submittedData.data || submittedData || []).map((doc: any) => ({
-          ...doc,
+          id: String(doc._id || doc.id),
+          title: doc.name || doc.fileName || 'Document',
+          description: doc.type || '',
+          category: doc.type || 'Personal Documents',
+          fileName: doc.fileName,
+          fileSize: doc.size,
+          fileUrl: doc.filePath ? buildFileUrl(String(doc.filePath)) : undefined,
+          createdAt: doc.uploadedAt || doc.createdAt,
+          updatedAt: doc.updatedAt || doc.uploadedAt,
           type: 'submitted' as const,
-          status: doc.status || 'pending'
+          status: (doc.status === 'Pending' ? 'pending' : doc.status === 'Verified' ? 'approved' : 'pending') as Document['status'],
         })),
         ...(issuedData.data || issuedData || []).map((doc: any) => ({
           ...doc,

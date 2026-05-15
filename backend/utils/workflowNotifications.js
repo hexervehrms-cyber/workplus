@@ -77,9 +77,34 @@ export async function postTeamsMessage(org, title, text) {
   }
 }
 
+/**
+ * Map tenant orgId string (JWT / Employee) to Organization Mongo _id for Notification schema.
+ */
+export async function resolveOrganizationObjectId(orgId) {
+  const s = String(orgId || '').trim();
+  if (!s || s === 'system') return null;
+
+  if (mongoose.Types.ObjectId.isValid(s)) {
+    const byId = await Organization.findById(s).select('_id').lean();
+    if (byId) return byId._id;
+  }
+
+  const byCode = await Organization.findOne({ code: s.toUpperCase() })
+    .select('_id')
+    .lean();
+  if (byCode) return byCode._id;
+
+  return null;
+}
+
 async function loadOrg(orgId) {
-  if (!orgId || !mongoose.Types.ObjectId.isValid(String(orgId))) return null;
-  return Organization.findById(orgId).lean();
+  if (!orgId || orgId === 'system') return null;
+  const oid = await resolveOrganizationObjectId(orgId);
+  if (oid) return Organization.findById(oid).lean();
+  if (mongoose.Types.ObjectId.isValid(String(orgId))) {
+    return Organization.findById(orgId).lean();
+  }
+  return null;
 }
 
 async function listRoutingAdmins(org) {

@@ -3,7 +3,7 @@ import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { useCurrency } from '../../context/CurrencyContext';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { DollarSign, TrendingUp, TrendingDown, Calendar, Download, Loader2, BarChart3 } from 'lucide-react';
 
 interface SalaryBreakdown {
@@ -55,7 +55,6 @@ export default function EmployeeSalaryBreakdown() {
       // setSalaryBreakdown(response.breakdown);
       // setSalaryHistory(response.history);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to fetch salary data');
     } finally {
       setLoading(false);
     }

@@ -22,7 +22,7 @@ import {
 } from '../../components/ui/select';
 import { LeaveRequestService, LeaveAllocationService, EmployeeService, LeaveTypeSettingsService } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import {
   type LeaveBalanceMap,
   parseBalanceApiResponse,

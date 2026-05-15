@@ -55,8 +55,8 @@ import {
 } from './ui/popover';
 import { apiClient, TokenManager } from '../utils/api';
 import { buildApiUrl, buildFileUrl } from '../utils/apiHelper';
-import { SocketService } from '../utils/socket';
-import { toast } from 'sonner';
+import { socketService as appSocket } from '../utils/socket';
+import { toast } from '../utils/portalToast';
 import { useAuth } from '../context/AuthContext';
 
 interface User {
@@ -113,7 +113,6 @@ export default function TeamsMessenger() {
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
-  const socketService = useRef<SocketService | null>(null);
   const [teamsChatIds, setTeamsChatIds] = useState<Record<string, string>>({});
   const [callOpen, setCallOpen] = useState(false);
   const [callJoinUrl, setCallJoinUrl] = useState<string | null>(null);
@@ -205,21 +204,17 @@ export default function TeamsMessenger() {
 
     const initSocket = async () => {
       try {
-        socketService.current = new SocketService();
-        const token = TokenManager.get();
-        if (!token) {
-          console.warn('TeamsMessenger: no bearer token in memory for socket auth');
+        if (!appSocket.isConnected()) {
+          await appSocket.connect(
+            user.id,
+            user.role,
+            user.orgId || user.tenantId || undefined
+          );
         }
-
-        await socketService.current.connect(
-          user.id,
-          user.role,
-          user.orgId || user.tenantId || undefined
-        );
 
         const myId = String(user.id);
 
-        socketService.current.on('chat:new_message', (data) => {
+        appSocket.on('chat:new_message', (data) => {
           if (cancelled) return;
           const incomingId = String(data.messageId);
           const senderId = String(data.senderId);
@@ -266,7 +261,7 @@ export default function TeamsMessenger() {
           });
         });
 
-        socketService.current.on('chat:message_read', (data) => {
+        appSocket.on('chat:message_read', (data) => {
           if (cancelled) return;
           setMessages((prev) =>
             prev.map((msg) =>
@@ -275,14 +270,14 @@ export default function TeamsMessenger() {
           );
         });
 
-        socketService.current.on('chat:user_typing', (data) => {
+        appSocket.on('chat:user_typing', (data) => {
           if (cancelled) return;
           if (data.userId === selectedUserRef.current?.id) {
             setIsTyping(data.isTyping);
           }
         });
 
-        socketService.current.on('chat:message_edited', (data) => {
+        appSocket.on('chat:message_edited', (data) => {
           if (cancelled) return;
           setMessages((prev) =>
             prev.map((msg) =>
@@ -291,7 +286,7 @@ export default function TeamsMessenger() {
           );
         });
 
-        socketService.current.on('chat:avatar_updated', (data: { userId: string; avatar: string }) => {
+        appSocket.on('chat:avatar_updated', (data: { userId: string; avatar: string }) => {
           if (cancelled) return;
           const url = resolveAvatarUrl(data.avatar);
           setUsers((prev) =>
@@ -302,18 +297,18 @@ export default function TeamsMessenger() {
           );
         });
 
-        socketService.current.on('chat:message_deleted', (data) => {
+        appSocket.on('chat:message_deleted', (data) => {
           if (cancelled) return;
           setMessages((prev) => prev.filter((msg) => msg.messageId !== data.messageId));
         });
 
-        socketService.current.emit('chat:get_conversations', {});
-        socketService.current.on('chat:conversations', (data) => {
+        appSocket.emit('chat:get_conversations', {});
+        appSocket.on('chat:conversations', (data) => {
           if (cancelled) return;
           setConversations(data.conversations);
         });
 
-        socketService.current.on(
+        appSocket.on(
           'call:incoming',
           (data: {
             callerId: string;
@@ -347,9 +342,14 @@ export default function TeamsMessenger() {
 
     return () => {
       cancelled = true;
-      if (socketService.current) {
-        socketService.current.disconnect();
-      }
+      appSocket.off('chat:new_message');
+      appSocket.off('chat:message_read');
+      appSocket.off('chat:user_typing');
+      appSocket.off('chat:message_edited');
+      appSocket.off('chat:avatar_updated');
+      appSocket.off('chat:message_deleted');
+      appSocket.off('chat:conversations');
+      appSocket.off('call:incoming');
     };
   }, [user?.id, user?.role, user?.orgId, user?.tenantId]);
 
@@ -408,7 +408,6 @@ export default function TeamsMessenger() {
         setConversations(convList);
       } catch (error) {
         console.error('Error fetching users:', error);
-        toast.error('Failed to load users');
       } finally {
         setLoading(false);
       }
@@ -419,16 +418,16 @@ export default function TeamsMessenger() {
 
   // Load messages when user is selected
   useEffect(() => {
-    if (!selectedUser || !socketService.current || !user?.id) return;
+    if (!selectedUser || !appSocket || !user?.id) return;
 
     const myId = String(user.id);
     const conversationId = [myId, selectedUser.id].sort().join('_');
       
       // Remove old listener before adding new one
-      socketService.current.off('chat:history');
+      appSocket.off('chat:history');
       
       // Emit request for history
-      socketService.current.emit('chat:get_history', {
+      appSocket.emit('chat:get_history', {
         conversationId,
         page: 1,
         limit: 50
@@ -459,10 +458,10 @@ export default function TeamsMessenger() {
         setMessages(formattedMessages.reverse());
       };
 
-      socketService.current.on('chat:history', handleHistory);
+      appSocket.on('chat:history', handleHistory);
 
       return () => {
-        socketService.current?.off('chat:history', handleHistory);
+        appSocket?.off('chat:history', handleHistory);
       };
   }, [selectedUser, user?.id]);
 
@@ -498,7 +497,7 @@ export default function TeamsMessenger() {
 
   // Handle sending message
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !selectedUser || !socketService.current || !user?.id) return;
+    if (!messageInput.trim() || !selectedUser || !appSocket || !user?.id) return;
 
     try {
       setSending(true);
@@ -526,7 +525,7 @@ export default function TeamsMessenger() {
       const teamsChatId = teamsChatIds[selectedUser.id];
 
       // Socket persists and delivers (single source — avoids duplicate DB rows)
-      socketService.current.emit('chat:send_message', {
+      appSocket.emit('chat:send_message', {
         recipientId: selectedUser.id,
         content: messageToSend,
         messageType: 'text',
@@ -546,9 +545,9 @@ export default function TeamsMessenger() {
 
   // Handle typing indicator
   const handleTyping = () => {
-    if (!selectedUser || !socketService.current) return;
+    if (!selectedUser || !appSocket) return;
 
-    socketService.current.emit('chat:typing', {
+    appSocket.emit('chat:typing', {
       recipientId: selectedUser.id,
       isTyping: true
     });
@@ -558,7 +557,7 @@ export default function TeamsMessenger() {
     }
 
     typingTimeoutRef.current = setTimeout(() => {
-      socketService.current?.emit('chat:typing', {
+      appSocket?.emit('chat:typing', {
         recipientId: selectedUser.id,
         isTyping: false
       });
@@ -634,7 +633,7 @@ export default function TeamsMessenger() {
   // Handle file upload
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file || !selectedUser || !socketService.current || !user?.id) return;
+    if (!file || !selectedUser || !appSocket || !user?.id) return;
 
     try {
       setSending(true);
@@ -1155,7 +1154,7 @@ export default function TeamsMessenger() {
         peerName={nativeCallPeer.name}
         withVideo={callWithVideo}
         localUserName={user?.name || 'User'}
-        socket={socketService.current}
+        socket={appSocket}
         incomingOffer={nativeIncomingOffer}
       />
     )}

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { apiClient } from '../../utils/api';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';

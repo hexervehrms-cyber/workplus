@@ -49,6 +49,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [socketConnected, setSocketConnected] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const userRef = useRef<User | null>(null);
+  const socketWasConnectedRef = useRef(false);
 
   useEffect(() => {
     userRef.current = user;
@@ -72,6 +73,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       setSocketConnected(false);
       socketService.disconnect();
+      realTimeSocket.disconnect();
+      socketWasConnectedRef.current = false;
       
       // Clear localStorage
       localStorage.removeItem('dashboardCache');
@@ -103,9 +106,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     socketService.setStateChangeCallback((state: ConnectionState) => {
       if (!isMounted) return;
       setSocketConnected(state === 'connected');
-      if (state === 'reconnecting') {
+      if (state === 'connected') {
+        socketWasConnectedRef.current = true;
+      } else if (state === 'reconnecting') {
         console.log('🔄 [AUTH] Socket reconnecting...');
-      } else if (state === 'disconnected') {
+      } else if (state === 'disconnected' && socketWasConnectedRef.current && userRef.current) {
         console.warn('⚠️ [AUTH] Socket disconnected');
         toast.error('Lost connection to real-time server');
       }

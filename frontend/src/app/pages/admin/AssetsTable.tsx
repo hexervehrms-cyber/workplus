@@ -7,7 +7,7 @@ import {
   Package, Plus, Search, Edit, Trash2, Loader2, X, 
   Download, FileUp, Eye, ChevronUp, ChevronDown
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { getBearerToken } from '../../utils/apiHelper';
 
 interface Asset {
@@ -69,7 +69,6 @@ export default function AssetsTable() {
       setAssets(data.data.assets || []);
     } catch (error) {
       console.error('Error fetching assets:', error);
-      toast.error('Failed to load assets');
     } finally {
       setLoading(false);
     }

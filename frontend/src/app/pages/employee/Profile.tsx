@@ -10,7 +10,7 @@ import { Progress } from '../../components/ui/progress';
 import { useCurrency } from '../../context/CurrencyContext';
 import CurrencySelector from '../../components/CurrencySelector';
 import { useState, useEffect } from 'react';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { apiGet, apiPost, apiPut, apiDelete, apiUpload, clearApiCache, buildFileUrl, buildApiUrl, getBearerToken } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';

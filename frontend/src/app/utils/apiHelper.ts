@@ -7,8 +7,17 @@ import { TokenManager } from './api';
 
 // Simple request cache for GET requests
 const requestCache = new Map<string, { data: any; timestamp: number }>();
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const inFlightGet = new Map<string, Promise<unknown>>();
+const CACHE_DURATION = 2 * 60 * 1000; // 2 minutes default
+const ATTENDANCE_CACHE_MS = 20 * 1000; // short TTL for live attendance
 const REQUEST_TIMEOUT_MS = 30_000;
+
+function cacheTtlForEndpoint(endpoint: string): number {
+  const e = endpoint.toLowerCase();
+  if (e.includes('/attendance/')) return ATTENDANCE_CACHE_MS;
+  if (e.includes('/dashboard/')) return 60 * 1000;
+  return CACHE_DURATION;
+}
 
 function cacheKeyForEndpoint(endpoint: string): string {
   return endpoint.trim();
@@ -130,20 +139,32 @@ export const apiRequest = async <T = any>(
  */
 export const apiGet = async <T = any>(endpoint: string, useCache = true): Promise<T> => {
   const cacheKey = cacheKeyForEndpoint(endpoint);
+  const ttl = cacheTtlForEndpoint(endpoint);
+
   if (useCache && requestCache.has(cacheKey)) {
     const cached = requestCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-      return cached.data;
+    if (cached && Date.now() - cached.timestamp < ttl) {
+      return cached.data as T;
     }
   }
 
-  const data = await apiRequest<T>(endpoint, { method: 'GET' });
-  
-  if (useCache) {
-    requestCache.set(cacheKey, { data, timestamp: Date.now() });
+  if (inFlightGet.has(cacheKey)) {
+    return inFlightGet.get(cacheKey) as Promise<T>;
   }
-  
-  return data;
+
+  const flight = apiRequest<T>(endpoint, { method: 'GET' })
+    .then((data) => {
+      if (useCache) {
+        requestCache.set(cacheKey, { data, timestamp: Date.now() });
+      }
+      return data;
+    })
+    .finally(() => {
+      inFlightGet.delete(cacheKey);
+    });
+
+  inFlightGet.set(cacheKey, flight);
+  return flight;
 };
 
 /**

@@ -13,7 +13,7 @@ import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
 import { apiClient } from '../utils/api';
 import { SocketService } from '../utils/socket';
-import { toast } from 'sonner';
+import { toast } from '../utils/portalToast';
 import { useAuth } from '../context/AuthContext';
 
 interface ChatUser {

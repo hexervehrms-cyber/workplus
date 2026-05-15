@@ -12,7 +12,7 @@ import {
   FileText, Loader2, Briefcase, Calendar, DollarSign, IndianRupee, Link as LinkIcon, Key
 } from 'lucide-react';
 import { EmployeeService } from '../../utils/api';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useCurrency } from '../../context/CurrencyContext';
 import OnboardingLinkGenerator from '../../components/OnboardingLinkGenerator';
@@ -97,7 +97,6 @@ export default function Employees() {
       // Add new employee to the list
       if (data.employee) {
         setEmployees(prev => [data.employee, ...prev]);
-        toast.success('New employee added by ' + (data.createdBy || 'admin'));
       }
     };
 
@@ -140,7 +139,6 @@ export default function Employees() {
       const data = await EmployeeService.getAllEmployees();
       setEmployees(data);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to fetch employees');
     } finally {
       setLoading(false);
     }

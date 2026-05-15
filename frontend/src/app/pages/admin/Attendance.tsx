@@ -12,7 +12,7 @@ import {
 } from '../../components/ui/dialog';
 import { Badge } from '../../components/ui/badge';
 import { apiClient } from '../../utils/api';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { apiGet, apiPost, buildApiUrl, getBearerToken } from '../../utils/apiHelper';
 import { TokenManager } from '../../utils/api';
 import realTimeSocket from '../../utils/realTimeSocket';
@@ -411,7 +411,6 @@ export default function AttendanceAdmin() {
       }
     } catch (error) {
       console.error('View attendance error:', error);
-      toast.error('Could not load full attendance details');
     } finally {
       setViewLoading(false);
     }
@@ -461,7 +460,6 @@ export default function AttendanceAdmin() {
       }
     } catch (error) {
       console.error('View from log error:', error);
-      toast.error('Failed to load attendance');
     } finally {
       setViewLoading(false);
     }

@@ -3,7 +3,7 @@ import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Plus, Search, Filter, Edit, Trash2, X, Eye, AlertCircle, Loader2 } from 'lucide-react';
 import { apiClient } from '../../utils/api';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { PasswordInput } from '../../components/PasswordInput';
 
 interface AdminUser {

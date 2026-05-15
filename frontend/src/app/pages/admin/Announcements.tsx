@@ -3,7 +3,7 @@ import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Plus, Send, Calendar, Loader2 } from 'lucide-react';
 import { apiClient, ApiError } from '../../utils/api';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 
 interface AnnouncementRow {
   _id: string;
@@ -51,7 +51,6 @@ export default function AnnouncementsAdmin() {
       }
     } catch (e) {
       console.error(e);
-      toast.error(e instanceof ApiError ? e.getUserMessage() : 'Failed to load announcements');
     } finally {
       setLoading(false);
     }

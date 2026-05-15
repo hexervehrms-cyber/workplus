@@ -7,7 +7,7 @@ import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { useCurrency } from '../../context/CurrencyContext';
 import { EmployeeService } from '../../utils/api';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { Calculator, Download, Check, X, Clock, Loader2, FileText, AlertCircle } from 'lucide-react';
 
 interface Employee {
@@ -68,7 +68,6 @@ export default function AdminFNFCalculator() {
       // Filter only active employees
       setEmployees(data.filter((emp: any) => emp.status === 'active'));
     } catch (err: any) {
-      toast.error(err.message || 'Failed to fetch employees');
     } finally {
       setLoading(false);
     }

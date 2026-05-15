@@ -23,7 +23,7 @@ import {
 import { LeaveRequestService } from '../utils/api';
 import { apiGet } from '../utils/apiHelper';
 import { useAuth } from '../context/AuthContext';
-import { toast } from 'sonner';
+import { toast } from '../utils/portalToast';
 
 interface LeaveRequest {
   _id: string;

@@ -6,7 +6,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Loader2, Package, Laptop, DollarSign, Calendar, MapPin, User, Image as ImageIcon, X, ChevronLeft, ChevronRight, Plus, Upload } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { getBearerToken } from '../../utils/apiHelper';
 
 interface Asset {
@@ -276,7 +276,6 @@ export default function EmployeeAssets() {
       setTotalValue(data.data.totalValue || 0);
     } catch (error) {
       console.error('Error fetching assets:', error);
-      toast.error('Failed to load your assets');
     } finally {
       setLoading(false);
     }

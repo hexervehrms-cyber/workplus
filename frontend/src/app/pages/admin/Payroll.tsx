@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '../../components/ui/command';
 import { Plus, Edit, Trash2, Download, Check, X, Loader, ChevronsUpDown, Eye } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { cn } from '../../components/ui/utils';
 import { apiGet, apiPost, apiPut, apiDelete, buildApiUrl, getBearerToken } from '../../utils/apiHelper';
 import { TokenManager } from '../../utils/api';
@@ -242,7 +242,6 @@ export default function Payroll() {
       setStructures(data.data || []);
     } catch (error) {
       console.error('Error fetching structures:', error);
-      toast.error('Failed to load salary structures');
     } finally {
       setLoading(false);
     }
@@ -256,7 +255,6 @@ export default function Payroll() {
       setSalarySlips(data.data || []);
     } catch (error) {
       console.error('Error fetching salary slips:', error);
-      toast.error('Failed to load salary slips');
     } finally {
       setLoading(false);
     }
@@ -270,7 +268,6 @@ export default function Payroll() {
       setEmployees(data.data || []);
     } catch (error) {
       console.error('Error fetching employees:', error);
-      toast.error('Failed to load employees');
     }
   };
 
@@ -410,7 +407,6 @@ export default function Payroll() {
       const data = await apiGet(`/salary/structures/by-id/${structure._id}`, false);
       const fullStructure = data?.data ?? data;
       if (!fullStructure || !fullStructure._id) {
-        toast.error('Could not load salary structure');
         setEditingStructureId(null);
         return;
       }
@@ -457,7 +453,6 @@ export default function Payroll() {
     } catch (error) {
       console.error('Error opening edit dialog:', error);
       setEditingStructureId(null);
-      toast.error('Failed to load salary structure for editing');
     }
   };
 
@@ -554,7 +549,6 @@ export default function Payroll() {
       setPreviewUrl(URL.createObjectURL(blob));
     } catch (error) {
       console.error('Error loading salary slip:', error);
-      toast.error('Failed to load salary slip details');
       setViewingSlip(slip);
     } finally {
       setViewSlipLoading(false);

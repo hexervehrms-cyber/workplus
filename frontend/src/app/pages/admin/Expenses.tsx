@@ -10,7 +10,7 @@ import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 
 interface Expense {
   _id: string;
@@ -129,7 +129,6 @@ export default function ExpensesAdmin() {
       setTotalExpenses(data.pagination?.total || 0);
     } catch (error) {
       console.error('Error fetching expenses:', error);
-      toast.error('Failed to fetch expenses');
     }
   }, [page]);
 

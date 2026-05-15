@@ -1,5 +1,6 @@
 import { io, Socket } from 'socket.io-client';
 import { TokenManager } from './api';
+import { socketService } from './socket';
 
 class RealTimeSocket {
   private socket: Socket | null = null;
@@ -8,6 +9,8 @@ class RealTimeSocket {
   private reconnectDelay = 1000;
   private isConnecting = false;
   private connectionAttempted = false;
+  private usesSharedSocket = false;
+  private dashboardListenersReady = false;
 
   constructor() {
     // Don't connect immediately - wait for user to be available
@@ -22,8 +25,15 @@ class RealTimeSocket {
   connectFromAuth(user: { id: string; role: string; orgId?: string; tenantId?: string }) {
     if (!user?.id) return;
     this.authUser = user;
+
+    const shared = socketService.getSocket();
+    if (socketService.isConnected() && shared) {
+      this.attachSharedSocket(shared, user);
+      return;
+    }
+
     this.connectionAttempted = false;
-    if (this.socket?.connected) {
+    if (this.socket?.connected && !this.usesSharedSocket) {
       return;
     }
     const token = TokenManager.get() || '';
@@ -32,10 +42,22 @@ class RealTimeSocket {
         id: user.id,
         role: user.role,
         orgId: user.orgId || user.tenantId,
-        tenantId: user.tenantId || user.orgId
+        tenantId: user.tenantId || user.orgId,
       },
       token
     );
+  }
+
+  private attachSharedSocket(socket: Socket, user: { id: string; role: string; orgId?: string; tenantId?: string }) {
+    this.usesSharedSocket = true;
+    this.socket = socket;
+    this.isConnecting = false;
+    this.connectionAttempted = true;
+    this.authUser = user;
+    if (!this.dashboardListenersReady) {
+      this.setupDashboardListeners();
+      this.dashboardListenersReady = true;
+    }
   }
 
   /**
@@ -47,12 +69,17 @@ class RealTimeSocket {
     }
 
     const user = this.authUser || TokenManager.getUser();
-    const token = TokenManager.get() || '';
-
     if (!user?.id) {
       return;
     }
 
+    const shared = socketService.getSocket();
+    if (socketService.isConnected() && shared) {
+      this.attachSharedSocket(shared, user as { id: string; role: string; orgId?: string; tenantId?: string });
+      return;
+    }
+
+    const token = TokenManager.get() || '';
     if (this.connectionAttempted && !this.socket) {
       return;
     }
@@ -62,10 +89,11 @@ class RealTimeSocket {
   }
 
   private connect(user: any, token: string) {
-    if (this.isConnecting || this.socket?.connected) {
+    if (this.isConnecting || (this.socket?.connected && !this.usesSharedSocket)) {
       return;
     }
 
+    this.usesSharedSocket = false;
     this.isConnecting = true;
 
     if (!token) {
@@ -160,8 +188,10 @@ class RealTimeSocket {
       this.handleReconnect();
     });
 
-    // Set up dashboard update listeners
-    this.setupDashboardListeners();
+    if (!this.dashboardListenersReady) {
+      this.setupDashboardListeners();
+      this.dashboardListenersReady = true;
+    }
   }
 
   private handleReconnect() {
@@ -547,10 +577,17 @@ class RealTimeSocket {
 
   // Disconnect
   disconnect() {
+    if (this.usesSharedSocket) {
+      this.usesSharedSocket = false;
+      this.socket = null;
+      this.dashboardListenersReady = false;
+      return;
+    }
     if (this.socket) {
       this.socket.disconnect();
       this.socket = null;
     }
+    this.dashboardListenersReady = false;
   }
 
   // Get socket instance for custom events

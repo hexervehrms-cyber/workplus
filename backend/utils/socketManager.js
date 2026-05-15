@@ -132,8 +132,17 @@ class SocketManager {
         lastActivity: new Date()
       };
 
+      const priorSocketId = this.connectedUsers.get(String(userId));
+      if (priorSocketId && priorSocketId !== socket.id) {
+        const priorSocket = this.io.sockets.sockets.get(priorSocketId);
+        if (priorSocket) {
+          priorSocket.disconnect(true);
+          this.userSockets.delete(priorSocketId);
+        }
+      }
+
       this.userSockets.set(socket.id, userInfo);
-      this.connectedUsers.set(userId, socket.id);
+      this.connectedUsers.set(String(userId), socket.id);
 
       // Join organization room
       socket.join(`org_${orgId}`);

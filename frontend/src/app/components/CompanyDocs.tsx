@@ -12,7 +12,7 @@ import DocumentTracking from './DocumentTracking';
 import { apiClient, TokenManager } from '../utils/api';
 import { buildApiUrl, buildFileUrl } from '../utils/apiHelper';
 import { useAuth } from '../context/AuthContext';
-import { toast } from 'sonner';
+import { toast } from '../utils/portalToast';
 import { 
   FileText, 
   Download, 

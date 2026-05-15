@@ -3,7 +3,6 @@ import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { apiClient } from '../utils/api';
-import { toast } from 'sonner';
 import { 
   X, 
   User, 
@@ -141,7 +140,6 @@ const UserInfoModal: React.FC<UserInfoModalProps> = ({ user, isOpen, onClose }) 
       }
     } catch (error) {
       console.error('Error loading user data:', error);
-      toast.error('Failed to load user data');
     } finally {
       setLoading(false);
     }

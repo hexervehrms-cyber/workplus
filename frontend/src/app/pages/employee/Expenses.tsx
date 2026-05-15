@@ -25,7 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../../components/ui/select';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 
 interface Expense {
   _id: string;
@@ -155,7 +155,6 @@ export default function Expenses() {
       console.error('Error fetching expenses:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to load expenses';
       setError(errorMessage);
-      toast.error(errorMessage);
       setExpenses([]);
     } finally {
       setLoading(false);

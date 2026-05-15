@@ -22,8 +22,9 @@ import {
   localDayKey,
 } from '../../utils/attendancePersistence';
 import realTimeSocket from '../../utils/realTimeSocket';
+import { onPageVisible } from '../../utils/pageVisibility';
 import { useAttendance } from '../../../context/AttendanceContext';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import {
   Calendar,
   Clock,
@@ -101,7 +102,7 @@ const SYNC_CONFIG = {
   DEBOUNCE_MS: 1000,
   SOCKET_WAIT_MS: 1500,
   DB_SYNC_WAIT_MS: 2000,
-  PERIODIC_REFRESH_MS: 30000,
+  PERIODIC_REFRESH_MS: 60_000,
   ACTION_TIMEOUT_MS: 8000
 };
 
@@ -853,7 +854,7 @@ export default function EmployeeDashboard() {
       if (document.visibilityState !== 'visible') return;
       void syncWeeklyHours();
       void refreshLeaveBalance();
-    }, 30_000);
+    }, 60_000);
     const unsubLeave = realTimeSocket.onLeaveUpdate(() => {
       void refreshLeaveBalance();
     });
@@ -878,9 +879,21 @@ export default function EmployeeDashboard() {
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       void syncWeeklyHours();
-    }, 15_000);
+    }, 45_000);
     return () => clearInterval(interval);
   }, [user?.id, todayAttendance.isCheckedIn, syncWeeklyHours]);
+
+  // Refresh stale KPIs once when user returns to the tab
+  useEffect(() => {
+    if (!user?.id) return;
+    return onPageVisible(() => {
+      void syncWeeklyHours();
+      void refreshLeaveBalance();
+      if (todayAttendance.isCheckedIn && !disableRefresh) {
+        void safeRefresh(true);
+      }
+    });
+  }, [user?.id, todayAttendance.isCheckedIn, disableRefresh, syncWeeklyHours, refreshLeaveBalance, safeRefresh]);
 
   // ============================================================================
   // TIMER SYSTEM - Track working hours, breaks, and meetings in real-time
@@ -1002,7 +1015,6 @@ export default function EmployeeDashboard() {
           if (result.status === 409) {
             clearApiCache('/attendance/today');
             await fetchDashboardData(true);
-            toast.info('Syncing break status…');
             return;
           }
           throw new Error(result.message);
@@ -1087,7 +1099,6 @@ export default function EmployeeDashboard() {
           if (result.status === 409) {
             clearApiCache('/attendance/today');
             await fetchDashboardData(true);
-            toast.info('Syncing break status…');
             return;
           }
           throw new Error(result.message);
@@ -1175,7 +1186,6 @@ export default function EmployeeDashboard() {
           if (result.status === 409) {
             clearApiCache('/attendance/today');
             await fetchDashboardData(true);
-            toast.info('Check-in already processing — synced from server');
             return;
           }
           throw new Error(result.message);
@@ -1267,7 +1277,6 @@ export default function EmployeeDashboard() {
           if (result.status === 409) {
             clearApiCache('/attendance/today');
             await fetchDashboardData(true);
-            toast.info('Check-out already processing — synced from server');
             return;
           }
           throw new Error(result.message);

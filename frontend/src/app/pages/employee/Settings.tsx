@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { apiClient } from '../../utils/api';
 import { apiPut, clearApiCache } from '../../utils/apiHelper';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -81,7 +81,6 @@ export default function EmployeeSettings() {
       }
     } catch (error) {
       console.error('Error fetching employee data:', error);
-      toast.error('Failed to load employee information');
     } finally {
       setLoading(false);
     }

@@ -26,7 +26,7 @@ import {
   Phone,
   Briefcase
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { apiGet, apiPut, apiPost, buildFileUrl, getBearerToken } from '../../utils/apiHelper';
 
 interface Employee {
@@ -143,7 +143,6 @@ export default function EmployeeCorrespondence() {
       setEmployee(employeeData);
     } catch (error) {
       console.error('Error fetching employee:', error);
-      toast.error('Error loading employee data');
     }
   };
 
@@ -198,7 +197,6 @@ export default function EmployeeCorrespondence() {
       setDocuments(allDocuments);
     } catch (error) {
       console.error('Error fetching documents:', error);
-      toast.error('Error loading documents');
       setDocuments([]); // Set empty array on error
     } finally {
       setLoading(false);

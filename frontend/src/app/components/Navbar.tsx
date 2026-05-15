@@ -16,7 +16,7 @@ import {
 import { Badge } from './ui/badge';
 import CurrencyChanger from './CurrencyChanger';
 import { useState, useEffect } from 'react';
-import { toast } from 'sonner';
+import { toast } from '../utils/portalToast';
 import { buildApiUrl } from '../utils/apiHelper';
 import { socketService } from '../utils/socket';
 

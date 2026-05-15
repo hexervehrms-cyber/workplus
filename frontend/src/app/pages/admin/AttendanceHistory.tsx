@@ -7,7 +7,7 @@ import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog';
 import { Loader, Download, Filter, X, Calendar, Clock, Coffee, Eye } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { apiGet, getBearerToken } from '../../utils/apiHelper';
 
@@ -97,7 +97,6 @@ export default function AttendanceHistory() {
       setEmployees(data.data || []);
     } catch (error) {
       console.error('Error fetching employees:', error);
-      toast.error('Failed to load employees');
     }
   };
 
@@ -124,13 +123,9 @@ export default function AttendanceHistory() {
       if (data.success) {
         setAttendanceRecords(data.data || []);
         setTotalRecords(data.total || 0);
-        toast.success(`Loaded ${data.data?.length || 0} attendance records`);
-      } else {
-        toast.error('Failed to fetch attendance history');
       }
     } catch (error) {
       console.error('Error fetching attendance history:', error);
-      toast.error('Failed to fetch attendance history');
     } finally {
       setLoading(false);
     }
@@ -155,10 +150,8 @@ export default function AttendanceHistory() {
 
       const data = await apiGet(`/attendance-history/breaks/${selectedEmployee}?${params}`);
       setBreakRecords(data?.data?.breaks || data?.breaks || []);
-      toast.success(`Loaded ${(data?.data?.breaks || data?.breaks || []).length} break records`);
     } catch (error) {
       console.error('Error fetching break history:', error);
-      toast.error('Failed to fetch break history');
     } finally {
       setLoading(false);
     }
@@ -202,10 +195,8 @@ export default function AttendanceHistory() {
       const data = await apiGet(`/attendance-history/leaves/${selectedEmployee}?${params}`);
       setLeaveRecords(data?.data || []);
       setTotalRecords(data?.total || 0);
-      toast.success(`Loaded ${data?.data?.length || 0} leave records`);
     } catch (error) {
       console.error('Error fetching leave history:', error);
-      toast.error('Failed to fetch leave history');
     } finally {
       setLoading(false);
     }
@@ -249,10 +240,8 @@ export default function AttendanceHistory() {
       setSalarySlipLoading(true);
       const data = await apiGet(`/salary/slip/${selectedEmployee}/${salarySlipMonth}/${salarySlipYear}`);
       setSalarySlipContent(data?.data || '');
-      toast.success('Salary slip loaded successfully');
     } catch (error) {
       console.error('Error fetching salary slip:', error);
-      toast.error('Failed to fetch salary slip');
     } finally {
       setSalarySlipLoading(false);
     }

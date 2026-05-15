@@ -6,7 +6,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Checkbox } from '../../components/ui/checkbox';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { Plus, Edit2, Trash2, Calendar, Settings, Loader2, Check } from 'lucide-react';
 
 interface SalaryCycle {
@@ -66,7 +66,6 @@ export default function AdminSalaryCycle() {
       // TODO: Call API to fetch salary cycles
       setCycles([]);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to fetch salary cycles');
     } finally {
       setLoading(false);
     }

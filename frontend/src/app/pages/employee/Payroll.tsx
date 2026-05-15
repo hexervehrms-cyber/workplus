@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../../components/ui/dialog';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { apiGet, buildApiUrl } from '../../utils/apiHelper';
 import { TokenManager } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
@@ -110,7 +110,6 @@ export default function Payroll() {
       await fetchSalarySlips(empId);
     } catch (error) {
       console.error('Error fetching employee and slips:', error);
-      toast.error('Failed to load payroll data');
     } finally {
       setLoading(false);
     }
@@ -127,7 +126,6 @@ export default function Payroll() {
       }
     } catch (error) {
       console.error('Error fetching salary slips:', error);
-      toast.error('Failed to load salary slips');
       setSalarySlips([]);
     }
   };
@@ -162,7 +160,6 @@ export default function Payroll() {
       setPreviewOpen(true);
     } catch (error) {
       console.error('Error loading payslip preview:', error);
-      toast.error('Failed to load payslip preview');
       setViewingSlipId(null);
     } finally {
       setPreviewLoading(false);

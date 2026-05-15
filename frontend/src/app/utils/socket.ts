@@ -56,13 +56,29 @@ export class SocketService {
   // Connect to Socket.IO server
   connect(userId: string, role: string, tenantId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Store user info for reconnection
-      this.userId = userId;
-      this.role = role;
-      this.tenantId = tenantId || null;
+      const uid = String(userId);
+      const tid = tenantId ? String(tenantId) : null;
 
-      // Disconnect existing socket if any
+      // Reuse existing connection for same user (avoids duplicate sockets on reload/navigation)
+      if (
+        this.socket?.connected &&
+        this.userId === uid &&
+        this.role === role &&
+        this.tenantId === tid
+      ) {
+        this.setState('connected');
+        resolve();
+        return;
+      }
+
+      // Store user info for reconnection
+      this.userId = uid;
+      this.role = role;
+      this.tenantId = tid;
+
+      // Disconnect existing socket if any (different user or stale connection)
       if (this.socket) {
+        this.socket.removeAllListeners();
         this.socket.disconnect();
         this.socket = null;
       }
@@ -86,8 +102,9 @@ export class SocketService {
           },
           timeout: 20_000,
           auth: {
-            token: token || ''
-          }
+            token: token || '',
+          },
+          forceNew: false,
         });
 
         // Connection successful

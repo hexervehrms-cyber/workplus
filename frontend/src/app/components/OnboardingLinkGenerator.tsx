@@ -6,7 +6,7 @@ import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Card } from './ui/card';
 import { Copy, Check, Loader, Mail, Link as LinkIcon } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '../utils/portalToast';
 import { TokenManager } from '../utils/api';
 import { buildApiUrl } from '../utils/apiHelper';
 

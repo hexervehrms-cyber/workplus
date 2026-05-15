@@ -4,7 +4,7 @@ import { Button } from '../../components/ui/button';
 import { Settings, Loader2, Save } from 'lucide-react';
 import { LeaveTypeSettingsService } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { Label } from '../../components/ui/label';
 
 interface LeaveTypeSettings {

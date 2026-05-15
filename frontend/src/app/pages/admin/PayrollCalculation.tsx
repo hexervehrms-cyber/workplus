@@ -9,7 +9,7 @@ import { Textarea } from '../../components/ui/textarea';
 import {
   DollarSign, Plus, Search, Loader2, X, Calculator, Download, Eye, Trash2, CheckCircle, Clock
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { apiGet, apiPost, apiPut } from '../../utils/apiHelper';
 
 interface PayrollCalculation {
@@ -85,7 +85,6 @@ export default function PayrollCalculation() {
       setPayrolls(data.data || []);
     } catch (error: any) {
       console.error('Error fetching payrolls:', error);
-      toast.error('Failed to load payrolls');
     } finally {
       setLoading(false);
     }

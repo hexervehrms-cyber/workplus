@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import {
   Package, Plus, Search, Loader2, Eye, ChevronUp, ChevronDown, X
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { getBearerToken } from '../../utils/apiHelper';
 
 interface Asset {
@@ -195,7 +195,6 @@ export default function EmployeeAssetsTable() {
       setTotalValue(data.data.totalValue || 0);
     } catch (error) {
       console.error('Error fetching assets:', error);
-      toast.error('Failed to load your assets');
     } finally {
       setLoading(false);
     }

@@ -3,7 +3,6 @@ import { Card } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Loader2, Package, Laptop, DollarSign, Calendar, MapPin, Plus } from 'lucide-react';
-import { toast } from 'sonner';
 import { getBearerToken } from '../utils/apiHelper';
 
 interface Asset {
@@ -59,7 +58,6 @@ export default function EmployeeAssetsSection({ employeeId, isAdmin = false, onA
       setTotalValue(data.data.totalValue || 0);
     } catch (error) {
       console.error('Error fetching assets:', error);
-      toast.error('Failed to load assets');
     } finally {
       setLoading(false);
     }

@@ -12,7 +12,7 @@ import {
   Upload, Image as ImageIcon, Star, Trash, ChevronLeft, ChevronRight,
   Download, FileUp
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { apiGet, apiPost, apiPut, apiDelete, apiUpload, buildFileUrl, getBearerToken } from '../../utils/apiHelper';
 
 interface Asset {
@@ -304,7 +304,6 @@ export default function Assets() {
       setAssets(data.data.assets || []);
     } catch (error) {
       console.error('Error fetching assets:', error);
-      toast.error('Failed to load assets');
     } finally {
       setLoading(false);
     }

@@ -4,7 +4,7 @@ import { Button } from '../../components/ui/button';
 import { Calendar, Loader2, CheckCircle, XCircle } from 'lucide-react';
 import { LeaveRequestService } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import {
   Dialog,
   DialogContent,

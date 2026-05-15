@@ -7,7 +7,7 @@ import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { useCurrency } from '../../context/CurrencyContext';
 import { EmployeeService } from '../../utils/api';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { Plus, Edit2, Trash2, ChevronDown, ChevronUp, Calendar, DollarSign, Loader2 } from 'lucide-react';
 
 interface Employee {
@@ -72,7 +72,6 @@ export default function AdminSalaryStructure() {
       const data = await EmployeeService.getAllEmployees();
       setEmployees(data);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to fetch employees');
     } finally {
       setLoading(false);
     }

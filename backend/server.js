@@ -79,6 +79,8 @@ import seedSuperAdmin from "./seeders/superAdminSeeder.js";
 
 // Import socket handlers
 import { initializeChatHandlers } from "./utils/chatSocketHandlers.js";
+import { attachSocketIoRedisAdapter } from "./utils/socketIoScale.js";
+import { apiTrafficLimiter, uploadTrafficLimiter } from "./middleware/trafficGuard.js";
 
 // Import routes
 import dashboardRoutes from "./routes/dashboard.js";
@@ -175,6 +177,9 @@ validateEnvironment();
 
 const app = express();
 
+// Render / reverse proxy — required for rate limits and client IP
+app.set('trust proxy', 1);
+
 // Create HTTP server for Socket.IO
 const server = createServer(app);
 
@@ -238,6 +243,12 @@ const io = new Server(server, {
   transports: ['websocket', 'polling'],
   pingInterval: 25000,
   pingTimeout: 60000,
+  maxHttpBufferSize: 1e6,
+  perMessageDeflate: { threshold: 1024 },
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000,
+    skipMiddlewares: true,
+  },
 });
 
 // Make io globally accessible for routes
@@ -640,6 +651,11 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
   });
 }));
 
+// Production traffic guard (skipped in dev unless ENABLE_TRAFFIC_GUARD=true)
+app.use("/api", apiTrafficLimiter);
+app.use("/api/documents", uploadTrafficLimiter);
+app.use("/api/profile", uploadTrafficLimiter);
+
 app.use("/api/auth", authRoutes);
 
 // Create Admin (Super Admin only) — must stay on main app so it is not shadowed by the auth router
@@ -903,6 +919,13 @@ io.on('connection', (socket) => {
           socket.emit('auth_error', { message: 'Invalid authentication data', code: 'INVALID_AUTH_DATA' });
           socket.disconnect(true);
           return;
+        }
+
+        // One live socket per user — drop stale tabs/reloads to reduce memory and event storms
+        for (const [sid, existing] of io.sockets.sockets) {
+          if (sid !== socket.id && String(existing.userId) === String(userId)) {
+            existing.disconnect(true);
+          }
         }
 
         // Store user info on socket
@@ -1359,21 +1382,32 @@ app.use(errorHandler);
 
 const gracefulShutdown = async (signal) => {
   logger.info(`${signal} received. Starting graceful shutdown...`);
-  
+
+  const forceExit = setTimeout(() => {
+    logger.error('Graceful shutdown timed out — forcing exit');
+    process.exit(1);
+  }, 15_000);
+  forceExit.unref();
+
   try {
-    // Close server
-    server.close(() => {
-      logger.info('HTTP server closed');
+    await new Promise((resolve) => {
+      server.close(() => {
+        logger.info('HTTP server closed');
+        resolve();
+      });
     });
 
-    // Close Socket.IO
-    io.close();
-    logger.info('Socket.IO closed');
+    await new Promise((resolve) => {
+      io.close(() => {
+        logger.info('Socket.IO closed');
+        resolve();
+      });
+    });
 
-    // Close database connection
     await mongoose.connection.close();
     logger.info('Database connection closed');
 
+    clearTimeout(forceExit);
     process.exit(0);
   } catch (error) {
     logger.error(`Error during shutdown: ${error.message}`);
@@ -1394,8 +1428,11 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error(`Unhandled Rejection at ${promise}: ${reason}`);
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection', {
+    reason: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+  });
 });
 
 // ============================================================================
@@ -1426,6 +1463,7 @@ const startServer = async () => {
     await redis.initializeRedis();
     if (redis.isRedisConnected()) {
       logger.info('✅ Redis connected successfully');
+      await attachSocketIoRedisAdapter(io);
     } else {
       logger.warn('⚠️  Redis not available - caching disabled');
     }

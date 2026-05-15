@@ -62,25 +62,23 @@ class ConnectionMonitor {
    * Setup query performance monitoring
    */
   setupQueryMonitoring() {
-    // Hook into mongoose query execution
+    const monitor = this;
     mongoose.connection.on('open', () => {
+      if (mongoose.Query.prototype._workplusExecPatched) return;
+      mongoose.Query.prototype._workplusExecPatched = true;
+
       const originalExec = mongoose.Query.prototype.exec;
-
-      mongoose.Query.prototype.exec = function(...args) {
+      mongoose.Query.prototype.exec = async function patchedExec(...args) {
         const startTime = Date.now();
-        const callback = args[args.length - 1];
-
-        const wrappedCallback = (err, result) => {
-          const queryTime = Date.now() - startTime;
-          this.recordQueryMetrics(queryTime, err);
-
-          if (typeof callback === 'function') {
-            callback(err, result);
-          }
-        };
-
-        args[args.length - 1] = wrappedCallback;
-        return originalExec.apply(this, args);
+        let queryError = null;
+        try {
+          return await originalExec.apply(this, args);
+        } catch (err) {
+          queryError = err;
+          throw err;
+        } finally {
+          monitor.recordQueryMetrics(Date.now() - startTime, queryError);
+        }
       };
     });
   }

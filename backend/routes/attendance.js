@@ -17,6 +17,13 @@ import EmailNotificationService from '../utils/emailNotificationService.js';
 import { emitAttendanceKPIUpdate } from '../utils/kpiUpdater.js';
 import { dashboardCache } from '../utils/dashboardCache.js';
 import { getUserTimezone } from '../utils/timezoneHelper.js';
+import {
+  buildOrgIdClause,
+  isOpenBreak,
+  buildTodayAttendanceQuery,
+  buildLiveStatus,
+  recordWorkedHoursForRow,
+} from '../utils/attendanceQueryHelpers.js';
 
 const router = express.Router();
 
@@ -88,41 +95,13 @@ const findLatestCompletedBreak = (breaks = []) => {
   return null;
 };
 
-/** Today's attendance lookup — tolerates orgId string drift between JWT and Employee row. */
-const buildTodayAttendanceQuery = (
-  authRole,
-  currentUserId,
-  effectiveEmployeeId,
-  effectiveOrgId,
-  authOrgId
-) => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-
-  const orgIds = [...new Set([String(effectiveOrgId), String(authOrgId)].filter(Boolean))];
-  const orgClause =
-    orgIds.length > 1 ? { orgId: { $in: orgIds } } : { orgId: orgIds[0] };
-
-  const base = {
-    ...orgClause,
-    date: { $gte: today, $lt: tomorrow },
-  };
-
-  if (authRole === 'employee') {
-    return { ...base, userId: currentUserId };
-  }
-  return { ...base, employeeId: effectiveEmployeeId };
-};
-
 /** Fallback when arrayFilters update misses — end the latest open break on the document. */
 const endOpenBreakOnDocument = async (attendanceDoc, endTime, notes) => {
   if (!attendanceDoc?.breaks?.length) return null;
   let changed = false;
   for (let i = attendanceDoc.breaks.length - 1; i >= 0; i -= 1) {
     const b = attendanceDoc.breaks[i];
-    const open = b?.startTime && (b.endTime == null || b.endTime === undefined);
+    const open = isOpenBreak(b);
     if (open) {
       attendanceDoc.breaks[i].endTime = endTime;
       if (notes) attendanceDoc.breaks[i].endNotes = notes;
@@ -140,90 +119,8 @@ const endOpenBreakOnDocument = async (attendanceDoc, endTime, notes) => {
   return attendanceDoc;
 };
 
-const buildLiveStatus = (attendance) => {
-  let liveStatus = 'not_checked_in';
-  let currentHours = 0;
-  let isOnBreak = false;
-  let currentBreakDuration = 0;
-  let totalBreakTime = 0;
-  let breakType = 'regular';
-  let breakStartTime = null;
-
-  if (!attendance || !attendance.checkIn) {
-    return {
-      status: liveStatus,
-      currentHours,
-      isOnBreak,
-      currentBreakDuration,
-      breakType,
-      breakStartTime,
-      totalBreakTime,
-      lastUpdated: new Date()
-    };
-  }
-
-  const now = new Date();
-  if (attendance.checkOut) {
-    liveStatus = 'checked_out';
-    currentHours = (new Date(attendance.checkOut) - new Date(attendance.checkIn)) / (1000 * 60 * 60);
-  } else {
-    liveStatus = 'checked_in';
-    currentHours = (now - new Date(attendance.checkIn)) / (1000 * 60 * 60);
-
-    if (attendance.breaks?.length) {
-      const lastBreak = attendance.breaks[attendance.breaks.length - 1];
-      if (lastBreak?.startTime && !lastBreak?.endTime) {
-        isOnBreak = true;
-        currentBreakDuration = (now - new Date(lastBreak.startTime)) / (1000 * 60);
-        liveStatus = 'on_break';
-        breakType = lastBreak.breakType || 'regular';
-        breakStartTime = lastBreak.startTime;
-      }
-    }
-  }
-
-  if (attendance.breaks?.length) {
-    totalBreakTime = attendance.breaks.reduce((sum, item) => {
-      if (item?.startTime && item?.endTime) {
-        return sum + ((new Date(item.endTime) - new Date(item.startTime)) / (1000 * 60));
-      }
-      return sum;
-    }, 0);
-  }
-
-  return {
-    status: liveStatus,
-    currentHours: Math.round(currentHours * 100) / 100,
-    isOnBreak,
-    currentBreakDuration: Math.round(currentBreakDuration),
-    breakType,
-    breakStartTime,
-    totalBreakTime: Math.round(totalBreakTime),
-    lastUpdated: new Date()
-  };
-};
-
-/** Hours credited for one row: completed shift uses stored/recalculated hours; open shift uses live timer. */
-const recordWorkedHoursForRow = (r) => {
-  if (!r?.checkIn) return 0;
-  if (r.checkOut) {
-    let h = typeof r.hoursWorked === 'number' && !Number.isNaN(r.hoursWorked) ? r.hoursWorked : 0;
-    if (h > 0) return h;
-    let calc = (new Date(r.checkOut) - new Date(r.checkIn)) / (1000 * 60 * 60);
-    if (Array.isArray(r.breaks)) {
-      for (const b of r.breaks) {
-        if (b?.startTime && b?.endTime) {
-          calc -= (new Date(b.endTime) - new Date(b.startTime)) / (1000 * 60 * 60);
-        }
-      }
-    }
-    return Math.max(0, Math.round(calc * 100) / 100);
-  }
-  return buildLiveStatus(r).currentHours || 0;
-};
-
 /** Sum worked hours Mon–Sun (calendar week, same midnight boundaries as /today). */
-const sumHoursThisWeekForUser = async (userId, orgId) => {
+const sumHoursThisWeekForUser = async (userId, effectiveOrgId, authOrgId) => {
   const now = new Date();
   const weekStart = new Date(now);
   const dow = weekStart.getDay();
@@ -235,7 +132,7 @@ const sumHoursThisWeekForUser = async (userId, orgId) => {
 
   const rows = await Attendance.find({
     userId,
-    orgId,
+    ...buildOrgIdClause(effectiveOrgId, authOrgId),
     date: { $gte: weekStart, $lt: weekEnd }
   })
     .select('date checkIn checkOut hoursWorked breaks')
@@ -349,7 +246,11 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
     .populate('employeeId', 'employeeCode department')
     .lean();
 
-  const hoursThisWeek = await sumHoursThisWeekForUser(currentUserId, effectiveOrgId);
+  const hoursThisWeek = await sumHoursThisWeekForUser(
+    currentUserId,
+    effectiveOrgId,
+    userOrgId
+  );
 
   res.json({
     success: true,
@@ -451,57 +352,21 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    console.log('🔍 [CHECK-IN] Employee role detected, looking up employee record...');
-    let employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId, status: 'active' }).select('_id firstName lastName userId').lean();
-    
+    const employee = await findEmployeeForSelfService(authUserId, authOrgId);
     if (!employee) {
-      console.log('❌ [CHECK-IN] Employee profile not found, attempting to create one...');
-      
-      // Try to find ANY employee record for this user to debug
-      const anyEmployee = await Employee.findOne({ userId: authUserId }).select('_id firstName lastName userId orgId status').lean();
-      console.log('🔍 [CHECK-IN] Any employee record found:', anyEmployee);
-      
-      // Create employee record if it doesn't exist
-      try {
-        const newEmployee = await Employee.create({
-          userId: authUserId,
-          orgId: authOrgId,
-          status: 'active'
-        });
-        employee = newEmployee.toObject();
-        console.log('✅ [CHECK-IN] Created new employee record:', {
-          employeeId: employee._id,
-          userId: authUserId,
-          orgId: authOrgId
-        });
-      } catch (createError) {
-        console.error('❌ [CHECK-IN] Failed to create employee record:', createError.message);
-        logger.error('Failed to create employee record on check-in', {
-          userId: authUserId,
-          orgId: authOrgId,
-          error: createError.message
-        });
-        return res.status(403).json({
-          success: false,
-          message: 'Employee profile not found or inactive for authenticated user',
-          code: 'EMPLOYEE_NOT_FOUND',
-          details: {
-            userId: authUserId,
-            orgId: authOrgId
-          }
-        });
-      }
+      return res.status(403).json({
+        success: false,
+        message: 'Employee profile not found or inactive for authenticated user',
+        code: 'EMPLOYEE_NOT_FOUND',
+      });
     }
-    
-    console.log('✅ [CHECK-IN] Employee found/created, using employee data:', {
-      employeeId: employee._id,
-      firstName: employee.firstName,
-      lastName: employee.lastName
-    });
     effectiveUserId = authUserId;
     effectiveEmployeeId = employee._id;
     effectiveOrgId = String(employee.orgId || authOrgId);
-    effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employeeName || 'Employee';
+    effectiveEmployeeName =
+      `${employee.firstName || ''} ${employee.lastName || ''}`.trim() ||
+      employeeName ||
+      'Employee';
   } else {
     console.log('❌ [CHECK-IN] Non-employee role detected:', authRole);
     if (!effectiveUserId || !effectiveEmployeeId || !effectiveOrgId) {
@@ -572,13 +437,13 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   
   const previousAttendance = await Attendance.findOne({
     userId: effectiveUserId,
-    orgId: effectiveOrgId,
-    date: { $gte: yesterday, $lt: today }
+    ...buildOrgIdClause(effectiveOrgId, authOrgId),
+    date: { $gte: yesterday, $lt: today },
   });
 
   if (previousAttendance && previousAttendance.breaks && previousAttendance.breaks.length > 0) {
     const lastBreak = previousAttendance.breaks[previousAttendance.breaks.length - 1];
-    if (lastBreak.startTime && !lastBreak.endTime) {
+    if (isOpenBreak(lastBreak)) {
       // Close the open break from yesterday
       const breakEndTime = new Date(today);
       breakEndTime.setHours(0, 0, 0, 0); // Set to midnight (end of previous day)
@@ -728,35 +593,20 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    let employee = await Employee.findOne({ userId: authUserId, orgId: authOrgId, status: 'active' }).select('_id firstName lastName').lean();
-    
+    const employee = await findEmployeeForSelfService(authUserId, authOrgId);
     if (!employee) {
-      // Create employee record if it doesn't exist
-      try {
-        const newEmployee = await Employee.create({
-          userId: authUserId,
-          orgId: authOrgId,
-          status: 'active'
-        });
-        employee = newEmployee.toObject();
-        console.log('✅ [CHECK-OUT] Created new employee record:', {
-          employeeId: employee._id,
-          userId: authUserId,
-          orgId: authOrgId
-        });
-      } catch (createError) {
-        console.error('❌ [CHECK-OUT] Failed to create employee record:', createError.message);
-        return res.status(403).json({
-          success: false,
-          message: 'Employee profile not found or inactive for authenticated user'
-        });
-      }
+      return res.status(403).json({
+        success: false,
+        message: 'Employee profile not found or inactive for authenticated user',
+      });
     }
-    
     effectiveUserId = authUserId;
     effectiveEmployeeId = employee._id;
     effectiveOrgId = String(employee.orgId || authOrgId);
-    effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employeeName || 'Employee';
+    effectiveEmployeeName =
+      `${employee.firstName || ''} ${employee.lastName || ''}`.trim() ||
+      employeeName ||
+      'Employee';
   } else {
     if (!effectiveUserId || !effectiveEmployeeId || !effectiveOrgId) {
       return res.status(400).json({
@@ -1127,7 +977,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
         });
       }
 
-      if (attendance.breaks?.some((b) => b.startTime && b.endTime == null)) {
+      if (attendance.breaks?.some((b) => isOpenBreak(b))) {
         return res.status(200).json({
           success: true,
           message: 'Already on break.',

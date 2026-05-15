@@ -2,7 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { Calendar, Loader } from 'lucide-react';
 import { buildApiUrl } from '../../utils/apiHelper';
 import { TokenManager } from '../../utils/api';
-import { readPersistedAttendance, isPayloadFresh } from '../../utils/attendancePersistence';
+import {
+  readPersistedAttendance,
+  isPayloadFresh,
+  clearPersistedAttendance,
+  writePersistedAttendance,
+} from '../../utils/attendancePersistence';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -118,59 +123,149 @@ export default function Attendance() {
     }
   };
 
-  // Fetch today's attendance — server liveStatus is source of truth for check-in and break
+  const applyCachedCheckedIn = useCallback(
+    async (uid: string | null) => {
+      const cached = await readPersistedAttendance(uid);
+      const hasFreshCheckedIn =
+        cached &&
+        isPayloadFresh(cached) &&
+        (cached.isCheckedIn || cached.checkedIn) &&
+        !cached.checkOutTime;
+
+      if (!hasFreshCheckedIn) return false;
+
+      syncAttendance(
+        {
+          isCheckedIn: true,
+          checkInTime: cached.checkInTime || null,
+          checkOutTime: cached.checkOutTime || null,
+          hoursWorked: cached.hoursWorked || cached.currentHours || 0,
+          status: cached.status || 'present',
+          isOnBreak: cached.isOnBreak || false,
+          breakType: cached.breakType || 'regular',
+          currentBreakDuration: cached.currentBreakDuration || 0,
+        },
+        'api'
+      );
+      return true;
+    },
+    [syncAttendance]
+  );
+
+  // Fetch today's attendance — server liveStatus is source of truth; cache fills orgId-mismatch gaps
   const fetchTodayAttendance = useCallback(async () => {
+    const uid = user?.id ? String(user.id) : null;
+
     try {
       const token = TokenManager.get();
       const response = await fetch(buildApiUrl('/attendance/today'), {
         credentials: 'include',
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        }
+          'Content-Type': 'application/json',
+        },
       });
 
       if (!response.ok) throw new Error('Failed to fetch attendance');
 
       const data = await response.json();
-      console.log('Fetched today attendance:', data.data);
+      const payload = data.data;
+      setTodayData(payload);
 
-      setTodayData(data.data);
+      const att = payload?.attendance;
+      if (!att) {
+        const kept = await applyCachedCheckedIn(uid);
+        if (!kept) {
+          syncAttendance(
+            {
+              isCheckedIn: false,
+              checkInTime: null,
+              checkOutTime: null,
+              hoursWorked: 0,
+              status: 'absent',
+              isOnBreak: false,
+              breakType: 'regular',
+              currentBreakDuration: 0,
+            },
+            'api'
+          );
+          await clearPersistedAttendance(uid);
+        }
+        return;
+      }
 
-      const liveStatus = data.data?.liveStatus?.status;
-      const isCheckedInNow =
-        liveStatus === 'checked_in' || liveStatus === 'on_break' || liveStatus === 'in_meeting';
-      const isOnBreak = !!data.data?.liveStatus?.isOnBreak;
-      const breakTypeFromApi = (data.data?.liveStatus?.breakType as string) || 'regular';
-      const hours = data.data?.liveStatus?.currentHours || 0;
-
-      const att = data.data?.attendance;
-      const checkInTime = att?.checkIn
+      const ls = payload?.liveStatus;
+      const checkInTime = att.checkIn
         ? new Date(att.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
         : null;
-      const checkOutTime = att?.checkOut
+      const checkOutTime = att.checkOut
         ? new Date(att.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
         : null;
+
+      const hasCheckOut = att.checkOut != null && String(att.checkOut).trim() !== '';
+      let isCheckedInNow = false;
+      if (hasCheckOut) {
+        isCheckedInNow = false;
+      } else if (ls?.status === 'checked_out' || ls?.status === 'not_checked_in') {
+        isCheckedInNow = false;
+      } else if (
+        ls?.status === 'checked_in' ||
+        ls?.status === 'on_break' ||
+        ls?.status === 'in_meeting'
+      ) {
+        isCheckedInNow = true;
+      } else {
+        isCheckedInNow = Boolean(att.checkIn);
+      }
+
+      let isOnBreak = Boolean(ls?.isOnBreak || ls?.status === 'on_break');
+      let breakType = (ls?.breakType as string) || 'regular';
+      if (Array.isArray(att.breaks) && att.breaks.length > 0) {
+        const lastBreak = att.breaks[att.breaks.length - 1];
+        if (lastBreak?.startTime && !lastBreak?.endTime) {
+          isOnBreak = true;
+          breakType = lastBreak.breakType || 'regular';
+        }
+      }
+
+      const hours = att.hoursWorked ?? ls?.currentHours ?? 0;
 
       syncAttendance(
         {
           isCheckedIn: isCheckedInNow,
           checkInTime,
           checkOutTime,
-          hoursWorked: att?.hoursWorked ?? hours,
-          status: att?.status || liveStatus || 'absent',
+          hoursWorked: hours,
+          status: att.status || ls?.status || 'absent',
           isOnBreak,
-          breakType: isOnBreak ? breakTypeFromApi : 'regular',
-          currentBreakDuration: 0
+          breakType: isOnBreak ? breakType : 'regular',
+          currentBreakDuration:
+            typeof ls?.currentBreakDuration === 'number' ? Math.round(ls.currentBreakDuration) : 0,
         },
         'api'
       );
+
+      void writePersistedAttendance(uid, {
+        checkedIn: isCheckedInNow,
+        isCheckedIn: isCheckedInNow,
+        checkInTime,
+        checkOutTime,
+        hoursWorked: hours,
+        currentHours: hours,
+        status: att.status || ls?.status || 'absent',
+        isOnBreak,
+        breakType,
+        currentBreakDuration:
+          typeof ls?.currentBreakDuration === 'number' ? Math.round(ls.currentBreakDuration) : 0,
+        timestamp: Date.now(),
+      });
     } catch (error) {
       console.error('Error fetching attendance:', error);
+      await applyCachedCheckedIn(uid);
     } finally {
       setLoading(false);
     }
-  }, [user?.id, syncAttendance]);
+  }, [user?.id, syncAttendance, applyCachedCheckedIn]);
 
   // Fetch attendance history (paginated)
   const fetchAttendanceHistoryPage = useCallback(

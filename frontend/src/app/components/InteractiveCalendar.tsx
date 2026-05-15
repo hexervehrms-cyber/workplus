@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from './ui/select';
 import { LeaveRequestService } from '../utils/api';
-import { apiGet } from '../utils/apiHelper';
+import { apiGetSafe } from '../utils/apiHelper';
 import { useAuth } from '../context/AuthContext';
 import { toast } from '../utils/portalToast';
 
@@ -77,9 +77,9 @@ export default function InteractiveCalendar() {
         }
 
         // Fetch holidays
-        const holidayData = await apiGet('/holidays');
-        if (holidayData?.success && Array.isArray(holidayData.data)) {
-          setHolidays(holidayData.data);
+        const holidayRes = await apiGetSafe<{ success?: boolean; data?: unknown[] }>('/holidays');
+        if (holidayRes.ok && holidayRes.data?.success && Array.isArray(holidayRes.data.data)) {
+          setHolidays(holidayRes.data.data);
         }
       } catch (error) {
         console.error('Error fetching data:', error);
@@ -90,15 +90,15 @@ export default function InteractiveCalendar() {
     };
 
     fetchData();
-  }, [user]);
+  }, [user?.id]);
 
   // Listen for real-time holiday updates via Socket.IO
   useEffect(() => {
     const refreshHolidays = async () => {
       try {
-        const holidayData = await apiGet('/holidays');
-        if (holidayData?.success && Array.isArray(holidayData.data)) {
-          setHolidays(holidayData.data);
+        const holidayRes = await apiGetSafe<{ success?: boolean; data?: unknown[] }>('/holidays');
+        if (holidayRes.ok && holidayRes.data?.success && Array.isArray(holidayRes.data.data)) {
+          setHolidays(holidayRes.data.data);
         }
       } catch (error) {
         console.error('Error refreshing holidays:', error);

@@ -46,6 +46,10 @@ export class ErrorBoundary extends React.Component<Props, State> {
     });
   };
 
+  handleReload = () => {
+    window.location.reload();
+  };
+
   render() {
     if (this.state.hasError) {
       return (
@@ -89,11 +93,11 @@ export class ErrorBoundary extends React.Component<Props, State> {
                 Try Again
               </Button>
               <Button
-                onClick={() => window.location.href = '/'}
+                onClick={this.handleReload}
                 className="flex-1"
                 variant="outline"
               >
-                Go Home
+                Reload Page
               </Button>
             </div>
           </div>

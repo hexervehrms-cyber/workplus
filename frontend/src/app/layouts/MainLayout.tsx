@@ -1,6 +1,7 @@
 import { Outlet, useLocation } from 'react-router';
 import { Sidebar } from '../components/Sidebar';
 import { Navbar } from '../components/Navbar';
+import { RouteErrorBoundary } from '../components/RouteErrorBoundary';
 import { cn } from '../components/ui/utils';
 
 export function MainLayout() {
@@ -18,7 +19,9 @@ export function MainLayout() {
             isChatRoute ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'
           )}
         >
-          <Outlet />
+          <RouteErrorBoundary>
+            <Outlet />
+          </RouteErrorBoundary>
         </main>
       </div>
     </div>

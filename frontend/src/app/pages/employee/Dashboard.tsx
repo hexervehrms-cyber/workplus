@@ -6,7 +6,8 @@ import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useAuth } from '../../context/AuthContext';
 import { TokenManager, LeaveAllocationService } from '../../utils/api';
 import { parseBalanceApiResponse, sumRemainingDays } from '../../utils/leaveBalance';
-import { apiGet, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
+import { apiGetSafe, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
+import { safeLocaleTime, safeFormatTime, runSafe } from '../../utils/safeUi';
 import { postAttendanceAction } from '../../utils/attendanceApi';
 import {
   formatWeekHours,
@@ -112,21 +113,6 @@ function isLikelyMongoObjectId(id: string | null | undefined): boolean {
 }
 
 /** Parse values from toLocaleTimeString (e.g. "02:30 PM") for today's clock math */
-function safeLocaleTime(value: unknown): string | null {
-  if (value == null || value === '') return null;
-  const d = new Date(value as string | number | Date);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-}
-
-function safeFormatTime(seconds: number): string {
-  const s = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
-  const hours = Math.floor(s / 3600);
-  const minutes = Math.floor((s % 3600) / 60);
-  const secs = Math.floor(s % 60);
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-}
-
 function parseTodayCheckInTime(checkInTime: string): Date | null {
   const raw = checkInTime?.trim();
   if (!raw) return null;
@@ -203,6 +189,14 @@ export default function EmployeeDashboard() {
   const safeRefreshRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
   const lastWeekSyncRef = useRef(0);
   const breakSecondsRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Update refs whenever state changes
   useEffect(() => {
@@ -265,11 +259,12 @@ export default function EmployeeDashboard() {
     lastWeekSyncRef.current = now;
     try {
       clearApiCache('/attendance/today');
-      const res = await apiGet<{ hoursThisWeek?: number; weekKey?: string; attendance?: unknown }>(
-        '/attendance/today',
-        false
-      );
-      const data = (res as { data?: { hoursThisWeek?: number; weekKey?: string } })?.data ?? res;
+      const res = await apiGetSafe<{
+        success?: boolean;
+        data?: { hoursThisWeek?: number; weekKey?: string; liveStatus?: { currentHours?: number } };
+      }>('/attendance/today', false);
+      if (!res.ok) return;
+      const data = res.data?.data ?? res.data;
       const weekHours =
         typeof (data as { hoursThisWeek?: number })?.hoursThisWeek === 'number'
           ? (data as { hoursThisWeek: number }).hoursThisWeek
@@ -373,15 +368,15 @@ export default function EmployeeDashboard() {
       setLoading(true);
 
       timeoutId = setTimeout(() => {
-        setLoading(false);
+        if (mountedRef.current) setLoading(false);
       }, SYNC_CONFIG.ACTION_TIMEOUT_MS);
 
       debug.group('[FETCH DASHBOARD]');
       debug.log('⚡ Fetching all dashboard data in parallel...');
 
       const [attendanceResult, holidaysResult] = await Promise.allSettled([
-        apiGet('/attendance/today', false),
-        apiGet('/holidays')
+        apiGetSafe('/attendance/today', false),
+        apiGetSafe('/holidays'),
       ]);
 
       const cachedHolidays = localStorage.getItem('cached_holidays');
@@ -394,10 +389,23 @@ export default function EmployeeDashboard() {
         }
       }
 
-      if (holidaysResult.status === 'fulfilled' && holidaysResult.value?.success && Array.isArray(holidaysResult.value.data)) {
-        console.log('✅ Loaded', holidaysResult.value.data.length, 'holidays');
-        setHolidays(holidaysResult.value.data);
-        localStorage.setItem('cached_holidays', JSON.stringify(holidaysResult.value.data));
+      if (
+        holidaysResult.status === 'fulfilled' &&
+        holidaysResult.value.ok &&
+        holidaysResult.value.data &&
+        (holidaysResult.value.data as { success?: boolean }).success !== false
+      ) {
+        const holidayPayload = holidaysResult.value.data as { data?: unknown[] };
+        const list = Array.isArray(holidayPayload.data)
+          ? holidayPayload.data
+          : Array.isArray(holidayPayload)
+            ? (holidayPayload as unknown as unknown[])
+            : [];
+        if (list.length > 0) {
+          console.log('✅ Loaded', list.length, 'holidays');
+          if (mountedRef.current) setHolidays(list);
+          localStorage.setItem('cached_holidays', JSON.stringify(list));
+        }
       } else if (cachedHolidays) {
         try {
           const parsed = JSON.parse(cachedHolidays);
@@ -408,25 +416,39 @@ export default function EmployeeDashboard() {
         }
       }
 
+      const attendanceResolved =
+        attendanceResult.status === 'fulfilled' ? attendanceResult.value : null;
+
       debug.log('📊 Attendance API Result:', {
         status: attendanceResult.status,
-        success: attendanceResult.status === 'fulfilled' ? attendanceResult.value?.success : false,
-        hasData: attendanceResult.status === 'fulfilled' ? !!attendanceResult.value?.data : false,
-        error: attendanceResult.status === 'rejected' ? attendanceResult.reason?.message : undefined
+        ok: attendanceResolved?.ok,
+        hasData: attendanceResolved?.ok ? !!(attendanceResolved.data as { data?: unknown })?.data : false,
+        error:
+          attendanceResult.status === 'rejected'
+            ? String((attendanceResult.reason as Error)?.message || attendanceResult.reason)
+            : attendanceResolved && !attendanceResolved.ok
+              ? attendanceResolved.error
+              : undefined,
       });
 
       const attendanceApiOk =
         attendanceResult.status === 'fulfilled' &&
-        attendanceResult.value &&
-        attendanceResult.value.success === true;
+        attendanceResolved?.ok === true &&
+        (attendanceResolved.data as { success?: boolean })?.success === true;
 
-      const attendanceData = attendanceApiOk ? attendanceResult.value.data : null;
+      const attendanceData = attendanceApiOk
+        ? ((attendanceResolved!.data as { data?: Record<string, unknown> }).data ?? null)
+        : null;
 
       if (!attendanceApiOk) {
         debug.warn('📊 Attendance sync skipped — no definitive server response; keeping cached/local state', {
           status: attendanceResult.status,
-          success: attendanceResult.status === 'fulfilled' ? attendanceResult.value?.success : undefined,
-          error: attendanceResult.status === 'rejected' ? String((attendanceResult.reason as Error)?.message || attendanceResult.reason) : undefined
+          error:
+            attendanceResult.status === 'rejected'
+              ? String((attendanceResult.reason as Error)?.message || attendanceResult.reason)
+              : attendanceResolved && !attendanceResolved.ok
+                ? attendanceResolved.error
+                : undefined,
         });
         if (!actionInProgressRef.current) {
           loadFromLocalStorage();
@@ -484,16 +506,18 @@ export default function EmployeeDashboard() {
           breakType: calculatedBreakType
         });
 
-        updateAttendance({
-          isCheckedIn: isCurrentlyCheckedIn,
-          checkInTime: checkInTime,
-          checkOutTime: checkOutTime,
-          hoursWorked: attendance.hoursWorked || 0,
-          status: attendance.status || 'absent',
-          isOnBreak: calculatedIsOnBreak,
-          currentBreakDuration: calculatedBreakDuration,
-          breakType: calculatedBreakType
-        });
+        if (mountedRef.current) {
+          updateAttendance({
+            isCheckedIn: isCurrentlyCheckedIn,
+            checkInTime: checkInTime,
+            checkOutTime: checkOutTime,
+            hoursWorked: (attendance.hoursWorked as number) || 0,
+            status: (attendance.status as string) || 'absent',
+            isOnBreak: calculatedIsOnBreak,
+            currentBreakDuration: calculatedBreakDuration,
+            breakType: calculatedBreakType,
+          });
+        }
 
         const uid = user?.id ? String(user.id) : null;
         writePersistedAttendance(uid, {
@@ -594,7 +618,7 @@ export default function EmployeeDashboard() {
       debug.error('Failed to fetch dashboard data:', err);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, [user?.id, isRecentlyUpdated, updateAttendance, loadFromLocalStorage, ingestWeekHoursFromServer]);
 
@@ -726,7 +750,7 @@ export default function EmployeeDashboard() {
     // CRITICAL FIX: Use refs instead of state to prevent stale closures
     const handleBreakStarted = (data: any) => {
       debug.log('📡 [EMPLOYEE-DASHBOARD] break:started event received:', data);
-      // Use ref, not state - always has current value
+      if (!data?.employeeId || !employeeIdRef.current) return;
       if (String(data.employeeId) === String(employeeIdRef.current)) {
         debug.log('📡 [EMPLOYEE-DASHBOARD] Break started for current employee, updating state');
         setLastSocketEventTime(Date.now());
@@ -768,9 +792,7 @@ export default function EmployeeDashboard() {
         setLastSocketEventTime(Date.now());
         updateAttendance({
           isCheckedIn: true,
-          checkInTime: data.checkInTime
-            ? new Date(data.checkInTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-            : null
+          checkInTime: safeLocaleTime(data.checkInTime),
         }, 'socket');
       }
     };
@@ -782,8 +804,8 @@ export default function EmployeeDashboard() {
         setLastSocketEventTime(Date.now());
         updateAttendance({
           isCheckedIn: false,
-          checkOutTime: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-          isOnBreak: false
+          checkOutTime: safeLocaleTime(new Date()) || null,
+          isOnBreak: false,
         }, 'socket');
       }
     };
@@ -814,13 +836,17 @@ export default function EmployeeDashboard() {
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-      const result = await apiGet(`/attendance?limit=30&startDate=${thirtyDaysAgo.toISOString()}`);
+      const result = await apiGetSafe<{ success?: boolean; data?: AttendanceRecord[] }>(
+        `/attendance?limit=30&startDate=${thirtyDaysAgo.toISOString()}`
+      );
 
-      if (result.success && Array.isArray(result.data)) {
-        setAttendanceHistory(result.data);
+      if (result.ok && result.data?.success && Array.isArray(result.data.data)) {
+        const rows = result.data.data;
+        if (!mountedRef.current) return;
+        setAttendanceHistory(rows);
 
         const breaks: BreakRecord[] = [];
-        result.data.forEach((record: AttendanceRecord) => {
+        rows.forEach((record: AttendanceRecord) => {
           if (record.breaks && Array.isArray(record.breaks)) {
             record.breaks.forEach((breakItem: BreakRecord) => {
               breaks.push({
@@ -840,7 +866,7 @@ export default function EmployeeDashboard() {
     } catch (err) {
       debug.warn('Failed to fetch attendance history:', err);
     } finally {
-      setAttendanceLoading(false);
+      if (mountedRef.current) setAttendanceLoading(false);
     }
   }, []);
 
@@ -1013,7 +1039,7 @@ export default function EmployeeDashboard() {
         if (!result.ok) {
           if (result.status === 409) {
             clearApiCache('/attendance/today');
-            await fetchDashboardData(true);
+            runSafe('attendance-sync', () => fetchDashboardDataRef.current?.(true));
             return;
           }
           throw new Error(result.message);
@@ -1097,7 +1123,7 @@ export default function EmployeeDashboard() {
         if (!result.ok) {
           if (result.status === 409) {
             clearApiCache('/attendance/today');
-            await fetchDashboardData(true);
+            runSafe('attendance-sync', () => fetchDashboardDataRef.current?.(true));
             return;
           }
           throw new Error(result.message);
@@ -1184,7 +1210,7 @@ export default function EmployeeDashboard() {
         if (!result.ok) {
           if (result.status === 409) {
             clearApiCache('/attendance/today');
-            await fetchDashboardData(true);
+            runSafe('check-in-sync', () => fetchDashboardDataRef.current?.(true));
             return;
           }
           throw new Error(result.message);
@@ -1241,7 +1267,7 @@ export default function EmployeeDashboard() {
         setLastSocketEventTime(Date.now());
         lastActionTimeRef.current = Date.now();
         setTimeout(() => {
-          void fetchDashboardData(true);
+          runSafe('post-check-in', () => fetchDashboardDataRef.current?.(true));
         }, 400);
       } catch (innerErr) {
         throw innerErr;
@@ -1254,7 +1280,7 @@ export default function EmployeeDashboard() {
         return;
       }
       clearApiCache('/attendance/today');
-      await fetchDashboardData(true);
+      runSafe('post-check-in-error', () => fetchDashboardDataRef.current?.(true));
     } finally {
       actionInProgressRef.current = false;
       setAttendanceBusy(null);
@@ -1284,7 +1310,7 @@ export default function EmployeeDashboard() {
         if (!result.ok) {
           if (result.status === 409) {
             clearApiCache('/attendance/today');
-            await fetchDashboardData(true);
+            runSafe('attendance-sync', () => fetchDashboardDataRef.current?.(true));
             return;
           }
           throw new Error(result.message);
@@ -1348,7 +1374,7 @@ export default function EmployeeDashboard() {
         setLastSocketEventTime(Date.now());
         lastActionTimeRef.current = Date.now();
         setTimeout(() => {
-          void fetchDashboardData(true);
+          runSafe('post-check-in', () => fetchDashboardDataRef.current?.(true));
         }, 400);
       } catch (innerErr) {
         throw innerErr;
@@ -1357,7 +1383,7 @@ export default function EmployeeDashboard() {
       console.error('Check-out error:', error);
       toast.error(error instanceof Error ? error.message : 'Check-out failed');
       clearApiCache('/attendance/today');
-      await fetchDashboardData(true);
+      runSafe('post-check-out-error', () => fetchDashboardDataRef.current?.(true));
     } finally {
       actionInProgressRef.current = false;
       setAttendanceBusy(null);

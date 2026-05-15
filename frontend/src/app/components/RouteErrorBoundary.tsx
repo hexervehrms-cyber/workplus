@@ -37,9 +37,14 @@ export class RouteErrorBoundary extends Component<Props, State> {
         <div className="min-h-[40vh] flex flex-col items-center justify-center gap-4 p-8 text-center">
           <p className="text-lg font-semibold text-foreground">This page hit an error</p>
           <p className="text-sm text-muted-foreground max-w-md">{this.state.message}</p>
-          <Button type="button" onClick={this.handleRetry}>
-            Try again
-          </Button>
+          <div className="flex flex-wrap gap-2 justify-center">
+            <Button type="button" onClick={this.handleRetry}>
+              Try again
+            </Button>
+            <Button type="button" variant="outline" onClick={() => window.location.reload()}>
+              Reload page
+            </Button>
+          </div>
         </div>
       );
     }

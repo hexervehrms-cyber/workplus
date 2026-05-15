@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Calendar, Loader } from 'lucide-react';
 import { buildApiUrl } from '../../utils/apiHelper';
+import { safeLocaleTime, hasCheckOutValue } from '../../utils/safeUi';
 import { TokenManager } from '../../utils/api';
 import {
   readPersistedAttendance,
@@ -195,14 +196,10 @@ export default function Attendance() {
       }
 
       const ls = payload?.liveStatus;
-      const checkInTime = att.checkIn
-        ? new Date(att.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-        : null;
-      const checkOutTime = att.checkOut
-        ? new Date(att.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-        : null;
+      const checkInTime = safeLocaleTime(att.checkIn);
+      const checkOutTime = safeLocaleTime(att.checkOut);
 
-      const hasCheckOut = att.checkOut != null && String(att.checkOut).trim() !== '';
+      const hasCheckOut = hasCheckOutValue(att.checkOut);
       let isCheckedInNow = false;
       if (hasCheckOut) {
         isCheckedInNow = false;

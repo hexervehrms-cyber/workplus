@@ -94,7 +94,7 @@ function RoleBasedRedirect() {
     };
 
     verifyAndRedirect();
-  }, [user, loading]);
+  }, [user?.id, user?.role, loading]);
 
   if (verifying) {
     console.log('⏳ RoleBasedRedirect - Still verifying...');

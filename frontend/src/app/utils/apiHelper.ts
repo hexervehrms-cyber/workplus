@@ -177,6 +177,20 @@ export const apiGet = async <T = any>(endpoint: string, useCache = true): Promis
   return flight;
 };
 
+/** GET that never throws — for dashboards and background sync. */
+export async function apiGetSafe<T = unknown>(
+  endpoint: string,
+  useCache = true
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  try {
+    const data = await apiGet<T>(endpoint, useCache);
+    return { ok: true, data };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Request failed';
+    return { ok: false, error: message };
+  }
+}
+
 /**
  * Clear cache for specific endpoint or all
  */

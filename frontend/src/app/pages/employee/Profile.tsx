@@ -373,8 +373,10 @@ export default function Profile() {
         lastName: employeeProfile?.lastName || profileData?.profile?.lastName || '',
         email: profileData?.email || '',
         phone: employeeProfile?.phone || profileData?.contact?.phone || '',
-        dateOfBirth: '',
-        gender: '',
+        dateOfBirth: employeeProfile?.dateOfBirth
+          ? new Date(employeeProfile.dateOfBirth).toISOString().split('T')[0]
+          : '',
+        gender: employeeProfile?.gender || '',
         address: employeeProfile?.address || profileData?.contact?.address?.street || '',
         employeeId: employeeProfile?.employeeId || employeeProfile?.employeeCode || '',
         department: employeeProfile?.department || '',
@@ -522,7 +524,9 @@ export default function Profile() {
         },
         employeeDetails: {
           phone: personalForm.phone.trim(),
-          address: personalForm.address.trim()
+          address: personalForm.address.trim(),
+          gender: personalForm.gender.trim(),
+          ...(personalForm.dateOfBirth ? { dateOfBirth: personalForm.dateOfBirth } : {}),
         }
       });
 
@@ -535,7 +539,9 @@ export default function Profile() {
           firstName: personalForm.firstName.trim(),
           lastName: personalForm.lastName.trim(),
           phone: personalForm.phone.trim(),
-          address: personalForm.address.trim()
+          address: personalForm.address.trim(),
+          gender: personalForm.gender.trim(),
+          dateOfBirth: personalForm.dateOfBirth,
         } : null);
 
         setIsEditingPersonal(false);
@@ -836,6 +842,9 @@ export default function Profile() {
               <Button
                 size="icon"
                 className="absolute bottom-0 right-0 rounded-full w-10 h-10"
+                type="button"
+                aria-label="Edit personal information"
+                onClick={() => setIsEditingPersonal(true)}
               >
                 <Edit className="w-4 h-4" />
               </Button>

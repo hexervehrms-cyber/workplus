@@ -4,6 +4,10 @@
  */
 
 import express from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { authenticate } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import ChatMessage from '../models/ChatMessage.js';
@@ -11,7 +15,29 @@ import User from '../models/User.js';
 import logger from '../utils/logger.js';
 import { sendTeamsMessage, getTeamsChatMessages, createTeamsChat } from '../config/teamsConfig.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const router = express.Router();
+
+const chatUploadDir = path.join(__dirname, '..', 'uploads', 'chat');
+const chatFileStorage = multer.diskStorage({
+  destination(_req, _file, cb) {
+    if (!fs.existsSync(chatUploadDir)) {
+      fs.mkdirSync(chatUploadDir, { recursive: true });
+    }
+    cb(null, chatUploadDir);
+  },
+  filename(_req, file, cb) {
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, `chat-${uniqueSuffix}${path.extname(file.originalname)}`);
+  }
+});
+
+const chatFileUpload = multer({
+  storage: chatFileStorage,
+  limits: { fileSize: 25 * 1024 * 1024 }
+});
 
 /**
  * Send a message
@@ -100,6 +126,74 @@ router.post('/messages', authenticate, asyncHandler(async (req, res) => {
     });
   }
 }));
+
+/**
+ * POST /api/chat/upload
+ * Upload a file attachment for a direct message (persists message + file on disk)
+ */
+router.post(
+  '/upload',
+  authenticate,
+  chatFileUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    const senderId = req.user.userId;
+    const orgId = req.user.orgId;
+    const { recipientId } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No file uploaded' });
+    }
+    if (!recipientId) {
+      return res.status(400).json({ success: false, message: 'recipientId is required' });
+    }
+
+    const recipient = await User.findOne({
+      _id: recipientId,
+      orgId,
+      isActive: true,
+      deletedAt: null
+    }).select('_id').lean();
+
+    if (!recipient) {
+      return res.status(404).json({ success: false, message: 'Recipient not found' });
+    }
+
+    const relPath = `/uploads/chat/${req.file.filename}`;
+    const conversationId = [String(senderId), String(recipientId)].sort().join('_');
+
+    const message = await ChatMessage.create({
+      senderId,
+      recipientId,
+      conversationId,
+      messageType: 'file',
+      content: {
+        text: relPath,
+        file: {
+          fileName: req.file.originalname,
+          filePath: relPath,
+          fileSize: req.file.size,
+          mimeType: req.file.mimetype
+        }
+      },
+      channelInfo: {
+        channelType: 'direct',
+        participants: [senderId, recipientId]
+      },
+      orgId,
+      status: 'delivered'
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        fileUrl: relPath,
+        messageId: message.messageId || message._id.toString(),
+        fileName: req.file.originalname
+      },
+      message: 'File uploaded'
+    });
+  })
+);
 
 /**
  * Get conversation messages

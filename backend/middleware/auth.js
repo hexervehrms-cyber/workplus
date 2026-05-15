@@ -40,16 +40,6 @@ export const authenticate = asyncHandler(async (req, res, next) => {
   }
   
   try {
-    // Check if token is blacklisted
-    const isBlacklisted = await JWTCache.isTokenBlacklisted(token);
-    if (isBlacklisted) {
-      return res.status(401).json({
-        success: false,
-        message: "Token has been revoked. Please log in again.",
-        code: "TOKEN_REVOKED"
-      });
-    }
-
     // Try to get from cache first (must still match verified JWT subject — legacy keys used token.substring(0,20) and collided)
     let cachedData = await JWTCache.getTokenCache(token);
     if (cachedData?.userData?.role) {

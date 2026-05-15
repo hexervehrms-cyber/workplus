@@ -9,7 +9,8 @@ import {
   Users, DollarSign, Package
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { apiGet, apiPost, buildFileUrl } from '../../utils/apiHelper';
+import { apiPost, buildApiUrl } from '../../utils/apiHelper';
+import { TokenManager } from '../../utils/api';
 
 interface ExportStats {
   totalRecords: number;
@@ -35,9 +36,11 @@ export default function BulkOperations() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [importFormat, setImportFormat] = useState<'csv' | 'json'>('csv');
 
-  const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+  const getBearer = () =>
+    TokenManager.get() || localStorage.getItem('authToken') || localStorage.getItem('token');
 
   const handleExport = async (format: 'csv' | 'json') => {
+    const token = getBearer();
     if (!token) {
       toast.error('Authentication token not found. Please log in again.');
       return;
@@ -45,9 +48,14 @@ export default function BulkOperations() {
 
     try {
       setLoading(true);
-      const fileUrl = buildFileUrl(`/admin/bulk/${activeTab}/export/${format}`);
-      
-      const response = await fetch(fileUrl);
+      const url = buildApiUrl(`admin/bulk/${activeTab}/export/${format}`);
+
+      const response = await fetch(url, {
+        credentials: 'include',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || `Failed to export ${activeTab}`);
@@ -109,6 +117,7 @@ export default function BulkOperations() {
       return;
     }
 
+    const token = getBearer();
     if (!token) {
       toast.error('Authentication token not found. Please log in again.');
       return;
@@ -121,7 +130,7 @@ export default function BulkOperations() {
       const formData = new FormData();
       formData.append('file', selectedFile);
 
-      const endpoint = `/api/admin/bulk/${activeTab}/import/${importFormat}`;
+      const endpoint = `admin/bulk/${activeTab}/import/${importFormat}`;
 
       const data = await apiPost(endpoint, formData);
 

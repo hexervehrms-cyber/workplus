@@ -713,15 +713,36 @@ router.get(
       const { slipId } = req.params;
 
       const slip = await SalarySlip.findById(slipId)
-        .populate("employeeId", "firstName lastName employeeCode email")
+        .populate({
+          path: "employeeId",
+          select: "firstName lastName employeeCode email userId",
+          populate: { path: "userId", select: "_id" }
+        })
         .populate("salaryStructureId");
 
       if (!slip) {
         return sendError(res, "Salary slip not found", 404, "NOT_FOUND");
       }
 
-      // Check authorization
-      if (slip.userId.toString() !== req.user.userId && req.user.role !== "admin" && req.user.role !== "hr" && req.user.role !== "super_admin") {
+      // Check authorization (userId on slip, or owning employee's user)
+      const slipOwnerUserId =
+        slip.userId == null
+          ? null
+          : slip.userId._id
+            ? slip.userId._id.toString()
+            : slip.userId.toString();
+      const employeeDoc = slip.employeeId;
+      let employeeUserId = null;
+      if (employeeDoc?.userId) {
+        const u = employeeDoc.userId;
+        employeeUserId = (u._id || u).toString();
+      }
+      const requestUserId = req.user.userId?.toString?.() || String(req.user.userId);
+      const isOwner =
+        (slipOwnerUserId != null && slipOwnerUserId === requestUserId) ||
+        (employeeUserId != null && employeeUserId === requestUserId);
+      const isPrivileged = ["admin", "hr", "super_admin"].includes(req.user.role);
+      if (!isOwner && !isPrivileged) {
         return sendError(res, "Unauthorized", 403, "FORBIDDEN");
       }
 

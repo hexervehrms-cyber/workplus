@@ -4,8 +4,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { Send, Search, MoreVertical, Paperclip, Smile, Phone, Video, Users, MessageSquare, Loader2, Check, CheckCheck } from 'lucide-react';
-import { Card } from './ui/card';
+import { Send, Search, MoreVertical, Paperclip, Smile, Phone, Video, MessageSquare, Loader2, Check, CheckCheck } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -15,10 +14,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 import { apiClient, TokenManager } from '../utils/api';
+import { buildFileUrl } from '../utils/apiHelper';
 import { SocketService } from '../utils/socket';
 import { toast } from 'sonner';
 import { useAuth } from '../context/AuthContext';
@@ -69,14 +68,12 @@ export default function TeamsMessenger() {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [_conversations, setConversations] = useState<Conversation[]>([]);
   const [messageInput, setMessageInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
-  const [teamsEnabled, setTeamsEnabled] = useState(false);
-  const [teamsChatId, setTeamsChatId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const socketService = useRef<SocketService | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
@@ -206,8 +203,8 @@ export default function TeamsMessenger() {
             .filter((u: any) => u.role !== 'super_admin' && String(u._id) !== myId)
             .map((u: any) => ({
               id: u._id,
-              name: u.name,
-              email: u.email,
+              name: u.name || 'User',
+              email: (u.email && String(u.email).trim()) || 'Email not on file',
               role: u.role,
               avatar: u.avatar,
               isOnline: true,
@@ -307,10 +304,6 @@ export default function TeamsMessenger() {
         recipientId: selectedUser.id,
         content: messageToSend,
         messageType: 'text',
-        teamsIntegration: {
-          enabled: teamsEnabled,
-          chatId: teamsChatId
-        }
       });
 
       // Also send via API for persistence
@@ -320,19 +313,18 @@ export default function TeamsMessenger() {
           text: messageToSend
         },
         messageType: 'text',
-        teamsIntegration: {
-          enabled: teamsEnabled,
-          chatId: teamsChatId
-        }
       });
       
-      // Update the temporary message with the real message ID from server
-      if (response.data?.messageId) {
-        setMessages(prev => prev.map(msg => 
-          msg.messageId === newMessage.messageId 
-            ? { ...msg, messageId: response.data.messageId, status: 'delivered' }
-            : msg
-        ));
+      const saved = response.data as { messageId?: string; _id?: string } | undefined;
+      const realId = saved?.messageId || (saved?._id != null ? String(saved._id) : undefined);
+      if (realId) {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.messageId === newMessage.messageId
+              ? { ...msg, messageId: realId, status: 'delivered' as const }
+              : msg
+          )
+        );
       }
 
       toast.success('Message sent');
@@ -367,39 +359,15 @@ export default function TeamsMessenger() {
     }, 3000);
   };
 
-  // Create Teams chat
-  const handleCreateTeamsChat = async () => {
-    if (!selectedUser) return;
-
-    try {
-      const response = await apiClient.post('/chat/teams/create', {
-        recipientId: selectedUser.id,
-        topic: `Chat with ${selectedUser.name}`
-      });
-
-      if (response.data?.teamsChatId) {
-        setTeamsChatId(response.data.teamsChatId);
-        setTeamsEnabled(true);
-        toast.success('Teams chat created successfully');
-      }
-    } catch (error) {
-      console.error('Error creating Teams chat:', error);
-      toast.error('Failed to create Teams chat');
-    }
-  };
-
-  // Handle deleting message
-  const handleDeleteMessage = async (messageId: string) => {
-    if (!window.confirm('Delete this message?')) return;
-
-    try {
-      await apiClient.delete(`/chat/messages/${messageId}`);
-      setMessages(prev => prev.filter(msg => msg.messageId !== messageId));
-      toast.success('Message deleted');
-    } catch (error) {
-      console.error('Error deleting message:', error);
-      toast.error('Failed to delete message');
-    }
+  // Open a browser-based meeting room (no Microsoft Teams dependency)
+  const openQuickMeeting = (withVideo: boolean) => {
+    if (!selectedUser || !user?.id) return;
+    const room = encodeURIComponent(`WorkPlus-${[String(user.id), selectedUser.id].sort().join('-')}`);
+    const base = withVideo
+      ? `https://meet.jit.si/${room}`
+      : `https://meet.jit.si/${room}#config.startWithVideoMuted=true`;
+    window.open(base, '_blank', 'noopener,noreferrer');
+    toast.success(withVideo ? 'Opening video room in a new tab' : 'Opening voice-first room in a new tab');
   };
 
   // Handle file upload
@@ -413,31 +381,33 @@ export default function TeamsMessenger() {
       formData.append('file', file);
       formData.append('recipientId', selectedUser.id);
 
-      const response = await apiClient.post('/chat/upload', formData);
+      const response = await apiClient.upload<{ fileUrl?: string; messageId?: string; fileName?: string }>(
+        '/chat/upload',
+        formData
+      );
 
-      if (response.data?.fileUrl) {
-
+      const payload = response.data;
+      if (payload?.fileUrl) {
         const newMessage: Message = {
-          messageId: response.data.messageId || `temp-${Date.now()}`,
+          messageId: payload.messageId || `temp-${Date.now()}`,
           senderId: user.id,
           senderName: user.name || 'You',
           recipientId: selectedUser.id,
-          content: response.data.fileUrl,
+          content: payload.fileUrl,
           timestamp: new Date(),
           isOwn: true,
           status: 'delivered',
-          messageType: 'file'
+          messageType: 'file',
         };
 
-        setMessages(prev => [...prev, newMessage]);
+        setMessages((prev) => [...prev, newMessage]);
 
-        // Emit via socket
         socketService.current.emit('chat:send_message', {
           recipientId: selectedUser.id,
-          content: response.data.fileUrl,
+          content: payload.fileUrl,
           messageType: 'file',
           fileName: file.name,
-          fileSize: file.size
+          fileSize: file.size,
         });
 
         toast.success('File uploaded successfully');
@@ -447,6 +417,7 @@ export default function TeamsMessenger() {
       toast.error('Failed to upload file');
     } finally {
       setSending(false);
+      if (event.target) event.target.value = '';
     }
   };
 
@@ -558,37 +529,17 @@ export default function TeamsMessenger() {
                       {selectedUser.role === 'super_admin' ? 'Super Admin' : selectedUser.role.charAt(0).toUpperCase() + selectedUser.role.slice(1)}
                     </Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground">{selectedUser.email}</p>
+                  <p className="text-xs text-muted-foreground break-all">{selectedUser.email}</p>
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
-                {teamsEnabled && (
-                  <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-                    <MessageSquare className="w-3 h-3 mr-1" />
-                    Teams Connected
-                  </Badge>
-                )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleCreateTeamsChat}
-                  title="Connect to Microsoft Teams"
-                >
-                  <Users className="w-4 h-4" />
-                </Button>
                 <Button
                   variant="ghost"
                   size="sm"
                   type="button"
-                  title="Voice call"
-                  onClick={() =>
-                    toast.info(
-                      teamsEnabled
-                        ? 'Use Microsoft Teams for voice once your org has Teams calling enabled.'
-                        : 'Connect Microsoft Teams from the menu to enable integrated calls.'
-                    )
-                  }
+                  title="Voice call (opens browser meeting)"
+                  onClick={() => openQuickMeeting(false)}
                 >
                   <Phone className="w-4 h-4" />
                 </Button>
@@ -596,14 +547,8 @@ export default function TeamsMessenger() {
                   variant="ghost"
                   size="sm"
                   type="button"
-                  title="Video call"
-                  onClick={() =>
-                    toast.info(
-                      teamsEnabled
-                        ? 'Start a Teams meeting from your Teams client, or use Connect below.'
-                        : 'Connect Microsoft Teams first to use video in this workspace.'
-                    )
-                  }
+                  title="Video call (opens browser meeting)"
+                  onClick={() => openQuickMeeting(true)}
                 >
                   <Video className="w-4 h-4" />
                 </Button>
@@ -614,24 +559,12 @@ export default function TeamsMessenger() {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-56">
-                    <DropdownMenuItem onClick={handleCreateTeamsChat}>
-                      Connect Microsoft Teams
-                    </DropdownMenuItem>
                     <DropdownMenuItem
-                      onClick={() => toast.info('Open your Teams app to start an instant meeting if enabled by your admin.')}
+                      onClick={() =>
+                        toast.info('Meetings open in a new browser tab (Jitsi). Allow camera/microphone when prompted.')
+                      }
                     >
-                      Teams meeting tips
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      disabled={!teamsEnabled}
-                      onClick={() => {
-                        setTeamsEnabled(false);
-                        setTeamsChatId(null);
-                        toast.success('Teams link cleared for this conversation');
-                      }}
-                    >
-                      Disconnect Teams for this chat
+                      About browser calls
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -658,7 +591,18 @@ export default function TeamsMessenger() {
                             : 'bg-orange-500 text-white'
                         }`}
                       >
-                        <p className="text-sm">{message.content}</p>
+                        {message.messageType === 'file' && message.content?.startsWith('/') ? (
+                          <a
+                            href={buildFileUrl(message.content)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm underline break-all"
+                          >
+                            View attachment
+                          </a>
+                        ) : (
+                          <p className="text-sm break-words">{message.content}</p>
+                        )}
                         <div className="flex items-center gap-1 mt-1 text-xs opacity-90">
                           <span>
                             {new Date(message.timestamp).toLocaleDateString('en-US', { 

@@ -857,13 +857,8 @@ export class AdvanceLoanService {
 // ============================================
 export class TokenRefreshService {
   async refreshToken(): Promise<ApiResponse<{ token: string; user: any }>> {
-    const refreshToken = TokenManager.getRefreshToken();
-
-    if (!refreshToken) {
-      throw new ApiError('No refresh token available', 401, 'NO_REFRESH_TOKEN');
-    }
-
-    const url = `${getApiBaseUrl()}/security/auth/refresh-token`;
+    const bodyRefresh = TokenManager.getRefreshToken();
+    const url = `${getApiBaseUrl()}/auth/refresh`;
     const REFRESH_TIMEOUT = 15000;
 
     try {
@@ -872,7 +867,8 @@ export class TokenRefreshService {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken })
+          credentials: 'include',
+          body: JSON.stringify(bodyRefresh ? { refreshToken: bodyRefresh } : {})
         },
         REFRESH_TIMEOUT
       );

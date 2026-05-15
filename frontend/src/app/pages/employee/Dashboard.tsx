@@ -6,7 +6,7 @@ import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useAuth } from '../../context/AuthContext';
 import { TokenManager } from '../../utils/api';
 import { apiGet, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
-import { clearPersistedAttendance, writePersistedAttendance } from '../../utils/attendancePersistence';
+import { clearPersistedAttendance, writePersistedAttendance, localDayKey } from '../../utils/attendancePersistence';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useAttendance } from '../../../context/AttendanceContext';
 import { getDynamicGreeting, getMotivationalQuote } from '../../utils/greetingUtils';
@@ -15,8 +15,8 @@ import {
   Calendar,
   Clock,
   TrendingUp,
-  LogIn,
-  LogOut,
+  Play,
+  Square,
   Pause
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
@@ -356,9 +356,19 @@ export default function EmployeeDashboard() {
           : null;
 
         const ls = attendanceData.liveStatus;
-        const isCurrentlyCheckedIn = ls?.status
-          ? ls.status === 'checked_in' || ls.status === 'on_break'
-          : !!attendance.checkIn && !attendance.checkOut;
+        const hasCheckOut =
+          attendance.checkOut != null && String(attendance.checkOut).trim() !== '';
+
+        let isCurrentlyCheckedIn = false;
+        if (hasCheckOut) {
+          isCurrentlyCheckedIn = false;
+        } else if (ls?.status === 'checked_out' || ls?.status === 'not_checked_in') {
+          isCurrentlyCheckedIn = false;
+        } else if (ls?.status === 'checked_in' || ls?.status === 'on_break' || ls?.status === 'in_meeting') {
+          isCurrentlyCheckedIn = true;
+        } else {
+          isCurrentlyCheckedIn = Boolean(attendance.checkIn);
+        }
 
         let calculatedIsOnBreak = false;
         let calculatedBreakType = 'regular';
@@ -417,7 +427,7 @@ export default function EmployeeDashboard() {
           timestamp: Date.now()
         });
       } else {
-        console.log('ℹ️ Server confirmed no attendance row for today — showing Log In');
+        console.log('ℹ️ Server confirmed no attendance row for today — showing Check In');
 
         updateAttendance({
           isCheckedIn: false,
@@ -437,9 +447,10 @@ export default function EmployeeDashboard() {
         clearApiCache('/attendance/today');
       }
 
+      const weekHours = typeof attendanceData?.hoursThisWeek === 'number' ? attendanceData.hoursThisWeek : 0;
       setKpiMetrics({
         leaveBalance: "12 days",
-        hoursThisWeek: `${attendanceData?.liveStatus?.currentHours || 0}h`,
+        hoursThisWeek: `${weekHours}h`,
         performance: "85%"
       });
 
@@ -960,9 +971,10 @@ export default function EmployeeDashboard() {
       lastActionTimeRef.current = Date.now();
 
       const token = TokenManager.get();
-      // For employees, send minimal payload - backend extracts userId, employeeId, orgId from JWT
-      const payload: { notes: string } = {
-        notes: 'Checked in'
+      const idempotencyKey = `check-in-${user?.id || 'me'}-${localDayKey()}`;
+      const payload: { notes: string; idempotencyKey: string } = {
+        notes: 'Checked in',
+        idempotencyKey
       };
       
       // CRITICAL FIX: Add timeout to fetch
@@ -974,7 +986,8 @@ export default function EmployeeDashboard() {
           credentials: 'include',
           headers: {
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Idempotency-Key': idempotencyKey
           },
           body: JSON.stringify(payload),
           signal: controller.signal
@@ -991,7 +1004,11 @@ export default function EmployeeDashboard() {
           throw new Error(errorMessage);
         }
 
-        const checkInTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const result = await response.json();
+        const serverAtt = result?.data;
+        const checkInTime = serverAtt?.checkIn
+          ? new Date(serverAtt.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+          : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
         // Update state immediately
         updateAttendance({
@@ -999,6 +1016,21 @@ export default function EmployeeDashboard() {
           checkInTime: checkInTime,
           status: 'present'
         }, 'action');
+
+        const uid = user?.id ? String(user.id) : null;
+        writePersistedAttendance(uid, {
+          checkedIn: true,
+          isCheckedIn: true,
+          checkInTime,
+          checkOutTime: null,
+          currentHours: 0,
+          hoursWorked: 0,
+          status: 'present',
+          isOnBreak: false,
+          currentBreakDuration: 0,
+          breakType: 'regular',
+          timestamp: Date.now()
+        });
 
         clearApiCache('/attendance/today');
         setTimeout(() => {
@@ -1031,8 +1063,10 @@ export default function EmployeeDashboard() {
 
       const resolvedEmployeeId = await ensureEmployeeId();
       const token = TokenManager.get();
-      const payload: { notes: string; employeeId?: string | null } = {
-        notes: 'Checked out'
+      const idempotencyKey = `check-out-${user?.id || 'me'}-${localDayKey()}`;
+      const payload: { notes: string; employeeId?: string | null; idempotencyKey: string } = {
+        notes: 'Checked out',
+        idempotencyKey
       };
       if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
       
@@ -1045,7 +1079,8 @@ export default function EmployeeDashboard() {
           credentials: 'include',
           headers: {
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Idempotency-Key': idempotencyKey
           },
           body: JSON.stringify(payload),
           signal: controller.signal
@@ -1062,16 +1097,41 @@ export default function EmployeeDashboard() {
           throw new Error(errorMessage);
         }
 
-        const checkOutTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const result = await response.json();
+        const serverAtt = result?.data;
+        const hoursWorked =
+          typeof serverAtt?.hoursWorked === 'number' && !Number.isNaN(serverAtt.hoursWorked)
+            ? serverAtt.hoursWorked
+            : 0;
+        const checkOutTime = serverAtt?.checkOut
+          ? new Date(serverAtt.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+          : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const prevCheckInTime = todayAttendance.checkInTime;
 
         // Update state immediately
         updateAttendance({
           isCheckedIn: false,
           checkOutTime: checkOutTime,
+          hoursWorked,
           isOnBreak: false,
           breakType: 'regular',
           currentBreakDuration: 0
         }, 'action');
+
+        const uid = user?.id ? String(user.id) : null;
+        writePersistedAttendance(uid, {
+          checkedIn: false,
+          isCheckedIn: false,
+          checkInTime: prevCheckInTime,
+          checkOutTime,
+          currentHours: hoursWorked,
+          hoursWorked,
+          status: 'present',
+          isOnBreak: false,
+          currentBreakDuration: 0,
+          breakType: 'regular',
+          timestamp: Date.now()
+        });
 
         clearApiCache('/attendance/today');
         setTimeout(() => {
@@ -1129,34 +1189,38 @@ export default function EmployeeDashboard() {
               </Badge>
             )}
 
-            {/* Action Buttons - Professional Layout */}
+            {/* Action buttons: shift attendance (not account login — use profile menu to sign out) */}
+            <div className="flex flex-col items-end gap-1">
             <div className="flex gap-2">
               {!todayAttendance.isCheckedIn ? (
                 <Button
+                  type="button"
                   size="sm"
                   className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
                   disabled={loading}
                   onClick={handleCheckIn}
-                  aria-label="Check in to work"
+                  aria-label="Check in to work for today"
                 >
-                  <LogIn className="w-4 h-4 mr-1.5" />
-                  Log In
+                  <Play className="w-4 h-4 mr-1.5" />
+                  Check In
                 </Button>
               ) : (
                 <>
                   <Button
+                    type="button"
                     size="sm"
                     className="bg-red-600 hover:bg-red-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
                     disabled={loading}
                     onClick={handleCheckOut}
-                    aria-label="Check out from work"
+                    aria-label="Check out from work for today"
                   >
-                    <LogOut className="w-4 h-4 mr-1.5" />
-                    Log Out
+                    <Square className="w-4 h-4 mr-1.5" />
+                    Check Out
                   </Button>
 
                   {!todayAttendance.isOnBreak ? (
                         <Button
+                          type="button"
                           size="sm"
                           className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
                           onClick={() => handleBreakStart('regular')}
@@ -1168,6 +1232,7 @@ export default function EmployeeDashboard() {
                         </Button>
                       ) : (
                         <Button
+                          type="button"
                           size="sm"
                           className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
                           onClick={handleBreakEnd}
@@ -1184,6 +1249,7 @@ export default function EmployeeDashboard() {
               
               {/* Manual Refresh Button - Always visible */}
               <Button
+                type="button"
                 size="sm"
                 variant="outline"
                 className="text-muted-foreground hover:text-foreground px-3 py-2 rounded-md transition-colors"
@@ -1196,6 +1262,10 @@ export default function EmployeeDashboard() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
               </Button>
+            </div>
+            <p className="text-xs text-muted-foreground text-right max-w-[280px] leading-snug">
+              Shift attendance for today. To sign out of your account, use the profile menu (top right).
+            </p>
             </div>
           </div>
         </div>

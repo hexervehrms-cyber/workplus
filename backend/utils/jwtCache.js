@@ -1,7 +1,7 @@
 /**
  * JWT Cache Manager - Redis-based token caching
- * Improves performance by caching JWT verification results
- * Includes token blacklisting for logout functionality
+ * Improves performance by caching JWT verification results.
+ * Logout relies on refresh/session revocation and short access TTL (no blacklist).
  */
 
 import crypto from "crypto";
@@ -10,7 +10,6 @@ import logger from './logger.js';
 
 const TOKEN_CACHE_PREFIX = 'jwt_token:';
 const USER_SESSION_PREFIX = 'user_session:';
-const TOKEN_BLACKLIST_PREFIX = 'token_blacklist:';
 const TOKEN_TTL = 24 * 60 * 60; // 24 hours
 
 /** Full-token hash — NEVER use token.substring(0,20): HS256 JWTs share an identical prefix, causing cross-user cache collisions. */
@@ -142,61 +141,6 @@ class JWTCache {
   }
 
   /**
-   * Blacklist a token (for logout)
-   */
-  static async blacklistToken(token, expiresIn = TOKEN_TTL) {
-    if (!redis.isRedisConnected()) {
-      logger.debug('Redis not connected - skipping token blacklist');
-      return false;
-    }
-
-    try {
-      const key = `${TOKEN_BLACKLIST_PREFIX}${tokenFingerprint(token)}`;
-      const success = await redis.set(key, { blacklistedAt: new Date().toISOString() }, expiresIn);
-      
-      if (success) {
-        logger.debug('Token blacklisted', {
-          tokenPrefix: token.substring(0, 20)
-        });
-      }
-      
-      return success;
-    } catch (error) {
-      logger.warn('Failed to blacklist token', {
-        error: error.message
-      });
-      return false;
-    }
-  }
-
-  /**
-   * Check if token is blacklisted
-   */
-  static async isTokenBlacklisted(token) {
-    if (!redis.isRedisConnected()) {
-      return false;
-    }
-
-    try {
-      const key = `${TOKEN_BLACKLIST_PREFIX}${tokenFingerprint(token)}`;
-      const blacklisted = await redis.get(key);
-      
-      if (blacklisted) {
-        logger.debug('Token is blacklisted', {
-          tokenPrefix: token.substring(0, 20)
-        });
-      }
-      
-      return !!blacklisted;
-    } catch (error) {
-      logger.warn('Failed to check token blacklist', {
-        error: error.message
-      });
-      return false;
-    }
-  }
-
-  /**
    * Clear token cache
    */
   static async clearTokenCache(token) {
@@ -256,12 +200,10 @@ class JWTCache {
     try {
       const tokenKeys = await redis.keys(`${TOKEN_CACHE_PREFIX}*`);
       const sessionKeys = await redis.keys(`${USER_SESSION_PREFIX}*`);
-      const blacklistKeys = await redis.keys(`${TOKEN_BLACKLIST_PREFIX}*`);
 
       return {
         cachedTokens: tokenKeys.length,
         cachedSessions: sessionKeys.length,
-        blacklistedTokens: blacklistKeys.length,
         timestamp: new Date().toISOString()
       };
     } catch (error) {

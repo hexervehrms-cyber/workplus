@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Pause, Calendar, Loader } from 'lucide-react';
+import { Calendar, Loader } from 'lucide-react';
 import { buildApiUrl } from '../../utils/apiHelper';
 import { TokenManager } from '../../utils/api';
 import { readPersistedAttendance, isPayloadFresh } from '../../utils/attendancePersistence';
@@ -22,6 +22,36 @@ interface AttendanceRecord {
 
 const HISTORY_PAGE_SIZE = 10;
 
+function buildActivityLogsFromAttendance(att: any) {
+  if (!att) return [];
+  type Row = { id: string; action: string; time: string; status: string; sortKey: number };
+  const rows: Row[] = [];
+  const pushRow = (id: string, action: string, d: string | Date, status: string) => {
+    const dt = new Date(d);
+    rows.push({
+      id,
+      action,
+      time: dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      status,
+      sortKey: dt.getTime(),
+    });
+  };
+  if (att.checkIn) pushRow(`in-${att._id}`, 'Checked in', att.checkIn, 'working');
+  if (Array.isArray(att.breaks)) {
+    att.breaks.forEach((b: any, i: number) => {
+      if (b.startTime) {
+        pushRow(`bs-${att._id}-${i}`, `Break started (${b.breakType || 'regular'})`, b.startTime, 'break');
+      }
+      if (b.endTime) {
+        pushRow(`be-${att._id}-${i}`, 'Break ended', b.endTime, 'working');
+      }
+    });
+  }
+  if (att.checkOut) pushRow(`out-${att._id}`, 'Checked out', att.checkOut, 'working');
+  rows.sort((a, b) => b.sortKey - a.sortKey);
+  return rows.map(({ sortKey: _s, ...rest }) => rest);
+}
+
 function isLikelyMongoObjectId(id: string | null | undefined): boolean {
   return !!id && /^[a-f\d]{24}$/i.test(id);
 }
@@ -33,15 +63,15 @@ export default function Attendance() {
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
   const [filteredAttendance, setFilteredAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [currentHours, setCurrentHours] = useState(0);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
-  const [activityLogs, setActivityLogs] = useState<Array<{
-    id: string;
-    action: string;
-    time: string;
-    status: string;
-  }>>([]);
+  const [activityLogs, setActivityLogs] = useState<
+    Array<{
+      id: string;
+      action: string;
+      time: string;
+      status: string;
+    }>
+  >([]);
   const [filterStartDate, setFilterStartDate] = useState<string>('');
   const [filterEndDate, setFilterEndDate] = useState<string>('');
   const [filterLoading, setFilterLoading] = useState(false);
@@ -49,20 +79,10 @@ export default function Attendance() {
   const [historyTotalPages, setHistoryTotalPages] = useState(1);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
 
-  // Load activity logs from localStorage on mount
   useEffect(() => {
-    const today = new Date().toDateString();
-    const storedLogs = localStorage.getItem(`activityLogs_${today}`);
-    if (storedLogs) {
-      try {
-        setActivityLogs(JSON.parse(storedLogs));
-      } catch (e) {
-        console.warn('Failed to parse stored activity logs');
-      }
-    }
-  }, []);
-
-  // Fetch employee ID
+    const att = todayData?.attendance;
+    setActivityLogs(buildActivityLogsFromAttendance(att));
+  }, [todayData]);
   const fetchEmployeeId = async () => {
     try {
       if (!user?.id) return;
@@ -132,7 +152,6 @@ export default function Attendance() {
         ? new Date(att.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
         : null;
 
-      setCurrentHours(hours);
       syncAttendance(
         {
           isCheckedIn: isCheckedInNow,
@@ -245,213 +264,6 @@ export default function Attendance() {
     setFilteredAttendance(attendanceHistory);
   }, [attendanceHistory]);
 
-  // Add activity log
-  const addActivityLog = (action: string, status: string) => {
-    const newLog = {
-      id: Date.now().toString(),
-      action,
-      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      status
-    };
-    setActivityLogs(prev => {
-      const updated = [newLog, ...prev];
-      // Save to localStorage
-      const today = new Date().toDateString();
-      localStorage.setItem(`activityLogs_${today}`, JSON.stringify(updated));
-      return updated;
-    });
-  };
-
-  // Get orgId
-  const getOrgId = () => {
-    let orgId = user?.orgId;
-    if (!orgId) {
-      const storedUser = localStorage.getItem('user');
-      if (storedUser) {
-        try {
-          const parsedUser = JSON.parse(storedUser);
-          orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-        } catch (e) {
-          console.warn('Could not parse stored user');
-        }
-      }
-    }
-    return orgId || 'system';
-  };
-
-  // Break Start
-  const handleBreakStart = async (kind: 'regular' = 'regular') => {
-    // Prevent starting break if not checked in
-    if (!liveAttendance.isCheckedIn) {
-      console.log('⏸️ [BREAK START] Not checked in, cannot start break');
-      alert('Please check in first before starting a break');
-      return;
-    }
-    
-    // Prevent starting break if already on break
-    if (liveAttendance.isOnBreak) {
-      console.log('⏸️ [BREAK START] Already on break, skipping');
-      return;
-    }
-    
-    try {
-      setActionLoading(true);
-      
-      // Optimistic update
-      syncAttendance(
-        {
-          isOnBreak: true,
-          breakType: kind,
-          currentBreakDuration: 0
-        },
-        'action'
-      );
-      
-      const token = TokenManager.get();
-      const payload: any = {
-        breakType: kind,
-        notes: `Break started`
-      };
-      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
-      if (getOrgId()) payload.orgId = getOrgId();
-      
-      const response = await fetch(buildApiUrl('/attendance/break-start'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Break start failed');
-      }
-
-      const result = await response.json();
-      const liveStatus = result.data?.liveStatus;
-      
-      // Confirm with server response
-      if (liveStatus) {
-        syncAttendance(
-          {
-            isOnBreak: liveStatus.isOnBreak || true,
-            breakType: liveStatus.breakType || kind,
-            currentBreakDuration: liveStatus.currentBreakDuration || 0
-          },
-          'action'
-        );
-      }
-      
-      addActivityLog('Started Break', 'break');
-    } catch (error) {
-      console.error('Break start error:', error);
-      // Rollback on error
-      syncAttendance(
-        {
-          isOnBreak: false,
-          breakType: 'regular',
-          currentBreakDuration: 0
-        },
-        'action'
-      );
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  // Break End
-  const handleBreakEnd = async () => {
-    // Prevent ending break if not on break
-    if (!liveAttendance.isOnBreak) {
-      console.log('⏸️ [BREAK END] Not on break, skipping');
-      return;
-    }
-    
-    const wasOnBreak = liveAttendance.isOnBreak;
-    const prevBreakType = liveAttendance.breakType;
-    
-    try {
-      setActionLoading(true);
-      
-      // Optimistic update
-      syncAttendance(
-        {
-          isOnBreak: false,
-          breakType: 'regular',
-          currentBreakDuration: 0
-        },
-        'action'
-      );
-      
-      const token = TokenManager.get();
-      const payload: any = {
-        notes: 'Break ended'
-      };
-      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
-      if (getOrgId()) payload.orgId = getOrgId();
-      
-      const response = await fetch(buildApiUrl('/attendance/break-end'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      const responseData = await response.json();
-      if (!response.ok) {
-        throw new Error(responseData.message || 'Break end failed');
-      }
-
-      const liveStatus = responseData?.data?.liveStatus;
-      
-      // Confirm with server response
-      if (liveStatus) {
-        syncAttendance(
-          {
-            isOnBreak: liveStatus.isOnBreak || false,
-            breakType: liveStatus.breakType || 'regular',
-            currentBreakDuration: liveStatus.currentBreakDuration || 0
-          },
-          'action'
-        );
-      }
-      
-      addActivityLog('Ended Break', 'working');
-    } catch (error) {
-      console.error('Break end error:', error);
-      // Rollback on error
-      syncAttendance(
-        {
-          isOnBreak: wasOnBreak,
-          breakType: prevBreakType || 'regular'
-        },
-        'action'
-      );
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  // Update hours every second when checked in
-  useEffect(() => {
-    if (!liveAttendance.isCheckedIn || !todayData?.attendance?.checkIn) return;
-
-    const interval = setInterval(() => {
-      const checkInTime = new Date(todayData.attendance.checkIn);
-      const now = new Date();
-      const hours = (now.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
-      setCurrentHours(hours);
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [liveAttendance.isCheckedIn, todayData]);
-
   // Single subscription: refresh from API (context is updated in fetchTodayAttendance)
   useEffect(() => {
     const unsub = realTimeSocket.onAttendanceUpdate(() => {
@@ -466,14 +278,14 @@ export default function Attendance() {
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      if (!liveAttendance.isCheckedIn && !liveAttendance.isOnBreak) return;
+      if (!liveAttendance.isCheckedIn) return;
 
       console.log('⏰ [ATTENDANCE] Periodic refresh triggered');
       fetchTodayAttendance();
     }, 30000); // Refresh every 30 seconds while checked in or on break
 
     return () => clearInterval(interval);
-  }, [employeeId, fetchTodayAttendance, liveAttendance.isCheckedIn, liveAttendance.isOnBreak]);
+  }, [employeeId, fetchTodayAttendance, liveAttendance.isCheckedIn]);
 
   // Initial load only — hydrate from IndexedDB / local cache, then API
   useEffect(() => {
@@ -481,7 +293,6 @@ export default function Attendance() {
       const uid = user?.id ? String(user.id) : null;
       const payload = await readPersistedAttendance(uid);
       if (payload && isPayloadFresh(payload)) {
-        setCurrentHours(payload.currentHours || payload.hoursWorked || 0);
         setLoading(false);
       }
 
@@ -506,35 +317,6 @@ export default function Attendance() {
         </Card>
       ) : (
         <>
-
-          {/* Break and Meeting Actions */}
-          {liveAttendance.isCheckedIn && (
-            <Card className="rounded-2xl overflow-hidden">
-              <div className="p-6 border-b border-border">
-                <h3 className="font-semibold text-lg">Actions</h3>
-                <p className="text-sm text-muted-foreground">Manage your break and meeting status</p>
-              </div>
-              <div className="p-6">
-                <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
-                  <Button
-                    variant={liveAttendance.isOnBreak ? "destructive" : "outline"}
-                    size="lg"
-                    className="rounded-xl"
-                    onClick={
-                      liveAttendance.isOnBreak
-                        ? handleBreakEnd
-                        : () => handleBreakStart('regular')
-                    }
-                    disabled={actionLoading}
-                  >
-                    <Pause className="w-5 h-5 mr-2" />
-                    {liveAttendance.isOnBreak ? 'End Break' : 'Start Break'}
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          )}
-
           {/* Activity Logs */}
           <Card className="rounded-2xl overflow-hidden">
             <div className="p-6 border-b border-border">

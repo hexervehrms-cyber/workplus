@@ -4,8 +4,15 @@ import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { apiGet, buildFileUrl } from '../../utils/apiHelper';
+import { apiGet, buildApiUrl } from '../../utils/apiHelper';
+import { TokenManager } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
 
 interface SalarySlip {
@@ -44,15 +51,38 @@ interface SalarySlip {
   };
 }
 
+async function fetchSalarySlipBlob(slipId: string): Promise<Blob> {
+  const url = buildApiUrl(`salary/slip/${slipId}/download`);
+  const token = TokenManager.get();
+  const response = await fetch(url, {
+    credentials: 'include',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      Accept: 'text/html,application/pdf,*/*',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Download failed with status ${response.status}`);
+  }
+  return response.blob();
+}
+
 export default function Payroll() {
   const { user } = useAuth();
   const [salarySlips, setSalarySlips] = useState<SalarySlip[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [expandedSlip, setExpandedSlip] = useState<string | null>(null);
-  const [employeeId, setEmployeeId] = useState<string | null>(null);
   const [viewingSlipId, setViewingSlipId] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
 
   useEffect(() => {
     fetchEmployeeAndSlips();
@@ -61,33 +91,25 @@ export default function Payroll() {
   const fetchEmployeeAndSlips = async () => {
     try {
       setLoading(true);
-      
+
       if (!user?.id) {
-        console.error('❌ User not authenticated');
+        console.error('User not authenticated');
         toast.error('User not authenticated');
         return;
       }
 
-      console.log('👤 Fetching employee for user:', user.id);
-
-      // First, get the employee record to get employeeId
       const employeeData = await apiGet(`/employees/user/${user.id}`);
-      console.log('✅ Employee data fetched:', employeeData);
-      
+
       if (!employeeData.data || !employeeData.data._id) {
-        console.error('❌ No employee ID found in response');
         toast.error('Employee record not found');
         return;
       }
 
       const empId = employeeData.data._id;
-      console.log('📝 Employee ID:', empId);
-      setEmployeeId(empId);
 
-      // Now fetch salary slips using employeeId
       await fetchSalarySlips(empId);
     } catch (error) {
-      console.error('❌ Error fetching employee and slips:', error);
+      console.error('Error fetching employee and slips:', error);
       toast.error('Failed to load payroll data');
     } finally {
       setLoading(false);
@@ -96,19 +118,15 @@ export default function Payroll() {
 
   const fetchSalarySlips = async (empId: string) => {
     try {
-      console.log('📊 Fetching salary slips for employee:', empId);
       const data = await apiGet(`/salary/slips/${empId}`);
-      console.log('✅ Salary slips response:', data);
-      
+
       if (data.data && Array.isArray(data.data)) {
-        console.log(`📊 Found ${data.data.length} salary slips`);
         setSalarySlips(data.data);
       } else {
-        console.warn('⚠️ No salary slips data in response');
         setSalarySlips([]);
       }
     } catch (error) {
-      console.error('❌ Error fetching salary slips:', error);
+      console.error('Error fetching salary slips:', error);
       toast.error('Failed to load salary slips');
       setSalarySlips([]);
     }
@@ -116,28 +134,15 @@ export default function Payroll() {
 
   const handleDownloadSalarySlip = async (slipId: string) => {
     try {
-      const fileUrl = buildFileUrl(`/salary/slip/${slipId}/download`);
-      
-      const response = await fetch(fileUrl, {
-        credentials: 'include',
-        headers: {
-          'Accept': 'application/pdf,text/html'
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Download failed with status ${response.status}`);
-      }
-      
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      const blob = await fetchSalarySlipBlob(slipId);
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `salary-slip-${slipId}.pdf`;
+      a.download = `salary-slip-${slipId}.html`;
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      URL.revokeObjectURL(url);
       toast.success('Salary slip downloaded successfully');
     } catch (error) {
       console.error('Error downloading salary slip:', error);
@@ -145,12 +150,36 @@ export default function Payroll() {
     }
   };
 
-  const handleViewSalarySlip = (slipId: string) => {
-    setViewingSlipId(viewingSlipId === slipId ? null : slipId);
+  const handleViewSalarySlip = async (slipId: string) => {
+    try {
+      setPreviewLoading(true);
+      setViewingSlipId(slipId);
+      const blob = await fetchSalarySlipBlob(slipId);
+      setPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return URL.createObjectURL(blob);
+      });
+      setPreviewOpen(true);
+    } catch (error) {
+      console.error('Error loading payslip preview:', error);
+      toast.error('Failed to load payslip preview');
+      setViewingSlipId(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const closePreview = () => {
+    setPreviewOpen(false);
+    setViewingSlipId(null);
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
   };
 
   const currentSlip = salarySlips.find(
-    slip => slip.month === selectedMonth && slip.year === selectedYear
+    (slip) => slip.month === selectedMonth && slip.year === selectedYear
   );
 
   if (loading) {
@@ -163,27 +192,41 @@ export default function Payroll() {
 
   return (
     <div className="p-6 space-y-6">
+      <Dialog open={previewOpen} onOpenChange={(open) => !open && closePreview()}>
+        <DialogContent className="max-w-4xl h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Salary payslip preview</DialogTitle>
+          </DialogHeader>
+          {previewUrl && (
+            <iframe title="Payslip preview" src={previewUrl} className="w-full flex-1 min-h-[60vh] rounded-md border" />
+          )}
+          {viewingSlipId && (
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => handleDownloadSalarySlip(viewingSlipId)}>
+                <Download className="w-4 h-4 mr-2" />
+                Download
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">My Salary Slips</h1>
           <p className="text-muted-foreground">View and download your salary slips</p>
         </div>
-        <Button
-          onClick={() => fetchEmployeeAndSlips()}
-          variant="outline"
-          className="rounded-lg"
-        >
+        <Button onClick={() => fetchEmployeeAndSlips()} variant="outline" className="rounded-lg">
           <RefreshCw className="w-4 h-4 mr-2" />
           Refresh
         </Button>
       </div>
 
-      {/* Month/Year Selector */}
       <Card className="p-6">
         <div className="flex gap-4 items-end">
           <div>
             <label className="text-sm font-medium">Month</label>
-            <Select value={selectedMonth.toString()} onValueChange={(val) => setSelectedMonth(parseInt(val))}>
+            <Select value={selectedMonth.toString()} onValueChange={(val) => setSelectedMonth(parseInt(val, 10))}>
               <SelectTrigger className="rounded-lg mt-2 w-40">
                 <SelectValue />
               </SelectTrigger>
@@ -199,7 +242,7 @@ export default function Payroll() {
 
           <div>
             <label className="text-sm font-medium">Year</label>
-            <Select value={selectedYear.toString()} onValueChange={(val) => setSelectedYear(parseInt(val))}>
+            <Select value={selectedYear.toString()} onValueChange={(val) => setSelectedYear(parseInt(val, 10))}>
               <SelectTrigger className="rounded-lg mt-2 w-40">
                 <SelectValue />
               </SelectTrigger>
@@ -215,10 +258,9 @@ export default function Payroll() {
         </div>
       </Card>
 
-      {/* Current Month Salary Summary */}
       {currentSlip ? (
         <Card className="p-6 bg-gradient-to-br from-primary/10 to-accent/10 border-primary/20">
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
               <p className="text-sm text-muted-foreground">Gross Earnings</p>
               <p className="text-2xl font-bold">₹{currentSlip.grossEarnings.toLocaleString()}</p>
@@ -231,11 +273,17 @@ export default function Payroll() {
               <p className="text-sm text-muted-foreground">Net Salary</p>
               <p className="text-2xl font-bold text-primary">₹{currentSlip.netSalary.toLocaleString()}</p>
             </div>
-            <div className="flex items-end justify-end">
+            <div className="flex flex-wrap items-end justify-end gap-2">
               <Button
-                onClick={() => handleDownloadSalarySlip(currentSlip._id)}
+                variant="outline"
+                onClick={() => void handleViewSalarySlip(currentSlip._id)}
+                disabled={previewLoading}
                 className="rounded-lg"
               >
+                <Eye className="w-4 h-4 mr-2" />
+                View payslip
+              </Button>
+              <Button onClick={() => void handleDownloadSalarySlip(currentSlip._id)} className="rounded-lg">
                 <Download className="w-4 h-4 mr-2" />
                 Download
               </Button>
@@ -245,14 +293,15 @@ export default function Payroll() {
       ) : (
         <Card className="p-8 text-center">
           <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-          <p className="text-muted-foreground">No salary slip available for {new Date(selectedYear, selectedMonth - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</p>
+          <p className="text-muted-foreground">
+            No salary slip available for{' '}
+            {new Date(selectedYear, selectedMonth - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+          </p>
         </Card>
       )}
 
-      {/* Salary Slip Details */}
       {currentSlip && (
         <div className="space-y-4">
-          {/* Attendance Summary */}
           <Card className="p-6">
             <h3 className="font-semibold text-lg mb-4">Attendance Summary</h3>
             <div className="grid grid-cols-4 gap-4">
@@ -275,7 +324,6 @@ export default function Payroll() {
             </div>
           </Card>
 
-          {/* Earnings Breakdown */}
           <Card className="p-6">
             <h3 className="font-semibold text-lg mb-4">Earnings Breakdown</h3>
             <div className="space-y-2">
@@ -333,12 +381,13 @@ export default function Payroll() {
                   <span className="font-medium">₹{currentSlip.earnings.commission.toLocaleString()}</span>
                 </div>
               )}
-              {currentSlip.earnings.otherEarnings && currentSlip.earnings.otherEarnings.map((earning, idx) => (
-                <div key={idx} className="flex justify-between py-2 border-b">
-                  <span>{earning.name}</span>
-                  <span className="font-medium">₹{earning.amount.toLocaleString()}</span>
-                </div>
-              ))}
+              {currentSlip.earnings.otherEarnings &&
+                currentSlip.earnings.otherEarnings.map((earning, idx) => (
+                  <div key={idx} className="flex justify-between py-2 border-b">
+                    <span>{earning.name}</span>
+                    <span className="font-medium">₹{earning.amount.toLocaleString()}</span>
+                  </div>
+                ))}
               <div className="flex justify-between py-2 font-bold text-lg bg-green-50 px-2 rounded">
                 <span>Total Earnings</span>
                 <span>₹{currentSlip.grossEarnings.toLocaleString()}</span>
@@ -346,7 +395,6 @@ export default function Payroll() {
             </div>
           </Card>
 
-          {/* Deductions Breakdown */}
           <Card className="p-6">
             <h3 className="font-semibold text-lg mb-4">Deductions Breakdown</h3>
             <div className="space-y-2">
@@ -380,12 +428,13 @@ export default function Payroll() {
                   <span className="font-medium">₹{currentSlip.deductions.leaveDeduction.toLocaleString()}</span>
                 </div>
               )}
-              {currentSlip.deductions.otherDeductions && currentSlip.deductions.otherDeductions.map((deduction, idx) => (
-                <div key={idx} className="flex justify-between py-2 border-b">
-                  <span>{deduction.name}</span>
-                  <span className="font-medium">₹{deduction.amount.toLocaleString()}</span>
-                </div>
-              ))}
+              {currentSlip.deductions.otherDeductions &&
+                currentSlip.deductions.otherDeductions.map((deduction, idx) => (
+                  <div key={idx} className="flex justify-between py-2 border-b">
+                    <span>{deduction.name}</span>
+                    <span className="font-medium">₹{deduction.amount.toLocaleString()}</span>
+                  </div>
+                ))}
               <div className="flex justify-between py-2 font-bold text-lg bg-red-50 px-2 rounded">
                 <span>Total Deductions</span>
                 <span>₹{currentSlip.totalDeductions.toLocaleString()}</span>
@@ -393,7 +442,6 @@ export default function Payroll() {
             </div>
           </Card>
 
-          {/* Net Salary */}
           <Card className="p-6 bg-gradient-to-r from-primary/20 to-primary/10">
             <div className="flex justify-between items-center">
               <span className="text-xl font-bold">NET SALARY</span>
@@ -403,7 +451,6 @@ export default function Payroll() {
         </div>
       )}
 
-      {/* Salary Slip History */}
       <Card className="p-6">
         <h3 className="font-semibold text-lg mb-4">Salary Slip History</h3>
         {salarySlips.length === 0 ? (
@@ -414,7 +461,10 @@ export default function Payroll() {
         ) : (
           <div className="space-y-2">
             {salarySlips.map((slip) => (
-              <div key={slip._id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors">
+              <div
+                key={slip._id}
+                className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
+              >
                 <div className="flex items-center gap-4">
                   <Calendar className="w-5 h-5 text-muted-foreground" />
                   <div>
@@ -424,16 +474,15 @@ export default function Payroll() {
                     <p className="text-sm text-muted-foreground">Net: ₹{slip.netSalary.toLocaleString()}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-4">
-                  <Badge variant={slip.status === 'approved' ? 'default' : 'secondary'}>
-                    {slip.status}
-                  </Badge>
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <Badge variant={slip.status === 'approved' ? 'default' : 'secondary'}>{slip.status}</Badge>
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => handleViewSalarySlip(slip._id)}
+                    onClick={() => void handleViewSalarySlip(slip._id)}
+                    disabled={previewLoading}
                     className="rounded-lg"
-                    title="View salary slip details"
+                    title="View payslip"
                   >
                     <Eye className="w-4 h-4 mr-2" />
                     View
@@ -441,9 +490,9 @@ export default function Payroll() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => handleDownloadSalarySlip(slip._id)}
+                    onClick={() => void handleDownloadSalarySlip(slip._id)}
                     className="rounded-lg"
-                    title="Download salary slip as PDF"
+                    title="Download salary slip"
                   >
                     <Download className="w-4 h-4 mr-2" />
                     Download

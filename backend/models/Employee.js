@@ -101,6 +101,15 @@ const employeeSchema = new mongoose.Schema(
       type: String,
       trim: true
     },
+    gender: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    dateOfBirth: {
+      type: Date,
+      default: null
+    },
     address: { 
       type: String,
       trim: true

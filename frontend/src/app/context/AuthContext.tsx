@@ -3,7 +3,7 @@
  * Features: Session persistence, proactive token refresh, role-based routing
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { AuthService, TokenManager, ApiError, TokenRefreshService } from '../utils/api';
 import { socketService, ConnectionState } from '../utils/socket';
 import { clearApiCache } from '../utils/apiHelper';
@@ -47,15 +47,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [socketConnected, setSocketConnected] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const userRef = useRef<User | null>(null);
+
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
 
   const performLogout = useCallback(async () => {
     setLoading(true);
+    const uid = userRef.current?.id ? String(userRef.current.id) : null;
 
     try {
       await AuthService.logout();
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
+      try {
+        await clearPersistedAttendance(uid);
+      } catch (e) {
+        console.warn('clearPersistedAttendance on logout:', e);
+      }
       // Clear all state immediately
       setUser(null);
       setSocketConnected(false);

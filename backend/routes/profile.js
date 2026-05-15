@@ -255,6 +255,12 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
     if (employeeDetails.employeeId) employeeUpdateData.employeeCode = employeeDetails.employeeId.trim();
     if (employeeDetails.joiningDate) employeeUpdateData.joiningDate = new Date(employeeDetails.joiningDate);
     if (employeeDetails.phone) employeeUpdateData.phone = employeeDetails.phone.trim();
+    if (employeeDetails.gender !== undefined && employeeDetails.gender !== null) {
+      employeeUpdateData.gender = String(employeeDetails.gender).trim();
+    }
+    if (employeeDetails.dateOfBirth) {
+      employeeUpdateData.dateOfBirth = new Date(employeeDetails.dateOfBirth);
+    }
     if (employeeDetails.address) employeeUpdateData.address = employeeDetails.address.trim();
     if (employeeDetails.department) employeeUpdateData.department = employeeDetails.department.trim();
     if (employeeDetails.designation) employeeUpdateData.designation = employeeDetails.designation.trim();

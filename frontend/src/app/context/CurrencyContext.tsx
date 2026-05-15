@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 
 interface Currency {
   code: string;
@@ -78,6 +78,8 @@ const currencies: Currency[] = [
   { code: 'NZD', name: 'New Zealand Dollar', symbol: 'NZ$', exchangeRate: 1.45 },
 ];
 
+const defaultInr = currencies.find((c) => c.code === 'INR') || currencies[0];
+
 const CurrencyContext = createContext<CurrencyContextType | undefined>(undefined);
 
 interface CurrencyProviderProps {
@@ -85,16 +87,25 @@ interface CurrencyProviderProps {
 }
 
 export function CurrencyProvider({ children }: CurrencyProviderProps) {
-  const [selectedCurrency, setSelectedCurrency] = useState<Currency>(currencies[0]);
+  const [selectedCurrency, setSelectedCurrencyState] = useState<Currency>(defaultInr);
   const [loading, setLoading] = useState(true);
+
+  const setSelectedCurrency = (currency: Currency) => {
+    setSelectedCurrencyState(currency);
+    try {
+      localStorage.setItem('userCurrency', currency.code);
+    } catch (error) {
+      console.error('Error saving currency preference:', error);
+    }
+  };
 
   useEffect(() => {
     try {
       const savedCurrency = localStorage.getItem('userCurrency');
       if (savedCurrency) {
-        const currency = currencies.find(c => c.code === savedCurrency);
+        const currency = currencies.find((c) => c.code === savedCurrency);
         if (currency) {
-          setSelectedCurrency(currency);
+          setSelectedCurrencyState(currency);
         }
       }
     } catch (error) {

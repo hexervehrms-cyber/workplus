@@ -11,7 +11,8 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '
 import { Plus, Edit, Trash2, Download, Check, X, Loader, ChevronsUpDown, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '../../components/ui/utils';
-import { apiGet, apiPost, apiPut, apiDelete, buildFileUrl } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, apiDelete, buildApiUrl } from '../../utils/apiHelper';
+import { TokenManager } from '../../utils/api';
 
 interface SalaryStructure {
   _id: string;
@@ -487,18 +488,24 @@ export default function Payroll() {
   // Handle download salary slip as PDF
   const handleDownloadSalarySlip = async (slipId: string) => {
     try {
-      const fileUrl = buildFileUrl(`/salary/slip/${slipId}/download`);
-      
-      const response = await fetch(fileUrl);
+      const url = buildApiUrl(`salary/slip/${slipId}/download`);
+      const token = TokenManager.get();
+      const response = await fetch(url, {
+        credentials: 'include',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          Accept: 'application/pdf,text/html,*/*',
+        },
+      });
       if (response.ok) {
         const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
+        const objectUrl = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
+        a.href = objectUrl;
         a.download = `salary-slip-${slipId}.pdf`;
         document.body.appendChild(a);
         a.click();
-        window.URL.revokeObjectURL(url);
+        window.URL.revokeObjectURL(objectUrl);
         document.body.removeChild(a);
         toast.success('Salary slip downloaded');
       } else {

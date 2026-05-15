@@ -151,6 +151,51 @@ const buildLiveStatus = (attendance) => {
   };
 };
 
+/** Hours credited for one row: completed shift uses stored/recalculated hours; open shift uses live timer. */
+const recordWorkedHoursForRow = (r) => {
+  if (!r?.checkIn) return 0;
+  if (r.checkOut) {
+    let h = typeof r.hoursWorked === 'number' && !Number.isNaN(r.hoursWorked) ? r.hoursWorked : 0;
+    if (h > 0) return h;
+    let calc = (new Date(r.checkOut) - new Date(r.checkIn)) / (1000 * 60 * 60);
+    if (Array.isArray(r.breaks)) {
+      for (const b of r.breaks) {
+        if (b?.startTime && b?.endTime) {
+          calc -= (new Date(b.endTime) - new Date(b.startTime)) / (1000 * 60 * 60);
+        }
+      }
+    }
+    return Math.max(0, Math.round(calc * 100) / 100);
+  }
+  return buildLiveStatus(r).currentHours || 0;
+};
+
+/** Sum worked hours Mon–Sun (calendar week, same midnight boundaries as /today). */
+const sumHoursThisWeekForUser = async (userId, orgId) => {
+  const now = new Date();
+  const weekStart = new Date(now);
+  const dow = weekStart.getDay();
+  const toMonday = dow === 0 ? -6 : 1 - dow;
+  weekStart.setDate(weekStart.getDate() + toMonday);
+  weekStart.setHours(0, 0, 0, 0);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+
+  const rows = await Attendance.find({
+    userId,
+    orgId,
+    date: { $gte: weekStart, $lt: weekEnd }
+  })
+    .select('date checkIn checkOut hoursWorked breaks')
+    .lean();
+
+  let sum = 0;
+  for (const r of rows) {
+    sum += recordWorkedHoursForRow(r);
+  }
+  return Math.round(sum * 100) / 100;
+};
+
 const queueHrAttendanceEmail = (type, payload) => {
   setImmediate(async () => {
     try {
@@ -243,11 +288,14 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
   .populate('employeeId', 'employeeCode department')
   .lean();
 
+  const hoursThisWeek = await sumHoursThisWeekForUser(currentUserId, userOrgId);
+
   res.json({
     success: true,
     data: {
       attendance,
-      liveStatus: buildLiveStatus(attendance)
+      liveStatus: buildLiveStatus(attendance),
+      hoursThisWeek
     }
   });
 }));

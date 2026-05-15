@@ -60,8 +60,7 @@ import Session from "./models/Session.js";
 import { errorHandler, requestIdMiddleware, asyncHandler } from "./middleware/errorHandler.js";
 import { tenantMiddleware, subscriptionMiddleware } from "./middleware/tenant.js";
 import fileValidator from "./middleware/fileValidator.js";
-// Rate limiter disabled for now
-const loginLimiter = (req, res, next) => next();
+// Rate limiter disabled for now on server-level stubs; auth router uses real limiters from rateLimiter.js
 const registerLimiter = (req, res, next) => next();
 // import { loginLimiter, registerLimiter } from "./middleware/rateLimiter.js";
 
@@ -103,10 +102,12 @@ import onboardingRoutes from "./routes/onboarding.js";
 import salaryRoutes from "./routes/salary.js";
 import payrollRoutes from "./routes/payroll.js";
 import organizationNotificationSettingsRoutes from "./routes/organizationNotificationSettings.js";
+import adminBulkOperationsRoutes from "./routes/admin-bulk-operations.js";
 import announcementsRoutes from "./routes/announcements.js";
 import notificationsRoutes from "./routes/notifications.js";
 import tasksRoutes from "./routes/tasks.js";
 import organizationsRoutes from "./routes/organizations.js";
+import authRoutes from "./routes/auth.js";
 
 // Import sales routes
 import callsRoutes from "./routes/sales/calls.js";
@@ -575,6 +576,127 @@ app.use("/health", healthRoutes);
 // Import auth middleware
 import { authenticate } from "./middleware/auth.js";
 
+// Registration keeps legacy 24h access-token flow (self-service signup); login uses routes/auth.js (15m + refresh + Redis session)
+app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) => {
+  const { name, email, password, role, organization } = req.body;
+
+  if (!name || !email || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "Name, email and password are required"
+    });
+  }
+
+  const emailNorm = email.toLowerCase().trim();
+  const existingUser = await User.findOne({ email: emailNorm });
+  if (existingUser) {
+    return res.status(400).json({
+      success: false,
+      message: "User already exists"
+    });
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const user = await User.create({
+    name,
+    email: emailNorm,
+    password: hashedPassword,
+    role: role || 'employee',
+    organization: organization || 'WorkPlus Inc.'
+  });
+
+  const token = jwt.sign(
+    {
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      tenantId: user.orgId || 'system',
+      orgId: user.orgId || 'system'
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: '24h' }
+  );
+
+  setAccessTokenCookie(res, token, 24 * 60 * 60);
+
+  const userData = {
+    id: user._id.toString(),
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    avatar: user.avatar || null,
+    organization: user.organization || 'WorkPlus Inc.'
+  };
+
+  io.emit('employee_created', userData);
+
+  res.status(201).json({
+    success: true,
+    message: "Registration successful",
+    data: {
+      user: userData,
+      token: token
+    }
+  });
+}));
+
+app.use("/api/auth", authRoutes);
+
+// Create Admin (Super Admin only) — must stay on main app so it is not shadowed by the auth router
+app.post("/api/auth/create-admin", asyncHandler(async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ success: false, message: "No token provided" });
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (jwtError) {
+    return res.status(401).json({ success: false, message: "Invalid or expired token" });
+  }
+
+  if (decoded.role !== 'super_admin') {
+    return res.status(403).json({ success: false, message: "Only super admin can create admin accounts" });
+  }
+
+  const { name, email, password, organization, orgId } = req.body;
+
+  if (!name || !email || !password) {
+    return res.status(400).json({ success: false, message: "Name, email and password are required" });
+  }
+
+  const emailNorm = email.toLowerCase().trim();
+  const existingUser = await User.findOne({ email: emailNorm });
+  if (existingUser) {
+    return res.status(400).json({ success: false, message: "User already exists with this email" });
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const user = await User.create({
+    name,
+    email: emailNorm,
+    password: hashedPassword,
+    role: 'admin',
+    organization: organization || 'WorkPlus Inc.',
+    orgId: orgId || decoded.tenantId || 'system'
+  });
+
+  res.status(201).json({
+    success: true,
+    message: "Admin user created successfully",
+    data: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      organization: user.organization
+    }
+  });
+}));
+
 // Dashboard routes (with authentication)
 app.use("/api/dashboard", authenticate, dashboardRoutes);
 app.use("/api/dashboard", authenticate, dashboardSuperAdminRoutes);
@@ -615,6 +737,28 @@ app.use("/api/profile", authenticate, profileRoutes);
 
 // Employees routes (with authentication)
 app.use("/api/employees", authenticate, employeesRoutes);
+
+// Document status (legacy path; registered before /api/documents router so it is reachable)
+app.patch("/api/documents/:id/status", authenticate, asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ message: "Invalid document ID" });
+  }
+
+  const document = await Document.findByIdAndUpdate(
+    id,
+    { status },
+    { new: true }
+  );
+
+  if (!document) {
+    return res.status(404).json({ message: "Document not found" });
+  }
+
+  res.json(document);
+}));
 
 // Documents routes (with authentication)
 app.use("/api/documents", authenticate, documentsRoutes);
@@ -683,6 +827,32 @@ app.use("/api/payroll", authenticate, payrollRoutes);
 
 // Admin: org notification integrations (SMTP + Teams) and routing
 app.use("/api/admin", organizationNotificationSettingsRoutes);
+app.use("/api/admin/bulk", adminBulkOperationsRoutes);
+
+// Experience / HR document bundle for a user (authenticated)
+app.get("/api/experience-documents/:userId", authenticate, asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(userId)) {
+    return res.status(400).json({ message: "Invalid user ID" });
+  }
+
+  const experienceTypes = [
+    "experience_letter",
+    "offer_letter",
+    "relieving_letter",
+    "appraisal_letter",
+    "salary_slips",
+    "bank_statement"
+  ];
+
+  const documents = await Document.find({
+    userId,
+    type: { $in: experienceTypes }
+  }).sort({ uploadedAt: -1 });
+
+  res.json(documents);
+}));
 
 // ============================================================================
 // SOCKET.IO SETUP
@@ -1167,223 +1337,6 @@ io.on('error', (error) => {
 });
 
 // ============================================================================
-// AUTHENTICATION ROUTES
-// ============================================================================
-
-// Handle preflight for login
-app.options("/api/auth/login", cors(corsOptions));
-
-app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    // Validate input
-    if (!email || !password) {
-      console.error("LOGIN ERROR: Missing email or password");
-      return res.status(400).json({ 
-        success: false, 
-        message: "Email and password are required",
-        code: "MISSING_CREDENTIALS"
-      });
-    }
-
-    // Find user by email (must be active — same rules as JWT-protected routes)
-    const user = await User.findOne({ email: email.toLowerCase().trim(), isActive: true }).select('+password');
-    if (!user) {
-      console.error(`LOGIN ERROR: User not found or inactive - ${email}`);
-      return res.status(401).json({ 
-        success: false, 
-        message: "Invalid credentials",
-        code: "INVALID_CREDENTIALS"
-      });
-    }
-
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      console.error(`LOGIN ERROR: Invalid password for ${email}`);
-      return res.status(401).json({ 
-        success: false, 
-        message: "Invalid credentials",
-        code: "INVALID_CREDENTIALS"
-      });
-    }
-
-    if (user.lockUntil && user.lockUntil > new Date()) {
-      return res.status(423).json({
-        success: false,
-        message: "Account is temporarily locked.",
-        code: "ACCOUNT_LOCKED"
-      });
-    }
-
-    const orgId = user.orgId || 'system';
-
-    // Access token — claims must satisfy authenticate middleware + attendance (userId, orgId)
-    const token = jwt.sign(
-      { 
-        userId: user._id.toString(),
-        email: user.email,
-        role: user.role,
-        orgId,
-        tenantId: orgId
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    logger.info('User logged in successfully', {
-      userId: user._id,
-      email: user.email,
-      role: user.role
-    });
-
-    const employee = await Employee.findOne({ userId: user._id, orgId }).lean();
-
-    clearLegacyAuthCookies(res);
-    clearAccessTokenCookie(res);
-    // httpOnly access cookie (Bearer still accepted for API clients)
-    setAccessTokenCookie(res, token, 24 * 60 * 60);
-
-    // Return standardized response (token in body optional for legacy tools; prefer cookie for browsers)
-    return res.status(200).json({
-      success: true,
-      message: "Login successful",
-      token: token,
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        avatar: user.avatar || null,
-        organization: user.organization || 'WorkPlus Inc.',
-        tenantId: orgId,
-        orgId,
-        employeeId: employee?._id?.toString?.() || '',
-        employeeCode: employee?.employeeCode || ''
-      }
-    });
-
-  } catch (error) {
-    console.error("LOGIN ERROR:", error);
-    logger.error('Login endpoint error', {
-      error: error.message,
-      stack: error.stack
-    });
-    
-    return res.status(500).json({
-      success: false,
-      message: "Server error during login",
-      code: "LOGIN_ERROR"
-    });
-  }
-}));
-
-app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) => {
-  const { name, email, password, role, organization } = req.body;
-
-  if (!name || !email || !password) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "Name, email and password are required" 
-    });
-  }
-
-  const existingUser = await User.findOne({ email });
-  if (existingUser) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "User already exists" 
-    });
-  }
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-  const user = await User.create({
-    name,
-    email,
-    password: hashedPassword,
-    role: role || 'employee',
-    organization: organization || 'WorkPlus Inc.'
-  });
-
-  const token = jwt.sign(
-    { 
-      userId: user._id.toString(),
-      email: user.email,
-      role: user.role,
-      tenantId: user.orgId || 'system',
-      orgId: user.orgId || 'system'
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '24h' }
-  );
-
-  setAccessTokenCookie(res, token, 24 * 60 * 60);
-
-  const userData = {
-    id: user._id.toString(),
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    avatar: user.avatar || null,
-    organization: user.organization || 'WorkPlus Inc.'
-  };
-
-  io.emit('employee_created', userData);
-
-  res.status(201).json({
-    success: true,
-    message: "Registration successful",
-    data: {
-      user: userData,
-      token: token
-    }
-  });
-}));
-
-// Same JWT rules as /api/attendance/* (Bearer + verify + active user)
-app.get("/api/auth/me", authenticate, asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user.userId).lean();
-  if (!user) {
-    return res.status(401).json({
-      success: false,
-      message: "User not found",
-      code: "USER_NOT_FOUND"
-    });
-  }
-
-  const orgId = user.orgId || req.user.orgId || 'system';
-  const employee = await Employee.findOne({ userId: user._id, orgId }).lean();
-
-  res.json({
-    success: true,
-    data: {
-      _id: user._id,
-      id: user._id,
-      userId: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      avatar: user.avatar || null,
-      organization: user.organization || 'WorkPlus Inc.',
-      tenantId: orgId,
-      orgId,
-      employeeId: employee?._id,
-      employeeCode: employee?.employeeCode
-    }
-  });
-}));
-
-app.post("/api/auth/logout", authenticate, asyncHandler(async (req, res) => {
-  clearAccessTokenCookie(res);
-  clearLegacyAuthCookies(res);
-  res.json({
-    success: true,
-    message: "Logout successful"
-  });
-}));
-
-// ============================================================================
 // DOCUMENT ROUTES
 // ============================================================================
 
@@ -1495,125 +1448,3 @@ const startServer = async () => {
 startServer();
 
 export { app, server, io };
-
-
-// ============================================================================
-// ADDITIONAL ROUTES (Preserved from original)
-// ============================================================================
-
-// Create Admin (Super Admin only)
-app.post("/api/auth/create-admin", asyncHandler(async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ success: false, message: "No token provided" });
-  }
-
-  const token = authHeader.replace('Bearer ', '');
-  
-  let decoded;
-  try {
-    decoded = jwt.verify(token, process.env.JWT_SECRET);
-  } catch (jwtError) {
-    return res.status(401).json({ success: false, message: "Invalid or expired token" });
-  }
-
-  if (decoded.role !== 'super_admin') {
-    return res.status(403).json({ success: false, message: "Only super admin can create admin accounts" });
-  }
-
-  const { name, email, password, organization, orgId } = req.body;
-
-  if (!name || !email || !password) {
-    return res.status(400).json({ success: false, message: "Name, email and password are required" });
-  }
-
-  const existingUser = await User.findOne({ email });
-  if (existingUser) {
-    return res.status(400).json({ success: false, message: "User already exists with this email" });
-  }
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-  const user = await User.create({
-    name,
-    email,
-    password: hashedPassword,
-    role: 'admin',
-    organization: organization || 'WorkPlus Inc.',
-    orgId: orgId || decoded.tenantId || 'system'
-  });
-
-  res.status(201).json({
-    success: true,
-    message: "Admin user created successfully",
-    data: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      organization: user.organization
-    }
-  });
-}));
-
-// Get experience documents
-app.get("/api/experience-documents/:userId", asyncHandler(async (req, res) => {
-  const { userId } = req.params;
-  
-  if (!mongoose.Types.ObjectId.isValid(userId)) {
-    return res.status(400).json({ message: "Invalid user ID" });
-  }
-
-  const experienceTypes = [
-    "experience_letter", 
-    "offer_letter", 
-    "relieving_letter", 
-    "appraisal_letter", 
-    "salary_slips", 
-    "bank_statement"
-  ];
-  
-  const documents = await Document.find({ 
-    userId, 
-    type: { $in: experienceTypes } 
-  }).sort({ uploadedAt: -1 });
-  
-  res.json(documents);
-}));
-
-// Update document status
-app.patch("/api/documents/:id/status", asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
-  
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({ message: "Invalid document ID" });
-  }
-  
-  const document = await Document.findByIdAndUpdate(
-    id, 
-    { status }, 
-    { new: true }
-  );
-  
-  if (!document) {
-    return res.status(404).json({ message: "Document not found" });
-  }
-  
-  res.json(document);
-}));
-
-
-// Generate employee document
-// NOTE: This endpoint is now handled by the documents router at POST /api/documents/digital-generate
-
-// Get all documents for an employee
-// NOTE: This endpoint is now handled by the documents router at GET /api/documents/employee/:employeeId
-
-// Get documents for organization
-// NOTE: This endpoint is now handled by the documents router at GET /api/documents/organization/:organizationId
-
-// Get document by ID
-// NOTE: This endpoint is now handled by the documents router at GET /api/documents/generated/:documentId
-
-// Delete document
-// NOTE: This endpoint is now handled by the documents router at DELETE /api/documents/generated/:documentId

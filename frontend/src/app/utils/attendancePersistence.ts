@@ -142,6 +142,23 @@ function queueIdbPut(key: string, payload: PersistedAttendancePayload): void {
 /**
  * Read attendance snapshot: IndexedDB first, then localStorage / legacy / session.
  */
+async function readPayloadForKey(
+  key: string,
+  userId: string | null,
+  dayKey: string
+): Promise<PersistedAttendancePayload | null> {
+  try {
+    const rawIdb = await attendanceIdbGet(key);
+    if (rawIdb && typeof rawIdb === 'object' && !Array.isArray(rawIdb)) {
+      const payload = normalizeParsed(rawIdb as Record<string, unknown>, userId, dayKey);
+      if (payload && isPayloadFresh(payload)) return payload;
+    }
+  } catch {
+    /* ignore */
+  }
+  return tryParse(localStorage.getItem(key), userId, dayKey);
+}
+
 export async function readPersistedAttendance(userId: string | null): Promise<PersistedAttendancePayload | null> {
   const dayKey = localDayKey();
   const key = canonicalStorageKey(userId, dayKey);
@@ -199,6 +216,17 @@ export async function readPersistedAttendance(userId: string | null): Promise<Pe
     }
   } catch {
     /* sessionStorage blocked */
+  }
+
+  // 5) Legacy builds stored under userId "unknown" before AuthContext wired cache keys
+  if (userId && userId !== 'unknown') {
+    const legacyUnknownKey = canonicalStorageKey('unknown', dayKey);
+    const legacyPayload = await readPayloadForKey(legacyUnknownKey, userId, dayKey);
+    if (legacyPayload && isPayloadFresh(legacyPayload)) {
+      writeLocalMirrors(userId, legacyPayload, true);
+      queueIdbPut(key, legacyPayload);
+      return legacyPayload;
+    }
   }
 
   return null;

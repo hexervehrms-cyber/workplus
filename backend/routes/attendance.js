@@ -17,6 +17,7 @@ import EmailNotificationService from '../utils/emailNotificationService.js';
 import { emitAttendanceKPIUpdate } from '../utils/kpiUpdater.js';
 import { dashboardCache } from '../utils/dashboardCache.js';
 import { getUserTimezone } from '../utils/timezoneHelper.js';
+import { findEmployeeForSelfService } from '../utils/employeeSelfService.js';
 import {
   buildOrgIdClause,
   isOpenBreak,
@@ -42,44 +43,6 @@ const noOpenBreakFilter = () => ({
 const hasOpenBreakFilter = () => ({
   breaks: { $elemMatch: OPEN_BREAK_INNER }
 });
-
-/**
- * Employee row for the logged-in user (JWT orgId can be wrong vs Employee.orgId).
- */
-const findEmployeeForSelfService = async (currentUserId, authOrgId) => {
-  let employee = await Employee.findOne({ userId: currentUserId, orgId: authOrgId, status: 'active' })
-    .select('_id firstName lastName orgId')
-    .lean();
-  if (!employee) {
-    employee = await Employee.findOne({ userId: currentUserId, status: 'active' })
-      .select('_id firstName lastName orgId')
-      .sort({ updatedAt: -1 })
-      .lean();
-  }
-  
-  // If still no employee found, create one
-  if (!employee) {
-    console.log('🔍 [ATTENDANCE] Creating employee record for user:', currentUserId);
-    try {
-      const newEmployee = await Employee.create({
-        userId: currentUserId,
-        orgId: authOrgId,
-        status: 'active'
-      });
-      employee = newEmployee.toObject();
-      console.log('✅ [ATTENDANCE] Created new employee record:', {
-        employeeId: employee._id,
-        userId: currentUserId,
-        orgId: authOrgId
-      });
-    } catch (createError) {
-      console.error('❌ [ATTENDANCE] Failed to create employee record:', createError.message);
-      return null;
-    }
-  }
-  
-  return employee;
-};
 
 /**
  * Find the latest completed break record for the attendance entry.
@@ -419,13 +382,21 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     authOrgId
   );
 
-  // Check if already checked in today
-  const existingAttendance = await Attendance.findOne(todayQuery);
+  // Latest row for today (avoid stale duplicate documents)
+  const existingAttendance = await Attendance.findOne(todayQuery).sort({ _id: -1 });
 
-  if (existingAttendance && existingAttendance.checkIn && !existingAttendance.checkOut) {
+  if (existingAttendance?.checkIn && !existingAttendance.checkOut) {
     return res.status(200).json({
       success: true,
       message: 'Already checked in today.',
+      data: existingAttendance
+    });
+  }
+
+  if (existingAttendance?.checkOut) {
+    return res.status(200).json({
+      success: true,
+      message: 'Already checked out today.',
       data: existingAttendance
     });
   }
@@ -959,9 +930,9 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
     ).select('_id employeeId orgId breaks meetingMode checkIn checkOut');
 
     if (!updatedAttendance) {
-      const attendance = await Attendance.findOne(dayQuery).select(
-        '_id checkIn checkOut breaks meetingMode'
-      );
+      const attendance = await Attendance.findOne(dayQuery)
+        .sort({ _id: -1 })
+        .select('_id checkIn checkOut breaks meetingMode');
 
       if (!attendance) {
         return res.status(400).json({
@@ -1096,7 +1067,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
     }
     effectiveEmployeeId = employee._id;
-    effectiveOrgId = employee.orgId || authOrgId;
+    effectiveOrgId = String(employee.orgId || authOrgId);
     effectiveEmployeeName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || effectiveEmployeeName || 'Employee';
   } else if (effectiveOrgId !== authOrgId && authRole !== 'super_admin') {
     return res.status(403).json({ success: false, message: 'Unauthorized org access' });
@@ -1109,10 +1080,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     });
   }
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  effectiveOrgId = String(effectiveOrgId);
 
   try {
     // ATOMIC OPERATION: Use $pull with condition to end the active break
@@ -1155,7 +1123,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       .populate('employeeId', 'employeeCode department');
 
     if (!updatedAttendance) {
-      const attendance = await Attendance.findOne(dayQuery);
+      const attendance = await Attendance.findOne(dayQuery).sort({ _id: -1 });
 
       if (!attendance) {
         return res.status(400).json({
@@ -1164,7 +1132,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
         });
       }
 
-      if (!attendance.breaks?.some((b) => b.startTime && (b.endTime == null || b.endTime === undefined))) {
+      if (!attendance.breaks?.some((b) => isOpenBreak(b))) {
         const liveStatus = buildLiveStatus(attendance);
         return res.status(200).json({
           success: true,

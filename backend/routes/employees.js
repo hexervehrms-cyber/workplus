@@ -16,6 +16,7 @@ import { authenticate, authorize, requirePermission } from '../middleware/auth.j
 import bcrypt from 'bcrypt';
 import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
+import { findEmployeeForSelfService } from '../utils/employeeSelfService.js';
 
 const router = express.Router();
 
@@ -276,25 +277,34 @@ router.get('/:id', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'
  * Get employee by user ID
  */
 router.get('/user/:userId', asyncHandler(async (req, res) => {
-  const orgId = req.user.orgId || 'system';
-  
-  const employee = await Employee.findOne({ 
-    userId: req.params.userId,
-    orgId: orgId
-  })
-    .populate('userId', 'name email avatar role isActive organization')
-    .lean(); // P0 FIX: Use .lean() for read-only queries
+  const authOrgId = req.user.orgId || 'system';
+  const targetUserId = req.params.userId;
+
+  if (req.user.role === 'employee' && String(req.user.userId) !== String(targetUserId)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Employees can only access their own profile',
+    });
+  }
+
+  const employee = await findEmployeeForSelfService(targetUserId, authOrgId, {
+    createIfMissing: false,
+  });
 
   if (!employee) {
     return res.status(404).json({
       success: false,
-      message: 'Employee not found'
+      message: 'Employee not found',
     });
   }
 
+  const populated = await Employee.findById(employee._id)
+    .populate('userId', 'name email avatar role isActive organization')
+    .lean();
+
   res.json({
     success: true,
-    data: employee
+    data: populated || employee,
   });
 }));
 

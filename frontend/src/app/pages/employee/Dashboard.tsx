@@ -7,6 +7,7 @@ import { useAuth } from '../../context/AuthContext';
 import { TokenManager, LeaveAllocationService } from '../../utils/api';
 import { parseBalanceApiResponse, sumRemainingDays } from '../../utils/leaveBalance';
 import { apiGet, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
+import { postAttendanceAction } from '../../utils/attendanceApi';
 import {
   clearPersistedAttendance,
   writePersistedAttendance,
@@ -572,27 +573,25 @@ export default function EmployeeDashboard() {
     [isRecentlyUpdated, fetchDashboardData]
   );
 
-  // Fetch data on mount with force refresh
+  // Fetch data on mount — cache hydrates via AttendanceContext when user is ready
   useEffect(() => {
-    // FIX #7: Load from localStorage FIRST to restore state immediately
-    // This ensures buttons are visible before API call completes
-    console.log('🚀 [DASHBOARD MOUNT] Loading state from localStorage first');
+    if (!user?.id) return;
     loadFromLocalStorage();
-    
-    // Then fetch from API to sync with server
-    // Use a longer delay to ensure auth context is fully initialized
     const timeoutId = setTimeout(() => {
-      console.log('🚀 [DASHBOARD MOUNT] Fetching from API to sync with server');
-      fetchDashboardData(true);
-    }, 500);
-
+      void fetchDashboardData(true);
+    }, 300);
     return () => clearTimeout(timeoutId);
-  }, [fetchDashboardData, loadFromLocalStorage]);
+  }, [user?.id, fetchDashboardData, loadFromLocalStorage]);
 
-  // Fetch employee ID on mount
+  // Seed employeeId from auth profile (avoids 404 on strict org employee lookup)
   useEffect(() => {
-    ensureEmployeeId();
-  }, [user?.id]);
+    const fromAuth = user?.employeeId != null ? String(user.employeeId) : '';
+    if (isLikelyMongoObjectId(fromAuth)) {
+      setEmployeeId(fromAuth);
+    } else {
+      void ensureEmployeeId();
+    }
+  }, [user?.id, user?.employeeId]);
 
   // ============================================================================
   // SOCKET.IO LISTENERS - FIXED: Use refs to prevent stale closures
@@ -827,7 +826,6 @@ export default function EmployeeDashboard() {
       lastActionTimeRef.current = Date.now();
 
       const resolvedEmployeeId = await ensureEmployeeId();
-      const token = TokenManager.get();
       const idempotencyKey = `break-start-${resolvedEmployeeId || 'me'}-${Date.now()}`;
       
       const payload: { breakType: string; notes: string; idempotencyKey: string; employeeId?: string | null } = {
@@ -846,39 +844,22 @@ export default function EmployeeDashboard() {
         currentBreakDuration: 0
       }, 'action');
       
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
-      
       try {
-        const response = await fetch(buildApiUrl('/attendance/break-start'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            'Content-Type': 'application/json',
-            'Idempotency-Key': idempotencyKey
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
+        const result = await postAttendanceAction('/attendance/break-start', payload, idempotencyKey);
 
-        if (!response.ok) {
-          let errorMessage = 'Break start failed';
-          try {
-            const error = await response.json();
-            errorMessage = error.message || errorMessage;
-          } catch (e) {
-            // Response body is not JSON
+        if (!result.ok) {
+          if (result.status === 409) {
+            clearApiCache('/attendance/today');
+            await fetchDashboardData(true);
+            toast.info('Syncing break status…');
+            return;
           }
-          debug.error('❌ [BREAK START] API Error:', errorMessage);
-          throw new Error(errorMessage);
+          throw new Error(result.message);
         }
 
-        const result = await response.json();
         debug.log('✅ [BREAK START] Success:', result);
 
-        // Confirm optimistic update with server response
-        const liveStatus = result.data?.liveStatus;
+        const liveStatus = (result.data as { liveStatus?: Record<string, unknown> })?.liveStatus;
         if (liveStatus) {
           updateAttendance({
             isOnBreak: liveStatus.isOnBreak || true,
@@ -890,8 +871,8 @@ export default function EmployeeDashboard() {
         clearApiCache('/attendance/today');
         toast.success('Break started');
         setLastSocketEventTime(Date.now());
-      } finally {
-        clearTimeout(timeoutId);
+      } catch (innerErr) {
+        throw innerErr;
       }
     } catch (error) {
       debug.error('❌ [BREAK START] Error:', error);
@@ -930,7 +911,6 @@ export default function EmployeeDashboard() {
       lastActionTimeRef.current = Date.now();
       
       const resolvedEmployeeId = await ensureEmployeeId();
-      const token = TokenManager.get();
       const idempotencyKey = `break-end-${resolvedEmployeeId || 'me'}-${Date.now()}`;
       
       const payload: { notes: string; idempotencyKey: string; employeeId?: string | null } = {
@@ -948,38 +928,22 @@ export default function EmployeeDashboard() {
         currentBreakDuration: 0
       }, 'action');
       
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
-      
       try {
-        const response = await fetch(buildApiUrl('/attendance/break-end'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            'Content-Type': 'application/json',
-            'Idempotency-Key': idempotencyKey
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
+        const result = await postAttendanceAction('/attendance/break-end', payload, idempotencyKey);
 
-        if (!response.ok) {
-          let errorMessage = 'Break end failed';
-          try {
-            const error = await response.json();
-            errorMessage = error.message || errorMessage;
-          } catch (e) {
-            // Response body is not JSON
+        if (!result.ok) {
+          if (result.status === 409) {
+            clearApiCache('/attendance/today');
+            await fetchDashboardData(true);
+            toast.info('Syncing break status…');
+            return;
           }
-          debug.error('❌ [BREAK END] API Error:', errorMessage);
-          throw new Error(errorMessage);
+          throw new Error(result.message);
         }
 
-        const result = await response.json();
         debug.log('✅ [BREAK END] Success:', result);
 
-        const liveStatus = result.data?.liveStatus;
+        const liveStatus = (result.data as { liveStatus?: Record<string, unknown> })?.liveStatus;
         updateAttendance(
           {
             isOnBreak: liveStatus?.isOnBreak === true,
@@ -1007,8 +971,8 @@ export default function EmployeeDashboard() {
         setTimeout(() => {
           disableRefreshRef.current = false;
         }, 4000);
-      } finally {
-        clearTimeout(timeoutId);
+      } catch (innerErr) {
+        throw innerErr;
       }
     } catch (error) {
       debug.error('❌ [BREAK END] Error:', error);
@@ -1033,42 +997,26 @@ export default function EmployeeDashboard() {
       setAttendanceBusy('check-in');
       lastActionTimeRef.current = Date.now();
 
-      const token = TokenManager.get();
-      const idempotencyKey = `check-in-${user?.id || 'me'}-${localDayKey()}`;
+      const idempotencyKey = `check-in-${user?.id || 'me'}-${localDayKey()}-${Date.now()}`;
       const payload: { notes: string; idempotencyKey: string } = {
         notes: 'Checked in',
         idempotencyKey
       };
-      
-      // CRITICAL FIX: Add timeout to fetch
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
-      try {
-        const response = await fetch(buildApiUrl('/attendance/check-in'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            'Content-Type': 'application/json',
-            'Idempotency-Key': idempotencyKey
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
 
-        if (!response.ok) {
-          let errorMessage = 'Check-in failed';
-          try {
-            const error = await response.json();
-            errorMessage = error.message || errorMessage;
-          } catch (e) {
-            // Response body is not JSON
+      try {
+        const result = await postAttendanceAction('/attendance/check-in', payload, idempotencyKey);
+
+        if (!result.ok) {
+          if (result.status === 409) {
+            clearApiCache('/attendance/today');
+            await fetchDashboardData(true);
+            toast.info('Check-in already processing — synced from server');
+            return;
           }
-          throw new Error(errorMessage);
+          throw new Error(result.message);
         }
 
-        const result = await response.json();
-        const serverAtt = result?.data;
+        const serverAtt = result.data as Record<string, unknown> | undefined;
         const checkInTime = serverAtt?.checkIn
           ? new Date(serverAtt.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
           : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -1098,8 +1046,8 @@ export default function EmployeeDashboard() {
         clearApiCache('/attendance/today');
         toast.success('Checked in successfully');
         setLastSocketEventTime(Date.now());
-      } finally {
-        clearTimeout(timeoutId);
+      } catch (innerErr) {
+        throw innerErr;
       }
     } catch (error) {
       console.error('Check-in error:', error);
@@ -1126,43 +1074,27 @@ export default function EmployeeDashboard() {
       lastActionTimeRef.current = Date.now();
 
       const resolvedEmployeeId = await ensureEmployeeId();
-      const token = TokenManager.get();
-      const idempotencyKey = `check-out-${user?.id || 'me'}-${localDayKey()}`;
+      const idempotencyKey = `check-out-${user?.id || 'me'}-${localDayKey()}-${Date.now()}`;
       const payload: { notes: string; employeeId?: string | null; idempotencyKey: string } = {
         notes: 'Checked out',
         idempotencyKey
       };
       if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
-      
-      // CRITICAL FIX: Add timeout to fetch
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
-      try {
-        const response = await fetch(buildApiUrl('/attendance/check-out'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            'Content-Type': 'application/json',
-            'Idempotency-Key': idempotencyKey
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
 
-        if (!response.ok) {
-          let errorMessage = 'Check-out failed';
-          try {
-            const error = await response.json();
-            errorMessage = error.message || errorMessage;
-          } catch (e) {
-            // Response body is not JSON
+      try {
+        const result = await postAttendanceAction('/attendance/check-out', payload, idempotencyKey);
+
+        if (!result.ok) {
+          if (result.status === 409) {
+            clearApiCache('/attendance/today');
+            await fetchDashboardData(true);
+            toast.info('Check-out already processing — synced from server');
+            return;
           }
-          throw new Error(errorMessage);
+          throw new Error(result.message);
         }
 
-        const result = await response.json();
-        const serverAtt = result?.data;
+        const serverAtt = result.data as Record<string, unknown> | undefined;
         const hoursWorked =
           typeof serverAtt?.hoursWorked === 'number' && !Number.isNaN(serverAtt.hoursWorked)
             ? serverAtt.hoursWorked
@@ -1198,11 +1130,13 @@ export default function EmployeeDashboard() {
         });
 
         clearApiCache('/attendance/today');
+        toast.success('Checked out successfully');
+        setLastSocketEventTime(Date.now());
         setTimeout(() => {
           void safeRefresh(true);
         }, 600);
-      } finally {
-        clearTimeout(timeoutId);
+      } catch (innerErr) {
+        throw innerErr;
       }
     } catch (error) {
       console.error('Check-out error:', error);

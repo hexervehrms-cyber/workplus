@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
-import { TokenManager } from '../app/utils/api';
+import { useAuth } from '../app/context/AuthContext';
 import {
   readPersistedAttendance,
   writePersistedAttendance,
@@ -25,7 +25,7 @@ interface AttendanceContextType {
   resetAttendance: () => void;
   loadFromLocalStorage: () => void;
   saveToLocalStorage: () => void;
-  lastUpdateSource: string; // Track where last update came from
+  lastUpdateSource: string;
 }
 
 const defaultState: AttendanceState = {
@@ -42,49 +42,55 @@ const defaultState: AttendanceState = {
 const AttendanceContext = createContext<AttendanceContextType | undefined>(undefined);
 
 export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
   const [attendance, setAttendanceState] = useState<AttendanceState>(defaultState);
   const [lastUpdateSource, setLastUpdateSource] = useState('init');
   const lastUpdateTimeRef = useRef(Date.now());
 
-  const persistToLocalStorage = useCallback((state: AttendanceState) => {
-    try {
-      const user = TokenManager.getUser();
-      const userId = user?.id != null ? String(user.id) : null;
-      writePersistedAttendance(userId, {
-        userId,
-        checkedIn: state.isCheckedIn,
-        isCheckedIn: state.isCheckedIn,
-        checkInTime: state.checkInTime,
-        checkOutTime: state.checkOutTime,
-        currentHours: state.hoursWorked,
-        hoursWorked: state.hoursWorked,
-        status: state.status,
-        isOnBreak: state.isOnBreak,
-        currentBreakDuration: state.currentBreakDuration,
-        breakType: state.breakType,
-        timestamp: Date.now()
-      });
-      console.log('💾 [ATTENDANCE-CONTEXT] Saved attendance cache (canonical + mirrors)');
-    } catch (e) {
-      console.warn('Failed to save attendance cache:', e);
-    }
-  }, []);
+  const resolveUserId = useCallback((): string | null => {
+    const id = user?.id ?? user?.userId;
+    return id != null ? String(id) : null;
+  }, [user?.id, user?.userId]);
 
-  // Load from durable cache (IndexedDB + localStorage + legacy migration)
+  const persistToLocalStorage = useCallback(
+    (state: AttendanceState) => {
+      try {
+        const userId = resolveUserId();
+        writePersistedAttendance(userId, {
+          userId,
+          checkedIn: state.isCheckedIn,
+          isCheckedIn: state.isCheckedIn,
+          checkInTime: state.checkInTime,
+          checkOutTime: state.checkOutTime,
+          currentHours: state.hoursWorked,
+          hoursWorked: state.hoursWorked,
+          status: state.status,
+          isOnBreak: state.isOnBreak,
+          currentBreakDuration: state.currentBreakDuration,
+          breakType: state.breakType,
+          timestamp: Date.now()
+        });
+      } catch (e) {
+        console.warn('Failed to save attendance cache:', e);
+      }
+    },
+    [resolveUserId]
+  );
+
   const loadFromLocalStorage = useCallback(() => {
     void (async () => {
       try {
-        const currentUser = TokenManager.getUser();
-        const userId = currentUser?.id != null ? String(currentUser.id) : null;
+        const userId = resolveUserId();
+        if (!userId) return;
+
         const payload = await readPersistedAttendance(userId);
         if (!payload || !isPayloadFresh(payload)) {
           return;
         }
-        if (payload.userId != null && userId && String(payload.userId) !== String(userId)) {
+        if (payload.userId != null && String(payload.userId) !== String(userId)) {
           console.warn('⚠️ [ATTENDANCE-CONTEXT] Ignoring cached attendance: user mismatch');
           return;
         }
-        console.log('📦 [ATTENDANCE-CONTEXT] Loaded from attendance cache:', payload);
         setAttendanceState({
           isCheckedIn: payload.checkedIn || payload.isCheckedIn || false,
           checkInTime: payload.checkInTime || null,
@@ -100,59 +106,55 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         console.warn('Failed to load attendance cache:', e);
       }
     })();
-  }, []);
+  }, [resolveUserId]);
 
-  // Save to localStorage with timestamp
   const saveToLocalStorage = useCallback(() => {
     persistToLocalStorage(attendance);
   }, [attendance, persistToLocalStorage]);
 
-  // Update specific fields with source tracking
-  const updateAttendance = useCallback((updates: Partial<AttendanceState>, source = 'action') => {
-    console.log('🔄 [ATTENDANCE-CONTEXT] Updating attendance from', source, ':', updates);
-    lastUpdateTimeRef.current = Date.now();
-    setLastUpdateSource(source);
-
-    setAttendanceState(prev => {
-      const newState = { ...prev, ...updates };
-      persistToLocalStorage(newState);
-      return newState;
-    });
-  }, [persistToLocalStorage]);
-
-  // Reset to default state
-  const resetAttendance = useCallback(() => {
-    console.log('🔄 [ATTENDANCE-CONTEXT] Resetting attendance');
-    const user = TokenManager.getUser();
-    const userId = user?.id != null ? String(user.id) : null;
-    setAttendanceState(defaultState);
-    setLastUpdateSource('reset');
-    try {
-      clearPersistedAttendance(userId).catch(() => {
-        /* non-fatal */
-      });
-    } catch (e) {
-      console.warn('Failed to clear attendance cache:', e);
-    }
-  }, []);
-
-  // Wrapper for setAttendance
-  const setAttendance = useCallback((state: AttendanceState | ((prev: AttendanceState) => AttendanceState)) => {
-    if (typeof state === 'function') {
-      setAttendanceState(prev => {
-        const newState = state(prev);
-        setLastUpdateSource('direct');
+  const updateAttendance = useCallback(
+    (updates: Partial<AttendanceState>, source = 'action') => {
+      lastUpdateTimeRef.current = Date.now();
+      setLastUpdateSource(source);
+      setAttendanceState((prev) => {
+        const newState = { ...prev, ...updates };
         persistToLocalStorage(newState);
         return newState;
       });
-    } else {
-      setAttendanceState(state);
-      setLastUpdateSource('direct');
-      persistToLocalStorage(state);
-    }
-  }, [persistToLocalStorage]);
+    },
+    [persistToLocalStorage]
+  );
 
-  // Flush when tab goes to background or navigates away (mobile / sleep / reload)
+  const resetAttendance = useCallback(() => {
+    const userId = resolveUserId();
+    setAttendanceState(defaultState);
+    setLastUpdateSource('reset');
+    void clearPersistedAttendance(userId).catch(() => {});
+  }, [resolveUserId]);
+
+  const setAttendance = useCallback(
+    (state: AttendanceState | ((prev: AttendanceState) => AttendanceState)) => {
+      if (typeof state === 'function') {
+        setAttendanceState((prev) => {
+          const newState = state(prev);
+          setLastUpdateSource('direct');
+          persistToLocalStorage(newState);
+          return newState;
+        });
+      } else {
+        setAttendanceState(state);
+        setLastUpdateSource('direct');
+        persistToLocalStorage(state);
+      }
+    },
+    [persistToLocalStorage]
+  );
+
+  useEffect(() => {
+    if (!user?.id && !user?.userId) return;
+    loadFromLocalStorage();
+  }, [user?.id, user?.userId, loadFromLocalStorage]);
+
   useEffect(() => {
     const flush = () => {
       try {

@@ -156,6 +156,27 @@ function isTokenExpired(token: string): boolean {
   }
 }
 
+/** Hydrate JWT mirror (IndexedDB) and refresh when expired — for attendance + apiHelper. */
+export async function ensureAccessToken(): Promise<string | null> {
+  await TokenManager.hydrateFromIndexedDB();
+  let authToken = TokenManager.get();
+  if (!authToken) return null;
+  if (!isTokenExpired(authToken)) return authToken;
+
+  try {
+    const refreshService = new TokenRefreshService();
+    const refreshResult = await refreshService.refreshToken();
+    if (refreshResult.success && refreshResult.data?.token) {
+      TokenManager.set(refreshResult.data.token);
+      return refreshResult.data.token;
+    }
+    TokenManager.clear();
+  } catch {
+    TokenManager.clear();
+  }
+  return null;
+}
+
 // Fetch with timeout
 async function fetchWithTimeout(url: string, options: RequestInit, timeout: number): Promise<Response> {
   const controller = new AbortController();

@@ -3,7 +3,7 @@
  * Ensures all API calls use the correct base URL for production and development
  */
 
-import { TokenManager } from './api';
+import { TokenManager, ensureAccessToken, TokenRefreshService } from './api';
 
 // Simple request cache for GET requests
 const requestCache = new Map<string, { data: any; timestamp: number }>();
@@ -94,10 +94,11 @@ export function bearerAuthHeaders(extra?: Record<string, string>): HeadersInit {
  */
 export const apiRequest = async <T = any>(
   endpoint: string,
-  options: RequestInit & { skipContentType?: boolean } = {}
+  options: RequestInit & { skipContentType?: boolean } = {},
+  retriedAuth = false
 ): Promise<T> => {
   const url = buildApiUrl(endpoint);
-  const token = TokenManager.get();
+  const token = await ensureAccessToken();
 
   const headers: HeadersInit = {
     ...(token && { Authorization: `Bearer ${token}` }),
@@ -116,7 +117,19 @@ export const apiRequest = async <T = any>(
   };
 
   try {
-    const response = await fetchWithTimeout(url, config, REQUEST_TIMEOUT_MS);
+    let response = await fetchWithTimeout(url, config, REQUEST_TIMEOUT_MS);
+
+    if (response.status === 401 && !retriedAuth) {
+      try {
+        const refreshResult = await new TokenRefreshService().refreshToken();
+        if (refreshResult.success && refreshResult.data?.token) {
+          TokenManager.set(refreshResult.data.token);
+          return apiRequest<T>(endpoint, options, true);
+        }
+      } catch {
+        /* fall through */
+      }
+    }
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));

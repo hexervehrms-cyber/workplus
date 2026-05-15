@@ -1191,13 +1191,18 @@ export default function EmployeeDashboard() {
           throw new Error(result.message);
         }
 
-        const payload = result.data as {
+        const responsePayload = result.data as {
           attendance?: Record<string, unknown>;
           hoursThisWeek?: number;
           weekKey?: string;
           checkIn?: string | Date;
+          message?: string;
         };
-        const serverAtt = (payload?.attendance ?? payload) as Record<string, unknown>;
+        const serverAtt = (responsePayload?.attendance ?? responsePayload) as Record<
+          string,
+          unknown
+        >;
+
         const checkInTime = serverAtt?.checkIn
           ? new Date(serverAtt.checkIn as string | Date).toLocaleTimeString('en-US', {
               hour: '2-digit',
@@ -1205,15 +1210,17 @@ export default function EmployeeDashboard() {
             })
           : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
-        if (typeof payload?.hoursThisWeek === 'number') {
-          ingestWeekHoursFromServer(payload.hoursThisWeek, payload.weekKey, 0);
+        if (typeof responsePayload?.hoursThisWeek === 'number') {
+          ingestWeekHoursFromServer(responsePayload.hoursThisWeek, responsePayload.weekKey, 0);
         }
 
-        // Update state immediately
         updateAttendance({
           isCheckedIn: true,
           checkInTime: checkInTime,
-          status: 'present'
+          checkOutTime: null,
+          status: 'present',
+          isOnBreak: false,
+          currentBreakDuration: 0,
         }, 'action');
 
         const uid = user?.id ? String(user.id) : null;
@@ -1235,18 +1242,22 @@ export default function EmployeeDashboard() {
         void syncWeeklyHours();
         toast.success('Checked in successfully');
         setLastSocketEventTime(Date.now());
+        lastActionTimeRef.current = Date.now();
+        setTimeout(() => {
+          void fetchDashboardData(true);
+        }, 400);
       } catch (innerErr) {
         throw innerErr;
       }
     } catch (error) {
       console.error('Check-in error:', error);
-      toast.error(error instanceof Error ? error.message : 'Check-in failed');
-      // Rollback optimistic update on error
-      updateAttendance({
-        isCheckedIn: false,
-        checkInTime: null,
-        status: 'absent'
-      }, 'action');
+      const message = error instanceof Error ? error.message : 'Check-in failed';
+      toast.error(message);
+      if (message.toLowerCase().includes('session') || message.toLowerCase().includes('token')) {
+        return;
+      }
+      clearApiCache('/attendance/today');
+      await fetchDashboardData(true);
     } finally {
       actionInProgressRef.current = false;
       setAttendanceBusy(null);
@@ -1333,22 +1344,25 @@ export default function EmployeeDashboard() {
 
         clearApiCache('/attendance/today');
         void syncWeeklyHours();
-        toast.success('Checked out successfully');
+        const apiMessage = (checkOutPayload as { message?: string })?.message || '';
+        toast.success(
+          apiMessage.toLowerCase().includes('check in again')
+            ? 'Session ended. You can check in again anytime.'
+            : 'Checked out successfully'
+        );
         setLastSocketEventTime(Date.now());
+        lastActionTimeRef.current = Date.now();
         setTimeout(() => {
-          void safeRefresh(true);
-        }, 600);
+          void fetchDashboardData(true);
+        }, 400);
       } catch (innerErr) {
         throw innerErr;
       }
     } catch (error) {
       console.error('Check-out error:', error);
       toast.error(error instanceof Error ? error.message : 'Check-out failed');
-      // Rollback optimistic update on error
-      updateAttendance({
-        isCheckedIn: true,
-        checkOutTime: null
-      }, 'action');
+      clearApiCache('/attendance/today');
+      await fetchDashboardData(true);
     } finally {
       actionInProgressRef.current = false;
       setAttendanceBusy(null);
@@ -1413,7 +1427,12 @@ export default function EmployeeDashboard() {
                 )}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">Not checked in yet today</p>
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">Not checked in yet today</p>
+                <p className="text-xs text-muted-foreground/80">
+                  You can check in, check out, and start a new session multiple times per day.
+                </p>
+              </div>
             )}
 
             <div className="flex flex-wrap items-center gap-3">

@@ -23,6 +23,7 @@ import {
   buildUserIdClause,
   isOpenBreak,
   buildTodayAttendanceQuery,
+  withOpenSessionFilter,
   buildLiveStatus,
   recordWorkedHoursForRow,
   sumHoursFromAttendanceRows,
@@ -209,7 +210,8 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
     userOrgId
   );
 
-  let attendance = await Attendance.findOne(todayQuery)
+  // Prefer open session so employees can start a new shift after checkout (multiple sessions/day)
+  let attendance = await Attendance.findOne(withOpenSessionFilter(todayQuery))
     .sort({ _id: -1 })
     .populate('userId', 'name email avatar')
     .populate('employeeId', 'employeeCode department')
@@ -390,42 +392,27 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     authOrgId
   );
 
-  // Latest row for today (avoid stale duplicate documents)
+  // Open session for today (not latest closed row — allows check-in again after checkout)
+  const openSession = await Attendance.findOne(withOpenSessionFilter(todayQuery)).sort({ _id: -1 });
+
+  if (openSession?.checkIn) {
+    const hoursThisWeek = await sumHoursThisWeekForUser(
+      effectiveUserId,
+      effectiveOrgId,
+      authOrgId
+    );
+    return res.status(200).json({
+      success: true,
+      message: 'Already checked in for this session.',
+      data: {
+        attendance: openSession,
+        hoursThisWeek,
+        weekKey: calendarWeekKey(),
+      },
+    });
+  }
+
   const existingAttendance = await Attendance.findOne(todayQuery).sort({ _id: -1 });
-
-  if (existingAttendance?.checkIn && !existingAttendance.checkOut) {
-    const hoursThisWeek = await sumHoursThisWeekForUser(
-      effectiveUserId,
-      effectiveOrgId,
-      authOrgId
-    );
-    return res.status(200).json({
-      success: true,
-      message: 'Already checked in today.',
-      data: {
-        attendance: existingAttendance,
-        hoursThisWeek,
-        weekKey: calendarWeekKey(),
-      },
-    });
-  }
-
-  if (existingAttendance?.checkOut) {
-    const hoursThisWeek = await sumHoursThisWeekForUser(
-      effectiveUserId,
-      effectiveOrgId,
-      authOrgId
-    );
-    return res.status(200).json({
-      success: true,
-      message: 'Already checked out today.',
-      data: {
-        attendance: existingAttendance,
-        hoursThisWeek,
-        weekKey: calendarWeekKey(),
-      },
-    });
-  }
 
   // IMPORTANT: Close any open breaks from previous days to prevent stale break status
   const yesterday = new Date(today);
@@ -464,8 +451,9 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     }
   }
 
-  // Create new attendance record
+  // Create new attendance record (or re-entry after earlier checkout today)
   let attendance;
+  const isReEntry = Boolean(existingAttendance?.checkOut);
   try {
     const timezone = getUserTimezone(req) || 'Asia/Kolkata';
     
@@ -480,7 +468,10 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
       orgId: effectiveOrgId,
       checkInLocation: location || 'Office',
       checkInIP: req.ip || req.connection.remoteAddress,
-      checkInNotes: notes
+      checkInNotes: notes,
+      ...(isReEntry
+        ? { isReEntry: true, previousAttendanceId: existingAttendance._id }
+        : {}),
     });
 
     logger.info('Attendance check-in created successfully', {
@@ -488,7 +479,8 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
       userId: effectiveUserId,
       employeeId: effectiveEmployeeId,
       orgId: effectiveOrgId,
-      timezone
+      timezone,
+      isReEntry,
     });
   } catch (createError) {
     logger.error('Failed to create attendance record', {
@@ -636,21 +628,30 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     authOrgId
   );
 
-  // Find today's attendance record
-  const attendance = await Attendance.findOne(todayQuery).sort({ _id: -1 });
+  const hoursThisWeekBefore = await sumHoursThisWeekForUser(
+    effectiveUserId,
+    effectiveOrgId,
+    authOrgId
+  );
+
+  let attendance = await Attendance.findOne(withOpenSessionFilter(todayQuery)).sort({ _id: -1 });
 
   if (!attendance || !attendance.checkIn) {
+    const lastClosed = await Attendance.findOne(todayQuery).sort({ _id: -1 });
+    if (lastClosed?.checkOut) {
+      return res.status(200).json({
+        success: true,
+        message: 'Already checked out. You can check in again to start a new session.',
+        data: {
+          attendance: lastClosed,
+          hoursThisWeek: hoursThisWeekBefore,
+          weekKey: calendarWeekKey(),
+        },
+      });
+    }
     return res.status(400).json({
       success: false,
-      message: 'No check-in found for today. Please check in first.'
-    });
-  }
-
-  if (attendance.checkOut) {
-    return res.status(200).json({
-      success: true,
-      message: 'Already checked out today.',
-      data: attendance
+      message: 'No check-in found for today. Please check in first.',
     });
   }
 
@@ -958,11 +959,9 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
     );
 
     const attendanceMatch = {
-      ...dayQuery,
-      checkIn: { $exists: true, $ne: null },
-      $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
+      ...withOpenSessionFilter(dayQuery),
       ...noOpenBreakFilter(),
-      'meetingMode.isActive': { $ne: true }
+      'meetingMode.isActive': { $ne: true },
     };
 
     const updatedAttendance = await Attendance.findOneAndUpdate(
@@ -988,7 +987,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
       if (attendance.checkOut) {
         return res.status(400).json({
           success: false,
-          message: 'Already checked out. Cannot start break.'
+          message: 'No active session. Check in again before starting a break.',
         });
       }
 

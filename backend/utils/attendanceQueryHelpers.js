@@ -48,6 +48,16 @@ export function buildUserIdClause(userId) {
 }
 
 /** Today's attendance lookup — tolerates orgId string drift between JWT and Employee row. */
+/** Active shift today: checked in and not yet checked out (supports multiple sessions per day). */
+export const OPEN_ATTENDANCE_SESSION_FILTER = {
+  checkIn: { $exists: true, $ne: null },
+  $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
+};
+
+export function withOpenSessionFilter(query) {
+  return { ...query, ...OPEN_ATTENDANCE_SESSION_FILTER };
+}
+
 export function buildTodayAttendanceQuery(
   authRole,
   currentUserId,

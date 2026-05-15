@@ -55,6 +55,19 @@ interface Employee {
   department: string;
 }
 
+const TABLE_LEAVE_KEYS = [
+  'vacation',
+  'sickLeave',
+  'casualLeave',
+  'compensatoryOff',
+  'personal',
+  'emergency',
+] as const;
+
+function getAllocationTotal(allocations: LeaveAllocation['allocations']): number {
+  return TABLE_LEAVE_KEYS.reduce((sum, key) => sum + (Number(allocations[key]) || 0), 0);
+}
+
 const LEAVE_TYPES = [
   { key: 'vacation', label: 'Vacation' },
   { key: 'sickLeave', label: 'Sick Leave' },
@@ -445,6 +458,7 @@ export default function LeaveAllocation() {
                   <th className="p-4 text-center">Comp Off</th>
                   <th className="p-4 text-center">Personal</th>
                   <th className="p-4 text-center">Emergency</th>
+                  <th className="p-4 text-center font-semibold">Total Leaves</th>
                   <th className="p-4 text-left">Actions</th>
                 </tr>
               </thead>
@@ -466,6 +480,9 @@ export default function LeaveAllocation() {
                     <td className="p-4 text-center">{allocation.allocations.compensatoryOff}</td>
                     <td className="p-4 text-center">{allocation.allocations.personal}</td>
                     <td className="p-4 text-center">{allocation.allocations.emergency}</td>
+                    <td className="p-4 text-center font-semibold">
+                      {getAllocationTotal(allocation.allocations)}
+                    </td>
                     <td className="p-4">
                       <div className="flex gap-2">
                         <Button

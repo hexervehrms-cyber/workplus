@@ -151,6 +151,17 @@ export const idempotencyMiddleware = async (req, res, next) => {
     return originalStatus(code);
   };
 
+  const clearProcessing = async () => {
+    if (redis) {
+      try {
+        await redis.del(`idempotency:${idempotencyKey}`);
+      } catch {
+        /* ignore */
+      }
+    }
+    idempotencyStore.delete(idempotencyKey);
+  };
+
   res.json = async function (data) {
     if (statusCode >= 200 && statusCode < 300) {
       const entry = {
@@ -173,17 +184,16 @@ export const idempotencyMiddleware = async (req, res, next) => {
         idempotencyStore.set(idempotencyKey, entry);
       }
     } else {
-      if (redis) {
-        try {
-          await redis.del(`idempotency:${idempotencyKey}`);
-        } catch {
-          /* ignore */
-        }
-      }
-      idempotencyStore.delete(idempotencyKey);
+      await clearProcessing();
     }
     return originalJson(data);
   };
+
+  res.on('finish', () => {
+    if (statusCode < 200 || statusCode >= 300) {
+      void clearProcessing();
+    }
+  });
 
   next();
 };

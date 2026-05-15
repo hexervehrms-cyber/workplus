@@ -11,14 +11,46 @@ export async function findEmployeeForSelfService(currentUserId, authOrgId, { cre
     orgId: authOrgId,
     status: 'active',
   })
-    .select('_id firstName lastName orgId userId')
+    .select('_id firstName lastName orgId userId status')
     .lean();
 
   if (!employee) {
     employee = await Employee.findOne({ userId: currentUserId, status: 'active' })
-      .select('_id firstName lastName orgId userId')
+      .select('_id firstName lastName orgId userId status')
       .sort({ updatedAt: -1 })
       .lean();
+  }
+
+  // Inactive row blocks create (unique userId) — reactivate for self-service attendance
+  if (!employee) {
+    const inactive = await Employee.findOne({ userId: currentUserId })
+      .select('_id firstName lastName orgId userId status')
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    if (inactive) {
+      try {
+        await Employee.updateOne(
+          { _id: inactive._id },
+          {
+            $set: {
+              status: 'active',
+              ...(authOrgId && !inactive.orgId ? { orgId: authOrgId } : {}),
+            },
+          }
+        );
+        employee = { ...inactive, status: 'active', orgId: inactive.orgId || authOrgId };
+        logger.info('Reactivated employee for self-service attendance', {
+          employeeId: employee._id,
+          userId: currentUserId,
+        });
+      } catch (reactivateError) {
+        logger.error('Failed to reactivate employee for self-service', {
+          userId: currentUserId,
+          error: reactivateError.message,
+        });
+      }
+    }
   }
 
   if (!employee && createIfMissing) {
@@ -35,14 +67,25 @@ export async function findEmployeeForSelfService(currentUserId, authOrgId, { cre
         orgId: authOrgId,
       });
     } catch (createError) {
-      logger.error('Failed to create employee record for self-service', {
-        userId: currentUserId,
-        orgId: authOrgId,
-        error: createError.message,
-      });
-      return null;
+      if (createError.code === 11000) {
+        employee = await Employee.findOne({ userId: currentUserId })
+          .select('_id firstName lastName orgId userId status')
+          .lean();
+        if (employee && employee.status !== 'active') {
+          await Employee.updateOne({ _id: employee._id }, { $set: { status: 'active' } });
+          employee = { ...employee, status: 'active' };
+        }
+      }
+      if (!employee) {
+        logger.error('Failed to create employee record for self-service', {
+          userId: currentUserId,
+          orgId: authOrgId,
+          error: createError.message,
+        });
+        return null;
+      }
     }
   }
 
-  return employee;
+  return employee?.status === 'active' ? employee : null;
 }

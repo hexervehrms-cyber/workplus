@@ -217,13 +217,25 @@ export default function EmployeeDashboard() {
     performance: "0%"
   });
 
-  const applyWeekHours = useCallback((hours: number, weekKey?: string) => {
+  /** Completed week hours before today's live session (updated on each server sync). */
+  const weekHoursExclTodayRef = useRef(0);
+
+  const applyWeekHours = useCallback((hours: number, weekKey?: string, force = false) => {
     const key = weekKey || calendarWeekKey();
-    if (key !== calendarWeekKey()) return;
-    setKpiMetrics((prev) => ({ ...prev, hoursThisWeek: formatWeekHours(hours) }));
+    if (!force && key !== calendarWeekKey()) return;
+    const safe = Math.max(0, hours);
+    setKpiMetrics((prev) => ({ ...prev, hoursThisWeek: formatWeekHours(safe) }));
     const uid = user?.id ? String(user.id) : null;
-    writeCachedWeekHours(uid, hours);
+    writeCachedWeekHours(uid, safe);
   }, [user?.id]);
+
+  const ingestWeekHoursFromServer = useCallback(
+    (hoursThisWeek: number, weekKey?: string, todayLiveHours = 0) => {
+      weekHoursExclTodayRef.current = Math.max(0, hoursThisWeek - todayLiveHours);
+      applyWeekHours(hoursThisWeek, weekKey, true);
+    },
+    [applyWeekHours]
+  );
 
   const syncWeeklyHours = useCallback(async () => {
     if (!user?.id) return;
@@ -239,12 +251,19 @@ export default function EmployeeDashboard() {
           ? (data as { hoursThisWeek: number }).hoursThisWeek
           : null;
       if (weekHours !== null) {
-        applyWeekHours(weekHours, (data as { weekKey?: string }).weekKey);
+        const live = (data as { liveStatus?: { currentHours?: number } }).liveStatus;
+        const todayLive =
+          typeof live?.currentHours === 'number' ? live.currentHours : 0;
+        ingestWeekHoursFromServer(
+          weekHours,
+          (data as { weekKey?: string }).weekKey,
+          todayLive
+        );
       }
     } catch (err) {
       debug.warn('syncWeeklyHours failed', err);
     }
-  }, [user?.id, applyWeekHours]);
+  }, [user?.id, ingestWeekHoursFromServer]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -337,7 +356,7 @@ export default function EmployeeDashboard() {
       debug.log('⚡ Fetching all dashboard data in parallel...');
 
       const [attendanceResult, holidaysResult] = await Promise.allSettled([
-        apiGet('/attendance/today'),
+        apiGet('/attendance/today', false),
         apiGet('/holidays')
       ]);
 
@@ -510,7 +529,15 @@ export default function EmployeeDashboard() {
       if (attendanceApiOk) {
         clearApiCache('/attendance/today');
         if (typeof attendanceData?.hoursThisWeek === 'number') {
-          applyWeekHours(attendanceData.hoursThisWeek, attendanceData.weekKey);
+          const todayLive =
+            typeof attendanceData?.liveStatus?.currentHours === 'number'
+              ? attendanceData.liveStatus.currentHours
+              : 0;
+          ingestWeekHoursFromServer(
+            attendanceData.hoursThisWeek,
+            attendanceData.weekKey,
+            todayLive
+          );
         }
       }
 
@@ -548,7 +575,7 @@ export default function EmployeeDashboard() {
       setLoading(false);
     }
   // FIX #6: updateAttendance added to deps
-  }, [user, isRecentlyUpdated, updateAttendance, loadFromLocalStorage, applyWeekHours]);
+  }, [user, isRecentlyUpdated, updateAttendance, loadFromLocalStorage, ingestWeekHoursFromServer]);
 
   const ensureEmployeeId = async (): Promise<string | null> => {
     if (employeeIdRef.current) return employeeIdRef.current;
@@ -826,7 +853,7 @@ export default function EmployeeDashboard() {
       if (document.visibilityState !== 'visible') return;
       void syncWeeklyHours();
       void refreshLeaveBalance();
-    }, 60_000);
+    }, 30_000);
     const unsubLeave = realTimeSocket.onLeaveUpdate(() => {
       void refreshLeaveBalance();
     });
@@ -843,6 +870,17 @@ export default function EmployeeDashboard() {
       unsubAttendance();
     };
   }, [user?.id, syncWeeklyHours, refreshLeaveBalance]);
+
+  // Faster week-hours sync while checked in (server includes live open shift)
+  useEffect(() => {
+    if (!user?.id || !todayAttendance.isCheckedIn) return;
+    void syncWeeklyHours();
+    const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void syncWeeklyHours();
+    }, 15_000);
+    return () => clearInterval(interval);
+  }, [user?.id, todayAttendance.isCheckedIn, syncWeeklyHours]);
 
   // ============================================================================
   // TIMER SYSTEM - Track working hours, breaks, and meetings in real-time
@@ -882,6 +920,24 @@ export default function EmployeeDashboard() {
 
     return () => clearInterval(interval);
   }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.checkInTime, currentBreakDuration]);
+
+  // Live "Hours This Week" — server baseline + today's running timer
+  useEffect(() => {
+    if (!todayAttendance.isCheckedIn || todayAttendance.isOnBreak) {
+      return;
+    }
+    const tick = () => {
+      applyWeekHours(weekHoursExclTodayRef.current + workingHours, calendarWeekKey(), true);
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [
+    todayAttendance.isCheckedIn,
+    todayAttendance.isOnBreak,
+    workingHours,
+    applyWeekHours,
+  ]);
 
   // Format time display (HH:MM:SS)
   const formatTime = (seconds: number): string => {
@@ -1056,7 +1112,9 @@ export default function EmployeeDashboard() {
         );
 
         if (typeof breakPayload?.hoursThisWeek === 'number') {
-          applyWeekHours(breakPayload.hoursThisWeek, breakPayload.weekKey);
+          const liveH =
+            typeof liveStatus?.currentHours === 'number' ? liveStatus.currentHours : 0;
+          ingestWeekHoursFromServer(breakPayload.hoursThisWeek, breakPayload.weekKey, liveH);
         } else {
           void syncWeeklyHours();
         }
@@ -1123,10 +1181,23 @@ export default function EmployeeDashboard() {
           throw new Error(result.message);
         }
 
-        const serverAtt = result.data as Record<string, unknown> | undefined;
+        const payload = result.data as {
+          attendance?: Record<string, unknown>;
+          hoursThisWeek?: number;
+          weekKey?: string;
+          checkIn?: string | Date;
+        };
+        const serverAtt = (payload?.attendance ?? payload) as Record<string, unknown>;
         const checkInTime = serverAtt?.checkIn
-          ? new Date(serverAtt.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+          ? new Date(serverAtt.checkIn as string | Date).toLocaleTimeString('en-US', {
+              hour: '2-digit',
+              minute: '2-digit',
+            })
           : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+        if (typeof payload?.hoursThisWeek === 'number') {
+          ingestWeekHoursFromServer(payload.hoursThisWeek, payload.weekKey, 0);
+        }
 
         // Update state immediately
         updateAttendance({
@@ -1220,7 +1291,7 @@ export default function EmployeeDashboard() {
           : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
         if (typeof checkOutPayload?.hoursThisWeek === 'number') {
-          applyWeekHours(checkOutPayload.hoursThisWeek, checkOutPayload.weekKey);
+          ingestWeekHoursFromServer(checkOutPayload.hoursThisWeek, checkOutPayload.weekKey, 0);
         } else {
           void syncWeeklyHours();
         }

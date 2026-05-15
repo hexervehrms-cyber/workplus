@@ -87,17 +87,29 @@ const endOpenBreakOnDocument = async (attendanceDoc, endTime, notes) => {
 };
 
 /** Sum worked hours Mon–Sun (stored in MongoDB; resets each calendar week). */
-const sumHoursThisWeekForUser = async (userId, effectiveOrgId, authOrgId) => {
+const sumHoursThisWeekForUser = async (userId, effectiveOrgId, authOrgId, employeeId = null) => {
   const now = new Date();
   const { weekStart, weekEnd } = getCalendarWeekRange(now);
+  const orgClause = buildOrgIdClause(effectiveOrgId, authOrgId);
+  const dateClause = { date: { $gte: weekStart, $lt: weekEnd } };
 
-  const rows = await Attendance.find({
+  let rows = await Attendance.find({
     ...buildUserIdClause(userId),
-    ...buildOrgIdClause(effectiveOrgId, authOrgId),
-    date: { $gte: weekStart, $lt: weekEnd },
+    ...orgClause,
+    ...dateClause,
   })
     .select('date checkIn checkOut hoursWorked breaks')
     .lean();
+
+  if ((!rows || rows.length === 0) && employeeId) {
+    rows = await Attendance.find({
+      employeeId,
+      ...orgClause,
+      ...dateClause,
+    })
+      .select('date checkIn checkOut hoursWorked breaks')
+      .lean();
+  }
 
   return sumHoursFromAttendanceRows(rows, now);
 };
@@ -206,7 +218,8 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
   const hoursThisWeek = await sumHoursThisWeekForUser(
     currentUserId,
     effectiveOrgId,
-    userOrgId
+    userOrgId,
+    effectiveEmployeeId
   );
 
   res.json({
@@ -381,18 +394,36 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   const existingAttendance = await Attendance.findOne(todayQuery).sort({ _id: -1 });
 
   if (existingAttendance?.checkIn && !existingAttendance.checkOut) {
+    const hoursThisWeek = await sumHoursThisWeekForUser(
+      effectiveUserId,
+      effectiveOrgId,
+      authOrgId
+    );
     return res.status(200).json({
       success: true,
       message: 'Already checked in today.',
-      data: existingAttendance
+      data: {
+        attendance: existingAttendance,
+        hoursThisWeek,
+        weekKey: calendarWeekKey(),
+      },
     });
   }
 
   if (existingAttendance?.checkOut) {
+    const hoursThisWeek = await sumHoursThisWeekForUser(
+      effectiveUserId,
+      effectiveOrgId,
+      authOrgId
+    );
     return res.status(200).json({
       success: true,
       message: 'Already checked out today.',
-      data: existingAttendance
+      data: {
+        attendance: existingAttendance,
+        hoursThisWeek,
+        weekKey: calendarWeekKey(),
+      },
     });
   }
 

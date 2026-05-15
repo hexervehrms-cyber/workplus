@@ -15,8 +15,12 @@ export function formatWeekHours(hours: number): string {
   if (!Number.isFinite(hours) || hours <= 0) return '0h';
   const rounded = Math.round(hours * 100) / 100;
   if (rounded < 1) {
-    const mins = Math.round(rounded * 60);
-    return mins > 0 ? `${mins}m` : '0h';
+    const totalSeconds = Math.max(0, Math.floor(hours * 3600));
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    if (mins > 0) return `${mins}m`;
+    if (secs > 0) return `${secs}s`;
+    return '<1m';
   }
   const whole = Math.floor(rounded);
   const mins = Math.round((rounded - whole) * 60);

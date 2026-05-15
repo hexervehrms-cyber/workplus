@@ -351,6 +351,28 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
       completionPercentage,
       timestamp: new Date()
     });
+
+    if (updatedEmployee) {
+      const employeePayload =
+        typeof updatedEmployee.toObject === 'function'
+          ? updatedEmployee.toObject()
+          : updatedEmployee;
+      global.socketManager.broadcastToOrganization(userOrgId, 'employee_updated', {
+        employee: employeePayload,
+        updatedBy: updatedUser.name || 'Employee',
+        timestamp: new Date(),
+      });
+      global.socketManager.broadcastToRole('admin', 'employee_updated', {
+        employee: employeePayload,
+        orgId: userOrgId,
+        updatedBy: updatedUser.name || 'Employee',
+      });
+      global.socketManager.broadcastToRole('hr', 'employee_updated', {
+        employee: employeePayload,
+        orgId: userOrgId,
+        updatedBy: updatedUser.name || 'Employee',
+      });
+    }
   }
 
   // Emit activity log

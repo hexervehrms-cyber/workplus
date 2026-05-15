@@ -369,6 +369,69 @@ router.get(
 );
 
 /**
+ * GET /api/documents/download/:id
+ * Stream document file (authenticated) for inline view / download
+ */
+router.get(
+  "/download/:id",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const { id } = req.params;
+      const document = await Document.findById(id).lean();
+
+      if (!document) {
+        return sendError(res, "Document not found", 404, "NOT_FOUND");
+      }
+
+      if (
+        req.user.role === "employee" &&
+        String(req.user.userId) !== String(document.userId)
+      ) {
+        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      }
+
+      if (!document.filePath) {
+        return sendError(res, "File path missing", 404, "NOT_FOUND");
+      }
+
+      const relativePath = String(document.filePath).replace(/^\//, "");
+      const absolutePath = path.resolve(__dirname, "..", relativePath);
+
+      if (!fs.existsSync(absolutePath)) {
+        return sendError(res, "File not found on server", 404, "NOT_FOUND");
+      }
+
+      const ext = path.extname(document.fileName || document.filePath || "").toLowerCase();
+      const mimeByExt = {
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".txt": "text/plain",
+      };
+
+      const contentType = mimeByExt[ext] || "application/octet-stream";
+      const fileName = document.fileName || document.name || "document";
+
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(fileName)}"`);
+
+      return res.sendFile(absolutePath);
+    } catch (error) {
+      logger.error("Download document error", {
+        error: error.message,
+        documentId: req.params.id,
+      });
+      return sendError(res, "Failed to download document", 500, "DOCUMENT_ERROR");
+    }
+  })
+);
+
+/**
  * GET /api/documents/:id
  * Get a specific document
  */

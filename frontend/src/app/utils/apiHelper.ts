@@ -257,13 +257,16 @@ export const getBackendUrl = (): string => {
     return apiUrl.endsWith('/api') ? apiUrl.slice(0, -4) : apiUrl;
   }
   
-  // Production fallback - use the deployed backend URL
-  if (import.meta.env.PROD) {
+  if (typeof window !== 'undefined' && (window.location.hostname.includes('hexerve.online') || window.location.hostname.includes('vercel.app'))) {
     return 'https://workplus-backend-sg3a.onrender.com';
   }
-  
-  // Development fallback - use window.location.origin (Vite proxy will handle it)
-  return window.location.origin;
+
+  // Development: static uploads are served by the Express backend, not Vite
+  if (import.meta.env.DEV) {
+    return 'http://localhost:5000';
+  }
+
+  return typeof window !== 'undefined' ? window.location.origin : '';
 };
 
 /**

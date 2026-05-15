@@ -12,7 +12,7 @@ import CurrencySelector from '../../components/CurrencySelector';
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog';
-import { apiGet, apiPost, apiPut, apiDelete, apiUpload, clearApiCache, buildFileUrl } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, apiDelete, apiUpload, clearApiCache, buildFileUrl, buildApiUrl, getBearerToken } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 
 // IndexedDB helper functions
@@ -232,6 +232,43 @@ export default function Profile() {
     return buildFileUrl(doc.filePath);
   };
 
+  const openDocument = async (doc: Document) => {
+    if (!doc._id) {
+      const fallback = getDocumentFileUrl(doc);
+      if (fallback) {
+        window.open(fallback, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      toast.error('File not available');
+      return;
+    }
+
+    try {
+      const token = getBearerToken();
+      const url = buildApiUrl(`/documents/download/${doc._id}`);
+      const response = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        throw new Error('Could not open document');
+      }
+
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 120_000);
+    } catch {
+      const fallback = getDocumentFileUrl(doc);
+      if (fallback) {
+        window.open(fallback, '_blank', 'noopener,noreferrer');
+      } else {
+        toast.error('Could not open document');
+      }
+    }
+  };
+
   const [officialForm, setOfficialForm] = useState({
     employeeId: '',
     joiningDate: '',
@@ -255,7 +292,7 @@ export default function Profile() {
           ? new Date(String(d.uploadedAt)).toLocaleDateString()
           : new Date().toLocaleDateString(),
         status: String(d.status || 'uploaded'),
-        filePath: d.filePath ? String(d.filePath) : undefined,
+        filePath: d.filePath ? String(d.filePath) : d.fileUrl ? String(d.fileUrl) : undefined,
         category: d.type ? String(d.type) : undefined,
       }));
       setDocuments(mapped.filter((d) => d._id));
@@ -1574,10 +1611,7 @@ export default function Profile() {
                               variant="ghost"
                               className="h-8 w-8 p-0"
                               onClick={() => {
-                                // Download functionality
-                                if (docs.certificate?.filePath) {
-                                  window.open(docs.certificate.filePath, '_blank');
-                                }
+                                if (docs.certificate) void openDocument(docs.certificate);
                               }}
                             >
                               <Download className="w-4 h-4" />
@@ -1622,9 +1656,7 @@ export default function Profile() {
                               className="h-8 w-8 p-0"
                               onClick={() => {
                                 // Download functionality
-                                if (docs.marksheet?.filePath) {
-                                  window.open(docs.marksheet.filePath, '_blank');
-                                }
+                                if (docs.marksheet) void openDocument(docs.marksheet);
                               }}
                             >
                               <Download className="w-4 h-4" />
@@ -1669,9 +1701,7 @@ export default function Profile() {
                               className="h-8 w-8 p-0"
                               onClick={() => {
                                 // Download functionality
-                                if (docs.others?.filePath) {
-                                  window.open(docs.others.filePath, '_blank');
-                                }
+                                if (docs.others) void openDocument(docs.others);
                               }}
                             >
                               <Download className="w-4 h-4" />
@@ -1861,11 +1891,7 @@ export default function Profile() {
                             variant="ghost"
                             className="h-8 w-8 p-0"
                             title="View document"
-                            onClick={() => {
-                              const url = getDocumentFileUrl(doc);
-                              if (url) window.open(url, '_blank', 'noopener,noreferrer');
-                              else toast.error('File not available');
-                            }}
+                            onClick={() => void openDocument(doc)}
                           >
                             <Eye className="w-4 h-4" />
                           </Button>

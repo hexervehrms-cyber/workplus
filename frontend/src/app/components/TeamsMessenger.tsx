@@ -46,6 +46,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from './ui/dialog';
 import {
   Popover,
@@ -767,11 +768,20 @@ export default function TeamsMessenger() {
       u.email.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const addContactCandidates = hiddenUsers.filter(
-    (u) =>
-      u.name.toLowerCase().includes(addContactSearch.toLowerCase()) ||
-      u.email.toLowerCase().includes(addContactSearch.toLowerCase())
-  );
+  const addContactCandidates = users
+    .filter((u) => u.id !== String(user?.id))
+    .filter((u) => user?.role === 'super_admin' || u.role !== 'super_admin')
+    .filter(
+      (u) =>
+        u.name.toLowerCase().includes(addContactSearch.toLowerCase()) ||
+        u.email.toLowerCase().includes(addContactSearch.toLowerCase())
+    );
+
+  const handleOpenContactChat = (contact: User) => {
+    setSelectedUser(contact);
+    setShowAddContactDialog(false);
+    setAddContactSearch('');
+  };
 
   return (
     <>
@@ -1215,7 +1225,7 @@ export default function TeamsMessenger() {
         <DialogHeader>
           <DialogTitle>Add contact</DialogTitle>
           <DialogDescription>
-            Restore a removed contact or pick someone from your organization.
+            Search your organization, then add a removed contact back or open a chat.
           </DialogDescription>
         </DialogHeader>
         <Input
@@ -1227,28 +1237,61 @@ export default function TeamsMessenger() {
         <div className="max-h-64 overflow-y-auto space-y-1">
           {addContactCandidates.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">
-              No hidden contacts. All organization users are already in your list.
+              No users match your search.
             </p>
           ) : (
-            addContactCandidates.map((contact) => (
-              <button
-                key={contact.id}
-                type="button"
-                className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-accent text-left"
-                onClick={() => handleRestoreContact(contact.id)}
-              >
-                <Avatar className="h-9 w-9">
-                  <AvatarImage src={contact.avatar} />
-                  <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
-                </Avatar>
-                <div className="min-w-0">
-                  <p className="font-medium truncate">{contact.name}</p>
-                  <p className="text-xs text-muted-foreground truncate">{contact.email}</p>
+            addContactCandidates.map((contact) => {
+              const isHidden = hiddenContactIds.has(contact.id);
+              return (
+                <div
+                  key={contact.id}
+                  className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-accent"
+                >
+                  <Avatar className="h-9 w-9 shrink-0">
+                    <AvatarImage src={contact.avatar} />
+                    <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium truncate">{contact.name}</p>
+                    <p className="text-xs text-muted-foreground truncate">{contact.email}</p>
+                  </div>
+                  {isHidden ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => handleRestoreContact(contact.id)}
+                    >
+                      Add
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0"
+                      onClick={() => handleOpenContactChat(contact)}
+                    >
+                      Message
+                    </Button>
+                  )}
                 </div>
-              </button>
-            ))
+              );
+            })
           )}
         </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setShowAddContactDialog(false);
+              setAddContactSearch('');
+            }}
+          >
+            Close
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
     </>

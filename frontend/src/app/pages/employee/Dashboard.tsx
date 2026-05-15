@@ -4,12 +4,12 @@ import InteractiveCalendar from '../../components/InteractiveCalendar';
 import ChatWidget from '../../components/ChatWidget';
 import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useAuth } from '../../context/AuthContext';
-import { TokenManager } from '../../utils/api';
+import { TokenManager, LeaveAllocationService } from '../../utils/api';
+import { parseBalanceApiResponse, sumRemainingDays } from '../../utils/leaveBalance';
 import { apiGet, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
 import { clearPersistedAttendance, writePersistedAttendance, localDayKey } from '../../utils/attendancePersistence';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useAttendance } from '../../../context/AttendanceContext';
-import { getDynamicGreeting, getMotivationalQuote } from '../../utils/greetingUtils';
 import { toast } from 'sonner';
 import {
   Calendar,
@@ -17,7 +17,10 @@ import {
   TrendingUp,
   Play,
   Square,
-  Pause
+  Pause,
+  Loader2,
+  Coffee,
+  RefreshCw,
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -119,41 +122,27 @@ function parseTodayCheckInTime(checkInTime: string): Date | null {
 }
 
 // ============================================================================
-// DYNAMIC GREETING HEADER COMPONENT
+// STATIC GREETING (fixed at first render — no auto-rotation)
 // ============================================================================
-function DynamicGreetingHeader({ userName }: { userName: string }) {
-  const [greeting, setGreeting] = useState(getDynamicGreeting(userName));
-  const quote = getMotivationalQuote();
-
-  useEffect(() => {
-    // Update greeting every minute
-    const interval = setInterval(() => {
-      setGreeting(getDynamicGreeting(userName));
-    }, 60000);
-
-    return () => clearInterval(interval);
+function StaticGreetingHeader({ userName }: { userName: string }) {
+  const { title, subtitle } = useMemo(() => {
+    const capitalized =
+      userName.trim().charAt(0).toUpperCase() + userName.trim().slice(1) || 'Employee';
+    const hour = new Date().getHours();
+    const period =
+      hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+    return {
+      title: `${period}, ${capitalized}.`,
+      subtitle: 'Review current tasks and progress.',
+    };
   }, [userName]);
 
   return (
-    <div className="rounded-2xl p-8 flex-1">
-      <div className="space-y-3">
-        <div className="flex items-center gap-3">
-          <span className="text-5xl">{greeting.emoji}</span>
-          <h1 className="text-4xl font-bold text-slate-900">
-            {greeting.message}
-          </h1>
-        </div>
-        
-        <p className="text-lg text-slate-700">
-          {greeting.subMessage}
-        </p>
-        
-        <div className="pt-4">
-          <p className="text-sm italic text-slate-500">
-            💡 {quote}
-          </p>
-        </div>
-      </div>
+    <div className="flex-1 min-w-0 space-y-2">
+      <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-foreground">
+        {title}
+      </h1>
+      <p className="text-base md:text-lg text-muted-foreground">{subtitle}</p>
     </div>
   );
 }
@@ -162,6 +151,9 @@ export default function EmployeeDashboard() {
   const { user, loading: authLoading } = useAuth();
   const { attendance: todayAttendance, updateAttendance, loadFromLocalStorage } = useAttendance();
   const [loading, setLoading] = useState(false);
+  const [attendanceBusy, setAttendanceBusy] = useState<
+    null | 'check-in' | 'check-out' | 'break-start' | 'break-end'
+  >(null);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
 
   // ============================================================================
@@ -448,8 +440,29 @@ export default function EmployeeDashboard() {
       }
 
       const weekHours = typeof attendanceData?.hoursThisWeek === 'number' ? attendanceData.hoursThisWeek : 0;
+
+      let leaveBalanceLabel = '0 days';
+      try {
+        const empId = employeeIdRef.current || (await ensureEmployeeId());
+        if (empId) {
+          const now = new Date();
+          const balanceRes = await LeaveAllocationService.getEmployeeBalance(
+            empId,
+            now.getFullYear(),
+            now.getMonth() + 1
+          );
+          if (balanceRes.success) {
+            const parsed = parseBalanceApiResponse(balanceRes);
+            const totalRemaining = sumRemainingDays(parsed.balances);
+            leaveBalanceLabel = `${totalRemaining} day${totalRemaining === 1 ? '' : 's'}`;
+          }
+        }
+      } catch {
+        /* keep default */
+      }
+
       setKpiMetrics({
-        leaveBalance: "12 days",
+        leaveBalance: leaveBalanceLabel,
         hoursThisWeek: `${weekHours}h`,
         performance: "85%"
       });
@@ -580,14 +593,24 @@ export default function EmployeeDashboard() {
 
     const handleBreakEnded = (data: any) => {
       console.log('� [EMPLOYEE-DASHBOARD] break:ended event received:', data);
-      if (String(data.employeeId) === String(employeeIdRef.current)) {
-        console.log('📡 [EMPLOYEE-DASHBOARD] Break ended for current employee, updating state');
+      const matchEmployee =
+        data.employeeId && String(data.employeeId) === String(employeeIdRef.current);
+      const matchUser =
+        user?.id &&
+        (String(data.userId) === String(user.id) ||
+          String(data.attendance?.userId) === String(user.id));
+      if (matchEmployee || matchUser) {
         setLastSocketEventTime(Date.now());
-        updateAttendance({
-          isOnBreak: false,
-          currentBreakDuration: 0,
-          breakType: 'regular'
-        }, 'socket');
+        const ls = data.liveStatus;
+        updateAttendance(
+          {
+            isOnBreak: ls?.isOnBreak === true,
+            currentBreakDuration: ls?.currentBreakDuration || 0,
+            breakType: ls?.breakType || 'regular',
+            isCheckedIn: true,
+          },
+          'socket'
+        );
       }
     };
 
@@ -772,6 +795,7 @@ export default function EmployeeDashboard() {
     
     try {
       actionInProgressRef.current = true;
+      setAttendanceBusy('break-start');
       lastActionTimeRef.current = Date.now();
 
       const resolvedEmployeeId = await ensureEmployeeId();
@@ -836,18 +860,14 @@ export default function EmployeeDashboard() {
         }
 
         clearApiCache('/attendance/today');
-        
-        // Wait for socket event before refreshing
-        setTimeout(() => {
-          void safeRefresh(true);
-        }, SYNC_CONFIG.SOCKET_WAIT_MS);
+        toast.success('Break started');
+        setLastSocketEventTime(Date.now());
       } finally {
         clearTimeout(timeoutId);
       }
     } catch (error) {
       debug.error('❌ [BREAK START] Error:', error);
       toast.error(error instanceof Error ? error.message : 'Could not start break');
-      // Rollback optimistic update on error
       updateAttendance({
         isOnBreak: false,
         breakType: 'regular',
@@ -855,6 +875,7 @@ export default function EmployeeDashboard() {
       }, 'action');
     } finally {
       actionInProgressRef.current = false;
+      setAttendanceBusy(null);
     }
   };
 
@@ -877,6 +898,7 @@ export default function EmployeeDashboard() {
 
     try {
       actionInProgressRef.current = true;
+      setAttendanceBusy('break-end');
       lastActionTimeRef.current = Date.now();
       
       const resolvedEmployeeId = await ensureEmployeeId();
@@ -929,29 +951,40 @@ export default function EmployeeDashboard() {
         const result = await response.json();
         debug.log('✅ [BREAK END] Success:', result);
 
-        // Confirm optimistic update with server response
         const liveStatus = result.data?.liveStatus;
-        if (liveStatus) {
-          updateAttendance({
-            isOnBreak: liveStatus.isOnBreak || false,
-            breakType: liveStatus.breakType || 'regular',
-            currentBreakDuration: liveStatus.currentBreakDuration || 0
-          }, 'action');
-        }
+        updateAttendance(
+          {
+            isOnBreak: liveStatus?.isOnBreak === true,
+            breakType: liveStatus?.breakType || 'regular',
+            currentBreakDuration: liveStatus?.currentBreakDuration || 0,
+            isCheckedIn: true,
+          },
+          'action'
+        );
+
+        const uid = user?.id ? String(user.id) : null;
+        writePersistedAttendance(uid, {
+          checkedIn: true,
+          isCheckedIn: true,
+          isOnBreak: false,
+          currentBreakDuration: 0,
+          breakType: 'regular',
+          timestamp: Date.now(),
+        });
 
         clearApiCache('/attendance/today');
-        
-        // Wait for socket event before refreshing
+        setLastSocketEventTime(Date.now());
+        disableRefreshRef.current = true;
+        toast.success('Break ended');
         setTimeout(() => {
-          void safeRefresh(true);
-        }, SYNC_CONFIG.SOCKET_WAIT_MS);
+          disableRefreshRef.current = false;
+        }, 4000);
       } finally {
         clearTimeout(timeoutId);
       }
     } catch (error) {
       debug.error('❌ [BREAK END] Error:', error);
       toast.error(error instanceof Error ? error.message : 'Could not end break');
-      // Rollback optimistic update on error - restore previous state
       updateAttendance({
         isOnBreak: wasOnBreak,
         breakType: prevBreakType || 'regular',
@@ -959,6 +992,7 @@ export default function EmployeeDashboard() {
       }, 'action');
     } finally {
       actionInProgressRef.current = false;
+      setAttendanceBusy(null);
     }
   };
 
@@ -968,6 +1002,7 @@ export default function EmployeeDashboard() {
     
     try {
       actionInProgressRef.current = true;
+      setAttendanceBusy('check-in');
       lastActionTimeRef.current = Date.now();
 
       const token = TokenManager.get();
@@ -1033,9 +1068,8 @@ export default function EmployeeDashboard() {
         });
 
         clearApiCache('/attendance/today');
-        setTimeout(() => {
-          void safeRefresh(true);
-        }, 600);
+        toast.success('Checked in successfully');
+        setLastSocketEventTime(Date.now());
       } finally {
         clearTimeout(timeoutId);
       }
@@ -1050,6 +1084,7 @@ export default function EmployeeDashboard() {
       }, 'action');
     } finally {
       actionInProgressRef.current = false;
+      setAttendanceBusy(null);
     }
   };
 
@@ -1059,6 +1094,7 @@ export default function EmployeeDashboard() {
     
     try {
       actionInProgressRef.current = true;
+      setAttendanceBusy('check-out');
       lastActionTimeRef.current = Date.now();
 
       const resolvedEmployeeId = await ensureEmployeeId();
@@ -1150,6 +1186,7 @@ export default function EmployeeDashboard() {
       }, 'action');
     } finally {
       actionInProgressRef.current = false;
+      setAttendanceBusy(null);
     }
   };
 
@@ -1169,105 +1206,113 @@ export default function EmployeeDashboard() {
       <LoadingProgressBar isLoading={loading} color="bg-blue-500" />
       <div className="p-8 space-y-8">
         {/* Welcome Header with Attendance Buttons */}
-        <div className="flex items-center justify-between mb-8">
-          <DynamicGreetingHeader userName={user?.name || 'Employee'} />
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-2">
+          <StaticGreetingHeader userName={user?.name || 'Employee'} />
 
-          {/* Attendance Status and Action Buttons - Top Right Corner */}
-          <div className="flex flex-col items-end gap-4">
-            {/* Status Badge */}
+          <Card className="w-full lg:w-auto shrink-0 border-border/80 shadow-sm p-4 md:p-5">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">
+              Today&apos;s attendance
+            </p>
             {todayAttendance.isCheckedIn && (
-              <Badge 
-                className={`px-3 py-1.5 text-xs font-semibold rounded-full ${
-                  todayAttendance.isOnBreak 
-                    ? 'bg-amber-100 text-amber-700'
-                    : 'bg-emerald-100 text-emerald-700'
+              <Badge
+                className={`mb-3 px-3 py-1 text-xs font-semibold rounded-full ${
+                  todayAttendance.isOnBreak
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-emerald-100 text-emerald-800'
                 }`}
               >
-                {todayAttendance.isOnBreak 
-                  ? `● On Break (${formatTime(currentBreakDuration * 60)})`
-                  : `● Working (${formatTime(workingHours * 3600)})`}
+                {todayAttendance.isOnBreak
+                  ? `On break · ${formatTime(currentBreakDuration * 60)}`
+                  : `Working · ${formatTime(workingHours * 3600)}`}
               </Badge>
             )}
-
-            {/* Action buttons: shift attendance (not account login — use profile menu to sign out) */}
-            <div className="flex flex-col items-end gap-1">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {!todayAttendance.isCheckedIn ? (
                 <Button
                   type="button"
-                  size="sm"
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                  disabled={loading}
+                  size="default"
+                  className="h-10 min-w-[120px] bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-sm"
+                  disabled={loading || !!attendanceBusy}
                   onClick={handleCheckIn}
                   aria-label="Check in to work for today"
                 >
-                  <Play className="w-4 h-4 mr-1.5" />
+                  {attendanceBusy === 'check-in' ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Play className="w-4 h-4 mr-2" />
+                  )}
                   Check In
                 </Button>
               ) : (
                 <>
                   <Button
                     type="button"
-                    size="sm"
-                    className="bg-red-600 hover:bg-red-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                    disabled={loading}
+                    size="default"
+                    variant="destructive"
+                    className="h-10 min-w-[120px] font-semibold shadow-sm"
+                    disabled={loading || !!attendanceBusy}
                     onClick={handleCheckOut}
                     aria-label="Check out from work for today"
                   >
-                    <Square className="w-4 h-4 mr-1.5" />
+                    {attendanceBusy === 'check-out' ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Square className="w-4 h-4 mr-2" />
+                    )}
                     Check Out
                   </Button>
 
                   {!todayAttendance.isOnBreak ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                          onClick={() => handleBreakStart('regular')}
-                          disabled={loading}
-                          aria-label="Start a break"
-                        >
-                          <Pause className="w-4 h-4 mr-1.5" />
-                          Break
-                        </Button>
+                    <Button
+                      type="button"
+                      size="default"
+                      className="h-10 min-w-[100px] bg-amber-600 hover:bg-amber-700 text-white font-semibold shadow-sm"
+                      onClick={() => handleBreakStart('regular')}
+                      disabled={loading || !!attendanceBusy}
+                      aria-label="Start a break"
+                    >
+                      {attendanceBusy === 'break-start' ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                       ) : (
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                          onClick={handleBreakEnd}
-                          disabled={loading}
-                          aria-label="End break"
-                        >
-                          <Pause className="w-4 h-4 mr-1.5" />
-                          End Break
-                        </Button>
+                        <Coffee className="w-4 h-4 mr-2" />
                       )}
+                      Break
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="default"
+                      className="h-10 min-w-[120px] bg-amber-600 hover:bg-amber-700 text-white font-semibold shadow-sm"
+                      onClick={handleBreakEnd}
+                      disabled={loading || !!attendanceBusy}
+                      aria-label="End break"
+                    >
+                      {attendanceBusy === 'break-end' ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <Pause className="w-4 h-4 mr-2" />
+                      )}
+                      End Break
+                    </Button>
+                  )}
 
                 </>
               )}
               
-              {/* Manual Refresh Button - Always visible */}
               <Button
                 type="button"
-                size="sm"
+                size="icon"
                 variant="outline"
-                className="text-muted-foreground hover:text-foreground px-3 py-2 rounded-md transition-colors"
-                disabled={loading || disableRefresh}
+                className="h-10 w-10 shrink-0"
+                disabled={loading || disableRefresh || !!attendanceBusy}
                 onClick={() => safeRefresh(true)}
-                title="Manually refresh attendance status"
+                title="Refresh attendance"
                 aria-label="Refresh attendance from server"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground text-right max-w-[280px] leading-snug">
-              Shift attendance for today. To sign out of your account, use the profile menu (top right).
-            </p>
-            </div>
-          </div>
+          </Card>
         </div>
 
         {/* KPI Cards */}

@@ -18,6 +18,7 @@ import CurrencyChanger from './CurrencyChanger';
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { buildApiUrl } from '../utils/apiHelper';
+import { socketService } from '../utils/socket';
 
 interface Notification {
   _id: string;
@@ -184,11 +185,51 @@ export function Navbar() {
     return 'bg-muted';
   };
 
-  // Fetch notifications on mount and every 30 seconds
+  // Fetch notifications on mount, poll, and listen for real-time socket events
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 30000); // Refresh every 30 seconds
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchNotifications, 30000);
+
+    const onSocketNotification = (payload: {
+      id?: string;
+      _id?: string;
+      title?: string;
+      message?: string;
+      type?: string;
+      priority?: string;
+      createdAt?: string;
+      actionUrl?: string;
+    }) => {
+      const id = payload.id || payload._id;
+      if (!id || !payload.title) {
+        fetchNotifications();
+        return;
+      }
+      setNotifications((prev) => {
+        if (prev.some((n) => n._id === String(id))) return prev;
+        const entry: Notification = {
+          _id: String(id),
+          title: payload.title!,
+          message: payload.message || '',
+          type: payload.type || 'announcement',
+          priority: payload.priority || 'medium',
+          isRead: false,
+          createdAt: payload.createdAt || new Date().toISOString(),
+          actionUrl: payload.actionUrl
+        };
+        return [entry, ...prev].slice(0, 10);
+      });
+      setUnreadCount((c) => c + 1);
+    };
+
+    socketService.on('notification', onSocketNotification);
+    socketService.on('notification:received', onSocketNotification);
+
+    return () => {
+      clearInterval(interval);
+      socketService.off('notification', onSocketNotification);
+      socketService.off('notification:received', onSocketNotification);
+    };
   }, []);
 
   return (

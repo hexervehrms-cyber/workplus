@@ -13,7 +13,12 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import ChatMessage from '../models/ChatMessage.js';
 import User from '../models/User.js';
 import logger from '../utils/logger.js';
-import { sendTeamsMessage, getTeamsChatMessages, createTeamsChat } from '../config/teamsConfig.js';
+import {
+  sendTeamsMessage,
+  getTeamsChatMessages,
+  createTeamsChat,
+  createTeamsOnlineMeeting,
+} from '../config/teamsConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,6 +37,30 @@ const chatFileStorage = multer.diskStorage({
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     cb(null, `chat-${uniqueSuffix}${path.extname(file.originalname)}`);
   }
+});
+
+const avatarUploadDir = path.join(__dirname, '..', 'uploads', 'avatars');
+const avatarStorage = multer.diskStorage({
+  destination(_req, _file, cb) {
+    if (!fs.existsSync(avatarUploadDir)) {
+      fs.mkdirSync(avatarUploadDir, { recursive: true });
+    }
+    cb(null, avatarUploadDir);
+  },
+  filename(req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const targetId = req.params.userId || req.user?.userId || 'user';
+    cb(null, `avatar-${targetId}-${uniqueSuffix}${path.extname(file.originalname)}`);
+  },
+});
+
+const avatarUpload = multer({
+  storage: avatarStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(_req, file, cb) {
+    const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    cb(null, allowed.includes(file.mimetype));
+  },
 });
 
 const chatFileUpload = multer({
@@ -377,6 +406,17 @@ router.delete('/messages/:messageId', authenticate, asyncHandler(async (req, res
     message.deletedBy = userId;
     await message.save();
 
+    if (global.io) {
+      const payload = {
+        messageId: message._id.toString(),
+        conversationId: message.conversationId,
+      };
+      global.io.to(`user_${message.senderId}`).emit('chat:message_deleted', payload);
+      if (message.recipientId) {
+        global.io.to(`user_${message.recipientId}`).emit('chat:message_deleted', payload);
+      }
+    }
+
     res.json({
       success: true,
       message: 'Message deleted successfully'
@@ -455,6 +495,68 @@ router.get('/conversations', authenticate, asyncHandler(async (req, res) => {
       success: false,
       message: 'Failed to fetch conversations',
       error: error.message
+    });
+  }
+}));
+
+/**
+ * Create Microsoft Teams online meeting for in-platform voice/video
+ * POST /api/chat/teams/meeting
+ */
+router.post('/teams/meeting', authenticate, asyncHandler(async (req, res) => {
+  const { recipientId, withVideo = true } = req.body;
+  const userId = req.user.userId;
+
+  if (!recipientId) {
+    return res.status(400).json({
+      success: false,
+      message: 'recipientId is required',
+    });
+  }
+
+  try {
+    const currentUser = await User.findById(userId).select('name email').lean();
+    const recipient = await User.findById(recipientId).select('name email').lean();
+
+    if (!recipient?.email) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recipient not found',
+      });
+    }
+
+    if (!currentUser?.email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Your account must have an email linked to Microsoft 365 for Teams calls',
+      });
+    }
+
+    const subject = withVideo
+      ? `Video call: ${currentUser.name} & ${recipient.name}`
+      : `Voice call: ${currentUser.name} & ${recipient.name}`;
+
+    const meeting = await createTeamsOnlineMeeting(currentUser.email, subject, !!withVideo);
+
+    res.json({
+      success: true,
+      data: {
+        joinWebUrl: meeting.joinWebUrl,
+        meetingId: meeting.meetingId,
+        subject: meeting.subject,
+        withVideo: !!withVideo,
+      },
+    });
+  } catch (error) {
+    logger.error('Error creating Teams meeting', {
+      error: error.message,
+      response: error.response?.data,
+    });
+    res.status(500).json({
+      success: false,
+      message:
+        error.response?.data?.error?.message ||
+        'Failed to create Teams meeting. Ensure Teams app permissions (OnlineMeetings.ReadWrite.All) are granted.',
     });
   }
 }));
@@ -564,6 +666,63 @@ router.post('/teams/sync', authenticate, asyncHandler(async (req, res) => {
     });
   }
 }));
+
+/**
+ * POST /api/chat/users/:userId/avatar
+ * Upload avatar for self or (admin) another user in the same org
+ */
+router.post(
+  '/users/:userId/avatar',
+  authenticate,
+  avatarUpload.single('avatar'),
+  asyncHandler(async (req, res) => {
+    const { userId: targetUserId } = req.params;
+    const requesterId = req.user.userId;
+    const requesterRole = req.user.role;
+    const orgId = req.user.orgId || 'system';
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No avatar file provided' });
+    }
+
+    const isSelf = String(targetUserId) === String(requesterId);
+    if (!isSelf && requesterRole !== 'admin' && requesterRole !== 'super_admin') {
+      return res.status(403).json({ success: false, message: 'Not authorized to update this avatar' });
+    }
+
+    const targetUser = await User.findOne({
+      _id: targetUserId,
+      orgId,
+      isActive: true,
+      deletedAt: null,
+    }).select('avatar name email');
+
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const avatarPath = `uploads/avatars/${req.file.filename}`;
+    targetUser.avatar = avatarPath;
+    await targetUser.save();
+
+    if (global.io) {
+      global.io.to(`user_${targetUserId}`).emit('chat:avatar_updated', {
+        userId: targetUserId,
+        avatar: avatarPath,
+      });
+      global.io.to(`tenant_${orgId}`).emit('chat:avatar_updated', {
+        userId: targetUserId,
+        avatar: avatarPath,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Avatar updated successfully',
+      data: { avatarPath, user: targetUser },
+    });
+  })
+);
 
 /**
  * GET /api/chat/users

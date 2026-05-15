@@ -64,16 +64,19 @@ export default function AttendanceAdmin() {
   const [exportEndDate, setExportEndDate] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filteredAttendance, setFilteredAttendance] = useState<AttendanceRecord[]>([]);
+  const [activityStartDate, setActivityStartDate] = useState<string>('');
+  const [activityEndDate, setActivityEndDate] = useState<string>('');
+  const [activitySearch, setActivitySearch] = useState<string>('');
   const [lateEmployees, setLateEmployees] = useState<any[]>([]);
   const [lateEmployeesLoading, setLateEmployeesLoading] = useState(false);
 
   useEffect(() => {
     fetchAttendance();
-    fetchActivityLogs();
+    fetchActivityLogs(activityStartDate || undefined, activityEndDate || undefined);
 
     const handleAttendanceUpdate = () => {
       fetchAttendance();
-      fetchActivityLogs();
+      fetchActivityLogs(activityStartDate || undefined, activityEndDate || undefined);
     };
 
     // Listen to all attendance-related events
@@ -134,10 +137,14 @@ export default function AttendanceAdmin() {
     }
   };
 
-  const fetchActivityLogs = async () => {
+  const fetchActivityLogs = async (startDate?: string, endDate?: string) => {
     try {
       setLogsLoading(true);
-      const response = await apiClient.get(`/attendance/activity-logs?limit=300&t=${Date.now()}`);
+      const params: Record<string, string> = { limit: '500', t: String(Date.now()) };
+      if (startDate) params.startDate = startDate;
+      if (endDate) params.endDate = endDate;
+      const qs = new URLSearchParams(params).toString();
+      const response = await apiClient.get(`/attendance/activity-logs?${qs}`);
       if (response?.success) {
         setActivityLogs(response.data || []);
       } else {
@@ -153,119 +160,53 @@ export default function AttendanceAdmin() {
 
   // Export attendance data
   const handleExport = async () => {
-    try {
-      if (!exportStartDate || !exportEndDate) {
-        toast.error('Please select both start and end dates');
-        return;
-      }
+    if (!exportStartDate || !exportEndDate) {
+      toast.error('Please select both start and end dates');
+      return;
+    }
+    if (new Date(exportStartDate) > new Date(exportEndDate)) {
+      toast.error('Start date must be before end date');
+      return;
+    }
 
+    try {
       setExportLoading(true);
-      
-      const startDate = new Date(exportStartDate);
-      const endDate = new Date(exportEndDate);
-      
-      if (startDate > endDate) {
-        toast.error('Start date must be before end date');
-        return;
-      }
-      
-      // Call the bulk-export endpoint with proper API URL
+
       const apiUrl = buildApiUrl(`/attendance/bulk-export?startDate=${exportStartDate}&endDate=${exportEndDate}`);
-      let token = TokenManager.get();  // Changed from const to let
-      
-      console.log('🔄 [EXPORT] Starting attendance export', {
-        url: apiUrl,
-        hasToken: !!token,
-        startDate: exportStartDate,
-        endDate: exportEndDate,
-        token: token ? token.substring(0, 20) + '...' : 'NO_TOKEN'
-      });
-      
-      if (!token) {
-        console.warn('⚠️ [EXPORT] No token found, attempting to refresh auth');
-        // Try to refresh token
-        const refreshToken = TokenManager.getRefreshToken();
-        if (refreshToken) {
-          try {
-            const refreshResponse = await fetch(buildApiUrl('/security/auth/refresh-token'), {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ refreshToken }),
-              credentials: 'include'
-            });
-            if (refreshResponse.ok) {
-              const data = await refreshResponse.json();
-              token = data.token;
-              TokenManager.set(token);
-              console.log('✅ [EXPORT] Token refreshed successfully');
-            }
-          } catch (refreshError) {
-            console.error('❌ [EXPORT] Token refresh failed:', refreshError);
-          }
-        }
-        
-        if (!token) {
-          toast.error('Authentication required. Please log in again.');
-          return;
-        }
-      }
-      
+      const token = TokenManager.get();
+
+      const headers: HeadersInit = { 'Accept': 'text/csv, application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
       const response = await fetch(apiUrl, {
         method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Accept': 'text/csv'
-        },
+        headers,
         credentials: 'include'
       });
-      
-      console.log('📊 [EXPORT] Response received', {
-        status: response.status,
-        statusText: response.statusText,
-        contentType: response.headers.get('content-type')
-      });
-      
-      if (response.ok) {
-        // Get the CSV content
-        const csvContent = await response.text();
-        
-        console.log('✅ [EXPORT] CSV content received', {
-          length: csvContent.length,
-          preview: csvContent.substring(0, 100)
-        });
-        
-        // Create and download CSV file
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = window.URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `attendance_${exportStartDate}_to_${exportEndDate}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url);
-        
-        console.log('✅ [EXPORT] File downloaded successfully');
-        toast.success('Attendance data exported successfully');
-      } else {
-        const errorText = await response.text();
-        console.error('❌ [EXPORT] Export error response:', {
-          status: response.status,
-          statusText: response.statusText,
-          body: errorText
-        });
-        
-        // Try to parse as JSON for better error message
+
+      if (!response.ok) {
+        let msg = `Export failed (${response.status})`;
         try {
-          const errorJson = JSON.parse(errorText);
-          throw new Error(errorJson.message || 'Failed to export');
-        } catch {
-          throw new Error(`Export failed: ${response.status} ${response.statusText}`);
-        }
+          const body = await response.json();
+          msg = body.message || msg;
+        } catch { /* ignore */ }
+        throw new Error(msg);
       }
+
+      const csvContent = await response.text();
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `attendance_${exportStartDate}_to_${exportEndDate}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      toast.success('Attendance exported successfully');
     } catch (error) {
-      console.error('❌ [EXPORT] Export error:', error);
+      console.error('[EXPORT] error:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to export attendance data');
     } finally {
       setExportLoading(false);
@@ -377,6 +318,19 @@ export default function AttendanceAdmin() {
     return () => clearInterval(interval);
   }, []);
 
+  // Filtered activity logs (search)
+  const filteredActivityLogs = activitySearch.trim()
+    ? activityLogs.filter((log) => {
+        const q = activitySearch.trim().toLowerCase();
+        return (
+          log.employeeName?.toLowerCase().includes(q) ||
+          log.action?.toLowerCase().includes(q) ||
+          log.details?.breakType?.toLowerCase().includes(q) ||
+          log.details?.meetingTitle?.toLowerCase().includes(q)
+        );
+      })
+    : activityLogs;
+
   // Filter attendance data
   const applyFilter = () => {
     if (filterStatus === 'all') {
@@ -476,20 +430,61 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
         </div>
       </div>
 
-      <div className="flex gap-4 items-center">
+      <div className="flex flex-wrap gap-3 items-center">
         <div className="flex bg-muted rounded-xl p-1">
           <Button variant="default" size="sm" className="rounded-lg">
             <Activity className="w-4 h-4 mr-2" />
             Live Activity
           </Button>
         </div>
-        <div className="relative flex-1 max-w-md">
+        <div className="relative flex-1 min-w-[180px] max-w-xs">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <input
             type="text"
             placeholder="Search activity logs..."
-            className="w-full pl-10 pr-4 py-2 border rounded-xl bg-background"
+            value={activitySearch}
+            onChange={(e) => setActivitySearch(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 border rounded-xl bg-background text-sm"
           />
+        </div>
+        <div className="flex gap-2 items-center">
+          <label className="text-sm font-medium text-muted-foreground">From:</label>
+          <input
+            type="date"
+            value={activityStartDate}
+            onChange={(e) => setActivityStartDate(e.target.value)}
+            className="px-3 py-2 border rounded-lg bg-background text-sm"
+          />
+          <label className="text-sm font-medium text-muted-foreground">To:</label>
+          <input
+            type="date"
+            value={activityEndDate}
+            onChange={(e) => setActivityEndDate(e.target.value)}
+            className="px-3 py-2 border rounded-lg bg-background text-sm"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            className="rounded-xl"
+            onClick={() => fetchActivityLogs(activityStartDate || undefined, activityEndDate || undefined)}
+          >
+            <Filter className="w-4 h-4 mr-1" />
+            Filter
+          </Button>
+          {(activityStartDate || activityEndDate) && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="rounded-xl text-xs"
+              onClick={() => {
+                setActivityStartDate('');
+                setActivityEndDate('');
+                fetchActivityLogs();
+              }}
+            >
+              Clear
+            </Button>
+          )}
         </div>
         <div className="flex gap-2 items-center">
           <select
@@ -588,7 +583,7 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
           <div className="p-4 border-b">
             <h3 className="font-semibold flex items-center gap-2">
               <Activity className="w-4 h-4" />
-              Live Attendance Activity ({activityLogs.length} logs)
+              Live Attendance Activity ({filteredActivityLogs.length} logs)
             </h3>
             <p className="text-sm text-muted-foreground">Real-time employee check-ins, breaks, and check-outs</p>
           </div>
@@ -604,8 +599,8 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
                 </tr>
               </thead>
               <tbody>
-                {activityLogs.length > 0 ? (
-                  activityLogs.map((log) => (
+                {filteredActivityLogs.length > 0 ? (
+                  filteredActivityLogs.map((log) => (
                     <tr key={log._id} className="border-b hover:bg-accent/50">
                       <td className="p-4">
                         <p className="font-medium">{new Date(log.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</p>
@@ -667,7 +662,13 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
                       </td>
                     </tr>
                   ))
-                ) : null}
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="p-8 text-center text-muted-foreground">
+                      {logsLoading ? 'Loading activity logs…' : activitySearch || activityStartDate || activityEndDate ? 'No logs match your filter.' : 'No activity logged today.'}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

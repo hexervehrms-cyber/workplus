@@ -2,6 +2,8 @@ import express from "express";
 import mongoose from "mongoose";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import Announcement from "../models/Announcement.js";
+import logger from "../utils/logger.js";
+import { notifyTeamsOnAnnouncement } from "../utils/workflowNotifications.js";
 
 const router = express.Router();
 
@@ -306,9 +308,39 @@ router.post(
       .populate("authorId", "name email avatar")
       .lean();
 
+    if (!isScheduled) {
+      setImmediate(async () => {
+        try {
+          const doc = await Announcement.findById(announcement._id);
+          if (doc) {
+            await doc.createNotifications();
+            const audienceLabel =
+              audience === "management"
+                ? "Management (admin, HR, manager)"
+                : audience === "all"
+                  ? "All employees"
+                  : String(audience);
+            await notifyTeamsOnAnnouncement(
+              orgId,
+              doc.title,
+              doc.content,
+              audienceLabel
+            );
+          }
+        } catch (err) {
+          logger.error("Announcement notification dispatch failed", {
+            error: err.message,
+            announcementId: announcement._id,
+          });
+        }
+      });
+    }
+
     res.status(201).json({
       success: true,
-      message: "Announcement created successfully",
+      message: isScheduled
+        ? "Announcement scheduled successfully"
+        : "Announcement published successfully",
       data: populatedAnnouncement,
     });
   })

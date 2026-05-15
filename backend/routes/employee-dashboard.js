@@ -986,24 +986,28 @@ router.post('/leaves',
       try {
         const u = await User.findById(userId).select('name email').lean();
         const employeeRec = await Employee.findOne({ userId, orgId }).select('_id orgId').lean();
-        if (u?.email && employeeRec) {
+        if (employeeRec) {
           const orgSmtp = await resolveOrganizationSmtp(orgId);
-          await EmailNotificationService.sendLeaveRequestSubmitted(
-            {
-              userId,
-              _id: employeeRec._id,
-              name: u.name,
-              email: u.email,
-              orgId: employeeRec.orgId || orgId
-            },
-            leaveRequest,
-            { organizationSmtp: orgSmtp }
-          );
+          const empName = u?.name || employee.userId?.name || 'Employee';
+          const empEmail = u?.email || '';
+          if (empEmail) {
+            await EmailNotificationService.sendLeaveRequestSubmitted(
+              {
+                userId,
+                _id: employeeRec._id,
+                name: empName,
+                email: empEmail,
+                orgId: employeeRec.orgId || orgId
+              },
+              leaveRequest,
+              { organizationSmtp: orgSmtp }
+            );
+          }
           await notifyAdminsOnLeaveSubmitted(orgId, {
             leaveRequest,
             employeeUserId: userId,
-            employeeName: u.name,
-            employeeEmail: u.email
+            employeeName: empName,
+            employeeEmail: empEmail
           });
         }
       } catch (notifyErr) {

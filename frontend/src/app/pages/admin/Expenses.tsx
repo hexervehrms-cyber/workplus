@@ -322,6 +322,30 @@ export default function ExpensesAdmin() {
     }
   };
 
+  // Handle bulk delete
+  const handleBulkDelete = async () => {
+    if (selectedExpenses.size === 0) {
+      toast.error('Please select expenses to delete');
+      return;
+    }
+    if (!window.confirm(`Delete ${selectedExpenses.size} selected expense(s)? This cannot be undone.`)) return;
+
+    try {
+      setActionLoading(true);
+      const ids = Array.from(selectedExpenses);
+      await Promise.all(ids.map((id) => apiDelete(`/expenses/${id}`)));
+      toast.success(`${ids.length} expense(s) deleted`);
+      setSelectedExpenses(new Set());
+      setSelectAll(false);
+      await fetchExpenses();
+    } catch (error) {
+      console.error('Error deleting expenses:', error);
+      toast.error('Failed to delete selected expenses');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Handle bulk reject
   const handleBulkReject = async () => {
     if (selectedExpenses.size === 0) {
@@ -950,7 +974,7 @@ export default function ExpensesAdmin() {
           <div className="flex items-center justify-between">
             <p className="font-semibold">{selectedExpenses.size} expense(s) selected</p>
             <div className="flex gap-2">
-              <Button 
+              <Button
                 className="rounded-xl bg-green-600 hover:bg-green-700"
                 onClick={handleBulkApprove}
                 disabled={actionLoading}
@@ -958,7 +982,7 @@ export default function ExpensesAdmin() {
                 <CheckCircle className="w-4 h-4 mr-2" />
                 Approve Selected
               </Button>
-              <Button 
+              <Button
                 className="rounded-xl bg-red-600 hover:bg-red-700"
                 onClick={() => {
                   setActionType('reject');
@@ -969,6 +993,15 @@ export default function ExpensesAdmin() {
               >
                 <XCircle className="w-4 h-4 mr-2" />
                 Reject Selected
+              </Button>
+              <Button
+                variant="outline"
+                className="rounded-xl border-red-300 text-red-600 hover:bg-red-50"
+                onClick={handleBulkDelete}
+                disabled={actionLoading}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete Selected
               </Button>
             </div>
           </div>

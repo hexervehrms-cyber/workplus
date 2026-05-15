@@ -339,26 +339,6 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
     month: currentMonth
   });
 
-  if (!allocation) {
-    return res.json({
-      success: true,
-      data: {
-        vacation: 0,
-        sickLeave: 0,
-        casualLeave: 0,
-        earnedLeave: 0,
-        medicalLeave: 0,
-        maternityLeave: 0,
-        paternityLeave: 0,
-        compensatoryOff: 0,
-        personal: 0,
-        emergency: 0,
-        ncns: 0,
-        sandwichLeave: 0
-      }
-    });
-  }
-
   const leaveKeys = [
     'vacation',
     'sickLeave',
@@ -374,19 +354,39 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
     'sandwichLeave'
   ];
 
-  const balance = {};
-  for (const key of leaveKeys) {
-    const allocated = allocation.allocations?.[key] || 0;
-    const carried = allocation.carriedForward?.[key] || 0;
-    const used = allocation.used?.[key] || 0;
-    const pending = allocation.pending?.[key] || 0;
-    balance[key] = allocated + carried - used - pending;
+  const buildBreakdown = (allocDoc) => {
+    const breakdown = {};
+    for (const key of leaveKeys) {
+      const allocated = allocDoc?.allocations?.[key] || 0;
+      const carried = allocDoc?.carriedForward?.[key] || 0;
+      const used = allocDoc?.used?.[key] || 0;
+      const pending = allocDoc?.pending?.[key] || 0;
+      const total = allocated + carried;
+      breakdown[key] = {
+        allocated,
+        carried,
+        used,
+        pending,
+        total,
+        remaining: Math.max(0, total - used - pending),
+      };
+    }
+    return breakdown;
+  };
+
+  if (!allocation) {
+    return res.json({
+      success: true,
+      hasAllocation: false,
+      data: buildBreakdown(null),
+    });
   }
 
   res.json({
     success: true,
-    data: balance,
-    allocation
+    hasAllocation: true,
+    data: buildBreakdown(allocation),
+    allocation,
   });
 }));
 

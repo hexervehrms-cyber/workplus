@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Calendar as CalendarIcon, CheckCircle, XCircle, Clock, Plus, Edit2, Download, Trash2, AlertCircle } from 'lucide-react';
+import { Calendar as CalendarIcon, CheckCircle, XCircle, Clock, Plus, Edit2, Download, Trash2, AlertCircle, Eye } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -23,6 +23,11 @@ import {
 import { LeaveRequestService, LeaveAllocationService, EmployeeService, LeaveTypeSettingsService } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from 'sonner';
+import {
+  type LeaveBalanceMap,
+  parseBalanceApiResponse,
+  getTypeBalance,
+} from '../../utils/leaveBalance';
 
 interface LeaveRequest {
   _id: string;
@@ -53,7 +58,9 @@ const DEFAULT_ENABLED_LEAVE_TYPES: Record<string, boolean> = {
 export default function Leave() {
   const { user } = useAuth();
   const [leaveHistory, setLeaveHistory] = useState<LeaveRequest[]>([]);
-  const [leaveBalance, setLeaveBalance] = useState<any>(null);
+  const [leaveBalance, setLeaveBalance] = useState<LeaveBalanceMap>({});
+  const [hasLeaveAllocation, setHasLeaveAllocation] = useState(false);
+  const [viewingLeave, setViewingLeave] = useState<LeaveRequest | null>(null);
   const [enabledLeaveTypes, setEnabledLeaveTypes] = useState<Record<string, boolean> | null>(null);
   const [balanceKpiVisibility, setBalanceKpiVisibility] = useState<Record<string, boolean> | null>(null);
   const [leaveKpiReady, setLeaveKpiReady] = useState(false);
@@ -125,9 +132,11 @@ export default function Leave() {
           const balanceResponse = await LeaveAllocationService.getEmployeeBalance(employeeId, year, month);
           console.log('📊 [LEAVE] Balance response:', balanceResponse);
           
-          if (balanceResponse.success && balanceResponse.data) {
-            setLeaveBalance(balanceResponse.data);
-            console.log('✅ [LEAVE] Leave balance loaded:', balanceResponse.data);
+          if (balanceResponse.success) {
+            const parsed = parseBalanceApiResponse(balanceResponse);
+            setLeaveBalance(parsed.balances);
+            setHasLeaveAllocation(parsed.hasAllocation);
+            console.log('✅ [LEAVE] Leave balance loaded:', parsed);
           } else {
             console.warn('⚠️ [LEAVE] No balance data returned from API');
             console.warn('⚠️ [LEAVE] This employee may not have leave allocations set up');
@@ -178,130 +187,77 @@ export default function Leave() {
     fetchData();
   }, [user]);
 
+  useEffect(() => {
+    const refreshBalances = async () => {
+      if (!user?.id || document.visibilityState !== 'visible') return;
+      let employeeId = user.employeeId;
+      if (!employeeId) {
+        try {
+          const emp = await EmployeeService.getEmployeeByUserId(user.id);
+          employeeId = emp?._id;
+        } catch {
+          return;
+        }
+      }
+      if (!employeeId) return;
+      const now = new Date();
+      const balanceResponse = await LeaveAllocationService.getEmployeeBalance(
+        employeeId,
+        now.getFullYear(),
+        now.getMonth() + 1
+      );
+      if (balanceResponse.success) {
+        const parsed = parseBalanceApiResponse(balanceResponse);
+        setLeaveBalance(parsed.balances);
+        setHasLeaveAllocation(parsed.hasAllocation);
+      }
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshBalances();
+    };
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [user?.id, user?.employeeId]);
+
   const leaveBalanceCards = useMemo(() => {
-    const all: Array<{
-      type: string;
-      key: string;
-      total: number;
-      used: number;
-      pending: number;
-      color: string;
-      remaining: number;
-    }> = [
-    { 
-      type: 'Sick Leave', 
-      key: 'sickLeave',
-      total: leaveBalance?.sickLeave?.allocated || 0, 
-      used: leaveBalance?.sickLeave?.used || 0, 
-      pending: leaveBalance?.sickLeave?.pending || 0,
-      color: 'bg-secondary',
-      remaining: 0
-    },
-    { 
-      type: 'Casual Leave', 
-      key: 'casualLeave',
-      total: leaveBalance?.casualLeave?.allocated || 0, 
-      used: leaveBalance?.casualLeave?.used || 0, 
-      pending: leaveBalance?.casualLeave?.pending || 0,
-      color: 'bg-accent',
-      remaining: 0
-    },
-    { 
-      type: 'Earned Leave', 
-      key: 'earnedLeave',
-      total: leaveBalance?.earnedLeave?.allocated || 0, 
-      used: leaveBalance?.earnedLeave?.used || 0, 
-      pending: leaveBalance?.earnedLeave?.pending || 0,
-      color: 'bg-yellow-500',
-      remaining: 0
-    },
-    { 
-      type: 'Medical Leave', 
-      key: 'medicalLeave',
-      total: leaveBalance?.medicalLeave?.allocated || 0, 
-      used: leaveBalance?.medicalLeave?.used || 0, 
-      pending: leaveBalance?.medicalLeave?.pending || 0,
-      color: 'bg-red-500',
-      remaining: 0
-    },
-    { 
-      type: 'Maternity Leave', 
-      key: 'maternityLeave',
-      total: leaveBalance?.maternityLeave?.allocated || 0, 
-      used: leaveBalance?.maternityLeave?.used || 0, 
-      pending: leaveBalance?.maternityLeave?.pending || 0,
-      color: 'bg-pink-500',
-      remaining: 0
-    },
-    { 
-      type: 'Paternity Leave', 
-      key: 'paternityLeave',
-      total: leaveBalance?.paternityLeave?.allocated || 0, 
-      used: leaveBalance?.paternityLeave?.used || 0, 
-      pending: leaveBalance?.paternityLeave?.pending || 0,
-      color: 'bg-blue-500',
-      remaining: 0
-    },
-    { 
-      type: 'Compensatory Off', 
-      key: 'compensatoryOff',
-      total: leaveBalance?.compensatoryOff?.allocated || 0, 
-      used: leaveBalance?.compensatoryOff?.used || 0, 
-      pending: leaveBalance?.compensatoryOff?.pending || 0,
-      color: 'bg-green-500',
-      remaining: 0
-    },
-    { 
-      type: 'Personal', 
-      key: 'personal',
-      total: leaveBalance?.personal?.allocated || 0, 
-      used: leaveBalance?.personal?.used || 0, 
-      pending: leaveBalance?.personal?.pending || 0,
-      color: 'bg-purple-500',
-      remaining: 0
-    },
-    { 
-      type: 'Emergency', 
-      key: 'emergency',
-      total: leaveBalance?.emergency?.allocated || 0, 
-      used: leaveBalance?.emergency?.used || 0, 
-      pending: leaveBalance?.emergency?.pending || 0,
-      color: 'bg-orange-500',
-      remaining: 0
-    },
-    { 
-      type: 'NCNS', 
-      key: 'ncns',
-      total: leaveBalance?.ncns?.allocated || 0, 
-      used: leaveBalance?.ncns?.used || 0, 
-      pending: leaveBalance?.ncns?.pending || 0,
-      color: 'bg-gray-500',
-      remaining: 0
-    },
-    { 
-      type: 'Sandwich Leave', 
-      key: 'sandwichLeave',
-      total: leaveBalance?.sandwichLeave?.allocated || 0, 
-      used: leaveBalance?.sandwichLeave?.used || 0, 
-      pending: leaveBalance?.sandwichLeave?.pending || 0,
-      color: 'bg-indigo-500',
-      remaining: 0
-    },
-  ];
+    const cardDefs: Array<{ type: string; key: string; color: string }> = [
+      { type: 'Sick Leave', key: 'sickLeave', color: 'bg-secondary' },
+      { type: 'Casual Leave', key: 'casualLeave', color: 'bg-accent' },
+      { type: 'Earned Leave', key: 'earnedLeave', color: 'bg-yellow-500' },
+      { type: 'Medical Leave', key: 'medicalLeave', color: 'bg-red-500' },
+      { type: 'Maternity Leave', key: 'maternityLeave', color: 'bg-pink-500' },
+      { type: 'Paternity Leave', key: 'paternityLeave', color: 'bg-blue-500' },
+      { type: 'Compensatory Off', key: 'compensatoryOff', color: 'bg-green-500' },
+      { type: 'Personal', key: 'personal', color: 'bg-purple-500' },
+      { type: 'Emergency', key: 'emergency', color: 'bg-orange-500' },
+      { type: 'NCNS', key: 'ncns', color: 'bg-gray-500' },
+      { type: 'Sandwich Leave', key: 'sandwichLeave', color: 'bg-indigo-500' },
+    ];
+
+    const all = cardDefs.map((def) => {
+      const b = getTypeBalance(leaveBalance, def.key);
+      return {
+        ...def,
+        total: b.total,
+        used: b.used,
+        pending: b.pending,
+        remaining: b.remaining,
+      };
+    });
 
     if (!leaveKpiReady || !enabledLeaveTypes) return [];
 
-    return all
-      .filter((card) => {
-        if (card.key === 'vacation') return false;
-        if (enabledLeaveTypes[card.key] !== true) return false;
-        if (balanceKpiVisibility && balanceKpiVisibility[card.key] === false) return false;
-        return true;
-      })
-      .map((leave) => ({
-        ...leave,
-        remaining: leave.total - leave.used - leave.pending
-      }));
+    return all.filter((card) => {
+      if (card.key === 'vacation') return false;
+      if (enabledLeaveTypes[card.key] !== true) return false;
+      if (balanceKpiVisibility && balanceKpiVisibility[card.key] === false) return false;
+      return true;
+    });
   }, [leaveBalance, enabledLeaveTypes, balanceKpiVisibility, leaveKpiReady]);
 
   // Submit or update leave request
@@ -512,8 +468,10 @@ export default function Leave() {
           const month = now.getMonth() + 1;
           
           const balanceResponse = await LeaveAllocationService.getEmployeeBalance(refreshEmployeeId, year, month);
-          if (balanceResponse.success && balanceResponse.data) {
-            setLeaveBalance(balanceResponse.data);
+          if (balanceResponse.success) {
+            const parsed = parseBalanceApiResponse(balanceResponse);
+            setLeaveBalance(parsed.balances);
+            setHasLeaveAllocation(parsed.hasAllocation);
           }
         }
       } else {
@@ -563,7 +521,7 @@ export default function Leave() {
         </div>
       ) : (
         <>
-          {leaveBalanceCards.length > 0 && leaveBalanceCards.every(card => card.total === 0) && (
+          {!hasLeaveAllocation && leaveBalanceCards.length > 0 && leaveBalanceCards.every((card) => card.total === 0) && (
             <Card className="p-4 sm:p-6 rounded-xl bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800">
               <div className="flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-500 flex-shrink-0 mt-0.5" />
@@ -682,10 +640,19 @@ export default function Leave() {
                 <div className="flex flex-col sm:flex-row gap-2 pt-3 border-t border-foreground/10">
                   <Button
                     size="sm"
+                    variant="secondary"
+                    className="rounded-lg flex-1 text-xs sm:text-sm"
+                    type="button"
+                    onClick={() => setViewingLeave(leave)}
+                  >
+                    <Eye className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
+                    View
+                  </Button>
+                  <Button
+                    size="sm"
                     variant="outline"
                     className="rounded-lg flex-1 text-xs sm:text-sm"
                     onClick={() => {
-                      // Edit functionality - populate form with leave data
                       setEditingLeaveId(leave._id);
                   setFormData({
                     type: leave.leaveType || leave.type || '',
@@ -783,8 +750,10 @@ Reason: ${leave.reason}
                             const month = now.getMonth() + 1;
                             
                             const balanceResponse = await LeaveAllocationService.getEmployeeBalance(employeeId, year, month);
-                            if (balanceResponse.success && balanceResponse.data) {
-                              setLeaveBalance(balanceResponse.data);
+                            if (balanceResponse.success) {
+                              const parsed = parseBalanceApiResponse(balanceResponse);
+                              setLeaveBalance(parsed.balances);
+                              setHasLeaveAllocation(parsed.hasAllocation);
                             }
                           }
                         } catch (error) {
@@ -1003,6 +972,49 @@ Reason: ${leave.reason}
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!viewingLeave} onOpenChange={(open) => !open && setViewingLeave(null)}>
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>Leave request details</DialogTitle>
+            <DialogDescription>Full details for your leave application</DialogDescription>
+          </DialogHeader>
+          {viewingLeave && (
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">Type</span>
+                <span className="font-medium">{viewingLeave.leaveType || viewingLeave.type}</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">Status</span>
+                <Badge variant={viewingLeave.status === 'approved' ? 'default' : viewingLeave.status === 'pending' ? 'secondary' : 'destructive'}>
+                  {viewingLeave.status}
+                </Badge>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">From</span>
+                <span>{new Date(viewingLeave.startDate).toLocaleDateString()}</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">To</span>
+                <span>{new Date(viewingLeave.endDate).toLocaleDateString()}</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">Duration</span>
+                <span>
+                  {viewingLeave.days
+                    ? `${viewingLeave.days} day(s)`
+                    : '—'}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground block mb-1">Reason</span>
+                <p className="rounded-lg bg-muted/50 p-3">{viewingLeave.reason}</p>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

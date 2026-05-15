@@ -39,8 +39,52 @@ interface SalarySlip {
   year: number;
   status: string;
   grossEarnings: number;
+  totalDeductions?: number;
   netSalary: number;
   approvalDate?: string;
+  earnings?: {
+    basic?: number;
+    hra?: number;
+    medicalExpenses?: number;
+    travel?: number;
+    internetCharges?: number;
+    nightShiftAllowance?: number;
+    incentives?: number;
+    bonus?: number;
+    commission?: number;
+    otherEarnings?: Array<{ name: string; amount: number }>;
+  };
+  deductions?: {
+    providentFund?: number;
+    employeeStateInsurance?: number;
+    professionalTax?: number;
+    incomeTax?: number;
+    leaveDeduction?: number;
+    otherDeductions?: Array<{ name: string; amount: number }>;
+  };
+  attendanceData?: {
+    totalWorkingDays?: number;
+    presentDays?: number;
+    absentDays?: number;
+    leavesTaken?: number;
+    halfDays?: number;
+  };
+}
+
+async function fetchSalarySlipBlob(slipId: string): Promise<Blob> {
+  const url = buildApiUrl(`salary/slip/${slipId}/download`);
+  const token = TokenManager.get();
+  const response = await fetch(url, {
+    credentials: 'include',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      Accept: 'text/html,application/pdf,*/*',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Download failed with status ${response.status}`);
+  }
+  return response.blob();
 }
 
 export default function Payroll() {
@@ -52,6 +96,8 @@ export default function Payroll() {
   const [showGenerateSlipDialog, setShowGenerateSlipDialog] = useState(false);
   const [showViewSlipDialog, setShowViewSlipDialog] = useState(false);
   const [viewingSlip, setViewingSlip] = useState<SalarySlip | null>(null);
+  const [viewSlipLoading, setViewSlipLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedEmployee, setSelectedEmployee] = useState('');
   const [employeeType, setEmployeeType] = useState('employee');
   const [effectiveFrom, setEffectiveFrom] = useState('');
@@ -206,7 +252,7 @@ export default function Payroll() {
   const fetchSalarySlips = async () => {
     try {
       setLoading(true);
-      const data = await apiGet('/salary/slips/all');
+      const data = await apiGet('/salary/slips/all?limit=500&page=1');
       setSalarySlips(data.data || []);
     } catch (error) {
       console.error('Error fetching salary slips:', error);
@@ -321,52 +367,27 @@ export default function Payroll() {
     }
   };
 
-  // Handle delete salary slip
+  // Handle delete salary slip (removes from employee view — same SalarySlip record)
   const handleDeleteSalarySlip = async (slipId: string) => {
-    if (!window.confirm('Are you sure you want to delete this salary slip?')) {
+    if (!window.confirm('Delete this salary slip? It will be removed for the employee as well.')) {
       return;
     }
 
     try {
-      const token = localStorage.getItem('authToken');
-      console.log('🗑️ [SALARY] Deleting slip:', slipId);
-      console.log('🗑️ [SALARY] Token:', token ? 'Present' : 'Missing');
-      
-      const response = await fetch(`/api/salary/slip/${slipId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+      await apiDelete(`/salary/slip/${slipId}`);
+      toast.success('Salary slip deleted');
+      if (viewingSlip?._id === slipId) {
+        setShowViewSlipDialog(false);
+        setViewingSlip(null);
+        if (previewUrl) {
+          URL.revokeObjectURL(previewUrl);
+          setPreviewUrl(null);
         }
-      });
-
-      console.log('📥 [SALARY] Delete slip response status:', response.status);
-      console.log('📥 [SALARY] Delete slip response headers:', response.headers);
-      
-      const contentType = response.headers.get('content-type');
-      console.log('📥 [SALARY] Content-Type:', contentType);
-      
-      let data;
-      try {
-        data = await response.json();
-        console.log('📥 [SALARY] Delete slip response data:', data);
-      } catch (parseError) {
-        console.error('❌ [SALARY] Failed to parse response as JSON:', parseError);
-        const text = await response.text();
-        console.log('📥 [SALARY] Response text:', text);
-        data = { message: text || 'Unknown error' };
       }
-
-      if (response.ok) {
-        toast.success('Salary slip deleted successfully');
-        fetchSalarySlips();
-      } else {
-        console.error('❌ [SALARY] Delete slip error:', data);
-        toast.error(data.message || `Failed to delete salary slip (${response.status})`);
-      }
+      fetchSalarySlips();
     } catch (error) {
-      console.error('❌ [SALARY] Error deleting salary slip:', error);
-      toast.error('Failed to delete salary slip: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      console.error('Error deleting salary slip:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to delete salary slip');
     }
   };
 
@@ -485,51 +506,68 @@ export default function Payroll() {
     }
   };
 
-  // Handle download salary slip as PDF
-  const handleDownloadSalarySlip = async (slipId: string) => {
+  const downloadSlipFile = async (slipId: string, month: number, year: number) => {
+    const blob = await fetchSalarySlipBlob(slipId);
+    const objectUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = `salary-slip-${year}-${String(month).padStart(2, '0')}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(objectUrl);
+  };
+
+  const handleDownloadSalarySlip = async (slipId: string, month?: number, year?: number) => {
     try {
-      const url = buildApiUrl(`salary/slip/${slipId}/download`);
-      const token = TokenManager.get();
-      const response = await fetch(url, {
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          Accept: 'application/pdf,text/html,*/*',
-        },
-      });
-      if (response.ok) {
-        const blob = await response.blob();
-        const objectUrl = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = objectUrl;
-        a.download = `salary-slip-${slipId}.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(objectUrl);
-        document.body.removeChild(a);
-        toast.success('Salary slip downloaded');
-      } else {
-        toast.error('Failed to download salary slip');
-      }
+      const slip = salarySlips.find((s) => s._id === slipId) || viewingSlip;
+      await downloadSlipFile(slipId, month ?? slip?.month ?? 0, year ?? slip?.year ?? 0);
+      toast.success('Salary slip downloaded');
     } catch (error) {
       console.error('Error downloading salary slip:', error);
       toast.error('Failed to download salary slip');
     }
   };
 
-  // Handle view salary slip
-  const handleViewSalarySlip = (slip: SalarySlip) => {
-    console.log('👁️ [VIEW] Opening view dialog for slip:', slip);
-    console.log('👁️ [VIEW] Slip data:', {
-      id: slip._id,
-      employeeName: slip.employeeName,
-      month: slip.month,
-      year: slip.year,
-      status: slip.status
-    });
-    setViewingSlip(slip);
-    setShowViewSlipDialog(true);
-    console.log('👁️ [VIEW] Dialog state set to true');
+  const handleOpenSalarySlip = async (slipId: string) => {
+    try {
+      const blob = await fetchSalarySlipBlob(slipId);
+      const objectUrl = window.URL.createObjectURL(blob);
+      window.open(objectUrl, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error) {
+      console.error('Error opening salary slip:', error);
+      toast.error('Failed to open salary slip');
+    }
+  };
+
+  const handleViewSalarySlip = async (slip: SalarySlip) => {
+    try {
+      setViewSlipLoading(true);
+      setShowViewSlipDialog(true);
+      const res = await apiGet(`/salary/slip/by-id/${slip._id}`, false);
+      const full = (res?.data ?? res) as SalarySlip;
+      setViewingSlip(full?._id ? full : slip);
+
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      const blob = await fetchSalarySlipBlob(slip._id);
+      setPreviewUrl(URL.createObjectURL(blob));
+    } catch (error) {
+      console.error('Error loading salary slip:', error);
+      toast.error('Failed to load salary slip details');
+      setViewingSlip(slip);
+    } finally {
+      setViewSlipLoading(false);
+    }
+  };
+
+  const closeViewSlipDialog = () => {
+    setShowViewSlipDialog(false);
+    setViewingSlip(null);
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
   };
 
   // Reset form
@@ -784,10 +822,7 @@ export default function Payroll() {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => {
-                        console.log('👁️ [BUTTON] View button clicked for slip:', slip._id);
-                        handleViewSalarySlip(slip);
-                      }}
+                      onClick={() => void handleViewSalarySlip(slip)}
                       className="rounded-lg"
                     >
                       <Eye className="w-4 h-4 mr-2" />
@@ -796,7 +831,16 @@ export default function Payroll() {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => handleDownloadSalarySlip(slip._id)}
+                      onClick={() => handleOpenSalarySlip(slip._id)}
+                      className="rounded-lg"
+                    >
+                      <Eye className="w-4 h-4 mr-2" />
+                      Open
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleDownloadSalarySlip(slip._id, slip.month, slip.year)}
                       className="rounded-lg"
                     >
                       <Download className="w-4 h-4 mr-2" />
@@ -1280,8 +1324,8 @@ export default function Payroll() {
       </Dialog>
 
       {/* View Salary Slip Dialog */}
-      <Dialog open={showViewSlipDialog} onOpenChange={setShowViewSlipDialog}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <Dialog open={showViewSlipDialog} onOpenChange={(open) => !open && closeViewSlipDialog()}>
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Salary Slip Details</DialogTitle>
             <DialogDescription>
@@ -1289,9 +1333,18 @@ export default function Payroll() {
             </DialogDescription>
           </DialogHeader>
 
-          {viewingSlip && (
+          {viewSlipLoading ? (
+            <div className="flex justify-center py-12">
+              <Loader className="w-8 h-8 animate-spin" />
+            </div>
+          ) : viewingSlip ? (
             <div className="space-y-6">
-              {/* Header Info */}
+              {previewUrl && (
+                <div>
+                  <p className="text-sm font-medium mb-2">Payslip preview</p>
+                  <iframe title="Salary slip preview" src={previewUrl} className="w-full h-[280px] rounded-md border bg-white" />
+                </div>
+              )}
               <div className="bg-muted p-4 rounded-lg">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -1335,6 +1388,30 @@ export default function Payroll() {
                       <span className="text-sm">Gross Earnings</span>
                       <span className="font-medium">₹{viewingSlip.grossEarnings.toLocaleString()}</span>
                     </div>
+                    {viewingSlip.earnings?.basic ? (
+                      <div className="flex justify-between text-sm py-1 border-b">
+                        <span>Basic</span>
+                        <span>₹{viewingSlip.earnings.basic.toLocaleString()}</span>
+                      </div>
+                    ) : null}
+                    {viewingSlip.earnings?.hra ? (
+                      <div className="flex justify-between text-sm py-1 border-b">
+                        <span>HRA</span>
+                        <span>₹{viewingSlip.earnings.hra.toLocaleString()}</span>
+                      </div>
+                    ) : null}
+                    {viewingSlip.earnings?.bonus ? (
+                      <div className="flex justify-between text-sm py-1 border-b">
+                        <span>Bonus</span>
+                        <span>₹{viewingSlip.earnings.bonus.toLocaleString()}</span>
+                      </div>
+                    ) : null}
+                    {viewingSlip.earnings?.incentives ? (
+                      <div className="flex justify-between text-sm py-1 border-b">
+                        <span>Incentives</span>
+                        <span>₹{viewingSlip.earnings.incentives.toLocaleString()}</span>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
@@ -1342,9 +1419,27 @@ export default function Payroll() {
                 <div className="space-y-3">
                   <h3 className="font-semibold text-lg border-b pb-2">Deductions</h3>
                   <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-sm">Total Deductions</span>
-                      <span className="font-medium">₹{(viewingSlip.grossEarnings - viewingSlip.netSalary).toLocaleString()}</span>
+                    {viewingSlip.deductions?.providentFund ? (
+                      <div className="flex justify-between text-sm py-1 border-b">
+                        <span>PF</span>
+                        <span>₹{viewingSlip.deductions.providentFund.toLocaleString()}</span>
+                      </div>
+                    ) : null}
+                    {viewingSlip.deductions?.professionalTax ? (
+                      <div className="flex justify-between text-sm py-1 border-b">
+                        <span>Prof. Tax</span>
+                        <span>₹{viewingSlip.deductions.professionalTax.toLocaleString()}</span>
+                      </div>
+                    ) : null}
+                    <div className="flex justify-between pt-2 font-semibold text-sm">
+                      <span>Total Deductions</span>
+                      <span>
+                        ₹
+                        {(
+                          viewingSlip.totalDeductions ??
+                          viewingSlip.grossEarnings - viewingSlip.netSalary
+                        ).toLocaleString()}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1360,23 +1455,30 @@ export default function Payroll() {
 
               {/* Actions */}
               <div className="flex gap-2 justify-end border-t pt-4">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowViewSlipDialog(false)}
-                  className="rounded-lg"
-                >
+                <Button variant="outline" onClick={closeViewSlipDialog} className="rounded-lg">
                   Close
                 </Button>
+                <Button variant="outline" onClick={() => handleOpenSalarySlip(viewingSlip._id)} className="rounded-lg">
+                  Open in new tab
+                </Button>
                 <Button
-                  onClick={() => handleDownloadSalarySlip(viewingSlip._id)}
+                  onClick={() => handleDownloadSalarySlip(viewingSlip._id, viewingSlip.month, viewingSlip.year)}
                   className="rounded-lg"
                 >
                   <Download className="w-4 h-4 mr-2" />
-                  Download PDF
+                  Download
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleDeleteSalarySlip(viewingSlip._id)}
+                  className="rounded-lg text-red-600"
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete
                 </Button>
               </div>
             </div>
-          )}
+          ) : null}
         </DialogContent>
       </Dialog>
     </div>

@@ -18,7 +18,11 @@ import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
 import { emitLeaveKPIUpdate } from '../utils/kpiUpdater.js';
 import { dashboardCache } from '../utils/dashboardCache.js';
-import { notifyAdminsOnLeaveSubmitted, resolveOrganizationSmtp } from '../utils/workflowNotifications.js';
+import {
+  notifyAdminsOnLeaveSubmitted,
+  resolveOrganizationSmtp,
+  getHrInboxEmail
+} from '../utils/workflowNotifications.js';
 
 const router = express.Router();
 
@@ -267,6 +271,42 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
         employeeId: result.leaveRequest.employeeId._id
       });
 
+      try {
+        const lr = result.leaveRequest;
+        const populated = await LeaveRequest.findById(lr._id || id)
+          .populate('userId', 'name email')
+          .populate('approvedBy', 'name email');
+        if (populated?.userId?.email) {
+          const employeeRecord = await Employee.findOne({ userId: populated.userId._id })
+            .select('_id orgId')
+            .lean();
+          const orgSmtp = await resolveOrganizationSmtp(populated.orgId);
+          const employee = {
+            userId: populated.userId._id,
+            _id: employeeRecord?._id,
+            name: populated.userId.name || populated.employeeName,
+            email: populated.userId.email,
+            orgId: employeeRecord?.orgId || populated.orgId
+          };
+          const approver = {
+            _id: populated.approvedBy?._id || approvedBy,
+            name: populated.approvedBy?.name || 'Manager'
+          };
+          await EmailNotificationService.sendLeaveApproved(employee, populated, approver, {
+            organizationSmtp: orgSmtp
+          });
+          await EmailNotificationService.sendLeaveApprovedToHR(
+            employee,
+            populated,
+            approver,
+            getHrInboxEmail(),
+            { organizationSmtp: orgSmtp }
+          );
+        }
+      } catch (notifyErr) {
+        logger.warn('Smart leave approval emails failed', { error: notifyErr.message, leaveRequestId: id });
+      }
+
       return res.json({
         success: true,
         message: 'Leave request approved successfully',
@@ -421,10 +461,7 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
       await EmailNotificationService.sendLeaveApproved(employee, updated, approver, { organizationSmtp: orgSmtp });
       logger.info('Leave approved email sent', { leaveRequestId: id, email: employee.email });
 
-      const hrEmail = process.env.HR_EMAIL;
-      if (!hrEmail) {
-        logger.warn('HR_EMAIL not configured; skipping leave HR email', { leaveRequestId: id, orgId: updated.orgId });
-      }
+      const hrEmail = getHrInboxEmail();
       if (hrEmail) {
         await EmailNotificationService.sendLeaveApprovedToHR(employee, updated, approver, hrEmail, {
           organizationSmtp: orgSmtp
@@ -493,6 +530,39 @@ router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res)
         rejectedBy,
         reason: rejectionReason
       });
+
+      try {
+        const lr = result.leaveRequest;
+        const populated = await LeaveRequest.findById(lr._id || id)
+          .populate('userId', 'name email')
+          .populate('rejectedBy', 'name email');
+        if (populated?.userId?.email) {
+          const employeeRecord = await Employee.findOne({ userId: populated.userId._id })
+            .select('_id orgId')
+            .lean();
+          const orgSmtp = await resolveOrganizationSmtp(populated.orgId);
+          const employee = {
+            userId: populated.userId._id,
+            _id: employeeRecord?._id,
+            name: populated.userId.name || populated.employeeName,
+            email: populated.userId.email,
+            orgId: employeeRecord?.orgId || populated.orgId
+          };
+          const rejector = {
+            _id: populated.rejectedBy?._id || rejectedBy,
+            name: populated.rejectedBy?.name || 'Manager'
+          };
+          await EmailNotificationService.sendLeaveRejected(
+            employee,
+            populated,
+            rejector,
+            rejectionReason,
+            { organizationSmtp: orgSmtp }
+          );
+        }
+      } catch (notifyErr) {
+        logger.warn('Smart leave rejection emails failed', { error: notifyErr.message, leaveRequestId: id });
+      }
 
       return res.json({
         success: true,
@@ -873,6 +943,40 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
         workflowId: result.workflowId
       });
 
+      try {
+        const submitter = await User.findById(userId).select('name email').lean();
+        const employeeRecord = await Employee.findOne({ userId }).select('_id orgId').lean();
+        const orgSmtp = await resolveOrganizationSmtp(orgId);
+        if (submitter) {
+          const empName = submitter.name || employeeName || 'Employee';
+          const empEmail = submitter.email || '';
+          if (empEmail && employeeRecord) {
+            await EmailNotificationService.sendLeaveRequestSubmitted(
+              {
+                userId,
+                _id: employeeRecord._id,
+                name: empName,
+                email: empEmail,
+                orgId: employeeRecord.orgId || orgId
+              },
+              result.leaveRequest,
+              { organizationSmtp: orgSmtp }
+            );
+          }
+          await notifyAdminsOnLeaveSubmitted(orgId, {
+            leaveRequest: result.leaveRequest,
+            employeeUserId: userId,
+            employeeName: empName,
+            employeeEmail: empEmail
+          });
+        }
+      } catch (notifyErr) {
+        logger.warn('Smart leave notification emails failed', {
+          error: notifyErr.message,
+          leaveRequestId: result.leaveRequest._id
+        });
+      }
+
       return res.status(201).json({
         success: true,
         message: result.autoApproved ? 'Leave request auto-approved' : 'Leave request submitted successfully',
@@ -1057,31 +1161,34 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
 
     const orgSmtp = await resolveOrganizationSmtp(orgId);
 
-    if (user && user.email && employeeRecord) {
-      await EmailNotificationService.sendLeaveRequestSubmitted(
-        {
-          userId,
-          _id: employeeRecord._id,
-          name: user.name,
-          email: user.email,
-          orgId: employeeRecord.orgId || orgId
-        },
-        { _id: leaveRequest._id, type: leaveType, startDate: start, endDate: end, reason },
-        { organizationSmtp: orgSmtp }
-      );
-      logger.info('Leave request submitted email sent', { leaveRequestId: leaveRequest._id, email: user.email });
+    if (employeeRecord) {
+      const empName = user?.name || 'Employee';
+      const empEmail = user?.email || '';
+      if (empEmail) {
+        await EmailNotificationService.sendLeaveRequestSubmitted(
+          {
+            userId,
+            _id: employeeRecord._id,
+            name: empName,
+            email: empEmail,
+            orgId: employeeRecord.orgId || orgId
+          },
+          { _id: leaveRequest._id, type: leaveType, startDate: start, endDate: end, reason },
+          { organizationSmtp: orgSmtp }
+        );
+        logger.info('Leave request submitted email sent', { leaveRequestId: leaveRequest._id, email: empEmail });
+      }
 
       await notifyAdminsOnLeaveSubmitted(orgId, {
         leaveRequest,
         employeeUserId: userId,
-        employeeName: user.name,
-        employeeEmail: user.email
+        employeeName: empName,
+        employeeEmail: empEmail
       });
     } else {
-      logger.warn('Missing user or employee data for leave submission notification', {
+      logger.warn('Missing employee record for leave submission notification', {
         leaveRequestId: leaveRequest._id,
-        hasUser: !!user,
-        hasEmployeeRecord: !!employeeRecord
+        userId
       });
     }
   } catch (emailError) {

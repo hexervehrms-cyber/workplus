@@ -14,6 +14,30 @@ class RealTimeSocket {
     // Connection will be triggered when needed
   }
 
+  private authUser: { id: string; role: string; orgId?: string; tenantId?: string } | null = null;
+
+  /**
+   * Connect using authenticated user from AuthContext (TokenManager.getUser is not populated).
+   */
+  connectFromAuth(user: { id: string; role: string; orgId?: string; tenantId?: string }) {
+    if (!user?.id) return;
+    this.authUser = user;
+    this.connectionAttempted = false;
+    if (this.socket?.connected) {
+      return;
+    }
+    const token = TokenManager.get() || '';
+    this.connect(
+      {
+        id: user.id,
+        role: user.role,
+        orgId: user.orgId || user.tenantId,
+        tenantId: user.tenantId || user.orgId
+      },
+      token
+    );
+  }
+
   /**
    * Lazy connect - only connect when user data is available
    */
@@ -22,15 +46,13 @@ class RealTimeSocket {
       return;
     }
 
-    const user = TokenManager.getUser();
+    const user = this.authUser || TokenManager.getUser();
     const token = TokenManager.get() || '';
 
     if (!user?.id) {
-      // User not yet loaded, skip connection
       return;
     }
 
-    // Only attempt connection once per session
     if (this.connectionAttempted && !this.socket) {
       return;
     }

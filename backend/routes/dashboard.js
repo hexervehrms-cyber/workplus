@@ -13,6 +13,11 @@ import Session from "../models/Session.js";
 import { dashboardCache } from "../utils/dashboardCache.js";
 import { dashboardMonitor } from "../utils/dashboardMonitor.js";
 import { dashboardStatsBreaker, dashboardQuickStatsBreaker } from "../utils/circuitBreaker.js";
+import {
+  buildOrgIdFilter,
+  countOrgEmployees,
+  getFinancialTotals,
+} from "../utils/dashboardKpiHelpers.js";
 
 // Import specialized dashboard routes
 import superAdminRoutes from "./dashboard-superadmin.js";
@@ -112,63 +117,36 @@ router.get("/stats", asyncHandler(async (req, res) => {
       const now = new Date();
       
       // OPTIMIZATION: Use single aggregation pipeline for expenses and payroll
+      const orgFilter = buildOrgIdFilter(orgId);
       const [
         totalEmployees,
-        financialData,
+        financialTotals,
         attendanceStats,
         loggedInEmployees,
         onLeaveCount
       ] = await Promise.all([
-        Employee.countDocuments({ orgId, status: 'active' }).lean(),
-        // Combined financial aggregation
-        Expense.aggregate([
-          {
-            $facet: {
-              expenses: [
-                {
-                  $match: {
-                    orgId,
-                    date: { $gte: rangeStart, $lt: rangeEnd },
-                    status: { $in: ['approved', 'rejected'] }
-                  }
-                },
-                { $group: { _id: null, total: { $sum: "$amount" } } }
-              ],
-              payroll: [
-                {
-                  $match: {
-                    orgId: new mongoose.Types.ObjectId(orgId),
-                    createdAt: { $gte: rangeStart, $lt: rangeEnd },
-                    status: { $in: ['draft', 'pending', 'paid'] }
-                  }
-                },
-                { $group: { _id: null, total: { $sum: "$netPay" } } }
-              ]
-            }
-          }
-        ]),
+        countOrgEmployees(orgId),
+        getFinancialTotals(orgId, rangeStart, rangeEnd),
         Attendance.aggregate([
           {
             $match: {
-              orgId,
+              ...orgFilter,
               date: { $gte: rangeStart, $lt: rangeEnd },
               status: 'present'
             }
           },
           { $group: { _id: null, avgHours: { $avg: "$hoursWorked" } } }
         ]),
-        Session.countDocuments({ orgId, isActive: true, role: 'employee' }).lean(),
+        Session.countDocuments({ ...orgFilter, isActive: true, role: 'employee' }).lean(),
         LeaveRequest.countDocuments({
-          orgId,
+          ...orgFilter,
           status: 'approved',
           startDate: { $lte: now },
           endDate: { $gte: now }
         }).lean()
       ]);
       
-      const thisMonthExpenses = financialData[0]?.expenses[0]?.total || 0;
-      const thisMonthPayroll = financialData[0]?.payroll[0]?.total || 0;
-      const totalCost = thisMonthExpenses + thisMonthPayroll;
+      const { thisMonthExpenses, thisMonthPayroll, totalCost } = financialTotals;
       const avgHours = attendanceStats[0]?.avgHours || 0;
       const avgProductivity = Math.min(100, Math.round((avgHours / 8) * 100));
       
@@ -551,7 +529,7 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
         leaveExpenseStats,
         salesStats
       ] = await Promise.all([
-        Employee.countDocuments({ orgId, status: 'active' }).lean(),
+        countOrgEmployees(orgId),
         // Attendance stats in one aggregation
         Attendance.aggregate([
           {

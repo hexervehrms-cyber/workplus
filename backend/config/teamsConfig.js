@@ -111,6 +111,62 @@ export const getTeamsChatMessages = async (chatId, limit = 50) => {
 /**
  * Create Teams chat
  */
+/**
+ * Resolve Azure AD user id by email (for Graph organizer)
+ */
+export const getGraphUserIdByEmail = async (email) => {
+  const token = await getTeamsAccessToken();
+  const response = await axios.get(
+    `${teamsConfig.graphApiEndpoint}/users/${encodeURIComponent(email)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  return response.data.id;
+};
+
+/**
+ * Create a Microsoft Teams online meeting (real Teams — joinWebUrl for in-app embed)
+ */
+export const createTeamsOnlineMeeting = async (organizerEmail, subject, withVideo = true) => {
+  const token = await getTeamsAccessToken();
+  const organizerId =
+    process.env.TEAMS_ORGANIZER_USER_ID ||
+    (await getGraphUserIdByEmail(
+      process.env.TEAMS_ORGANIZER_EMAIL || organizerEmail
+    ));
+
+  const start = new Date();
+  const end = new Date(Date.now() + 60 * 60 * 1000);
+
+  const response = await axios.post(
+    `${teamsConfig.graphApiEndpoint}/users/${organizerId}/onlineMeetings`,
+    {
+      startDateTime: start.toISOString(),
+      endDateTime: end.toISOString(),
+      subject: subject || 'WorkPlus meeting',
+      lobbyBypassSettings: { scope: 'everyone', isDialInBypassEnabled: true },
+      allowedPresenters: 'everyone',
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  return {
+    joinWebUrl: response.data.joinWebUrl,
+    meetingId: response.data.id,
+    subject: response.data.subject,
+    withVideo,
+  };
+};
+
 export const createTeamsChat = async (participants, topic) => {
   try {
     const token = await getTeamsAccessToken();

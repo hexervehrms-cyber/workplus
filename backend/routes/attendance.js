@@ -88,6 +88,58 @@ const findLatestCompletedBreak = (breaks = []) => {
   return null;
 };
 
+/** Today's attendance lookup — tolerates orgId string drift between JWT and Employee row. */
+const buildTodayAttendanceQuery = (
+  authRole,
+  currentUserId,
+  effectiveEmployeeId,
+  effectiveOrgId,
+  authOrgId
+) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  const orgIds = [...new Set([String(effectiveOrgId), String(authOrgId)].filter(Boolean))];
+  const orgClause =
+    orgIds.length > 1 ? { orgId: { $in: orgIds } } : { orgId: orgIds[0] };
+
+  const base = {
+    ...orgClause,
+    date: { $gte: today, $lt: tomorrow },
+  };
+
+  if (authRole === 'employee') {
+    return { ...base, userId: currentUserId };
+  }
+  return { ...base, employeeId: effectiveEmployeeId };
+};
+
+/** Fallback when arrayFilters update misses — end the latest open break on the document. */
+const endOpenBreakOnDocument = async (attendanceDoc, endTime, notes) => {
+  if (!attendanceDoc?.breaks?.length) return null;
+  let changed = false;
+  for (let i = attendanceDoc.breaks.length - 1; i >= 0; i -= 1) {
+    const b = attendanceDoc.breaks[i];
+    const open = b?.startTime && (b.endTime == null || b.endTime === undefined);
+    if (open) {
+      attendanceDoc.breaks[i].endTime = endTime;
+      if (notes) attendanceDoc.breaks[i].endNotes = notes;
+      const mins = Math.round(
+        (endTime.getTime() - new Date(b.startTime).getTime()) / (1000 * 60)
+      );
+      attendanceDoc.breaks[i].duration = Math.max(0, mins);
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) return null;
+  attendanceDoc.markModified('breaks');
+  await attendanceDoc.save();
+  return attendanceDoc;
+};
+
 const buildLiveStatus = (attendance) => {
   let liveStatus = 'not_checked_in';
   let currentHours = 0;
@@ -308,10 +360,22 @@ router.get('/activity-logs', authorize('super_admin', 'admin', 'hr', 'manager'),
   const orgId = req.user.orgId;
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  // Support optional startDate / endDate query params; default to today
+  let rangeStart, rangeEnd;
+  if (req.query.startDate) {
+    rangeStart = new Date(req.query.startDate);
+    rangeStart.setHours(0, 0, 0, 0);
+  } else {
+    rangeStart = new Date();
+    rangeStart.setHours(0, 0, 0, 0);
+  }
+  if (req.query.endDate) {
+    rangeEnd = new Date(req.query.endDate);
+    rangeEnd.setHours(23, 59, 59, 999);
+  } else {
+    rangeEnd = new Date(rangeStart);
+    rangeEnd.setHours(23, 59, 59, 999);
+  }
 
   const attendanceActions = [
     'attendance_checkin',
@@ -325,7 +389,7 @@ router.get('/activity-logs', authorize('super_admin', 'admin', 'hr', 'manager'),
   const logs = await ActivityLog.find({
     orgId,
     action: { $in: attendanceActions },
-    createdAt: { $gte: today, $lt: tomorrow }
+    createdAt: { $gte: rangeStart, $lte: rangeEnd }
   })
     .select('userId action details ipAddress deviceInfo createdAt')
     .populate('userId', 'name email')
@@ -1201,69 +1265,73 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     // This ensures only the active break is ended, preventing race conditions
     const endTime = new Date();
 
-    const endMatch =
-      authRole === 'employee'
-        ? {
-            userId: currentUserId,
-            orgId: effectiveOrgId,
-            date: { $gte: today, $lt: tomorrow },
-            ...hasOpenBreakFilter()
-          }
-        : {
-            employeeId: effectiveEmployeeId,
-            orgId: effectiveOrgId,
-            date: { $gte: today, $lt: tomorrow },
-            ...hasOpenBreakFilter()
-          };
+    const dayQuery = buildTodayAttendanceQuery(
+      authRole,
+      currentUserId,
+      effectiveEmployeeId,
+      effectiveOrgId,
+      authOrgId
+    );
 
-    const updatedAttendance = await Attendance.findOneAndUpdate(
+    const endMatch = { ...dayQuery, ...hasOpenBreakFilter() };
+
+    let updatedAttendance = await Attendance.findOneAndUpdate(
       endMatch,
       {
         $set: {
           'breaks.$[activeBreak].endTime': endTime,
-          'breaks.$[activeBreak].endNotes': notes
-        }
+          'breaks.$[activeBreak].endNotes': notes || 'Break ended',
+        },
       },
       {
         arrayFilters: [
           {
             'activeBreak.startTime': { $exists: true, $ne: null },
-            'activeBreak.endTime': null
-          }
+            $or: [
+              { 'activeBreak.endTime': { $exists: false } },
+              { 'activeBreak.endTime': null },
+            ],
+          },
         ],
         new: true,
-        runValidators: false
+        runValidators: false,
       }
-    ).populate('userId', 'name email avatar')
-     .populate('employeeId', 'employeeCode department');
+    )
+      .populate('userId', 'name email avatar')
+      .populate('employeeId', 'employeeCode department');
 
     if (!updatedAttendance) {
-      // Check why update failed
-      const attendance = await Attendance.findOne(
-        authRole === 'employee'
-          ? { userId: currentUserId, orgId: effectiveOrgId, date: { $gte: today, $lt: tomorrow } }
-          : { employeeId: effectiveEmployeeId, orgId: effectiveOrgId, date: { $gte: today, $lt: tomorrow } }
-      ).select('_id breaks');
+      const attendance = await Attendance.findOne(dayQuery);
 
       if (!attendance) {
         return res.status(400).json({
           success: false,
-          message: 'No attendance record found for today.'
+          message: 'No attendance record found for today.',
         });
       }
 
-      if (!attendance.breaks?.some((b) => b.startTime && b.endTime == null)) {
+      if (!attendance.breaks?.some((b) => b.startTime && (b.endTime == null || b.endTime === undefined))) {
+        const liveStatus = buildLiveStatus(attendance);
         return res.status(200).json({
           success: true,
           message: 'No active break found to end.',
-          data: attendance
+          data: { attendance, liveStatus },
         });
       }
 
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to end break. Please try again.'
-      });
+      updatedAttendance = await endOpenBreakOnDocument(attendance, endTime, notes);
+      if (updatedAttendance) {
+        updatedAttendance = await Attendance.findById(updatedAttendance._id)
+          .populate('userId', 'name email avatar')
+          .populate('employeeId', 'employeeCode department');
+      }
+
+      if (!updatedAttendance) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to end break. Please try again.',
+        });
+      }
     }
 
     const latestBreakEntry = findLatestCompletedBreak(updatedAttendance.breaks);

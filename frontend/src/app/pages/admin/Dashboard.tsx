@@ -22,6 +22,7 @@ import {
   Download
 } from 'lucide-react';
 import { useCurrency } from '../../context/CurrencyContext';
+import { useAuth } from '../../context/AuthContext';
 import { useState, useEffect, useCallback } from 'react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -44,9 +45,11 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 import { apiClient } from '../../utils/api';
 import { TokenManager } from '../../utils/api';
 import realTimeSocket from '../../utils/realTimeSocket';
+import { socketService } from '../../utils/socket';
 
 export default function AdminDashboard() {
   const { formatCurrency, convertAmount, selectedCurrency } = useCurrency();
+  const { user } = useAuth();
   const [selectedTab, setSelectedTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [filterType, setFilterType] = useState('month');
@@ -108,15 +111,15 @@ export default function AdminDashboard() {
     console.log('✅ [ADMIN-DASHBOARD] All requests completed');
 
     // Process results with fallbacks
-    if (statsResponse.status === 'fulfilled' && statsResponse.value.data?.success) {
-      setDashboardStats(statsResponse.value.data.data || {});
+    if (statsResponse.status === 'fulfilled' && statsResponse.value.success) {
+      setDashboardStats(statsResponse.value.data || {});
     }
     if (quickStatsResponse.status === 'fulfilled' && quickStatsResponse.value.success && quickStatsResponse.value.data) {
       setQuickStats(quickStatsResponse.value.data);
       setLastUpdate(Date.now());
     }
-    if (expenseTrendsResponse.status === 'fulfilled' && expenseTrendsResponse.value.data?.success) {
-      setExpenseData(expenseTrendsResponse.value.data.data || []);
+    if (expenseTrendsResponse.status === 'fulfilled' && expenseTrendsResponse.value.success) {
+      setExpenseData(expenseTrendsResponse.value.data || []);
     }
     if (leaveResponse.status === 'fulfilled' && leaveResponse.value.success && leaveResponse.value.data) {
       setLeaveRequests(leaveResponse.value.data || []);
@@ -124,19 +127,56 @@ export default function AdminDashboard() {
     if (attendanceResponse.status === 'fulfilled' && attendanceResponse.value.success && attendanceResponse.value.data) {
       setTodaysAttendance(attendanceResponse.value.data || []);
     }
-    if (onBreakResponse.status === 'fulfilled' && onBreakResponse.value.data?.success) {
-      setEmployeesOnBreak(onBreakResponse.value.data.data || []);
+    if (onBreakResponse.status === 'fulfilled' && onBreakResponse.value.success) {
+      setEmployeesOnBreak(onBreakResponse.value.data || []);
     }
   }, [filterType, customStartDate, customEndDate]);
 
   // Refresh employees on break data
+  const applyKpiPayload = useCallback((kpis: Record<string, unknown>) => {
+    if (!kpis || typeof kpis !== 'object') return;
+    const num = (v: unknown, fallback: number) =>
+      typeof v === 'number' && !Number.isNaN(v) ? v : fallback;
+
+    setDashboardStats((prev) => ({
+      ...prev,
+      totalEmployees: num(kpis.totalEmployees, prev.totalEmployees),
+      avgProductivity: num(kpis.avgProductivity, prev.avgProductivity),
+      thisMonthExpenses: num(kpis.thisMonthExpenses, prev.thisMonthExpenses),
+      thisMonthPayroll: num(kpis.thisMonthPayroll, prev.thisMonthPayroll),
+      totalCost: num(
+        kpis.totalCost,
+        num(kpis.thisMonthExpenses, prev.thisMonthExpenses) +
+          num(kpis.thisMonthPayroll, prev.thisMonthPayroll)
+      ),
+      loggedInEmployees: num(kpis.activeUsers, prev.loggedInEmployees),
+      onLeave: num(kpis.onLeave, prev.onLeave),
+    }));
+
+    setQuickStats((prev) => ({
+      totalEmployees: num(kpis.totalEmployees, prev.totalEmployees),
+      presentToday: num(kpis.presentToday, prev.presentToday),
+      attendanceRate: num(kpis.attendanceRate, prev.attendanceRate),
+      pendingLeaves: num(kpis.pendingLeaves, prev.pendingLeaves),
+      pendingExpenses: num(kpis.pendingExpenses, prev.pendingExpenses),
+      activeUsers: num(kpis.activeUsers, prev.activeUsers),
+      onLeave: num(kpis.onLeave, prev.onLeave),
+      onBreak: num(kpis.onBreak, prev.onBreak),
+      totalSales: num(kpis.totalSales, prev.totalSales),
+      totalLoss: num(kpis.totalLoss, prev.totalLoss),
+      totalBonus: num(kpis.totalBonus, prev.totalBonus),
+      totalIncentive: num(kpis.totalIncentive, prev.totalIncentive),
+    }));
+    setLastUpdate(Date.now());
+  }, []);
+
   const refreshEmployeesOnBreak = useCallback(async () => {
     try {
       console.log('☕ [REFRESH] Fetching employees on break...');
       const response = await apiClient.get('/attendance/on-break');
-      if (response.data?.success) {
-        setEmployeesOnBreak(response.data.data || []);
-        console.log('☕ [REFRESH] Employees on break updated:', response.data.data?.length || 0);
+      if (response.success) {
+        setEmployeesOnBreak(response.data || []);
+        console.log('☕ [REFRESH] Employees on break updated:', response.data?.length || 0);
       }
     } catch (error) {
       console.error('Error refreshing employees on break:', error);
@@ -171,18 +211,23 @@ export default function AdminDashboard() {
     };
   }, [filterType, customStartDate, customEndDate, refreshDashboardData]);
 
-  // Socket.IO real-time updates - no polling needed
-  // All updates come through Socket.IO events
-
-  // Listen to real-time employee creation events and dashboard updates
   useEffect(() => {
-    const handleEmployeeCreated = (data: any) => {
-      console.log('👤 Employee created event received:', data);
-      // Update employee count
-      setDashboardStats(prev => ({
-        ...prev,
-        totalEmployees: (prev.totalEmployees || 0) + 1
-      }));
+    if (user?.id) {
+      realTimeSocket.connectFromAuth({
+        id: String(user.id),
+        role: user.role,
+        orgId: user.orgId || user.tenantId,
+        tenantId: user.tenantId || user.orgId,
+      });
+    }
+  }, [user?.id, user?.role, user?.orgId, user?.tenantId]);
+
+  // Socket.IO real-time updates
+  useEffect(() => {
+    const handleEmployeeCreated = () => {
+      refreshDashboardData().catch((error) => {
+        console.error('Error refreshing dashboard after employee created:', error);
+      });
     };
 
     const handleDashboardUpdate = (data: any) => {
@@ -202,37 +247,9 @@ export default function AdminDashboard() {
           console.error('Error refreshing dashboard data:', error);
         });
       } else if (data.type === 'kpi_update') {
-        if (data.data?.kpis) {
-          const kpis = data.data.kpis;
-          
-          // Update dashboard stats
-          setDashboardStats(prev => ({
-            ...prev,
-            totalEmployees: kpis.totalEmployees ?? prev.totalEmployees,
-            avgProductivity: kpis.avgProductivity ?? prev.avgProductivity,
-            thisMonthExpenses: kpis.thisMonthExpenses ?? prev.thisMonthExpenses,
-            thisMonthPayroll: kpis.thisMonthPayroll ?? prev.thisMonthPayroll,
-            totalCost: kpis.totalCost ?? prev.totalCost,
-            loggedInEmployees: kpis.activeUsers ?? prev.loggedInEmployees,
-            onLeave: kpis.onLeave ?? prev.onLeave
-          }));
-          
-          const newQuickStats = {
-            totalEmployees: kpis.totalEmployees ?? 0,
-            presentToday: kpis.presentToday ?? 0,
-            attendanceRate: kpis.attendanceRate ?? 0,
-            pendingLeaves: kpis.pendingLeaves ?? 0,
-            pendingExpenses: kpis.pendingExpenses ?? 0,
-            activeUsers: kpis.activeUsers ?? 0,
-            onLeave: kpis.onLeave ?? 0,
-            onBreak: kpis.onBreak ?? 0,
-            totalSales: kpis.totalSales ?? 0,
-            totalLoss: kpis.totalLoss ?? 0,
-            totalBonus: kpis.totalBonus ?? 0,
-            totalIncentive: kpis.totalIncentive ?? 0
-          };
-          setQuickStats(newQuickStats);
-          setLastUpdate(Date.now());
+        const kpis = data.data?.kpis || data.kpis;
+        if (kpis) {
+          applyKpiPayload(kpis);
         }
       }
     };
@@ -271,45 +288,63 @@ export default function AdminDashboard() {
     const unsubscribeLeave = realTimeSocket.onLeaveUpdate(handleLeaveUpdate);
     const unsubscribeAttendance = realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
 
-    // ADDED: Direct listeners for break events to ensure they trigger updates
-    const socket = realTimeSocket.getSocket();
-    if (socket) {
-      socket.on('break:started', (data) => {
-        console.log('☕ [DIRECT] break:started event received:', data);
-        handleAttendanceUpdate({ type: 'break_started', ...data });
-        // Refresh employees on break list
-        refreshEmployeesOnBreak();
-      });
-      
-      socket.on('break:ended', (data) => {
-        console.log('☕ [DIRECT] break:ended event received:', data);
-        handleAttendanceUpdate({ type: 'break_ended', ...data });
-        // Refresh employees on break list
-        refreshEmployeesOnBreak();
-      });
-      
-      socket.on('kpi:update', (data) => {
-        console.log('📊 [DIRECT] kpi:update event received:', data);
-        handleDashboardUpdate({ type: 'kpi_update', data });
-      });
-    }
+    const onBreakStarted = (data: any) => {
+      console.log('☕ break:started event received:', data);
+      handleAttendanceUpdate({ type: 'break_started', ...data });
+      refreshEmployeesOnBreak();
+    };
 
-    // Cleanup listeners on unmount
+    const onBreakEnded = (data: any) => {
+      console.log('☕ break:ended event received:', data);
+      handleAttendanceUpdate({ type: 'break_ended', ...data });
+      refreshEmployeesOnBreak();
+    };
+
+    const onKpiUpdate = (data: any) => {
+      const kpis = data?.kpis || data?.data?.kpis;
+      if (kpis) {
+        applyKpiPayload(kpis);
+      } else {
+        handleDashboardUpdate({ type: 'kpi_update', data });
+      }
+    };
+
+    const onSocketExpense = () => {
+      refreshDashboardData().catch(console.error);
+    };
+    const onSocketEmployee = (payload: { action?: string }) => {
+      const action = payload?.action;
+      if (action === 'created' || action === 'deleted' || action === 'updated') {
+        refreshDashboardData().catch(console.error);
+      }
+    };
+
+    const unsubscribeBreakStart = realTimeSocket.onBreakStarted(onBreakStarted);
+    const unsubscribeBreakEnd = realTimeSocket.onBreakEnded(onBreakEnded);
+    const unsubscribeKpi = realTimeSocket.onKPIUpdate(onKpiUpdate);
+
+    socketService.on('break:started', onBreakStarted);
+    socketService.on('break:ended', onBreakEnded);
+    socketService.on('kpi:update', onKpiUpdate);
+    socketService.on('expense:update', onSocketExpense);
+    socketService.on('employee:update', onSocketEmployee);
+
     return () => {
       unsubscribeEmployee();
       unsubscribeDashboard();
       unsubscribeExpense();
       unsubscribeLeave();
       unsubscribeAttendance();
-      
-      // Clean up direct listeners
-      if (socket) {
-        socket.off('break:started');
-        socket.off('break:ended');
-        socket.off('kpi:update');
-      }
+      unsubscribeBreakStart();
+      unsubscribeBreakEnd();
+      unsubscribeKpi();
+      socketService.off('break:started', onBreakStarted);
+      socketService.off('break:ended', onBreakEnded);
+      socketService.off('kpi:update', onKpiUpdate);
+      socketService.off('expense:update', onSocketExpense);
+      socketService.off('employee:update', onSocketEmployee);
     };
-  }, [refreshDashboardData]);
+  }, [refreshDashboardData, refreshEmployeesOnBreak, applyKpiPayload]);
 
   const handleApproveLeave = async (requestId) => {
     try {
@@ -605,26 +640,30 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
         <h2 className="text-xl font-bold mb-4">Financial Overview</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <KPICard
+            key={`expense-${lastUpdate}-${dashboardStats.thisMonthExpenses}`}
             title="This Month Expense"
             value={formatCurrency(dashboardStats.thisMonthExpenses)}
             icon={selectedCurrency.code === 'INR' ? IndianRupee : Receipt}
             color="accent"
           />
           <KPICard
+            key={`payroll-${lastUpdate}-${dashboardStats.thisMonthPayroll}`}
             title="This Month Payroll"
             value={formatCurrency(dashboardStats.thisMonthPayroll)}
             icon={selectedCurrency.code === 'INR' ? IndianRupee : DollarSign}
             color="primary"
           />
           <KPICard
+            key={`totalcost-${lastUpdate}-${dashboardStats.totalCost}`}
             title="Total Cost (Payroll + Expenses)"
             value={formatCurrency(dashboardStats.totalCost)}
             icon={selectedCurrency.code === 'INR' ? IndianRupee : DollarSign}
             color="destructive"
           />
           <KPICard
+            key={`employees-${lastUpdate}-${dashboardStats.totalEmployees}`}
             title="Total Employees"
-            value={dashboardStats.totalEmployees.toString()}
+            value={String(dashboardStats.totalEmployees ?? 0)}
             icon={Users}
             color="secondary"
           />

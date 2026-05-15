@@ -6,6 +6,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { AuthService, TokenManager, ApiError, TokenRefreshService } from '../utils/api';
 import { socketService, ConnectionState } from '../utils/socket';
+import realTimeSocket from '../utils/realTimeSocket';
 import { clearApiCache } from '../utils/apiHelper';
 import { clearPersistedAttendance } from '../utils/attendancePersistence';
 import { toast } from 'sonner';
@@ -155,6 +156,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             );
             
             await Promise.race([connectionPromise, timeoutPromise]);
+
+            realTimeSocket.connectFromAuth({
+              id: userForSocket.id,
+              role: userForSocket.role,
+              orgId: userForSocket.orgId,
+              tenantId: userForSocket.tenantId || userForSocket.orgId
+            });
             
             if (!cancelled) {
               const state = socketService.getState();
@@ -372,8 +380,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // Reconnect socket with new role
       socketService.disconnect();
+      realTimeSocket.disconnect();
       socketService.connect(user.id, role, user.tenantId)
-        .then(() => setSocketConnected(true))
+        .then(() => {
+          realTimeSocket.connectFromAuth({
+            id: user.id,
+            role,
+            orgId: user.orgId,
+            tenantId: user.tenantId || user.orgId
+          });
+          setSocketConnected(true);
+        })
         .catch((error) => {
           console.error('Failed to reconnect socket:', error);
           setSocketConnected(false);

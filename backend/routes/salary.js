@@ -8,6 +8,7 @@ import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, authorize } from "../middleware/auth.js";
 import SalaryStructure from "../models/SalaryStructure.js";
 import SalarySlip from "../models/SalarySlip.js";
+import Payslip from "../models/Payroll.js";
 import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import LeaveRequest from "../models/LeaveRequest.js";
@@ -15,6 +16,7 @@ import { sendSuccess, sendError, sendPaginated } from "../utils/apiResponse.js";
 import EmailNotificationService from "../utils/emailNotificationService.js";
 import logger from "../utils/logger.js";
 import { aggregateStructureMoney } from "../utils/payrollMoney.js";
+import { emitKPIUpdate } from "../utils/kpiUpdater.js";
 
 const router = express.Router();
 
@@ -489,6 +491,15 @@ router.post(
         year
       });
 
+      if (global.io && req.user.orgId) {
+        emitKPIUpdate(global.io, req.user.orgId, 'payroll', {
+          action: 'slip_generated',
+          salarySlipId: salarySlip._id,
+        }).catch((err) =>
+          logger.warn('KPI emit after salary slip generate failed', { error: err.message })
+        );
+      }
+
       return sendSuccess(res, salarySlip, "Salary slip generated successfully", 201);
     } catch (error) {
       logger.error("Generate salary slip error", {
@@ -540,6 +551,42 @@ router.get(
         userId: req.user.userId
       });
       return sendError(res, "Failed to fetch salary slips", 500, "FETCH_ERROR");
+    }
+  })
+);
+
+/**
+ * GET /api/salary/slip/by-id/:slipId
+ * Get full salary slip details (admin / owner)
+ */
+router.get(
+  "/slip/by-id/:slipId",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const { slipId } = req.params;
+
+      const slip = await SalarySlip.findOne({ _id: slipId, orgId: req.user.orgId })
+        .populate("employeeId", "firstName lastName employeeCode email department designation")
+        .populate("approvedBy", "name email")
+        .lean();
+
+      if (!slip) {
+        return sendError(res, "Salary slip not found", 404, "NOT_FOUND");
+      }
+
+      const employeeDoc = slip.employeeId;
+      const employeeName = employeeDoc
+        ? `${employeeDoc.firstName || ""} ${employeeDoc.lastName || ""}`.trim()
+        : slip.employeeName || "Unknown";
+
+      return sendSuccess(res, { ...slip, employeeName }, "Salary slip fetched successfully");
+    } catch (error) {
+      logger.error("Get salary slip by id error", {
+        error: error.message,
+        slipId: req.params.slipId
+      });
+      return sendError(res, "Failed to fetch salary slip", 500, "FETCH_ERROR");
     }
   })
 );
@@ -1142,7 +1189,10 @@ router.delete(
         userId: req.user.userId
       });
 
-      const slip = await SalarySlip.findByIdAndDelete(slipId);
+      const slip = await SalarySlip.findOneAndDelete({
+        _id: slipId,
+        orgId: req.user.orgId
+      });
 
       if (!slip) {
         logger.warn("Salary slip not found for deletion", {
@@ -1151,6 +1201,19 @@ router.delete(
         });
         return sendError(res, "Salary slip not found", 404, "NOT_FOUND");
       }
+
+      // Remove legacy Payslip rows so employee dashboard stays in sync
+      await Payslip.deleteMany({
+        employeeId: slip.employeeId,
+        orgId: slip.orgId,
+        year: slip.year,
+        $or: [
+          { month: String(slip.month) },
+          { month: slip.month }
+        ]
+      }).catch((err) => {
+        logger.warn("Payslip cleanup on salary slip delete failed", { error: err.message, slipId });
+      });
 
       logger.info("Salary slip deleted successfully", {
         slipId,

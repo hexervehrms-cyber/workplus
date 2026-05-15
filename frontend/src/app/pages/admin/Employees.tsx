@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
+import { PasswordInput } from '../../components/PasswordInput';
 import { Label } from '../../components/ui/label';
 import { Badge } from '../../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
@@ -418,8 +419,8 @@ export default function Employees() {
               </div>
               <div>
                 <Label>Password</Label>
-                <Input
-                  type="password"
+                <PasswordInput
+                  autoComplete="new-password"
                   value={formData.password}
                   onChange={(e) => setFormData({...formData, password: e.target.value})}
                   placeholder="Enter password"
@@ -526,8 +527,8 @@ export default function Employees() {
               </div>
               <div>
                 <Label>New Password</Label>
-                <Input
-                  type="password"
+                <PasswordInput
+                  autoComplete="new-password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="Enter new password"
@@ -540,8 +541,8 @@ export default function Employees() {
               </div>
               <div>
                 <Label>Confirm Password</Label>
-                <Input
-                  type="password"
+                <PasswordInput
+                  autoComplete="new-password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Confirm new password"

@@ -66,7 +66,7 @@ export const emitKPIUpdate = async (io, orgId, triggerType, triggerData = {}) =>
         orgId, 
         date: { $gte: startOfDay, $lt: endOfDay },
         checkIn: { $exists: true, $ne: null },
-        checkOut: { $exists: false }
+        $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
       }),
       
       // Employees on leave today
@@ -96,8 +96,8 @@ export const emitKPIUpdate = async (io, orgId, triggerType, triggerData = {}) =>
         date: { $gte: startOfDay, $lt: endOfDay },
         'breaks': {
           $elemMatch: {
-            startTime: { $exists: true },
-            endTime: { $exists: false }
+            startTime: { $exists: true, $ne: null },
+            $or: [{ endTime: { $exists: false } }, { endTime: null }]
           }
         }
       }),

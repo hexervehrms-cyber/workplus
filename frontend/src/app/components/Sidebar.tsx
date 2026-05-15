@@ -181,7 +181,7 @@ export function Sidebar() {
                 className={`
                   flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 cursor-pointer
                   ${isActive || isChildActive
-                    ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/25' 
+                    ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 ring-2 ring-primary/40 ring-offset-2 ring-offset-background' 
                     : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                   }
                 `}
@@ -218,7 +218,7 @@ export function Sidebar() {
                         className={`
                           flex items-center gap-3 px-4 py-2 rounded-lg transition-all duration-200
                           ${isChildActive
-                            ? 'bg-primary/20 text-primary' 
+                            ? 'bg-primary/15 text-primary font-semibold ring-2 ring-primary/35 ring-inset shadow-sm'
                             : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                           }
                         `}

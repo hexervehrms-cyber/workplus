@@ -8,6 +8,8 @@ interface KPICardProps {
   icon: LucideIcon;
   color?: 'primary' | 'secondary' | 'accent' | 'destructive';
   onClick?: () => void;
+  /** Stronger border/ring when showing live operational counts (e.g. checked-in / on break). */
+  emphasize?: boolean;
 }
 
 const colorClasses = {
@@ -17,19 +19,17 @@ const colorClasses = {
   destructive: 'bg-destructive/10 text-destructive'
 };
 
-export function KPICard({ title, value, change, icon: Icon, color = 'primary', onClick }: KPICardProps) {
+export function KPICard({ title, value, change, icon: Icon, color = 'primary', onClick, emphasize }: KPICardProps) {
   const isPositive = change !== undefined && change >= 0;
-  
-  // Log when the component renders
-  if (title === 'On Break') {
-    console.log('📊 [KPI-CARD] On Break card rendering with value:', value);
-  }
+  const numeric = typeof value === 'number' ? value : parseInt(String(value), 10);
+  const showEmphasis =
+    emphasize && !Number.isNaN(numeric) && numeric > 0;
 
   return (
     <Card
       className={`p-6 rounded-2xl border border-border/50 backdrop-blur-sm transition-all duration-300 kpi-card card-hover frame-motion ${
-        onClick ? 'cursor-pointer' : ''
-      }`}
+        showEmphasis ? 'ring-2 ring-primary/35 border-primary/30' : ''
+      } ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
     >
       <div className="flex items-start justify-between">

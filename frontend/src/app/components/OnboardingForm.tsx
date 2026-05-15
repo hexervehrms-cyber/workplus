@@ -4,6 +4,7 @@ import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Input } from './ui/input';
+import { PasswordInput } from './PasswordInput';
 import { Label } from './ui/label';
 import { Separator } from './ui/separator';
 import { Progress } from './ui/progress';
@@ -352,8 +353,8 @@ const OnboardingForm: React.FC<{
         </div>
         <div className="col-span-2">
           <Label>Password * (For Login)</Label>
-          <Input 
-            type="password"
+          <PasswordInput 
+            autoComplete="new-password"
             value={formData.password} 
             onChange={(e) => handleInputChange('password', e.target.value)}
             className="mt-2 rounded-xl" 

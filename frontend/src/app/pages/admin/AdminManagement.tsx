@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button';
 import { Plus, Search, Filter, Edit, Trash2, X, Eye, AlertCircle, Loader2 } from 'lucide-react';
 import { apiClient } from '../../utils/api';
 import { toast } from 'sonner';
+import { PasswordInput } from '../../components/PasswordInput';
 
 interface AdminUser {
   _id: string;
@@ -296,8 +297,8 @@ export default function AdminManagement() {
                 </div>
                 <div>
                   <label className="text-sm font-medium">Password *</label>
-                  <input
-                    type="password"
+                  <PasswordInput
+                    autoComplete="new-password"
                     placeholder="Enter password (min 6 characters)"
                     value={formData.password}
                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}
@@ -390,8 +391,8 @@ export default function AdminManagement() {
                 </div>
                 <div>
                   <label className="text-sm font-medium">Password (leave blank to keep current)</label>
-                  <input
-                    type="password"
+                  <PasswordInput
+                    autoComplete="new-password"
                     placeholder="Enter new password (min 6 characters)"
                     value={formData.password}
                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}

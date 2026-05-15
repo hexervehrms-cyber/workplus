@@ -11,9 +11,17 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
-import { apiClient } from '../utils/api';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
+import { apiClient, TokenManager } from '../utils/api';
 import { SocketService } from '../utils/socket';
 import { toast } from 'sonner';
+import { useAuth } from '../context/AuthContext';
 
 interface User {
   id: string;
@@ -57,6 +65,7 @@ interface Conversation {
 }
 
 export default function TeamsMessenger() {
+  const { user } = useAuth();
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -70,27 +79,38 @@ export default function TeamsMessenger() {
   const [teamsChatId, setTeamsChatId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const socketService = useRef<SocketService | null>(null);
-  const typingTimeoutRef = useRef<NodeJS.Timeout>();
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const selectedUserRef = useRef<User | null>(null);
+  selectedUserRef.current = selectedUser;
 
-  // Initialize Socket.IO connection
+  // Initialize Socket.IO connection (AuthContext + token mirror; avoids cleared localStorage)
   useEffect(() => {
+    if (!user?.id) return;
+
+    let cancelled = false;
+
     const initSocket = async () => {
       try {
         socketService.current = new SocketService();
-        const token = localStorage.getItem('authToken');
-        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        const token = TokenManager.get();
+        if (!token) {
+          console.warn('TeamsMessenger: no bearer token in memory for socket auth');
+        }
 
-        if (token && user.id) {
-          await socketService.current.connect(user.id, user.role, user.orgId);
+        await socketService.current.connect(
+          user.id,
+          user.role,
+          user.orgId || user.tenantId || undefined
+        );
 
-          // Listen for new messages
-          socketService.current.on('chat:new_message', (data) => {
-            const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-            
-            // Only add message if it's from another user (not our own sent message)
-            // Our sent messages are already added optimistically
-            if (data.senderId !== currentUser.id) {
-              setMessages(prev => [...prev, {
+        const myId = String(user.id);
+
+        socketService.current.on('chat:new_message', (data) => {
+          if (cancelled) return;
+          if (data.senderId !== myId) {
+            setMessages((prev) => [
+              ...prev,
+              {
                 messageId: data.messageId,
                 senderId: data.senderId,
                 senderName: data.senderName,
@@ -98,96 +118,102 @@ export default function TeamsMessenger() {
                 content: data.content,
                 timestamp: new Date(data.timestamp),
                 isOwn: false,
-                status: 'delivered'
-              }]);
-            } else {
-              // If it's our own message coming back, update the temp message with real ID
-              setMessages(prev => prev.map(msg => {
-                // Find temp message and replace with real one
+                status: 'delivered',
+              },
+            ]);
+          } else {
+            setMessages((prev) =>
+              prev.map((msg) => {
                 if (msg.messageId.startsWith('temp-') && msg.content === data.content) {
                   return {
                     ...msg,
                     messageId: data.messageId,
                     status: 'delivered',
-                    timestamp: new Date(data.timestamp)
+                    timestamp: new Date(data.timestamp),
                   };
                 }
                 return msg;
-              }));
-            }
-          });
+              })
+            );
+          }
+        });
 
-          // Listen for message read receipts
-          socketService.current.on('chat:message_read', (data) => {
-            setMessages(prev => prev.map(msg =>
+        socketService.current.on('chat:message_read', (data) => {
+          if (cancelled) return;
+          setMessages((prev) =>
+            prev.map((msg) =>
               msg.messageId === data.messageId ? { ...msg, status: 'read' } : msg
-            ));
-          });
+            )
+          );
+        });
 
-          // Listen for typing indicators
-          socketService.current.on('chat:user_typing', (data) => {
-            if (data.userId === selectedUser?.id) {
-              setIsTyping(data.isTyping);
-            }
-          });
+        socketService.current.on('chat:user_typing', (data) => {
+          if (cancelled) return;
+          if (data.userId === selectedUserRef.current?.id) {
+            setIsTyping(data.isTyping);
+          }
+        });
 
-          // Listen for message edits
-          socketService.current.on('chat:message_edited', (data) => {
-            setMessages(prev => prev.map(msg =>
-              msg.messageId === data.messageId
-                ? { ...msg, content: data.newContent }
-                : msg
-            ));
-          });
+        socketService.current.on('chat:message_edited', (data) => {
+          if (cancelled) return;
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.messageId === data.messageId ? { ...msg, content: data.newContent } : msg
+            )
+          );
+        });
 
-          // Listen for message deletes
-          socketService.current.on('chat:message_deleted', (data) => {
-            setMessages(prev => prev.filter(msg => msg.messageId !== data.messageId));
-          });
+        socketService.current.on('chat:message_deleted', (data) => {
+          if (cancelled) return;
+          setMessages((prev) => prev.filter((msg) => msg.messageId !== data.messageId));
+        });
 
-          // Get conversations
-          socketService.current.emit('chat:get_conversations', {});
-          socketService.current.on('chat:conversations', (data) => {
-            setConversations(data.conversations);
-          });
-        }
+        socketService.current.emit('chat:get_conversations', {});
+        socketService.current.on('chat:conversations', (data) => {
+          if (cancelled) return;
+          setConversations(data.conversations);
+        });
       } catch (error) {
         console.error('Socket initialization failed:', error);
+        toast.error('Could not connect to chat server');
       }
     };
 
     initSocket();
 
     return () => {
+      cancelled = true;
       if (socketService.current) {
         socketService.current.disconnect();
       }
     };
-  }, []);
+  }, [user?.id, user?.role, user?.orgId, user?.tenantId]);
 
   // Fetch users for chat with role-based filtering
   useEffect(() => {
     const fetchUsers = async () => {
+      if (!user?.id) {
+        setLoading(false);
+        return;
+      }
       try {
         setLoading(true);
         const response = await apiClient.get<any[]>('/chat/users');
 
         if (response.data && Array.isArray(response.data)) {
-          const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-          
-          // Filter out Super Admin users and current user
+          const myId = String(user.id);
           const formattedUsers: User[] = response.data
-            .filter((user: any) => user.role !== 'super_admin' && user._id !== currentUser.id)
-            .map((user: any) => ({
-              id: user._id,
-              name: user.name,
-              email: user.email,
-              role: user.role,
-              avatar: user.avatar,
+            .filter((u: any) => u.role !== 'super_admin' && String(u._id) !== myId)
+            .map((u: any) => ({
+              id: u._id,
+              name: u.name,
+              email: u.email,
+              role: u.role,
+              avatar: u.avatar,
               isOnline: true,
               unreadCount: 0,
               lastMessage: '',
-              lastMessageTime: ''
+              lastMessageTime: '',
             }));
 
           setUsers(formattedUsers);
@@ -201,13 +227,14 @@ export default function TeamsMessenger() {
     };
 
     fetchUsers();
-  }, []);
+  }, [user?.id]);
 
   // Load messages when user is selected
   useEffect(() => {
-    if (selectedUser && socketService.current) {
-      const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-      const conversationId = [currentUser.id, selectedUser.id].sort().join('_');
+    if (!selectedUser || !socketService.current || !user?.id) return;
+
+    const myId = String(user.id);
+    const conversationId = [myId, selectedUser.id].sort().join('_');
       
       // Remove old listener before adding new one
       socketService.current.off('chat:history');
@@ -228,7 +255,7 @@ export default function TeamsMessenger() {
           senderAvatar: msg.sender?.avatar,
           content: msg.content?.text || '',
           timestamp: new Date(msg.createdAt),
-          isOwn: msg.senderId === currentUser.id,
+          isOwn: msg.senderId === myId,
           status: msg.status,
           teamsIntegration: msg.metadata?.teamsIntegration
         }));
@@ -238,12 +265,10 @@ export default function TeamsMessenger() {
 
       socketService.current.on('chat:history', handleHistory);
 
-      // Cleanup listener when component unmounts or user changes
       return () => {
         socketService.current?.off('chat:history', handleHistory);
       };
-    }
-  }, [selectedUser]);
+  }, [selectedUser, user?.id]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -252,17 +277,16 @@ export default function TeamsMessenger() {
 
   // Handle sending message
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !selectedUser || !socketService.current) return;
+    if (!messageInput.trim() || !selectedUser || !socketService.current || !user?.id) return;
 
     try {
       setSending(true);
-      const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-      
+
       // Create the message object
       const newMessage: Message = {
         messageId: `temp-${Date.now()}`, // Temporary ID until server confirms
-        senderId: currentUser.id,
-        senderName: currentUser.name,
+        senderId: user.id,
+        senderName: user.name || 'You',
         recipientId: selectedUser.id,
         content: messageInput,
         timestamp: new Date(),
@@ -364,6 +388,68 @@ export default function TeamsMessenger() {
     }
   };
 
+  // Handle deleting message
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!window.confirm('Delete this message?')) return;
+
+    try {
+      await apiClient.delete(`/chat/messages/${messageId}`);
+      setMessages(prev => prev.filter(msg => msg.messageId !== messageId));
+      toast.success('Message deleted');
+    } catch (error) {
+      console.error('Error deleting message:', error);
+      toast.error('Failed to delete message');
+    }
+  };
+
+  // Handle file upload
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !selectedUser || !socketService.current || !user?.id) return;
+
+    try {
+      setSending(true);
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('recipientId', selectedUser.id);
+
+      const response = await apiClient.post('/chat/upload', formData);
+
+      if (response.data?.fileUrl) {
+
+        const newMessage: Message = {
+          messageId: response.data.messageId || `temp-${Date.now()}`,
+          senderId: user.id,
+          senderName: user.name || 'You',
+          recipientId: selectedUser.id,
+          content: response.data.fileUrl,
+          timestamp: new Date(),
+          isOwn: true,
+          status: 'delivered',
+          messageType: 'file'
+        };
+
+        setMessages(prev => [...prev, newMessage]);
+
+        // Emit via socket
+        socketService.current.emit('chat:send_message', {
+          recipientId: selectedUser.id,
+          content: response.data.fileUrl,
+          messageType: 'file',
+          fileName: file.name,
+          fileSize: file.size
+        });
+
+        toast.success('File uploaded successfully');
+      }
+    } catch (error) {
+      console.error('Error uploading file:', error);
+      toast.error('Failed to upload file');
+    } finally {
+      setSending(false);
+    }
+  };
+
   // Filter users based on search
   const filteredUsers = users.filter(user =>
     user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -402,7 +488,7 @@ export default function TeamsMessenger() {
                   onClick={() => setSelectedUser(user)}
                   className={`w-full p-3 rounded-lg mb-2 text-left transition-colors ${
                     selectedUser?.id === user.id
-                      ? 'bg-primary text-primary-foreground'
+                      ? 'bg-primary text-primary-foreground ring-2 ring-primary/50 ring-offset-2 ring-offset-background shadow-md'
                       : 'hover:bg-accent'
                   }`}
                 >
@@ -491,15 +577,64 @@ export default function TeamsMessenger() {
                 >
                   <Users className="w-4 h-4" />
                 </Button>
-                <Button variant="ghost" size="sm">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  title="Voice call"
+                  onClick={() =>
+                    toast.info(
+                      teamsEnabled
+                        ? 'Use Microsoft Teams for voice once your org has Teams calling enabled.'
+                        : 'Connect Microsoft Teams from the menu to enable integrated calls.'
+                    )
+                  }
+                >
                   <Phone className="w-4 h-4" />
                 </Button>
-                <Button variant="ghost" size="sm">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  title="Video call"
+                  onClick={() =>
+                    toast.info(
+                      teamsEnabled
+                        ? 'Start a Teams meeting from your Teams client, or use Connect below.'
+                        : 'Connect Microsoft Teams first to use video in this workspace.'
+                    )
+                  }
+                >
                   <Video className="w-4 h-4" />
                 </Button>
-                <Button variant="ghost" size="sm">
-                  <MoreVertical className="w-4 h-4" />
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="sm" type="button" aria-label="More chat options">
+                      <MoreVertical className="w-4 h-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuItem onClick={handleCreateTeamsChat}>
+                      Connect Microsoft Teams
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => toast.info('Open your Teams app to start an instant meeting if enabled by your admin.')}
+                    >
+                      Teams meeting tips
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      disabled={!teamsEnabled}
+                      onClick={() => {
+                        setTeamsEnabled(false);
+                        setTeamsChatId(null);
+                        toast.success('Teams link cleared for this conversation');
+                      }}
+                    >
+                      Disconnect Teams for this chat
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
 
@@ -563,9 +698,24 @@ export default function TeamsMessenger() {
             {/* Message Input */}
             <div className="border-t border-border bg-card p-4">
               <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm">
-                  <Paperclip className="w-4 h-4" />
-                </Button>
+                <label className="cursor-pointer">
+                  <input
+                    type="file"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                    disabled={sending}
+                  />
+                  <Button 
+                    variant="ghost" 
+                    size="sm"
+                    disabled={sending}
+                    asChild
+                  >
+                    <span>
+                      <Paperclip className="w-4 h-4" />
+                    </span>
+                  </Button>
+                </label>
                 <Input
                   placeholder="Type a message..."
                   value={messageInput}

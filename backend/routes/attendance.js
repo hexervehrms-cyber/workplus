@@ -1475,8 +1475,8 @@ router.get('/on-break', authorize('super_admin', 'admin', 'hr', 'manager'), asyn
     $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
     breaks: {
       $elemMatch: {
-        startTime: { $exists: true },
-        endTime: { $exists: false }
+        startTime: { $exists: true, $ne: null },
+        $or: [{ endTime: { $exists: false } }, { endTime: null }]
       }
     }
   })

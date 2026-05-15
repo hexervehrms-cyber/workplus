@@ -31,6 +31,21 @@ interface Notification {
   readAt?: string;
 }
 
+function profilePathForRole(role: string | undefined): string {
+  switch (role) {
+    case 'admin':
+      return '/admin/settings';
+    case 'super_admin':
+      return '/settings';
+    case 'employee':
+    case 'hr':
+    case 'manager':
+    case 'accountant':
+    default:
+      return '/employee/profile';
+  }
+}
+
 export function Navbar() {
   const { theme, toggleTheme } = useTheme();
   const { user, logout } = useAuth();
@@ -302,7 +317,7 @@ export function Navbar() {
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>My Account</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => navigate('/employee/profile')}>
+              <DropdownMenuItem onClick={() => navigate(profilePathForRole(user?.role))}>
                 <User className="w-4 h-4 mr-2" />
                 Profile
               </DropdownMenuItem>

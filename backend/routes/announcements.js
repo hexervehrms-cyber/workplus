@@ -2,528 +2,546 @@ import express from "express";
 import mongoose from "mongoose";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import Announcement from "../models/Announcement.js";
-import User from "../models/User.js";
 
 const router = express.Router();
 
+const mapPriority = (p) => {
+  if (["low", "medium", "high", "urgent"].includes(p)) return p;
+  if (p === "normal") return "medium";
+  return "medium";
+};
+
+/**
+ * Map UI audience key -> { visibility, targetAudience } (matches Announcement.js schema)
+ */
+function resolveAudience(audienceKey) {
+  const emptyTargets = { departments: [], roles: [], specificUsers: [] };
+  switch (audienceKey) {
+    case "management":
+      return {
+        visibility: "role",
+        targetAudience: { ...emptyTargets, roles: ["admin", "hr", "manager"] },
+      };
+    case "super_admin":
+      return {
+        visibility: "role",
+        targetAudience: { ...emptyTargets, roles: ["super_admin"] },
+      };
+    case "admin":
+      return {
+        visibility: "role",
+        targetAudience: { ...emptyTargets, roles: ["admin"] },
+      };
+    case "employee":
+      return {
+        visibility: "role",
+        targetAudience: { ...emptyTargets, roles: ["employee"] },
+      };
+    case "hr":
+      return {
+        visibility: "role",
+        targetAudience: { ...emptyTargets, roles: ["hr"] },
+      };
+    case "all":
+    default:
+      return { visibility: "all", targetAudience: { ...emptyTargets } };
+  }
+}
+
 /**
  * GET /api/announcements
- * Get announcements with filtering and pagination
  */
-router.get("/", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
-  const userId = req.user?.userId;
-  const userRole = req.user?.role;
-  
-  const {
-    type,
-    priority,
-    status = 'published',
-    targetAudience,
-    page = 1,
-    limit = 20,
-    search
-  } = req.query;
-  
-  const filter = { orgId };
-  
-  // Role-based filtering
-  if (userRole !== 'admin' && userRole !== 'super_admin') {
-    // Non-admins can only see published announcements targeted to them
-    filter.status = 'published';
-    filter.$or = [
-      { targetAudience: 'all' },
-      { targetAudience: 'employees', 'targetRoles': { $in: [userRole] } },
-      { 'targetUsers': userId },
-      { 'targetDepartments': req.user?.departmentId }
-    ];
-  } else {
-    // Admins can see all announcements
-    if (status) filter.status = status;
-  }
-  
-  // Apply other filters
-  if (type) filter.type = type;
-  if (priority) filter.priority = priority;
-  if (targetAudience) filter.targetAudience = targetAudience;
-  
-  // Search functionality
-  if (search) {
-    filter.$text = { $search: search };
-  }
-  
-  const announcements = await Announcement.find(filter)
-    .populate('createdBy', 'name email avatar profile.title')
-    .populate('targetUsers', 'name email')
-    .populate('targetDepartments', 'name')
-    .sort({ isPinned: -1, createdAt: -1 })
-    .limit(parseInt(limit))
-    .skip((parseInt(page) - 1) * parseInt(limit))
-    .lean();
-  
-  const total = await Announcement.countDocuments(filter);
-  
-  res.json({
-    success: true,
-    data: announcements,
-    pagination: {
-      page: parseInt(page),
-      limit: parseInt(limit),
-      total,
-      pages: Math.ceil(total / parseInt(limit))
-    }
-  });
-}));
+router.get(
+  "/",
+  asyncHandler(async (req, res) => {
+    const orgId = req.user?.orgId || "system";
+    const userId = req.user?.userId;
+    const userRole = req.user?.role;
+    const { type, priority, page = 1, limit = 20, search } = req.query;
 
-/**
- * GET /api/announcements/:id
- * Get announcement by ID
- */
-router.get("/:id", asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const orgId = req.user?.orgId || 'system';
-  const userId = req.user?.userId;
-  const userRole = req.user?.role;
-  
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid announcement ID"
-    });
-  }
-  
-  const filter = { _id: id, orgId };
-  
-  // Role-based access control
-  if (userRole !== 'admin' && userRole !== 'super_admin') {
-    filter.status = 'published';
-    filter.$or = [
-      { targetAudience: 'all' },
-      { targetAudience: 'employees', 'targetRoles': { $in: [userRole] } },
-      { 'targetUsers': userId },
-      { 'targetDepartments': req.user?.departmentId }
-    ];
-  }
-  
-  const announcement = await Announcement.findOne(filter)
-    .populate('createdBy', 'name email avatar profile.title')
-    .populate('targetUsers', 'name email avatar')
-    .populate('targetDepartments', 'name')
-    .lean();
-  
-  if (!announcement) {
-    return res.status(404).json({
-      success: false,
-      message: "Announcement not found or access denied"
-    });
-  }
-  
-  // Mark as read for the current user
-  if (userRole !== 'admin' && userRole !== 'super_admin') {
-    await Announcement.findByIdAndUpdate(id, {
-      $addToSet: { 'analytics.readBy': userId }
-    });
-  }
-  
-  res.json({
-    success: true,
-    data: announcement
-  });
-}));
+    const lim = Math.min(parseInt(String(limit), 10) || 20, 100);
+    const p = Math.max(parseInt(String(page), 10) || 1, 1);
+    const skip = (p - 1) * lim;
 
-/**
- * POST /api/announcements
- * Create new announcement
- */
-router.post("/", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
-  const userId = req.user?.userId;
-  const userRole = req.user?.role;
-  
-  // Check permissions - only admins and HR can create announcements
-  if (!['admin', 'super_admin', 'hr'].includes(userRole)) {
-    return res.status(403).json({
-      success: false,
-      message: "You don't have permission to create announcements"
-    });
-  }
-  
-  const {
-    title,
-    content,
-    type = 'general',
-    priority = 'normal',
-    targetAudience = 'all',
-    targetRoles = [],
-    targetUsers = [],
-    targetDepartments = [],
-    scheduledFor,
-    expiresAt,
-    isPinned = false,
-    allowComments = true,
-    attachments = []
-  } = req.body;
-  
-  // Validate required fields
-  if (!title || !content) {
-    return res.status(400).json({
-      success: false,
-      message: "Title and content are required"
-    });
-  }
-  
-  // Validate target audience
-  if (targetAudience === 'specific') {
-    if (targetRoles.length === 0 && targetUsers.length === 0 && targetDepartments.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "At least one target (roles, users, or departments) must be specified for specific audience"
+    if (userRole === "admin" || userRole === "super_admin") {
+      const filter = { orgId };
+      if (type) filter.type = type;
+      if (priority) filter.priority = priority;
+      if (search && String(search).trim()) {
+        const q = String(search).trim();
+        filter.$or = [
+          { title: { $regex: q, $options: "i" } },
+          { content: { $regex: q, $options: "i" } },
+        ];
+      }
+      const [announcements, total] = await Promise.all([
+        Announcement.find(filter)
+          .populate("authorId", "name email avatar")
+          .sort({ isPinned: -1, publishedAt: -1, createdAt: -1 })
+          .skip(skip)
+          .limit(lim)
+          .lean(),
+        Announcement.countDocuments(filter),
+      ]);
+      return res.json({
+        success: true,
+        data: announcements,
+        pagination: {
+          page: p,
+          limit: lim,
+          total,
+          pages: Math.max(1, Math.ceil(total / lim)),
+        },
       });
     }
-  }
-  
-  const announcement = await Announcement.create({
-    title: title.trim(),
-    content: content.trim(),
-    type,
-    priority,
-    targetAudience,
-    targetRoles: targetAudience === 'specific' ? targetRoles : [],
-    targetUsers: targetAudience === 'specific' ? targetUsers : [],
-    targetDepartments: targetAudience === 'specific' ? targetDepartments : [],
-    scheduledFor: scheduledFor ? new Date(scheduledFor) : null,
-    expiresAt: expiresAt ? new Date(expiresAt) : null,
-    isPinned,
-    allowComments,
-    attachments,
-    createdBy: userId,
-    orgId,
-    status: scheduledFor ? 'scheduled' : 'published'
-  });
-  
-  // Populate the created announcement for response
-  const populatedAnnouncement = await Announcement.findById(announcement._id)
-    .populate('createdBy', 'name email avatar')
-    .populate('targetUsers', 'name email')
-    .populate('targetDepartments', 'name')
-    .lean();
-  
-  res.status(201).json({
-    success: true,
-    message: "Announcement created successfully",
-    data: populatedAnnouncement
-  });
-}));
 
-/**
- * PUT /api/announcements/:id
- * Update announcement
- */
-router.put("/:id", asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const orgId = req.user?.orgId || 'system';
-  const userId = req.user?.userId;
-  const userRole = req.user?.role;
-  
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid announcement ID"
-    });
-  }
-  
-  const announcement = await Announcement.findOne({ _id: id, orgId });
-  
-  if (!announcement) {
-    return res.status(404).json({
-      success: false,
-      message: "Announcement not found"
-    });
-  }
-  
-  // Check permissions - only creator or admin can update
-  const canUpdate = userRole === 'admin' || 
-                   userRole === 'super_admin' ||
-                   announcement.createdBy.toString() === userId;
-  
-  if (!canUpdate) {
-    return res.status(403).json({
-      success: false,
-      message: "You don't have permission to update this announcement"
-    });
-  }
-  
-  const {
-    title,
-    content,
-    type,
-    priority,
-    targetAudience,
-    targetRoles,
-    targetUsers,
-    targetDepartments,
-    scheduledFor,
-    expiresAt,
-    isPinned,
-    allowComments,
-    attachments,
-    status
-  } = req.body;
-  
-  // Update fields
-  if (title) announcement.title = title.trim();
-  if (content) announcement.content = content.trim();
-  if (type) announcement.type = type;
-  if (priority) announcement.priority = priority;
-  if (targetAudience) announcement.targetAudience = targetAudience;
-  if (targetRoles) announcement.targetRoles = targetRoles;
-  if (targetUsers) announcement.targetUsers = targetUsers;
-  if (targetDepartments) announcement.targetDepartments = targetDepartments;
-  if (scheduledFor !== undefined) announcement.scheduledFor = scheduledFor ? new Date(scheduledFor) : null;
-  if (expiresAt !== undefined) announcement.expiresAt = expiresAt ? new Date(expiresAt) : null;
-  if (isPinned !== undefined) announcement.isPinned = isPinned;
-  if (allowComments !== undefined) announcement.allowComments = allowComments;
-  if (attachments) announcement.attachments = attachments;
-  if (status) announcement.status = status;
-  
-  announcement.updatedBy = userId;
-  await announcement.save();
-  
-  // Populate for response
-  const updatedAnnouncement = await Announcement.findById(announcement._id)
-    .populate('createdBy', 'name email avatar')
-    .populate('targetUsers', 'name email')
-    .populate('targetDepartments', 'name')
-    .lean();
-  
-  res.json({
-    success: true,
-    message: "Announcement updated successfully",
-    data: updatedAnnouncement
-  });
-}));
+    const userView = await Announcement.getUserAnnouncements(userId, orgId);
+    let rows = userView || [];
+    if (type) rows = rows.filter((r) => r.type === type);
+    if (priority) rows = rows.filter((r) => r.priority === priority);
+    if (search && String(search).trim()) {
+      const q = String(search).toLowerCase();
+      rows = rows.filter(
+        (r) =>
+          (r.title && r.title.toLowerCase().includes(q)) ||
+          (r.content && r.content.toLowerCase().includes(q))
+      );
+    }
+    const total = rows.length;
+    const announcements = rows.slice(skip, skip + lim);
 
-/**
- * DELETE /api/announcements/:id
- * Delete announcement (soft delete)
- */
-router.delete("/:id", asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const orgId = req.user?.orgId || 'system';
-  const userId = req.user?.userId;
-  const userRole = req.user?.role;
-  
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid announcement ID"
+    return res.json({
+      success: true,
+      data: announcements,
+      pagination: {
+        page: p,
+        limit: lim,
+        total,
+        pages: Math.max(1, Math.ceil(total / lim)),
+      },
     });
-  }
-  
-  const announcement = await Announcement.findOne({ _id: id, orgId });
-  
-  if (!announcement) {
-    return res.status(404).json({
-      success: false,
-      message: "Announcement not found"
-    });
-  }
-  
-  // Check permissions - only creator or admin can delete
-  const canDelete = userRole === 'admin' || 
-                   userRole === 'super_admin' ||
-                   announcement.createdBy.toString() === userId;
-  
-  if (!canDelete) {
-    return res.status(403).json({
-      success: false,
-      message: "You don't have permission to delete this announcement"
-    });
-  }
-  
-  // Soft delete
-  announcement.isDeleted = true;
-  announcement.deletedAt = new Date();
-  announcement.deletedBy = userId;
-  await announcement.save();
-  
-  res.json({
-    success: true,
-    message: "Announcement deleted successfully"
-  });
-}));
-
-/**
- * POST /api/announcements/:id/comments
- * Add comment to announcement
- */
-router.post("/:id/comments", asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const orgId = req.user?.orgId || 'system';
-  const userId = req.user?.userId;
-  const { content } = req.body;
-  
-  if (!content || !content.trim()) {
-    return res.status(400).json({
-      success: false,
-      message: "Comment content is required"
-    });
-  }
-  
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid announcement ID"
-    });
-  }
-  
-  const announcement = await Announcement.findOne({ 
-    _id: id, 
-    orgId,
-    status: 'published',
-    allowComments: true
-  });
-  
-  if (!announcement) {
-    return res.status(404).json({
-      success: false,
-      message: "Announcement not found or comments not allowed"
-    });
-  }
-  
-  const comment = {
-    content: content.trim(),
-    author: userId,
-    createdAt: new Date()
-  };
-  
-  announcement.comments.push(comment);
-  await announcement.save();
-  
-  // Populate the new comment for response
-  const updatedAnnouncement = await Announcement.findById(announcement._id)
-    .populate('comments.author', 'name email avatar')
-    .lean();
-  
-  const newComment = updatedAnnouncement.comments[updatedAnnouncement.comments.length - 1];
-  
-  res.status(201).json({
-    success: true,
-    message: "Comment added successfully",
-    data: newComment
-  });
-}));
+  })
+);
 
 /**
  * GET /api/announcements/pinned
- * Get pinned announcements
+ * Registered before /:id so "pinned" is not captured as an id.
  */
-router.get("/pinned", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
-  const userId = req.user?.userId;
-  const userRole = req.user?.role;
-  
-  const filter = { 
-    orgId,
-    isPinned: true,
-    status: 'published'
-  };
-  
-  // Role-based filtering for non-admins
-  if (userRole !== 'admin' && userRole !== 'super_admin') {
-    filter.$or = [
-      { targetAudience: 'all' },
-      { targetAudience: 'employees', 'targetRoles': { $in: [userRole] } },
-      { 'targetUsers': userId },
-      { 'targetDepartments': req.user?.departmentId }
-    ];
-  }
-  
-  const pinnedAnnouncements = await Announcement.find(filter)
-    .populate('createdBy', 'name email avatar')
-    .sort({ createdAt: -1 })
-    .limit(5)
-    .lean();
-  
-  res.json({
-    success: true,
-    data: pinnedAnnouncements
-  });
-}));
+router.get(
+  "/pinned",
+  asyncHandler(async (req, res) => {
+    const orgId = req.user?.orgId || "system";
+    const userId = req.user?.userId;
+    const userRole = req.user?.role;
+
+    const filter = {
+      orgId,
+      isPinned: true,
+      isPublished: true,
+      isDraft: false,
+    };
+
+    if (userRole === "admin" || userRole === "super_admin") {
+      const pinnedAnnouncements = await Announcement.find(filter)
+        .populate("authorId", "name email avatar")
+        .sort({ publishedAt: -1, createdAt: -1 })
+        .limit(5)
+        .lean();
+      return res.json({ success: true, data: pinnedAnnouncements });
+    }
+
+    const scoped = await Announcement.getUserAnnouncements(userId, orgId);
+    const pinnedAnnouncements = (scoped || [])
+      .filter((a) => a.isPinned)
+      .slice(0, 5);
+
+    return res.json({ success: true, data: pinnedAnnouncements });
+  })
+);
 
 /**
  * GET /api/announcements/dashboard-stats
- * Get announcement statistics for dashboard
  */
-router.get("/dashboard-stats", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
-  
-  const [
-    totalAnnouncements,
-    publishedAnnouncements,
-    scheduledAnnouncements,
-    pinnedAnnouncements
-  ] = await Promise.all([
-    Announcement.countDocuments({ orgId, isDeleted: false }),
-    Announcement.countDocuments({ orgId, status: 'published', isDeleted: false }),
-    Announcement.countDocuments({ orgId, status: 'scheduled', isDeleted: false }),
-    Announcement.countDocuments({ orgId, isPinned: true, status: 'published', isDeleted: false })
-  ]);
-  
-  res.json({
-    success: true,
-    data: {
+router.get(
+  "/dashboard-stats",
+  asyncHandler(async (req, res) => {
+    const orgId = req.user?.orgId || "system";
+
+    const [
       totalAnnouncements,
       publishedAnnouncements,
       scheduledAnnouncements,
-      pinnedAnnouncements
+      pinnedAnnouncements,
+    ] = await Promise.all([
+      Announcement.countDocuments({ orgId }),
+      Announcement.countDocuments({ orgId, isPublished: true, isDraft: false }),
+      Announcement.countDocuments({ orgId, isDraft: true }),
+      Announcement.countDocuments({
+        orgId,
+        isPinned: true,
+        isPublished: true,
+        isDraft: false,
+      }),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        totalAnnouncements,
+        publishedAnnouncements,
+        scheduledAnnouncements,
+        pinnedAnnouncements,
+      },
+    });
+  })
+);
+
+/**
+ * GET /api/announcements/:id
+ */
+router.get(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const orgId = req.user?.orgId || "system";
+    const userId = req.user?.userId;
+    const userRole = req.user?.role;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid announcement ID",
+      });
     }
-  });
-}));
+
+    const announcement = await Announcement.findOne({ _id: id, orgId })
+      .populate("authorId", "name email avatar")
+      .lean();
+
+    if (!announcement) {
+      return res.status(404).json({
+        success: false,
+        message: "Announcement not found or access denied",
+      });
+    }
+
+    if (userRole !== "admin" && userRole !== "super_admin") {
+      const allowed = await Announcement.getUserAnnouncements(userId, orgId);
+      const ok = (allowed || []).some((a) => String(a._id) === String(announcement._id));
+      if (!ok) {
+        return res.status(404).json({
+          success: false,
+          message: "Announcement not found or access denied",
+        });
+      }
+      const doc = await Announcement.findById(id);
+      if (doc) await doc.markAsRead(userId);
+    }
+
+    res.json({
+      success: true,
+      data: announcement,
+    });
+  })
+);
+
+/**
+ * POST /api/announcements
+ */
+router.post(
+  "/",
+  asyncHandler(async (req, res) => {
+    const orgId = req.user?.orgId || "system";
+    const userId = req.user?.userId;
+    const userRole = req.user?.role;
+
+    if (!["admin", "super_admin", "hr"].includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: "You don't have permission to create announcements",
+      });
+    }
+
+    const {
+      title,
+      content,
+      type = "general",
+      priority = "medium",
+      audience = "all",
+      scheduledFor,
+      expiresAt,
+      isPinned = false,
+      attachments = [],
+    } = req.body;
+
+    if (!title || !content) {
+      return res.status(400).json({
+        success: false,
+        message: "Title and content are required",
+      });
+    }
+
+    const { visibility, targetAudience } = resolveAudience(audience);
+    const scheduled = scheduledFor ? new Date(scheduledFor) : null;
+    const isScheduled = Boolean(scheduled && !Number.isNaN(scheduled.getTime()) && scheduled.getTime() > Date.now());
+
+    const announcement = await Announcement.create({
+      title: String(title).trim(),
+      content: String(content).trim(),
+      type,
+      priority: mapPriority(priority),
+      visibility,
+      targetAudience,
+      authorId: userId,
+      orgId,
+      isPublished: !isScheduled,
+      isDraft: isScheduled,
+      publishedAt: isScheduled ? null : new Date(),
+      isPinned: Boolean(isPinned),
+      expiresAt: expiresAt ? new Date(expiresAt) : undefined,
+      attachments: Array.isArray(attachments) ? attachments : [],
+    });
+
+    const populatedAnnouncement = await Announcement.findById(announcement._id)
+      .populate("authorId", "name email avatar")
+      .lean();
+
+    res.status(201).json({
+      success: true,
+      message: "Announcement created successfully",
+      data: populatedAnnouncement,
+    });
+  })
+);
+
+/**
+ * PUT /api/announcements/:id
+ */
+router.put(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const orgId = req.user?.orgId || "system";
+    const userId = req.user?.userId;
+    const userRole = req.user?.role;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid announcement ID",
+      });
+    }
+
+    const announcement = await Announcement.findOne({ _id: id, orgId });
+
+    if (!announcement) {
+      return res.status(404).json({
+        success: false,
+        message: "Announcement not found",
+      });
+    }
+
+    const canUpdate =
+      userRole === "admin" ||
+      userRole === "super_admin" ||
+      userRole === "hr" ||
+      announcement.authorId.toString() === String(userId);
+
+    if (!canUpdate) {
+      return res.status(403).json({
+        success: false,
+        message: "You don't have permission to update this announcement",
+      });
+    }
+
+    const { title, content, type, priority, audience, expiresAt, isPinned, isPublished, isDraft } = req.body;
+
+    if (title) announcement.title = String(title).trim();
+    if (content) announcement.content = String(content).trim();
+    if (type) announcement.type = type;
+    if (priority) announcement.priority = mapPriority(priority);
+    if (audience) {
+      const { visibility, targetAudience } = resolveAudience(audience);
+      announcement.visibility = visibility;
+      announcement.targetAudience = targetAudience;
+    }
+    if (expiresAt !== undefined) {
+      announcement.expiresAt = expiresAt ? new Date(expiresAt) : null;
+    }
+    if (isPinned !== undefined) announcement.isPinned = Boolean(isPinned);
+    if (isPublished !== undefined) announcement.isPublished = Boolean(isPublished);
+    if (isDraft !== undefined) announcement.isDraft = Boolean(isDraft);
+
+    await announcement.save();
+
+    const updatedAnnouncement = await Announcement.findById(announcement._id)
+      .populate("authorId", "name email avatar")
+      .lean();
+
+    res.json({
+      success: true,
+      message: "Announcement updated successfully",
+      data: updatedAnnouncement,
+    });
+  })
+);
+
+/**
+ * DELETE /api/announcements/:id
+ * Withdraw from publication (schema has no isDeleted field).
+ */
+router.delete(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const orgId = req.user?.orgId || "system";
+    const userId = req.user?.userId;
+    const userRole = req.user?.role;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid announcement ID",
+      });
+    }
+
+    const announcement = await Announcement.findOne({ _id: id, orgId });
+
+    if (!announcement) {
+      return res.status(404).json({
+        success: false,
+        message: "Announcement not found",
+      });
+    }
+
+    const canDelete =
+      userRole === "admin" ||
+      userRole === "super_admin" ||
+      userRole === "hr" ||
+      announcement.authorId.toString() === String(userId);
+
+    if (!canDelete) {
+      return res.status(403).json({
+        success: false,
+        message: "You don't have permission to delete this announcement",
+      });
+    }
+
+    announcement.isPublished = false;
+    announcement.isDraft = true;
+    announcement.isPinned = false;
+    await announcement.save();
+
+    res.json({
+      success: true,
+      message: "Announcement deleted successfully",
+    });
+  })
+);
+
+/**
+ * POST /api/announcements/:id/comments
+ */
+router.post(
+  "/:id/comments",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const orgId = req.user?.orgId || "system";
+    const userId = req.user?.userId;
+    const { content } = req.body;
+
+    if (!content || !content.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Comment content is required",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid announcement ID",
+      });
+    }
+
+    const announcement = await Announcement.findOne({
+      _id: id,
+      orgId,
+      isPublished: true,
+      isDraft: false,
+    });
+
+    if (!announcement) {
+      return res.status(404).json({
+        success: false,
+        message: "Announcement not found or comments not allowed",
+      });
+    }
+
+    announcement.comments.push({
+      userId,
+      comment: content.trim(),
+      createdAt: new Date(),
+    });
+    await announcement.save();
+
+    const updatedAnnouncement = await Announcement.findById(announcement._id)
+      .populate("comments.userId", "name email avatar")
+      .lean();
+
+    const newComment =
+      updatedAnnouncement.comments[updatedAnnouncement.comments.length - 1];
+
+    res.status(201).json({
+      success: true,
+      message: "Comment added successfully",
+      data: newComment,
+    });
+  })
+);
 
 /**
  * POST /api/announcements/:id/pin
- * Pin/unpin announcement
  */
-router.post("/:id/pin", asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const orgId = req.user?.orgId || 'system';
-  const userId = req.user?.userId;
-  const userRole = req.user?.role;
-  
-  // Check permissions
-  if (!['admin', 'super_admin', 'hr'].includes(userRole)) {
-    return res.status(403).json({
-      success: false,
-      message: "You don't have permission to pin announcements"
+router.post(
+  "/:id/pin",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const orgId = req.user?.orgId || "system";
+    const userRole = req.user?.role;
+
+    if (!["admin", "super_admin", "hr"].includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: "You don't have permission to pin announcements",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid announcement ID",
+      });
+    }
+
+    const announcement = await Announcement.findOne({ _id: id, orgId });
+
+    if (!announcement) {
+      return res.status(404).json({
+        success: false,
+        message: "Announcement not found",
+      });
+    }
+
+    announcement.isPinned = !announcement.isPinned;
+    await announcement.save();
+
+    res.json({
+      success: true,
+      message: `Announcement ${announcement.isPinned ? "pinned" : "unpinned"} successfully`,
+      data: { isPinned: announcement.isPinned },
     });
-  }
-  
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid announcement ID"
-    });
-  }
-  
-  const announcement = await Announcement.findOne({ _id: id, orgId });
-  
-  if (!announcement) {
-    return res.status(404).json({
-      success: false,
-      message: "Announcement not found"
-    });
-  }
-  
-  announcement.isPinned = !announcement.isPinned;
-  announcement.updatedBy = userId;
-  await announcement.save();
-  
-  res.json({
-    success: true,
-    message: `Announcement ${announcement.isPinned ? 'pinned' : 'unpinned'} successfully`,
-    data: { isPinned: announcement.isPinned }
-  });
-}));
+  })
+);
 
 export default router;

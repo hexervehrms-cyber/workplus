@@ -641,6 +641,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
             value={quickStats.activeUsers.toString()}
             icon={LogIn}
             color="primary"
+            emphasize
           />
           <KPICard
             key={`onBreak-${quickStats.onBreak}-${lastUpdate}`}
@@ -648,6 +649,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
             value={quickStats.onBreak.toString()}
             icon={Coffee}
             color="accent"
+            emphasize
           />
           <KPICard
             key={`onLeave-${quickStats.onLeave}-${lastUpdate}`}

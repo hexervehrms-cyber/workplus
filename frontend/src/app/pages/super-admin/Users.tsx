@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button';
 import { Users, Plus, Search, Filter, Edit, Trash2, X, Eye, AlertCircle } from 'lucide-react';
 import UserInfoModal from '../../components/UserInfoModal';
 import { apiClient } from '../../utils/api';
+import { PasswordInput } from '../../components/PasswordInput';
 
 interface GlobalUser {
   id?: string;
@@ -271,8 +272,8 @@ export default function GlobalUsers() {
                 </div>
                 <div>
                   <label className="text-sm font-medium">Password *</label>
-                  <input
-                    type="password"
+                  <PasswordInput
+                    autoComplete="new-password"
                     placeholder="Enter password (min 6 characters)"
                     value={formData.password}
                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}
@@ -371,8 +372,8 @@ export default function GlobalUsers() {
                 </div>
                 <div>
                   <label className="text-sm font-medium">Password (leave blank to keep current)</label>
-                  <input
-                    type="password"
+                  <PasswordInput
+                    autoComplete="new-password"
                     placeholder="Enter new password (min 6 characters)"
                     value={formData.password}
                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}

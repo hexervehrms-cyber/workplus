@@ -584,8 +584,8 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
                     date: { $gte: startOfDay, $lt: endOfDay },
                     breaks: {
                       $elemMatch: {
-                        startTime: { $exists: true },
-                        endTime: { $exists: false }
+                        startTime: { $exists: true, $ne: null },
+                        $or: [{ endTime: { $exists: false } }, { endTime: null }]
                       }
                     }
                   }

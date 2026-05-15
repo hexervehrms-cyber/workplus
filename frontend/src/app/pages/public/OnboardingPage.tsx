@@ -4,6 +4,7 @@ import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Lock, AlertCi
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
+import { PasswordInput } from '../../components/PasswordInput';
 import { Label } from '../../components/ui/label';
 import { Separator } from '../../components/ui/separator';
 import { Progress } from '../../components/ui/progress';
@@ -1102,8 +1103,8 @@ const OnboardingPage: React.FC = () => {
               <div className="grid grid-cols-1 gap-6">
                 <div>
                   <Label>Password *</Label>
-                  <Input
-                    type="password"
+                  <PasswordInput
+                    autoComplete="new-password"
                     name="password"
                     value={formData.password}
                     onChange={handleInputChange}
@@ -1156,8 +1157,8 @@ const OnboardingPage: React.FC = () => {
 
                 <div>
                   <Label>Confirm Password *</Label>
-                  <Input
-                    type="password"
+                  <PasswordInput
+                    autoComplete="new-password"
                     name="confirmPassword"
                     value={formData.confirmPassword}
                     onChange={handleInputChange}

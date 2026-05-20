@@ -15,7 +15,11 @@ import ChatMessage from '../models/ChatMessage.js';
 import ChatGroup from '../models/ChatGroup.js';
 import User from '../models/User.js';
 import logger from '../utils/logger.js';
-import { assertScopedOrgId, userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
+import {
+  assertScopedOrgId,
+  userOrgIdFromReq,
+  userOrgMatchFilter,
+} from '../utils/orgScopeHelpers.js';
 import {
   assertRecipientInOrg,
   assertConversationAccess,
@@ -244,9 +248,13 @@ router.post('/groups', authenticate, asyncHandler(async (req, res) => {
   }
 
   const allIdStrings = [String(creatorId), ...otherIds];
+  const memberObjectIdsForLookup = allIdStrings
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
   const usersFound = await User.find({
-    _id: { $in: allIdStrings },
-    orgId,
+    _id: { $in: memberObjectIdsForLookup },
+    ...userOrgMatchFilter(orgId),
     isActive: true,
     deletedAt: null,
   })
@@ -1066,11 +1074,11 @@ router.get('/users', authenticate, asyncHandler(async (req, res) => {
     const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
 
-    let filter = { 
+    let filter = {
       _id: { $ne: currentUserId },
-      orgId: orgId,
+      ...userOrgMatchFilter(orgId),
       isActive: true,
-      deletedAt: null
+      deletedAt: null,
     };
 
     // Role-based filtering — employee/admin chat excludes super_admin

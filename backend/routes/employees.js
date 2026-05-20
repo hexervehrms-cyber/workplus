@@ -336,9 +336,10 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
       .select('_id firstName lastName orgId userId status')
       .lean();
   } else {
+    const isSelf = String(req.user.userId) === String(targetUserId);
     employee = await findEmployeeForSelfService(targetUserId, authOrgId || '', {
-      createIfMissing: false,
-      allowCrossOrgFallback: false
+      createIfMissing: isSelf && req.user.role === 'employee',
+      allowCrossOrgFallback: isSelf,
     });
   }
 

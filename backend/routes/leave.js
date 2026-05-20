@@ -37,6 +37,7 @@ import {
   LEAVE_APPROVER_ROLES,
 } from '../utils/leaveAccessHelpers.js';
 import { userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
+import { findEmployeeForSelfService } from '../utils/employeeSelfService.js';
 
 const router = express.Router();
 const leaveApprovers = authorize(...LEAVE_APPROVER_ROLES);
@@ -938,12 +939,10 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   const tenantOrg = scopedOrgId(req) || orgId;
   const isPrivilegedCreator = ['admin', 'hr', 'manager', 'super_admin'].includes(req.user.role);
   if (!isPrivilegedCreator) {
-    const emp = await Employee.findOne({
-      userId: req.user.userId,
-      orgId: String(tenantOrg),
-    })
-      .select('_id orgId')
-      .lean();
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+      createIfMissing: true,
+    });
     if (!emp) {
       return res.status(403).json({
         success: false,

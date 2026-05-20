@@ -12,6 +12,8 @@ import Employee from '../models/Employee.js';
 import User from '../models/User.js';
 import { buildOrgIdFlexible } from '../utils/attendanceQueryHelpers.js';
 import { sendSuccess, sendError } from '../utils/apiResponse.js';
+import { userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
+import { findEmployeeForSelfService } from '../utils/employeeSelfService.js';
 
 const router = express.Router();
 
@@ -40,13 +42,22 @@ async function performanceForUserHandler(req, res) {
       return sendError(res, 'Unauthorized', 403, 'FORBIDDEN');
     }
 
-    const orgMatch = buildOrgIdFlexible(req.user.orgId);
-    const employee = await Employee.findOne({
+    const scopedOrg =
+      userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId || req.user?.tenantId;
+    const orgMatch = buildOrgIdFlexible(scopedOrg);
+    let employee = await Employee.findOne({
       ...orgMatch,
       userId: mongoose.Types.ObjectId.isValid(userId)
         ? { $in: [userId, new mongoose.Types.ObjectId(userId)] }
         : userId,
     }).lean();
+
+    if (!employee) {
+      employee = await findEmployeeForSelfService(userId, scopedOrg, {
+        allowCrossOrgFallback: true,
+        createIfMissing: true,
+      });
+    }
 
     if (!employee) {
       return sendError(res, 'Employee record not found', 404, 'NOT_FOUND');

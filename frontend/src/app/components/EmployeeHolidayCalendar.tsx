@@ -89,7 +89,7 @@ const EmployeeHolidayCalendar: React.FC<{ organizationId?: string }> = ({
 
   const handleDownloadCalendar = async (calendarId: string) => {
     try {
-      const blob = await apiFetchBlob(`holiday-calendars/${calendarId}/download`);
+      const blob = await apiFetchBlob(`holidays/calendars/${calendarId}/download`);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

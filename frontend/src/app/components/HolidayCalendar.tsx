@@ -175,7 +175,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
     }
 
     try {
-      await apiDelete(`holidays/${holidayId}`);
+      await apiDelete(appendOrgIdParam(`holidays/${holidayId}`, user));
       setHolidays((prev) => prev.filter((h) => (h._id || h.id) !== holidayId));
       alert('Holiday deleted successfully!');
     } catch (error) {
@@ -198,7 +198,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       if (editingHoliday) {
         const holidayId = editingHoliday._id || editingHoliday.id;
         const updatedHoliday = await apiPut<{ data?: Holiday & { _id?: string } }>(
-          `holidays/${holidayId}`,
+          appendOrgIdParam(`holidays/${holidayId}`, user),
           {
             name: holidayFormData.name,
             date: holidayFormData.date,
@@ -217,7 +217,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         alert('Holiday updated successfully!');
       } else {
         const newHolidayData = await apiPost<{ data?: Holiday & { _id?: string } }>(
-          'holidays',
+          appendOrgIdParam('holidays', user),
           {
             name: holidayFormData.name,
             date: holidayFormData.date,
@@ -260,7 +260,9 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       loadHolidays();
     } catch (error) {
       console.error('Error saving holiday:', error);
-      alert('Failed to save holiday: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      const msg =
+        error instanceof Error ? error.message : 'Failed to save holiday';
+      toast.error(msg.includes('Route not found') ? 'Holiday API unavailable — redeploy backend or contact support.' : msg);
     }
   };
 
@@ -313,7 +315,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
 
   const handlePublishCalendar = async (calendarId: string) => {
     try {
-      await apiPost(`holiday-calendars/${calendarId}/publish`);
+      await apiPost(appendOrgIdParam(`holidays/calendars/${calendarId}/publish`, user), {});
       setCalendars((prev) =>
         prev.map((cal) =>
           cal.id === calendarId
@@ -321,10 +323,12 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
             : cal
         )
       );
-      alert('Calendar published successfully!');
+      toast.success('Calendar published successfully');
     } catch (error) {
       console.error('Error publishing calendar:', error);
-      alert('Failed to publish calendar');
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to publish calendar'
+      );
     }
   };
 
@@ -340,16 +344,21 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
 
   const handleDownloadCalendar = async (calendarId: string) => {
     try {
-      const blob = await apiFetchBlob(`holiday-calendars/${calendarId}/download`);
+      const blob = await apiFetchBlob(
+        appendOrgIdParam(`holidays/calendars/${calendarId}/download`, user)
+      );
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'holiday-calendar.pdf';
+      a.download = `holiday-calendar-${selectedYear}.csv`;
       a.click();
       window.URL.revokeObjectURL(url);
+      toast.success('Calendar downloaded');
     } catch (error) {
       console.error('Error downloading calendar:', error);
-      alert('Failed to download calendar');
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to download calendar'
+      );
     }
   };
 

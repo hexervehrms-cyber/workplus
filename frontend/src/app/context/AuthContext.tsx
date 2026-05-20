@@ -8,7 +8,12 @@ import { AuthService, TokenManager, ApiError } from '../utils/api';
 import { socketService, ConnectionState } from '../utils/socket';
 import realTimeSocket from '../utils/realTimeSocket';
 import { clearApiCache, clearAllHolidayCaches } from '../utils/apiHelper';
-import { ensureAccessToken, refreshAccessToken, hydrateAccessToken } from '../utils/sessionAuth';
+import {
+  ensureAccessToken,
+  refreshAccessToken,
+  hydrateAccessToken,
+  isRefreshEndpointUnavailable,
+} from '../utils/sessionAuth';
 import { getRefreshTokenMirror } from '../utils/sessionAccessMirror';
 import { clearPersistedAttendance } from '../utils/attendancePersistence';
 import { clearUserScopedLocalStorage } from '../utils/userScopedStorage';
@@ -308,6 +313,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       void (async () => {
         await hydrateAccessToken();
         if (!TokenManager.get() && !getRefreshTokenMirror()) {
+          return;
+        }
+        if (isRefreshEndpointUnavailable()) {
           return;
         }
         try {

@@ -252,7 +252,8 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
  * Build complete attendance activity feed (DB logs + reconstructed Attendance events).
  */
 async function getMergedAttendanceActivityLogs(req, options = {}) {
-  const authOrgId = req.user?.orgId;
+  const authOrgId =
+    userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId || req.user?.tenantId;
   const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
   const skip = Math.max(parseInt(req.query.skip, 10) || 0, 0);
   const userIdFilter = options.userId || null;

@@ -22,6 +22,7 @@ import {
   setAccessTokenCookie,
 } from "../utils/httpAuth.js";
 import { normalizeAuthOrgId } from "../utils/orgScopeHelpers.js";
+import { handleAuthRefresh } from "../handlers/authRefreshHandler.js";
 
 const router = express.Router();
 
@@ -313,119 +314,7 @@ router.get("/me",
  * POST /api/auth/refresh
  * Refresh access token using refresh token
  */
-router.post("/refresh",
-  asyncHandler(async (req, res) => {
-    const refreshToken = req.body?.refreshToken || req.cookies?.refreshToken;
-
-    if (!refreshToken) {
-      return res.status(400).json({
-        success: false,
-        message: "Refresh token is required"
-      });
-    }
-
-    try {
-      let decodedRefresh;
-      try {
-        decodedRefresh = jwt.verify(refreshToken, process.env.JWT_SECRET);
-      } catch {
-        return res.status(401).json({
-          success: false,
-          message: "Invalid or expired refresh token"
-        });
-      }
-
-      if (decodedRefresh.type !== 'refresh') {
-        return res.status(401).json({
-          success: false,
-          message: "Invalid refresh token"
-        });
-      }
-
-      const authToken = await AuthToken.findByToken(refreshToken);
-
-      if (!authToken || !authToken.isValid()) {
-        return res.status(401).json({
-          success: false,
-          message: "Invalid or expired refresh token"
-        });
-      }
-
-      const user = await User.findById(authToken.userId);
-
-      if (!user || !user.isActive) {
-        return res.status(401).json({
-          success: false,
-          message: "User not found or inactive"
-        });
-      }
-
-      const sessionId = decodedRefresh.sessionId;
-      // Only enforce Redis session when Redis is up; otherwise rely on AuthToken DB record
-      if (sessionId && redis.isRedisConnected()) {
-        const liveSession = await SessionManager.getSession(sessionId);
-        if (!liveSession) {
-          return res.status(401).json({
-            success: false,
-            message: "Session expired or invalidated",
-            code: "SESSION_EXPIRED"
-          });
-        }
-      }
-
-      const orgId = normalizeAuthOrgId(user);
-      if (!orgId) {
-        return res.status(403).json({
-          success: false,
-          message: 'Account has no organization assigned. Contact your administrator.',
-          code: 'MISSING_ORG_CONTEXT'
-        });
-      }
-      const accessToken = jwt.sign(
-        {
-          userId: user._id.toString(),
-          email: user.email,
-          role: user.role,
-          ...(orgId ? { orgId, tenantId: orgId } : {}),
-          ...(sessionId ? { sessionId } : {}),
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: '15m' }
-      );
-
-      const isProduction = process.env.NODE_ENV === 'production';
-      const accessCookieOptions = {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: isProduction ? 'none' : 'lax',
-        maxAge: 15 * 60 * 1000,
-        path: '/'
-      };
-
-      res.cookie('accessToken', accessToken, accessCookieOptions);
-      setAccessTokenCookie(res, accessToken, 15 * 60);
-
-      await authToken.use();
-
-      res.json({
-        success: true,
-        data: {
-          accessToken,
-          token: accessToken,
-          expiresIn: 900
-        }
-      });
-
-    } catch (error) {
-      logger.error('Token refresh error', { error: error.message });
-
-      res.status(500).json({
-        success: false,
-        message: "Token refresh failed"
-      });
-    }
-  })
-);
+router.post("/refresh", asyncHandler(handleAuthRefresh));
 
 /**
  * POST /api/auth/logout

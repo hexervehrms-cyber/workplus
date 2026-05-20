@@ -196,15 +196,11 @@ export class ApiClient {
     const url = this.buildUrl(endpoint);
     let authToken = (await ensureAccessToken()) || TokenManager.get();
 
-    if (authToken && isTokenExpired(authToken)) {
-      try {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          authToken = refreshed;
-          TokenManager.set(refreshed);
-        }
-      } catch {
-        /* keep going with credentials:include */
+    if (authToken && isTokenExpired(authToken) && TokenManager.getRefreshToken()) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        authToken = refreshed;
+        TokenManager.set(refreshed);
       }
     }
 
@@ -859,7 +855,10 @@ export class HolidayService {
   }
 
   static async getHolidaysByOrganization(organizationId: string) {
-    const response = await apiClient.get<any[]>(`/holidays/organization/${organizationId}`);
+    const year = new Date().getFullYear();
+    const response = await apiClient.get<any[]>(
+      `/holidays?year=${year}&limit=500&orgId=${encodeURIComponent(organizationId)}`
+    );
     return response.data || [];
   }
 
@@ -954,58 +953,15 @@ export class AdvanceLoanService {
 // ============================================
 export class TokenRefreshService {
   async refreshToken(): Promise<ApiResponse<{ token: string; user: any }>> {
-    const bodyRefresh = TokenManager.getRefreshToken();
-    const url = `${getApiBaseUrl()}/auth/refresh`;
-    const REFRESH_TIMEOUT = 15000;
-
-    try {
-      const response = await fetchWithTimeout(
-        url,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify(bodyRefresh ? { refreshToken: bodyRefresh } : {})
-        },
-        REFRESH_TIMEOUT
-      );
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          TokenManager.clear();
-        }
-        throw new ApiError(
-          data.message || 'Token refresh failed',
-          response.status,
-          data.code
-        );
-      }
-
-      if (data.data?.accessToken) {
-        TokenManager.set(data.data.accessToken);
-      }
-      if (data.data?.refreshToken) {
-        TokenManager.setRefresh(data.data.refreshToken);
-      }
-      if (data.data?.user) {
-        TokenManager.setUser(data.data.user);
-      }
-
+    const accessToken = await refreshAccessToken();
+    if (accessToken) {
+      TokenManager.set(accessToken);
       return {
-        success: !!data.success,
-        data: data.data?.accessToken
-          ? { token: data.data.accessToken as string, user: data.data.user }
-          : undefined,
-        message: data.message
+        success: true,
+        data: { token: accessToken, user: TokenManager.getUser() },
       };
-    } catch (error) {
-      if (error instanceof ApiError) {
-        throw error;
-      }
-      throw new ApiError('Unable to refresh session', 0, 'NETWORK_ERROR');
     }
+    throw new ApiError('Unable to refresh session', 401, 'AUTH_REQUIRED');
   }
 }
 

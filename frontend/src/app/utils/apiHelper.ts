@@ -203,9 +203,9 @@ export async function apiFetch(
 
 export async function apiFetchBlob(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit & { skipContentType?: boolean } = {}
 ): Promise<Blob> {
-  const response = await apiFetch(endpoint, options);
+  const response = await apiFetch(endpoint, { ...options, skipContentType: true });
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     throw new Error(

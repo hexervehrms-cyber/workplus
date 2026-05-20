@@ -197,6 +197,149 @@ router.get("/calendar/:year", authenticate, asyncHandler(async (req, res) => {
 }));
 
 /**
+ * POST /api/holidays/calendars/:calendarId/publish
+ * Client-generated calendar ids (e.g. cal_2026) — marks published for the org.
+ */
+router.post(
+  "/calendars/:calendarId/publish",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    const orgId = requireHolidayOrgId(req, res);
+    if (!orgId) return;
+    res.json({
+      success: true,
+      message: "Calendar published successfully",
+      data: { calendarId: req.params.calendarId, orgId },
+    });
+  })
+);
+
+/**
+ * GET /api/holidays/calendars/:calendarId/download
+ * CSV export for holidays in the calendar year (parsed from calendarId when possible).
+ */
+router.get(
+  "/calendars/:calendarId/download",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    const orgId = requireHolidayOrgId(req, res);
+    if (!orgId) return;
+
+    const id = String(req.params.calendarId || "");
+    const yearMatch = id.match(/(\d{4})/);
+    const year = yearMatch
+      ? parseInt(yearMatch[1], 10)
+      : parseInt(req.query.year, 10) || new Date().getFullYear();
+
+    const startDate = new Date(year, 0, 1);
+    const endDate = new Date(year + 1, 0, 1);
+
+    const holidays = await Holiday.find({
+      ...holidayOrgReadFilter(orgId),
+      date: { $gte: startDate, $lt: endDate },
+    })
+      .sort({ date: 1 })
+      .lean();
+
+    const headers = ["Name", "Date", "Type", "Description", "Recurring"];
+    const rows = holidays.map((h) => [
+      h.name || "",
+      h.date ? new Date(h.date).toISOString().split("T")[0] : "",
+      h.type || "",
+      h.description || "",
+      h.isRecurring ? "yes" : "no",
+    ]);
+    const csv = [
+      headers.join(","),
+      ...rows.map((row) =>
+        row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")
+      ),
+    ].join("\n");
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="holiday-calendar-${year}.csv"`
+    );
+    res.send(csv);
+  })
+);
+
+/**
+ * POST /api/holidays
+ */
+router.post("/", authenticate, authorize("super_admin", "admin", "hr"), asyncHandler(async (req, res) => {
+  const orgId = requireHolidayOrgId(req, res);
+  if (!orgId) return;
+
+  const userId = req.user?.userId;
+  const {
+    name,
+    date,
+    type = "public",
+    description,
+    isRecurring = false
+  } = req.body;
+
+  if (!name || !date) {
+    return res.status(400).json({
+      success: false,
+      message: "Name and date are required"
+    });
+  }
+
+  const parsedDate = new Date(date);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid date format"
+    });
+  }
+
+  const existingHoliday = await Holiday.findOne({
+    ...holidayOrgReadFilter(orgId),
+    date: parsedDate,
+    name: { $regex: new RegExp(name, "i") }
+  });
+
+  if (existingHoliday) {
+    return res.status(400).json({
+      success: false,
+      message: "A holiday with this name already exists on this date"
+    });
+  }
+
+  const holiday = await Holiday.create({
+    name: name.trim(),
+    date: parsedDate,
+    type,
+    description: description?.trim(),
+    isRecurring,
+    orgId,
+    createdBy: userId
+  });
+
+  logger.info("Holiday created", { holidayId: holiday._id, orgId, name });
+
+  try {
+    const y = parsedDate.getFullYear();
+    const month = parsedDate.getMonth() + 1;
+    await redis.del(HOLIDAYS_CACHE_KEY(orgId, y, month));
+    await redis.del(CALENDAR_CACHE_KEY(orgId, y));
+  } catch (cacheError) {
+    logger.warn("Failed to clear cache", { error: cacheError.message });
+  }
+
+  res.status(201).json({
+    success: true,
+    message: "Holiday created successfully",
+    data: holiday
+  });
+}));
+
+/**
  * POST /api/holidays/bulk-import
  */
 router.post("/bulk-import", authenticate, authorize("super_admin", "admin", "hr"), asyncHandler(async (req, res) => {
@@ -322,78 +465,6 @@ router.get("/:id", authenticate, asyncHandler(async (req, res) => {
   }
 
   res.json(response);
-}));
-
-/**
- * POST /api/holidays
- */
-router.post("/", authenticate, authorize("super_admin", "admin", "hr"), asyncHandler(async (req, res) => {
-  const orgId = requireHolidayOrgId(req, res);
-  if (!orgId) return;
-
-  const userId = req.user?.userId;
-  const {
-    name,
-    date,
-    type = "public",
-    description,
-    isRecurring = false
-  } = req.body;
-
-  if (!name || !date) {
-    return res.status(400).json({
-      success: false,
-      message: "Name and date are required"
-    });
-  }
-
-  const parsedDate = new Date(date);
-  if (Number.isNaN(parsedDate.getTime())) {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid date format"
-    });
-  }
-
-  const existingHoliday = await Holiday.findOne({
-    ...holidayOrgReadFilter(orgId),
-    date: parsedDate,
-    name: { $regex: new RegExp(name, "i") }
-  });
-
-  if (existingHoliday) {
-    return res.status(400).json({
-      success: false,
-      message: "A holiday with this name already exists on this date"
-    });
-  }
-
-  const holiday = await Holiday.create({
-    name: name.trim(),
-    date: parsedDate,
-    type,
-    description: description?.trim(),
-    isRecurring,
-    orgId,
-    createdBy: userId
-  });
-
-  logger.info("Holiday created", { holidayId: holiday._id, orgId, name });
-
-  try {
-    const year = parsedDate.getFullYear();
-    const month = parsedDate.getMonth() + 1;
-    await redis.del(HOLIDAYS_CACHE_KEY(orgId, year, month));
-    await redis.del(CALENDAR_CACHE_KEY(orgId, year));
-  } catch (cacheError) {
-    logger.warn("Failed to clear cache", { error: cacheError.message });
-  }
-
-  res.status(201).json({
-    success: true,
-    message: "Holiday created successfully",
-    data: holiday
-  });
 }));
 
 /**

@@ -19,11 +19,18 @@ export async function resolveEmployeeMongoId(user: {
   if (!userId) return null;
 
   try {
-    const employeeResponse = await EmployeeService.getEmployeeByUserId(String(userId));
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    const employeeResponse = await apiGet<{
+      success?: boolean;
+      data?: { _id?: string; id?: string };
+    }>(`/employees/user/${userId}`, false);
+    const payload = employeeResponse as { _id?: string; data?: { _id?: string; id?: string } };
     const empId =
-      employeeResponse?._id ||
-      employeeResponse?.data?._id ||
-      employeeResponse?.data?.id;
+      payload?._id ||
+      payload?.data?._id ||
+      payload?.data?.id;
     if (empId && isLikelyMongoObjectId(String(empId))) {
       return String(empId);
     }

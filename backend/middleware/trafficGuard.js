@@ -10,7 +10,16 @@ const skipPaths = (req) => {
   if (!isProd && process.env.ENABLE_TRAFFIC_GUARD !== 'true') return true;
   const p = req.path || req.originalUrl || '';
   if (p.startsWith('/health')) return true;
-  if (p === '/api/auth/login' || p === '/api/auth/register') return true;
+  if (
+    p === '/api/auth/login' ||
+    p === '/api/auth/register' ||
+    p === '/api/auth/refresh' ||
+    p === '/auth/refresh' ||
+    p === '/auth/login' ||
+    p === '/auth/register'
+  ) {
+    return true;
+  }
   return false;
 };
 

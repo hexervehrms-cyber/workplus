@@ -271,7 +271,7 @@ export default function InteractiveCalendar() {
 
       const response = await LeaveRequestService.createLeaveRequest(leaveData);
       
-      if (response.success) {
+      if (response?.success) {
         const autoApproved = !!(response.data as { autoApproved?: boolean })?.autoApproved;
         toast.success(
           autoApproved
@@ -287,11 +287,20 @@ export default function InteractiveCalendar() {
           setLeaveHistory(Array.isArray(raw) ? raw : raw.data ?? []);
         }
       } else {
-        toast.error(response.message || 'Failed to submit leave request');
+        toast.error(response?.message || 'Failed to submit leave request');
       }
     } catch (error) {
       console.error('Error submitting leave request:', error);
-      toast.error(error instanceof ApiError ? error.getUserMessage() : error instanceof Error ? error.message : 'Failed to submit leave request');
+      let msg =
+        error instanceof ApiError
+          ? error.getUserMessage()
+          : error instanceof Error
+            ? error.message
+            : 'Failed to submit leave request';
+      if (msg.toLowerCase().includes('route not found')) {
+        msg = 'Leave API unavailable — redeploy backend or sign in again.';
+      }
+      toast.error(msg);
     } finally {
       setSubmittingLeave(false);
     }

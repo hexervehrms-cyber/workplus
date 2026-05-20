@@ -113,6 +113,7 @@ import tasksRoutes from "./routes/tasks.js";
 import organizationsRoutes from "./routes/organizations.js";
 import assetsRoutes from "./routes/assets.js";
 import authRoutes from "./routes/auth.js";
+import { handleAuthRefresh } from "./handlers/authRefreshHandler.js";
 
 // Import sales routes
 import callsRoutes from "./routes/sales/calls.js";
@@ -504,6 +505,12 @@ app.get("/api/health", asyncHandler(async (req, res) => {
     timestamp: new Date().toISOString()
   });
 }));
+
+// Session refresh (also on auth router) — early registration for Render deploys
+app.post("/api/auth/refresh", asyncHandler(handleAuthRefresh));
+app.options("/api/auth/refresh", (_req, res) => {
+  res.sendStatus(204);
+});
 
 app.get("/api/health/db", asyncHandler(async (req, res) => {
   try {

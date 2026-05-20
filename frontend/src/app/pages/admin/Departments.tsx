@@ -341,6 +341,9 @@ export default function AdminDepartments() {
       if (msg.toLowerCase().includes('invalid credentials')) {
         msg = 'Your session expired. Please sign out, sign in again, then create the department.';
       }
+      if (msg.toLowerCase().includes('route not found')) {
+        msg = 'Departments API is unavailable. Redeploy the backend or try again in a few minutes.';
+      }
       setFormError(msg);
       toast.error(msg);
     } finally {

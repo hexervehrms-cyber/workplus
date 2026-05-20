@@ -1021,15 +1021,26 @@ export default function TeamsMessenger() {
       toast.error('Select at least one employee');
       return;
     }
+    const invalidIds = [...createGroupMemberIds].filter(
+      (id) => !/^[a-f\d]{24}$/i.test(String(id))
+    );
+    if (invalidIds.length > 0) {
+      toast.error('Invalid contact selected. Refresh the list and try again.');
+      return;
+    }
     setCreatingGroup(true);
     try {
-      const res = await apiClient.post<{
-        conversationId: string;
-        name: string;
-        memberIds: string[];
+      const res = await apiPost<{
+        success?: boolean;
+        message?: string;
+        data?: {
+          conversationId: string;
+          name: string;
+          memberIds: string[];
+        };
       }>('/chat/groups', { name, memberIds: [...createGroupMemberIds] });
-      if (!res.success || !res.data) {
-        throw new Error(res.message || 'Could not create group');
+      if (!res?.success || !res.data) {
+        throw new Error(res?.message || 'Could not create group');
       }
       const d = res.data;
       toast.success('Group created');

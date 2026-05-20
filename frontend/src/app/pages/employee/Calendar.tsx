@@ -254,7 +254,8 @@ export default function Calendar() {
 
   // Submit leave request
   const handleSubmitLeave = async () => {
-    if (!user?.id || !formData.type || !formData.startDate || !formData.endDate || !formData.reason) {
+    const authUserId = String(user?.userId || user?.id || '');
+    if (!authUserId || !formData.type || !formData.startDate || !formData.endDate || !formData.reason) {
       toast.error('Please fill in all required fields');
       return;
     }
@@ -276,33 +277,38 @@ export default function Calendar() {
       const endDate = new Date(formData.endDate);
 
       const leaveData = {
-        userId: user.id,
+        userId: authUserId,
         employeeId: employeeId,
         leaveType: formData.type,
         startDate: startDate.toISOString(),
         endDate: endDate.toISOString(),
         reason: formData.reason,
-        orgId: orgId
+        orgId: orgId,
       };
 
       const response = await LeaveRequestService.createLeaveRequest(leaveData);
-      
-      if (response.success) {
+
+      if (response?.success) {
         toast.success('Leave request submitted successfully');
         setShowLeaveForm(false);
         setFormData({ type: '', startDate: '', endDate: '', reason: '' });
         
-        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
+        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
         if (updatedLeaves.success && updatedLeaves.data) {
           const raw = updatedLeaves.data as LeaveRequest[] | { data?: LeaveRequest[] };
           setLeaveHistory(Array.isArray(raw) ? raw : raw.data ?? []);
         }
       } else {
-        toast.error(response.message || 'Failed to submit leave request');
+        toast.error(response?.message || 'Failed to submit leave request');
       }
     } catch (error) {
       console.error('Error submitting leave request:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to submit leave request');
+      const msg = error instanceof Error ? error.message : 'Failed to submit leave request';
+      toast.error(
+        msg.toLowerCase().includes('route not found')
+          ? 'Leave API unavailable — redeploy backend or sign in again.'
+          : msg
+      );
     }
   };
 

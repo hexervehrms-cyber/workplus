@@ -39,6 +39,12 @@ export function holidayOrgReadFilter(scopedOrgId) {
   return { $or: [{ orgId: o }, { organizationId: o }] };
 }
 
+/** Match users belonging to a tenant (orgId / legacy tenantId / organizationId). */
+export function userOrgMatchFilter(scopedOrgId) {
+  const o = String(scopedOrgId);
+  return { $or: [{ orgId: o }, { tenantId: o }, { organizationId: o }] };
+}
+
 /**
  * Resolve tenant org or send 400. Use at start of route handlers (after validateOrgId).
  * @returns {string|null}

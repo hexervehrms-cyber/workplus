@@ -15,7 +15,7 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { apiClient } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
-import { apiFetch, apiGet, apiPost, getBearerToken } from '../../utils/apiHelper';
+import { apiFetch, apiGet, apiPost } from '../../utils/apiHelper';
 import realTimeSocket from '../../utils/realTimeSocket';
 
 interface AttendanceRecord {
@@ -215,12 +215,17 @@ export default function AttendanceAdmin() {
       if (startDate) params.startDate = startDate;
       if (endDate) params.endDate = endDate;
       if (!startDate && !endDate) {
-        const today = new Date().toISOString().slice(0, 10);
-        params.startDate = today;
-        params.endDate = today;
+        const end = new Date();
+        const start = new Date();
+        start.setDate(start.getDate() - 7);
+        params.startDate = start.toISOString().slice(0, 10);
+        params.endDate = end.toISOString().slice(0, 10);
       }
       const qs = new URLSearchParams(params).toString();
-      const response = await apiClient.get<ActivityLog[]>(`/attendance/activity-logs?${qs}`) as ActivityLogsResponse;
+      const response = await apiGet<ActivityLogsResponse>(
+        `/attendance/activity-logs?${qs}`,
+        false
+      );
       if (response?.success) {
         const rows = response.data ?? [];
         setActivityLogs((prev) => (append ? [...prev, ...rows] : rows));

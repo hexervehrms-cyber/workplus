@@ -120,7 +120,11 @@ export default function Performance() {
       setLastUpdated(data.lastUpdated ?? new Date().toISOString());
     } catch (err) {
       console.error('Error loading performance data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load performance data');
+      let msg = err instanceof Error ? err.message : 'Failed to load performance data';
+      if (msg.toLowerCase().includes('route not found')) {
+        msg = 'Performance API unavailable — redeploy backend or sign in again.';
+      }
+      setError(msg);
       setPerformanceData([]);
       setSkillsData([]);
       setKpis([]);

@@ -23,13 +23,14 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 
-interface LeaveAllocation {
+interface LeaveAllocationRecord {
   _id: string;
   employeeId: {
     _id: string;
     employeeCode: string;
     name: string;
     department: string;
+    userId?: { name?: string };
   };
   year: number;
   month: number;
@@ -65,7 +66,7 @@ const TABLE_LEAVE_KEYS = [
   'emergency',
 ] as const;
 
-function getAllocationTotal(allocations: LeaveAllocation['allocations'] | undefined): number {
+function getAllocationTotal(allocations: LeaveAllocationRecord['allocations'] | undefined): number {
   if (!allocations) return 0;
   return LEAVE_TYPES.reduce(
     (sum, { key }) => sum + (Number((allocations as Record<string, number>)[key]) || 0),
@@ -100,11 +101,11 @@ const LEAVE_TYPES = [
 
 export default function LeaveAllocation() {
   const { user } = useAuth();
-  const [allocations, setAllocations] = useState<LeaveAllocation[]>([]);
+  const [allocations, setAllocations] = useState<LeaveAllocationRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [selectedAllocation, setSelectedAllocation] = useState<LeaveAllocation | null>(null);
+  const [selectedAllocation, setSelectedAllocation] = useState<LeaveAllocationRecord | null>(null);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [selectedEmployee, setSelectedEmployee] = useState('');
@@ -147,23 +148,24 @@ export default function LeaveAllocation() {
       const employeesResponse = await EmployeeService.getAllEmployees();
       console.log('Employees response:', employeesResponse);
       
-      // Handle paginated response structure
-      let employeesData = [];
-      if (Array.isArray(employeesResponse)) {
-        employeesData = employeesResponse;
-      } else if (employeesResponse?.data && Array.isArray(employeesResponse.data)) {
-        employeesData = employeesResponse.data;
-      }
+      const employeesData = Array.isArray(employeesResponse) ? employeesResponse : [];
       
       console.log('Employees data:', employeesData);
       
       if (employeesData.length > 0) {
         // Map employees to ensure we have the right structure
-        const mappedEmployees = employeesData.map(emp => ({
+        const mappedEmployees = employeesData.map((emp: {
+          _id: string;
+          name?: string;
+          employeeCode?: string;
+          department?: string;
+          designation?: string;
+          userId?: { name?: string };
+        }) => ({
           _id: emp._id,
           name: emp.userId?.name || emp.name || 'Unknown',
-          employeeCode: emp.employeeCode,
-          department: emp.department,
+          employeeCode: emp.employeeCode ?? '',
+          department: emp.department ?? '',
           designation: emp.designation
         }));
         console.log('Mapped employees:', mappedEmployees);
@@ -197,7 +199,7 @@ export default function LeaveAllocation() {
           selectedMonth
         );
         
-        let rows: LeaveAllocation[] = [];
+        let rows: LeaveAllocationRecord[] = [];
         if (Array.isArray(allocationsData)) {
           rows = allocationsData;
         } else if (allocationsData?.data) {
@@ -234,7 +236,7 @@ export default function LeaveAllocation() {
     }
   };
 
-  const handleOpenForm = (allocation?: LeaveAllocation) => {
+  const handleOpenForm = (allocation?: LeaveAllocationRecord) => {
     if (allocation) {
       setSelectedAllocation(allocation);
       setSelectedEmployee(allocation.employeeId?._id || '');
@@ -242,8 +244,8 @@ export default function LeaveAllocation() {
       setIsMultiSelectMode(false);
       setFormData({
         ...defaultAllocationForm(),
-        ...(allocation.allocations as Record<string, number>),
-      });
+        ...(allocation.allocations as Partial<typeof formData>),
+      } as typeof formData);
     } else {
       setSelectedAllocation(null);
       setSelectedEmployee('');
@@ -312,12 +314,12 @@ export default function LeaveAllocation() {
       } else if (isMultiSelectMode && selectedEmployees.length > 0) {
         // Bulk allocate to multiple employees
         const response = await LeaveAllocationService.bulkAllocate(
-          orgId,
+          orgId ?? 'system',
           selectedYear,
           selectedMonth,
           selectedEmployees,
           formData,
-          user?.userId || user?.id
+          user?.userId || user?.id || ''
         );
         console.log('Bulk allocate response:', response);
         toast.success(`Leave allocation created for ${selectedEmployees.length} employees`);
@@ -383,13 +385,13 @@ export default function LeaveAllocation() {
       }
 
       const response = await LeaveAllocationService.yearlyAllocate(
-        orgId,
+        orgId ?? 'system',
         selectedYear,
         selectedEmployeesForYearly,
         yearlyFormData.casualLeave,
         yearlyFormData.earnedLeave,
         yearlyFormData.medicalLeave,
-        user?.userId || user?.id
+        user?.userId || user?.id || ''
       );
 
       toast.success(`Yearly leaves allocated to ${selectedEmployeesForYearly.length} employees`);

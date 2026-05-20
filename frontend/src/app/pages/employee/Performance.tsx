@@ -54,6 +54,17 @@ interface TeamMember {
   isYou?: boolean;
 }
 
+interface PerformancePayload {
+  performanceTrend?: PerformanceData[];
+  skills?: SkillData[];
+  kpis?: KPI[];
+  achievements?: Achievement[];
+  teamRanking?: TeamMember[];
+  overallScore?: number;
+  scoreDelta?: number;
+  lastUpdated?: string;
+}
+
 const ACHIEVEMENT_ICONS: Record<string, typeof Trophy> = {
   'Excellent Attendance': Award,
   'On Time': CheckCircle,
@@ -82,18 +93,21 @@ export default function Performance() {
     if (!user?.id) return;
     try {
       setError(null);
-      const res = await apiGet<{ success?: boolean; data?: Record<string, unknown> }>(
+      const res = await apiGet<PerformancePayload | { data?: PerformancePayload }>(
         `/performance/${user.id}?_t=${Date.now()}`,
         false
       );
-      const data = (res as { data?: Record<string, unknown> })?.data ?? res;
+      const data: PerformancePayload =
+        res && typeof res === 'object' && 'data' in res && res.data
+          ? res.data
+          : (res as PerformancePayload);
 
-      setPerformanceData((data.performanceTrend as PerformanceData[]) || []);
-      setSkillsData((data.skills as SkillData[]) || []);
-      setKpis((data.kpis as KPI[]) || []);
-      setAchievements((data.achievements as Achievement[]) || []);
+      setPerformanceData(data.performanceTrend ?? []);
+      setSkillsData(data.skills ?? []);
+      setKpis(data.kpis ?? []);
+      setAchievements(data.achievements ?? []);
       setTeamRanking(
-        ((data.teamRanking as TeamMember[]) || []).map((m) => ({
+        (data.teamRanking ?? []).map((m) => ({
           rank: m.rank,
           name: m.name,
           score: m.score,
@@ -103,7 +117,7 @@ export default function Performance() {
       );
       setOverallScore(Number(data.overallScore) || 0);
       setScoreDelta(Number(data.scoreDelta) || 0);
-      setLastUpdated((data.lastUpdated as string) || new Date().toISOString());
+      setLastUpdated(data.lastUpdated ?? new Date().toISOString());
     } catch (err) {
       console.error('Error loading performance data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load performance data');

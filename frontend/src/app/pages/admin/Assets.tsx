@@ -44,6 +44,7 @@ interface Asset {
   };
   status: string;
   condition: string;
+  photos?: Array<{ photoData?: string; isMainPhoto?: boolean }>;
 }
 
 export default function Assets() {

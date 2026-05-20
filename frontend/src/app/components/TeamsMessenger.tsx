@@ -61,7 +61,7 @@ import { socketService as appSocket } from '../utils/socket';
 import { toast } from '../utils/portalToast';
 import { useAuth } from '../context/AuthContext';
 
-interface User {
+interface ChatUser {
   id: string;
   name: string;
   email: string;
@@ -106,7 +106,7 @@ interface Conversation {
   messageCount: number;
 }
 
-function getActiveConversationId(selected: User | null, myId: string): string {
+function getActiveConversationId(selected: ChatUser | null, myId: string): string {
   if (!selected) return '';
   if (selected.chatKind === 'group' && selected.conversationId) {
     return selected.conversationId;
@@ -116,8 +116,8 @@ function getActiveConversationId(selected: User | null, myId: string): string {
 
 export default function TeamsMessenger() {
   const { user } = useAuth();
-  const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>([]);
+  const [selectedUser, setSelectedUser] = useState<ChatUser | null>(null);
+  const [users, setUsers] = useState<ChatUser[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [_conversations, setConversations] = useState<Conversation[]>([]);
   const [messageInput, setMessageInput] = useState('');
@@ -142,14 +142,14 @@ export default function TeamsMessenger() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showProfileDialog, setShowProfileDialog] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
-  const selectedUserRef = useRef<User | null>(null);
+  const selectedUserRef = useRef<ChatUser | null>(null);
   selectedUserRef.current = selectedUser;
 
   const CHAT_EMOJIS = ['😀', '😊', '👍', '🙏', '❤️', '🎉', '✅', '🔥', '💼', '📎', '🙂', '😅'];
   const [hiddenContactIds, setHiddenContactIds] = useState<Set<string>>(() => new Set());
   const [showAddContactDialog, setShowAddContactDialog] = useState(false);
   const [addContactSearch, setAddContactSearch] = useState('');
-  const [groupChats, setGroupChats] = useState<User[]>([]);
+  const [groupChats, setGroupChats] = useState<ChatUser[]>([]);
   const [showCreateGroupDialog, setShowCreateGroupDialog] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [createGroupMemberIds, setCreateGroupMemberIds] = useState<Set<string>>(() => new Set());
@@ -178,7 +178,7 @@ export default function TeamsMessenger() {
   const formatRoleLabel = (role: string) =>
     role === 'super_admin' ? 'Super Admin' : role.charAt(0).toUpperCase() + role.slice(1);
 
-  const mapApiUser = (u: any): User => ({
+  const mapApiUser = (u: any): ChatUser => ({
     id: String(u._id || u.id),
     name: u.name || 'User',
     email: (u.email && String(u.email).trim()) || 'Email not on file',
@@ -233,7 +233,7 @@ export default function TeamsMessenger() {
 
       const rawUsers = Array.isArray(usersRes.data) ? usersRes.data : [];
       const hideSuperAdmin = user.role !== 'super_admin';
-      const formattedUsers: User[] = rawUsers
+      const formattedUsers: ChatUser[] = rawUsers
         .filter((u: any) => String(u._id || u.id) !== myId)
         .filter((u: any) => !hideSuperAdmin || u.role !== 'super_admin')
         .map(mapApiUser);
@@ -273,7 +273,7 @@ export default function TeamsMessenger() {
       }
 
       const rawGroups = Array.isArray(groupsRes.data) ? groupsRes.data : [];
-      const groupRows: User[] = rawGroups.map((g: any) => {
+      const groupRows: ChatUser[] = rawGroups.map((g: any) => {
         const cid = String(g.conversationId || '');
         const preview = previewByGroupId.get(cid);
         return {
@@ -689,7 +689,7 @@ export default function TeamsMessenger() {
     }, 3000);
   };
 
-  const startNativeCall = (withVideo: boolean, peer: User, role: NativeCallRole = 'caller') => {
+  const startNativeCall = (withVideo: boolean, peer: ChatUser, role: NativeCallRole = 'caller') => {
     nativeCallBusyRef.current = true;
     setNativeIncomingOffer(null);
     setNativeCallRole(role);
@@ -915,7 +915,7 @@ export default function TeamsMessenger() {
         u.email.toLowerCase().includes(addContactSearch.toLowerCase())
     );
 
-  const handleOpenContactChat = (contact: User) => {
+  const handleOpenContactChat = (contact: ChatUser) => {
     setSelectedUser(contact);
     setShowAddContactDialog(false);
     setAddContactSearch('');

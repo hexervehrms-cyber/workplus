@@ -38,6 +38,7 @@ interface Expense {
   receipt?: string;
   title?: string;
   employeeName?: string;
+  userId?: string;
 }
 
 const expenseCategories = [
@@ -82,9 +83,8 @@ const expenseCategories = [
 
 // Currency amount display component with INR icon
 const CurrencyAmount: React.FC<{ amount: number; className?: string }> = ({ amount, className }) => {
-  const { selectedCurrency } = useCurrency();
-  
-  // For INR, format directly without conversion
+  const { selectedCurrency, formatCurrency } = useCurrency();
+
   if (selectedCurrency.code === 'INR') {
     return (
       <div className={`flex items-center gap-1 ${className || ''}`}>
@@ -93,9 +93,7 @@ const CurrencyAmount: React.FC<{ amount: number; className?: string }> = ({ amou
       </div>
     );
   }
-  
-  // For other currencies, use formatCurrency
-  const { formatCurrency } = useCurrency();
+
   return <span className={className}>{formatCurrency(amount)}</span>;
 };
 
@@ -167,7 +165,7 @@ export default function Expenses() {
     const stableUserId = user?.userId || user?.id;
     if (!stableUserId) return;
 
-    const matchesCurrentUser = (payload: { expense?: { userId?: string }; userId?: string }) => {
+    const matchesCurrentUser = (payload: { expense?: Expense; userId?: string }) => {
       const uid = payload?.expense?.userId ?? payload?.userId;
       return uid != null && String(uid) === String(stableUserId);
     };

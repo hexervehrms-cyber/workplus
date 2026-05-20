@@ -3,6 +3,8 @@
  * Features: Auto reconnect, cleanup, connection state, error handling
  */
 
+/// <reference types="vite/client" />
+
 import { io, Socket } from 'socket.io-client';
 import { TokenManager } from './api';
 
@@ -96,10 +98,6 @@ export class SocketService {
           reconnectionDelay: 1000,
           reconnectionDelayMax: 30_000,
           randomizationFactor: 0.5,
-          reconnectionDelayFn: (attempt) => {
-            const exp = Math.min(1000 * Math.pow(2, attempt - 1), 30_000);
-            return exp + Math.random() * 750;
-          },
           timeout: 20_000,
           auth: {
             token: token || '',

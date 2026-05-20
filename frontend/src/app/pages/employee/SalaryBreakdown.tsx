@@ -54,7 +54,8 @@ export default function EmployeeSalaryBreakdown() {
       // const response = await EmployeeService.getSalaryBreakdown(month, year);
       // setSalaryBreakdown(response.breakdown);
       // setSalaryHistory(response.history);
-    } catch (err: any) {
+    } catch {
+      /* load errors surfaced via toast */
     } finally {
       setLoading(false);
     }

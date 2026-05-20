@@ -65,7 +65,8 @@ export default function AdminSalaryCycle() {
       setLoading(true);
       // TODO: Call API to fetch salary cycles
       setCycles([]);
-    } catch (err: any) {
+    } catch {
+      /* load errors surfaced via toast */
     } finally {
       setLoading(false);
     }

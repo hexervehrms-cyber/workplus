@@ -51,9 +51,9 @@ export default function AttendanceCalendar() {
       const startDate = new Date(year, month - 1, 1).toISOString();
       const endDate = new Date(year, month, 0).toISOString();
       
-      const response = await apiClient.get(`/attendance?startDate=${startDate}&endDate=${endDate}&limit=100`);
+      const response = await apiClient.get<AttendanceRecord[]>(`/attendance?startDate=${startDate}&endDate=${endDate}&limit=100`);
       if (response?.success) {
-        setAttendance(response.data || []);
+        setAttendance(response.data ?? []);
       }
     } catch (error) {
       console.error('Error loading attendance:', error);
@@ -64,9 +64,9 @@ export default function AttendanceCalendar() {
 
   const loadEmployees = async () => {
     try {
-      const response = await apiClient.get('/employees');
+      const response = await apiClient.get<unknown[]>('/employees');
       if (response?.success) {
-        setEmployees(response.data || []);
+        setEmployees(response.data ?? []);
       }
     } catch (error) {
       console.error('Error loading employees:', error);

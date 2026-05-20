@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [
+    "src/app/pages/admin/**/*.ts",
+    "src/app/pages/admin/**/*.tsx",
+    "src/app/pages/employee/**/*.ts",
+    "src/app/pages/employee/**/*.tsx",
+    "src/app/pages/super-admin/**/*.ts",
+    "src/app/pages/super-admin/**/*.tsx",
+    "src/app/components/**/*.ts",
+    "src/app/components/**/*.tsx",
+    "src/app/context/**/*.ts",
+    "src/app/context/**/*.tsx",
+    "src/app/utils/**/*.ts",
+    "src/app/utils/**/*.tsx",
+    "src/app/App.tsx",
+    "src/app/main.tsx",
+    "src/app/routes/**/*.ts",
+    "src/app/routes/**/*.tsx"
+  ]
+}

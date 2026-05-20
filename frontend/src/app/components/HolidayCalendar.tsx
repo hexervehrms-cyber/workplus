@@ -40,7 +40,7 @@ interface Holiday {
   createdAt: string;
 }
 
-interface HolidayCalendar {
+interface HolidayCalendarRecord {
   id: string;
   name: string;
   year: number;
@@ -60,7 +60,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
   const [showAddHoliday, setShowAddHoliday] = useState(false);
   const [showCalendarPreview, setShowCalendarPreview] = useState(false);
   const [editingHoliday, setEditingHoliday] = useState<Holiday | null>(null);
-  const [calendars, setCalendars] = useState<HolidayCalendar[]>([]);
+  const [calendars, setCalendars] = useState<HolidayCalendarRecord[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [loading, setLoading] = useState(false);
@@ -132,12 +132,12 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         console.log('Calendars loaded:', data);
         // Convert calendar data to calendars format
         if (data.data && data.data.calendar) {
-          const calendarData: HolidayCalendar = {
+          const calendarData: HolidayCalendarRecord = {
             id: `cal_${selectedYear}`,
             name: `Holiday Calendar ${selectedYear}`,
             year: selectedYear,
             organizationId,
-            holidays: data.data.calendar ? Object.values(data.data.calendar).flat() : [],
+            holidays: (data.data.calendar ? Object.values(data.data.calendar).flat() : []) as Holiday[],
             isPublished: true,
             createdBy: 'system',
             createdAt: new Date().toISOString(),
@@ -335,7 +335,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
     try {
       // For now, we'll just create a local calendar object
       // In a real app, you'd save this to the backend
-      const newCalendar: HolidayCalendar = {
+      const newCalendar: HolidayCalendarRecord = {
         id: `cal_${Date.now()}`,
         name: calendarName,
         year: selectedYear,
@@ -382,7 +382,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
     }
   };
 
-  const handleViewCalendar = (calendar: HolidayCalendar) => {
+  const handleViewCalendar = (calendar: HolidayCalendarRecord) => {
     setShowCalendarPreview(true);
     // You can add more logic here to show the specific calendar
   };

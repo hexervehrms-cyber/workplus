@@ -12,7 +12,7 @@ import {
 import { toast } from '../../utils/portalToast';
 import { apiGet, apiPost, apiPut } from '../../utils/apiHelper';
 
-interface PayrollCalculation {
+interface PayrollCalculationRecord {
   _id: string;
   employeeId: {
     _id: string;
@@ -47,7 +47,7 @@ interface Employee {
 }
 
 export default function PayrollCalculation() {
-  const [payrolls, setPayrolls] = useState<PayrollCalculation[]>([]);
+  const [payrolls, setPayrolls] = useState<PayrollCalculationRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);

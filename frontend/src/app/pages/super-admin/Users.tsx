@@ -18,6 +18,17 @@ interface GlobalUser {
   isActive?: boolean;
 }
 
+interface ApiUser {
+  _id: string;
+  name: string;
+  email: string;
+  role: string;
+  organization?: string;
+  isActive?: boolean;
+}
+
+type UsersListResponse = ApiUser[] | { users?: ApiUser[] };
+
 export default function GlobalUsers() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
@@ -43,10 +54,10 @@ export default function GlobalUsers() {
 
   const loadUsers = async () => {
     try {
-      const response = await apiClient.get('/api/users');
+      const response = await apiClient.get<UsersListResponse>('/api/users');
       if (response.success && response.data) {
-        const userList = Array.isArray(response.data) ? response.data : response.data.users || [];
-        const formattedUsers = userList.map((user: any) => ({
+        const userList = Array.isArray(response.data) ? response.data : response.data.users ?? [];
+        const formattedUsers = userList.map((user) => ({
           _id: user._id,
           name: user.name,
           email: user.email,
@@ -90,7 +101,7 @@ export default function GlobalUsers() {
     setError(null);
 
     try {
-      const response = await apiClient.post('/api/users', {
+      const response = await apiClient.post<ApiUser>('/api/users', {
         name: formData.name,
         email: formData.email,
         password: formData.password,
@@ -99,7 +110,7 @@ export default function GlobalUsers() {
         isActive: true
       });
 
-      if (response.success) {
+      if (response.success && response.data) {
         const userData = response.data;
         const newUser: GlobalUser = {
           _id: userData._id,
@@ -191,9 +202,9 @@ export default function GlobalUsers() {
         updateData.password = formData.password;
       }
 
-      const response = await apiClient.put(`/api/users/${editingUser._id}`, updateData);
+      const response = await apiClient.put<ApiUser>(`/api/users/${editingUser._id}`, updateData);
 
-      if (response.success) {
+      if (response.success && response.data) {
         const updatedData = response.data;
         setUsers(users.map(user => 
           user._id === editingUser._id 

@@ -62,6 +62,107 @@ type BreakRow = {
   status: 'active' | 'ended';
 };
 
+type DashboardStats = {
+  totalEmployees: number;
+  avgProductivity: number;
+  thisMonthExpenses: number;
+  thisMonthPayroll: number;
+  totalCost: number;
+  loggedInEmployees: number;
+  onLeave: number;
+};
+
+type QuickStats = {
+  totalEmployees: number;
+  presentToday: number;
+  attendanceRate: number;
+  pendingLeaves: number;
+  pendingExpenses: number;
+  activeUsers: number;
+  onLeave: number;
+  onBreak: number;
+  totalSales: number;
+  totalLoss: number;
+  totalBonus: number;
+  totalIncentive: number;
+};
+
+type ExpenseTrendRow = { month: string; amount: number };
+
+type LeaveRequestRow = {
+  _id?: string;
+  id?: string;
+  employeeName?: string;
+  employeeEmail?: string;
+  department?: string;
+  type?: string;
+  leaveType?: string;
+  startDate: string;
+  endDate: string;
+  reason?: string;
+  status: string;
+  createdAt?: string;
+  userId?: { name?: string };
+};
+
+type AttendanceRow = {
+  _id?: string;
+  employeeName: string;
+  department?: string;
+  employeeId?: { department?: string };
+  checkIn?: string;
+  hoursWorked?: number;
+  breaks?: Array<{ startTime?: string; endTime?: string | null; breakType?: string }>;
+};
+
+type EmployeeOnBreakRow = {
+  employeeId?: string;
+  employeeName: string;
+  department?: string;
+  designation?: string;
+  breakType?: string;
+  breakStartTime?: string;
+  breakDuration?: number;
+};
+
+type EditingLeave = {
+  id: string;
+  type: string;
+  startDate: string;
+  endDate: string;
+  reason: string;
+  employeeName: string;
+};
+
+const defaultDashboardStats: DashboardStats = {
+  totalEmployees: 0,
+  avgProductivity: 0,
+  thisMonthExpenses: 0,
+  thisMonthPayroll: 0,
+  totalCost: 0,
+  loggedInEmployees: 0,
+  onLeave: 0,
+};
+
+const defaultQuickStats: QuickStats = {
+  totalEmployees: 0,
+  presentToday: 0,
+  attendanceRate: 0,
+  pendingLeaves: 0,
+  pendingExpenses: 0,
+  activeUsers: 0,
+  onLeave: 0,
+  onBreak: 0,
+  totalSales: 0,
+  totalLoss: 0,
+  totalBonus: 0,
+  totalIncentive: 0,
+};
+
+function getErrorMessage(err: unknown, fallback: string) {
+  return err instanceof Error ? err.message : fallback;
+}
+
 function formatTime(value?: string | null) {
   if (!value) return '—';
   return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -98,38 +199,18 @@ export default function AdminDashboard() {
   const [filterType, setFilterType] = useState('month');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
-  const [dashboardStats, setDashboardStats] = useState({
-    totalEmployees: 0,
-    avgProductivity: 0,
-    thisMonthExpenses: 0,
-    thisMonthPayroll: 0,
-    totalCost: 0,
-    loggedInEmployees: 0,
-    onLeave: 0
-  });
-  const [quickStats, setQuickStats] = useState({
-    totalEmployees: 0,
-    presentToday: 0,
-    attendanceRate: 0,
-    pendingLeaves: 0,
-    pendingExpenses: 0,
-    activeUsers: 0,
-    onBreak: 0,
-    totalSales: 0,
-    totalLoss: 0,
-    totalBonus: 0,
-    totalIncentive: 0
-  });
-  const [expenseData, setExpenseData] = useState([]);
-  const [leaveRequests, setLeaveRequests] = useState([]);
-  const [todaysAttendance, setTodaysAttendance] = useState([]);
-  const [employeesOnBreak, setEmployeesOnBreak] = useState([]);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats>(defaultDashboardStats);
+  const [quickStats, setQuickStats] = useState<QuickStats>(defaultQuickStats);
+  const [expenseData, setExpenseData] = useState<ExpenseTrendRow[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequestRow[]>([]);
+  const [todaysAttendance, setTodaysAttendance] = useState<AttendanceRow[]>([]);
+  const [employeesOnBreak, setEmployeesOnBreak] = useState<EmployeeOnBreakRow[]>([]);
   const [todayBreakLog, setTodayBreakLog] = useState<BreakRow[]>([]);
   const [lastUpdate, setLastUpdate] = useState(Date.now()); // Force re-render timestamp
   
   // Edit leave modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editingLeave, setEditingLeave] = useState(null);
+  const [editingLeave, setEditingLeave] = useState<EditingLeave | null>(null);
 
   const refreshDashboardData = useCallback(async () => {
     const params = new URLSearchParams();
@@ -144,13 +225,13 @@ export default function AdminDashboard() {
     // Fetch all data in parallel using Promise.allSettled for resilience
     const [statsResponse, quickStatsResponse, expenseTrendsResponse, leaveResponse, attendanceResponse, onBreakResponse, todayBreaksResponse] =
       await Promise.allSettled([
-        apiClient.get(`/dashboard/stats?${params.toString()}`),
-        apiClient.get(`/dashboard/quick-stats?${params.toString()}&_t=${Date.now()}`),
-        apiClient.get('/dashboard/expense-trends'),
-        apiClient.get('/dashboard/recent-leave-requests'),
-        apiClient.get('/dashboard/todays-attendance'),
-        apiClient.get(`/attendance/on-break?_t=${Date.now()}`),
-        apiClient.get(`/attendance/today-breaks?_t=${Date.now()}`)
+        apiClient.get<DashboardStats>(`/dashboard/stats?${params.toString()}`),
+        apiClient.get<QuickStats>(`/dashboard/quick-stats?${params.toString()}&_t=${Date.now()}`),
+        apiClient.get<ExpenseTrendRow[]>('/dashboard/expense-trends'),
+        apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests'),
+        apiClient.get<AttendanceRow[]>('/dashboard/todays-attendance'),
+        apiClient.get<EmployeeOnBreakRow[]>(`/attendance/on-break?_t=${Date.now()}`),
+        apiClient.get<BreakRow[]>(`/attendance/today-breaks?_t=${Date.now()}`)
       ]);
 
     console.log('✅ [ADMIN-DASHBOARD] All requests completed');
@@ -159,26 +240,26 @@ export default function AdminDashboard() {
 
     // Process results with fallbacks
     if (statsResponse.status === 'fulfilled' && statsResponse.value.success) {
-      setDashboardStats(statsResponse.value.data || {});
+      setDashboardStats(statsResponse.value.data ?? defaultDashboardStats);
     }
-    if (quickStatsResponse.status === 'fulfilled' && quickStatsResponse.value.success && quickStatsResponse.value.data) {
-      setQuickStats(quickStatsResponse.value.data);
+    if (quickStatsResponse.status === 'fulfilled' && quickStatsResponse.value.success) {
+      setQuickStats(quickStatsResponse.value.data ?? defaultQuickStats);
       setLastUpdate(Date.now());
     }
     if (expenseTrendsResponse.status === 'fulfilled' && expenseTrendsResponse.value.success) {
-      setExpenseData(expenseTrendsResponse.value.data || []);
+      setExpenseData(expenseTrendsResponse.value.data ?? []);
     }
-    if (leaveResponse.status === 'fulfilled' && leaveResponse.value.success && leaveResponse.value.data) {
-      setLeaveRequests(leaveResponse.value.data || []);
+    if (leaveResponse.status === 'fulfilled' && leaveResponse.value.success) {
+      setLeaveRequests(leaveResponse.value.data ?? []);
     }
-    if (attendanceResponse.status === 'fulfilled' && attendanceResponse.value.success && attendanceResponse.value.data) {
-      setTodaysAttendance(attendanceResponse.value.data || []);
+    if (attendanceResponse.status === 'fulfilled' && attendanceResponse.value.success) {
+      setTodaysAttendance(attendanceResponse.value.data ?? []);
     }
     if (onBreakResponse.status === 'fulfilled' && onBreakResponse.value.success) {
-      setEmployeesOnBreak(onBreakResponse.value.data || []);
+      setEmployeesOnBreak(onBreakResponse.value.data ?? []);
     }
     if (todayBreaksResponse.status === 'fulfilled' && todayBreaksResponse.value.success) {
-      setTodayBreakLog(todayBreaksResponse.value.data || []);
+      setTodayBreakLog(todayBreaksResponse.value.data ?? []);
     }
   }, [filterType, customStartDate, customEndDate, mounted]);
 
@@ -208,19 +289,19 @@ export default function AdminDashboard() {
   const refreshBreakSections = useCallback(async () => {
     try {
       const [onBreakResponse, todayBreaksResponse, attendanceResponse] = await Promise.all([
-        apiClient.get(`/attendance/on-break?_t=${Date.now()}`),
-        apiClient.get(`/attendance/today-breaks?_t=${Date.now()}`),
-        apiClient.get('/dashboard/todays-attendance'),
+        apiClient.get<EmployeeOnBreakRow[]>(`/attendance/on-break?_t=${Date.now()}`),
+        apiClient.get<BreakRow[]>(`/attendance/today-breaks?_t=${Date.now()}`),
+        apiClient.get<AttendanceRow[]>('/dashboard/todays-attendance'),
       ]);
       if (!mounted.current) return;
       if (onBreakResponse.success) {
-        setEmployeesOnBreak(onBreakResponse.data || []);
+        setEmployeesOnBreak(onBreakResponse.data ?? []);
       }
       if (todayBreaksResponse.success) {
-        setTodayBreakLog(todayBreaksResponse.data || []);
+        setTodayBreakLog(todayBreaksResponse.data ?? []);
       }
-      if (attendanceResponse.success && attendanceResponse.data) {
-        setTodaysAttendance(attendanceResponse.data || []);
+      if (attendanceResponse.success) {
+        setTodaysAttendance(attendanceResponse.data ?? []);
       }
       setLastUpdate(Date.now());
     } catch (error) {
@@ -269,10 +350,11 @@ export default function AdminDashboard() {
   const refreshEmployeesOnBreak = useCallback(async () => {
     try {
       console.log('☕ [REFRESH] Fetching employees on break...');
-      const response = await apiClient.get('/attendance/on-break');
+      const response = await apiClient.get<EmployeeOnBreakRow[]>('/attendance/on-break');
       if (response.success) {
-        setEmployeesOnBreak(response.data || []);
-        console.log('☕ [REFRESH] Employees on break updated:', response.data?.length || 0);
+        const rows = response.data ?? [];
+        setEmployeesOnBreak(rows);
+        console.log('☕ [REFRESH] Employees on break updated:', rows.length);
       }
     } catch (error) {
       console.error('Error refreshing employees on break:', error);
@@ -368,9 +450,9 @@ export default function AdminDashboard() {
     };
 
     // Subscribe to real-time events using the correct methods
-    const unsubscribeEmployee = realTimeSocket.onEmployeeUpdate((type, employee) => {
+    const unsubscribeEmployee = realTimeSocket.onEmployeeUpdate((type) => {
       if (type === 'created') {
-        handleEmployeeCreated(employee);
+        handleEmployeeCreated();
       }
     });
 
@@ -423,7 +505,7 @@ export default function AdminDashboard() {
     return () => clearInterval(timer);
   }, [employeesOnBreak.length]);
 
-  const handleApproveLeave = async (requestId) => {
+  const handleApproveLeave = async (requestId: string) => {
     try {
       console.log('✅ Approving leave request:', requestId);
       
@@ -441,20 +523,20 @@ export default function AdminDashboard() {
       if (response.success) {
         console.log('✅ Leave request approved successfully');
         // Refresh leave requests
-        const leaveResponse = await apiClient.get('/dashboard/recent-leave-requests');
-        if (leaveResponse.success && leaveResponse.data) {
-          setLeaveRequests(leaveResponse.data || []);
+        const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
+        if (leaveResponse.success) {
+          setLeaveRequests(leaveResponse.data ?? []);
         }
         alert('Leave request approved successfully');
       }
     } catch (error) {
       console.error('❌ Error approving leave:', error);
-      alert(`Failed to approve leave request: ${error.message || 'Unknown error'}`);
+      alert(`Failed to approve leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
   // Handle leave request rejection
-  const handleRejectLeave = async (requestId) => {
+  const handleRejectLeave = async (requestId: string) => {
     const reason = window.prompt('Enter rejection reason:', 'Rejected by admin');
     if (!reason) {
       return; // User cancelled
@@ -478,20 +560,20 @@ export default function AdminDashboard() {
       if (response.success) {
         console.log('✅ Leave request rejected successfully');
         // Refresh leave requests
-        const leaveResponse = await apiClient.get('/dashboard/recent-leave-requests');
-        if (leaveResponse.success && leaveResponse.data) {
-          setLeaveRequests(leaveResponse.data || []);
+        const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
+        if (leaveResponse.success) {
+          setLeaveRequests(leaveResponse.data ?? []);
         }
         alert('Leave request rejected successfully');
       }
     } catch (error) {
       console.error('❌ Error rejecting leave:', error);
-      alert(`Failed to reject leave request: ${error.message || 'Unknown error'}`);
+      alert(`Failed to reject leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
   // Handle leave request deletion
-  const handleDeleteLeave = async (requestId) => {
+  const handleDeleteLeave = async (requestId: string) => {
     if (!window.confirm('Are you sure you want to delete this leave request? This action cannot be undone.')) {
       return;
     }
@@ -504,28 +586,29 @@ export default function AdminDashboard() {
       if (response.success) {
         console.log('✅ Leave request deleted successfully');
         // Refresh leave requests
-        const leaveResponse = await apiClient.get('/dashboard/recent-leave-requests');
-        if (leaveResponse.success && leaveResponse.data) {
-          setLeaveRequests(leaveResponse.data || []);
+        const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
+        if (leaveResponse.success) {
+          setLeaveRequests(leaveResponse.data ?? []);
         }
         alert('Leave request deleted successfully');
       }
     } catch (error) {
       console.error('❌ Error deleting leave:', error);
-      alert(`Failed to delete leave request: ${error.message || 'Unknown error'}`);
+      alert(`Failed to delete leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
   // Handle leave request edit (open modal with leave data)
-  const handleEditLeave = (request) => {
+  const handleEditLeave = (request: LeaveRequestRow) => {
     console.log('✏️ Opening edit modal for leave:', request);
+    const requestId = request._id || request.id || '';
     setEditingLeave({
-      id: request._id,
-      type: request.type,
+      id: requestId,
+      type: request.type || request.leaveType || 'casual',
       startDate: new Date(request.startDate).toISOString().split('T')[0],
       endDate: new Date(request.endDate).toISOString().split('T')[0],
       reason: request.reason || '',
-      employeeName: request.employeeName
+      employeeName: request.employeeName || request.userId?.name || 'Unknown'
     });
     setEditModalOpen(true);
   };
@@ -544,26 +627,26 @@ export default function AdminDashboard() {
       });
       console.log('💾 Save response:', response);
       
-      if (response.success || response.data?.success) {
+      if (response.success) {
         console.log('✅ Leave request updated successfully');
         setEditModalOpen(false);
         setEditingLeave(null);
         
         // Refresh leave requests
-        const leaveResponse = await apiClient.get('/dashboard/recent-leave-requests');
-        if (leaveResponse.success && leaveResponse.data) {
-          setLeaveRequests(leaveResponse.data || []);
+        const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
+        if (leaveResponse.success) {
+          setLeaveRequests(leaveResponse.data ?? []);
         }
         alert('Leave request updated successfully');
       }
     } catch (error) {
       console.error('❌ Error updating leave:', error);
-      alert(`Failed to update leave request: ${error.message || 'Unknown error'}`);
+      alert(`Failed to update leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
   // Handle leave request download (generate PDF)
-  const handleDownloadLeave = async (request) => {
+  const handleDownloadLeave = async (request: LeaveRequestRow) => {
     try {
       console.log('📥 Downloading leave request:', request);
       
@@ -574,11 +657,11 @@ export default function AdminDashboard() {
 LEAVE REQUEST DETAILS
 =====================
 
-Employee: ${request.employeeName}
+Employee: ${request.employeeName || request.userId?.name || 'Unknown'}
 Email: ${request.employeeEmail || 'N/A'}
 Department: ${request.department}
 
-Leave Type: ${request.type}
+Leave Type: ${request.type || request.leaveType || 'N/A'}
 Start Date: ${new Date(request.startDate).toLocaleDateString()}
 End Date: ${new Date(request.endDate).toLocaleDateString()}
 Duration: ${days} days
@@ -586,7 +669,7 @@ Duration: ${days} days
 Reason: ${request.reason || 'N/A'}
 Status: ${request.status}
 
-Applied On: ${new Date(request.createdAt).toLocaleString()}
+Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() : 'N/A'}
       `.trim();
       
       // Create blob and download
@@ -594,7 +677,8 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `leave-request-${request.employeeName.replace(/\s+/g, '-')}-${Date.now()}.txt`;
+      const nameSlug = (request.employeeName || request.userId?.name || 'employee').replace(/\s+/g, '-');
+      a.download = `leave-request-${nameSlug}-${Date.now()}.txt`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -603,7 +687,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
       console.log('✅ Leave request downloaded successfully');
     } catch (error) {
       console.error('❌ Error downloading leave:', error);
-      alert(`Failed to download leave request: ${error.message || 'Unknown error'}`);
+      alert(`Failed to download leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
@@ -868,13 +952,13 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
                 </TableCell>
               </TableRow>
             ) : (
-              leaveRequests.map((request: any) => {
-                const requestId = request._id || request.id;
+              leaveRequests.map((request) => {
+                const requestId = request._id || request.id || '';
                 const employeeName = request.userId?.name || request.employeeName || 'Unknown';
                 const leaveType = request.type || request.leaveType || 'N/A';
                 const days = Math.ceil((new Date(request.endDate).getTime() - new Date(request.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
                 return (
-                  <TableRow key={requestId}>
+                  <TableRow key={requestId || `${employeeName}-${request.startDate}`}>
                     <TableCell className="font-medium">{employeeName}</TableCell>
                     <TableCell>{leaveType}</TableCell>
                     <TableCell>{new Date(request.startDate).toLocaleDateString()}</TableCell>
@@ -887,7 +971,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-2 flex-wrap">
-                        {request.status === 'pending' && (
+                        {request.status === 'pending' && requestId && (
                           <>
                             <Button 
                               variant="default" 
@@ -925,6 +1009,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
                         >
                           <Download className="w-4 h-4" />
                         </Button>
+                        {requestId && (
                         <Button 
                           variant="outline" 
                           size="sm"
@@ -934,6 +1019,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -970,7 +1056,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
                 </TableCell>
               </TableRow>
             ) : (
-              todaysAttendance.map((attendance: any) => {
+              todaysAttendance.map((attendance) => {
                 const breakInfo = summarizeAttendanceBreaks(attendance.breaks);
                 const rowKey = attendance._id || `${attendance.employeeName}-${attendance.checkIn}`;
                 return (
@@ -990,7 +1076,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {attendance.hoursWorked > 0 ? `${attendance.hoursWorked}h` : '—'}
+                      {(attendance.hoursWorked ?? 0) > 0 ? `${attendance.hoursWorked}h` : '—'}
                     </TableCell>
                   </TableRow>
                 );
@@ -1072,7 +1158,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
                 <p>No employees on break</p>
               </div>
             ) : (
-              employeesOnBreak.map((employee: any) => {
+              employeesOnBreak.map((employee) => {
                 const rowKey = String(employee.employeeId || employee.employeeName);
                 const liveMinutes = employee.breakStartTime
                   ? breakMinutesSince(employee.breakStartTime)

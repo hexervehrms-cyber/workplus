@@ -40,9 +40,7 @@ jobs:
         env:
           VITE_API_URL: https://example.com
       - run: npm run typecheck
-        continue-on-error: true
-      - run: npm run lint
-        continue-on-error: true
+      - run: npm run lint:ci
 
   docker:
     runs-on: ubuntu-latest

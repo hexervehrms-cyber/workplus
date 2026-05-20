@@ -48,6 +48,14 @@ interface AttendanceRecord {
   }>;
 }
 
+interface ActivityLogsResponse {
+  success: boolean;
+  data?: ActivityLog[];
+  total?: number;
+  hasMore?: boolean;
+  message?: string;
+}
+
 interface ActivityLog {
   _id: string;
   userId: string;
@@ -145,9 +153,9 @@ export default function AttendanceAdmin() {
     try {
       setLoading(true);
       await ensureAccessToken();
-      const response = await apiClient.get(`/dashboard/todays-attendance?t=${Date.now()}`);
+      const response = await apiClient.get<AttendanceRecord[]>(`/dashboard/todays-attendance?t=${Date.now()}`);
       if (response?.success) {
-        const records = response.data || [];
+        const records = response.data ?? [];
         setAttendance(records);
         const present = records.filter((r: AttendanceRecord) => r.status === 'present').length;
         const late = records.filter((r: AttendanceRecord) => r.status === 'late').length;
@@ -192,9 +200,9 @@ export default function AttendanceAdmin() {
         params.endDate = today;
       }
       const qs = new URLSearchParams(params).toString();
-      const response = await apiClient.get(`/attendance/activity-logs?${qs}`);
+      const response = await apiClient.get<ActivityLog[]>(`/attendance/activity-logs?${qs}`) as ActivityLogsResponse;
       if (response?.success) {
-        const rows = (response.data || []) as ActivityLog[];
+        const rows = response.data ?? [];
         setActivityLogs((prev) => (append ? [...prev, ...rows] : rows));
         setActivityLogTotal(Number(response.total) || rows.length);
         setActivityLogsHasMore(Boolean(response.hasMore));
@@ -332,7 +340,7 @@ export default function AttendanceAdmin() {
       if (data.data.errors && data.data.errors.length > 0) {
         console.log('Import errors:', data.data.errors);
         // Show first few errors
-        const errorMessages = data.data.errors.slice(0, 3).map(e => `Row ${e.row}: ${e.error}`).join('\n');
+        const errorMessages = data.data.errors.slice(0, 3).map((e: { row: number; error: string }) => `Row ${e.row}: ${e.error}`).join('\n');
         toast.error(`Some records failed:\n${errorMessages}`);
       }
       
@@ -353,9 +361,9 @@ export default function AttendanceAdmin() {
   const fetchLateEmployees = async () => {
     try {
       setLateEmployeesLoading(true);
-      const response = await apiClient.get('/attendance/late-today');
+      const response = await apiClient.get<unknown[]>('/attendance/late-today');
       if (response?.success) {
-        setLateEmployees(response.data || []);
+        setLateEmployees(response.data ?? []);
       }
     } catch (error) {
       console.error('Error fetching late employees:', error);

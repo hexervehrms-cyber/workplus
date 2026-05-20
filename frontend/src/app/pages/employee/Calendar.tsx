@@ -308,8 +308,8 @@ export default function Calendar() {
         
         const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
         if (updatedLeaves.success && updatedLeaves.data) {
-          const raw = updatedLeaves.data as { data?: unknown[] } | unknown[];
-          setLeaveHistory(Array.isArray(raw) ? raw : raw.data || []);
+          const raw = updatedLeaves.data as LeaveRequest[] | { data?: LeaveRequest[] };
+          setLeaveHistory(Array.isArray(raw) ? raw : raw.data ?? []);
         }
       } else {
         toast.error(response.message || 'Failed to submit leave request');

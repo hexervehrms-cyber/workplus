@@ -163,7 +163,7 @@ export default function Leave() {
         }
 
         try {
-          const enabledTypesResponse = await LeaveTypeSettingsService.getEnabledLeaveTypes(orgId);
+          const enabledTypesResponse = await LeaveTypeSettingsService.getEnabledLeaveTypes(orgId ?? 'system');
           if (enabledTypesResponse.success && enabledTypesResponse.data) {
             setEnabledLeaveTypes(enabledTypesResponse.data.settings);
             setBalanceKpiVisibility(enabledTypesResponse.data.balanceKpiVisibility ?? null);
@@ -364,7 +364,7 @@ export default function Leave() {
 
       // For new requests, check if there's enough balance
       // For editing, skip the balance check since leaves are already deducted
-      const remaining = balance?.remaining ?? balance?.available ?? 0;
+      const remaining = balance?.remaining ?? 0;
       if (!editingLeaveId && (!balance || remaining < days)) {
         toast.error(`Insufficient ${formData.type} balance. Available: ${remaining} days, Requested: ${days.toFixed(2)} days`);
         return;
@@ -694,6 +694,7 @@ Reason: ${leave.reason}
                     variant="destructive"
                     className="rounded-lg flex-1 text-xs sm:text-sm"
                     onClick={async () => {
+                      if (!user?.id) return;
                       if (confirm('Are you sure you want to delete this leave request?')) {
                         try {
                           // Calculate days to restore

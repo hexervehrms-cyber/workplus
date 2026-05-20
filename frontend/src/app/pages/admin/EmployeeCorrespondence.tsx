@@ -31,6 +31,9 @@ import { apiGet, apiPut, apiPost, buildFileUrl, getBearerToken } from '../../uti
 
 interface Employee {
   _id: string;
+  name?: string;
+  email?: string;
+  isActive?: boolean;
   userId: {
     _id: string;
     name: string;
@@ -239,8 +242,7 @@ export default function EmployeeCorrespondence() {
         setSelectedFile(null);
         fetchDocuments();
       } else {
-        const error = await response.json();
-        toast.error(error.message || 'Failed to issue document');
+        toast.error(data.message || 'Failed to issue document');
       }
     } catch (error) {
       console.error('Error issuing document:', error);
@@ -343,9 +345,9 @@ export default function EmployeeCorrespondence() {
           <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
             <span className="text-xl font-medium text-primary">
               {employee.userId?.name ? 
-                employee.userId.name.split(' ').map(n => n[0]).join('').toUpperCase() :
+                employee.userId.name.split(' ').map((n: string) => n[0]).join('').toUpperCase() :
                 employee.name ? 
-                employee.name.split(' ').map(n => n[0]).join('').toUpperCase() :
+                employee.name.split(' ').map((n: string) => n[0]).join('').toUpperCase() :
                 'N/A'
               }
             </span>

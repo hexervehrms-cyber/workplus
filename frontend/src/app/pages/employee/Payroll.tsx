@@ -260,7 +260,7 @@ export default function Payroll() {
                     ['Incentives', viewingSlip.earnings?.incentives],
                     ['Bonus', viewingSlip.earnings?.bonus],
                   ]
-                    .filter(([, v]) => (v ?? 0) > 0)
+                    .filter(([, v]) => Number(v ?? 0) > 0)
                     .map(([label, amount]) => (
                       <div key={String(label)} className="flex justify-between px-4 py-2 border-b border-border">
                         <span className="text-muted-foreground">{label}</span>
@@ -280,7 +280,7 @@ export default function Payroll() {
                     ['Professional tax', viewingSlip.deductions?.professionalTax],
                     ['Income tax', viewingSlip.deductions?.incomeTax],
                   ]
-                    .filter(([, v]) => (v ?? 0) > 0)
+                    .filter(([, v]) => Number(v ?? 0) > 0)
                     .map(([label, amount]) => (
                       <div key={String(label)} className="flex justify-between px-4 py-2 border-b border-border">
                         <span className="text-muted-foreground">{label}</span>

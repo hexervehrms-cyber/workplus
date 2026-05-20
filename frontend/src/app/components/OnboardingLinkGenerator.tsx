@@ -61,7 +61,7 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
 try {
       setLoading(true);
 
-      const data = await apiClient.post('/onboarding/generate-link', formData);
+      const data = await apiClient.post<GeneratedLink>('/onboarding/generate-link', formData);
 
       if (!data?.success) {
         throw new Error(data?.message || 'Failed to generate onboarding link');

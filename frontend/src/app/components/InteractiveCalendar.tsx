@@ -77,7 +77,7 @@ export default function InteractiveCalendar() {
         }
 
         // Fetch holidays
-        const holidayRes = await apiGetSafe<{ success?: boolean; data?: unknown[] }>('/holidays');
+        const holidayRes = await apiGetSafe<{ success?: boolean; data?: Holiday[] }>('/holidays');
         if (holidayRes.ok && holidayRes.data?.success && Array.isArray(holidayRes.data.data)) {
           setHolidays(holidayRes.data.data);
         }
@@ -96,7 +96,7 @@ export default function InteractiveCalendar() {
   useEffect(() => {
     const refreshHolidays = async () => {
       try {
-        const holidayRes = await apiGetSafe<{ success?: boolean; data?: unknown[] }>('/holidays');
+        const holidayRes = await apiGetSafe<{ success?: boolean; data?: Holiday[] }>('/holidays');
         if (holidayRes.ok && holidayRes.data?.success && Array.isArray(holidayRes.data.data)) {
           setHolidays(holidayRes.data.data);
         }
@@ -275,8 +275,8 @@ export default function InteractiveCalendar() {
         
         const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
         if (updatedLeaves.success && updatedLeaves.data) {
-          const raw = updatedLeaves.data as { data?: unknown[] } | unknown[];
-          setLeaveHistory(Array.isArray(raw) ? raw : raw.data || []);
+          const raw = updatedLeaves.data as LeaveRequest[] | { data?: LeaveRequest[] };
+          setLeaveHistory(Array.isArray(raw) ? raw : raw.data ?? []);
         }
       } else {
         toast.error(response.message || 'Failed to submit leave request');
@@ -412,7 +412,7 @@ export default function InteractiveCalendar() {
                         </>
                       ) : leave ? (
                         <>
-                          <div className="font-medium">{leaveStatus?.charAt(0).toUpperCase() + leaveStatus?.slice(1)} Leave</div>
+                          <div className="font-medium">{(leaveStatus?.charAt(0) ?? '').toUpperCase() + (leaveStatus?.slice(1) ?? '')} Leave</div>
                           <div className="text-gray-300">Click for details</div>
                         </>
                       ) : null}
@@ -589,7 +589,7 @@ export default function InteractiveCalendar() {
                 className="flex-1 rounded-xl border-foreground/20 hover:bg-muted/50 transition-all duration-200" 
                 onClick={() => {
                   setShowLeaveForm(false);
-                  setFormData({ type: '', startDate: '', endDate: '', reason: '' });
+                  setFormData({ type: '', startDate: '', endDate: '', startTime: '09:00', endTime: '10:00', isHourlyLeave: false, reason: '' });
                 }}
               >
                 Cancel

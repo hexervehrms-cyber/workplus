@@ -11,6 +11,7 @@ import {
   apiPost,
   buildFileUrl,
   fetchReceiptObjectUrl,
+  getBearerToken,
 } from '../../utils/apiHelper';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
@@ -78,9 +79,8 @@ const expenseCategories = [
 
 // Currency amount display component with INR icon
 const CurrencyAmount: React.FC<{ amount: number; className?: string }> = ({ amount, className }) => {
-  const { selectedCurrency } = useCurrency();
-  
-  // For INR, just format without conversion since amounts are already in INR
+  const { selectedCurrency, formatCurrency } = useCurrency();
+
   if (selectedCurrency.code === 'INR') {
     return (
       <div className={`flex items-center gap-1 ${className || ''}`}>
@@ -89,9 +89,7 @@ const CurrencyAmount: React.FC<{ amount: number; className?: string }> = ({ amou
       </div>
     );
   }
-  
-  // For other currencies, use the currency context
-  const { formatCurrency } = useCurrency();
+
   return <span className={className}>{formatCurrency(amount)}</span>;
 };
 

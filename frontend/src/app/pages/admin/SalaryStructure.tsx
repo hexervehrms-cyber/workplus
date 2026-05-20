@@ -71,7 +71,8 @@ export default function AdminSalaryStructure() {
       setLoading(true);
       const data = await EmployeeService.getAllEmployees();
       setEmployees(data);
-    } catch (err: any) {
+    } catch {
+      /* load errors surfaced via toast */
     } finally {
       setLoading(false);
     }

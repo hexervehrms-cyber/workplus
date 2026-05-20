@@ -16,6 +16,20 @@ interface AdminData {
   role: string;
 }
 
+interface NotificationIntegrationsPayload {
+  integrations?: {
+    smtp?: Record<string, unknown> & { passConfigured?: boolean };
+    teams?: { enabled?: boolean; webhookConfigured?: boolean };
+  };
+  notificationRouting?: {
+    notifyAdminsOnLeaveSubmit?: boolean;
+    notifyAdminsOnExpenseSubmit?: boolean;
+    notifyEmployeeOnLeaveDecision?: boolean;
+    notifyEmployeeOnExpenseDecision?: boolean;
+    adminRoles?: string[];
+  };
+}
+
 export default function AdminSettings() {
   const { user } = useAuth();
   const [admin, setAdmin] = useState<AdminData | null>(null);
@@ -95,31 +109,33 @@ export default function AdminSettings() {
       if (!canManageOrgNotifications || !user?.id) return;
       try {
         setNotifLoading(true);
-        const res = await apiClient.get('/admin/notification-integrations');
-        if (res.data?.success && res.data.data) {
-          const d = res.data.data;
-          if (d.integrations) {
+        const res = await apiClient.get<NotificationIntegrationsPayload>('/admin/notification-integrations');
+        if (res.success && res.data) {
+          const d = res.data;
+          const loadedIntegrations = d.integrations;
+          if (loadedIntegrations) {
             setIntegrations((prev) => ({
               ...prev,
               smtp: {
                 ...prev.smtp,
-                ...(d.integrations.smtp || {}),
+                ...(loadedIntegrations.smtp || {}),
                 pass: ''
               },
               teams: {
-                enabled: !!d.integrations.teams?.enabled,
+                enabled: !!loadedIntegrations.teams?.enabled,
                 webhookUrl: ''
               }
             }));
-            setSmtpPassConfigured(!!d.integrations.smtp?.passConfigured);
-            setTeamsWebhookConfigured(!!d.integrations.teams?.webhookConfigured);
+            setSmtpPassConfigured(!!loadedIntegrations.smtp?.passConfigured);
+            setTeamsWebhookConfigured(!!loadedIntegrations.teams?.webhookConfigured);
           }
-          if (d.notificationRouting) {
+          const loadedRouting = d.notificationRouting;
+          if (loadedRouting) {
             setNotificationRouting((prev) => ({
               ...prev,
-              ...d.notificationRouting,
-              adminRoles: d.notificationRouting.adminRoles?.length
-                ? d.notificationRouting.adminRoles
+              ...loadedRouting,
+              adminRoles: loadedRouting.adminRoles?.length
+                ? loadedRouting.adminRoles
                 : prev.adminRoles
             }));
           }
@@ -144,12 +160,12 @@ export default function AdminSettings() {
     try {
       setSaving(true);
 
-      const response = await apiClient.put(`/users/${admin?._id}`, {
+      const response = await apiClient.put<unknown>(`/users/${admin?._id}`, {
         name: editedAdmin.name,
         email: editedAdmin.email
       });
 
-      if (response.data?.success) {
+      if (response.success) {
         setAdmin(editedAdmin);
         setIsEditingInfo(false);
         toast.success('Admin information updated successfully');
@@ -180,7 +196,7 @@ export default function AdminSettings() {
       if (integrations.smtp.pass.trim()) {
         smtpPayload.pass = integrations.smtp.pass.trim();
       }
-      const res = await apiClient.patch('/admin/notification-integrations', {
+      const res = await apiClient.patch<NotificationIntegrationsPayload>('/admin/notification-integrations', {
         integrations: {
           smtp: smtpPayload,
           teams: {
@@ -190,17 +206,17 @@ export default function AdminSettings() {
         },
         notificationRouting
       });
-      if (res.data?.success) {
+      if (res.success) {
         toast.success('Notification settings saved');
         setIntegrations((p) => ({ ...p, smtp: { ...p.smtp, pass: '' } }));
-        if (res.data.data?.integrations?.smtp?.passConfigured !== undefined) {
-          setSmtpPassConfigured(!!res.data.data.integrations.smtp.passConfigured);
+        if (res.data?.integrations?.smtp?.passConfigured !== undefined) {
+          setSmtpPassConfigured(!!res.data.integrations.smtp.passConfigured);
         }
-        if (res.data.data?.integrations?.teams?.webhookConfigured !== undefined) {
-          setTeamsWebhookConfigured(!!res.data.data.integrations.teams.webhookConfigured);
+        if (res.data?.integrations?.teams?.webhookConfigured !== undefined) {
+          setTeamsWebhookConfigured(!!res.data.integrations.teams.webhookConfigured);
         }
       } else {
-        toast.error(res.data?.message || 'Save failed');
+        toast.error(res.message || 'Save failed');
       }
     } catch (err: any) {
       toast.error(err.response?.data?.message || 'Failed to save notification settings');
@@ -230,12 +246,12 @@ export default function AdminSettings() {
 
     try {
       setSaving(true);
-      const response = await apiClient.post('/auth/reset-password', {
+      const response = await apiClient.post<unknown>('/auth/reset-password', {
         currentPassword: passwordData.currentPassword,
         newPassword: passwordData.newPassword
       });
 
-      if (response.data?.success) {
+      if (response.success) {
         toast.success('Password reset successfully');
         setPasswordData({
           currentPassword: '',

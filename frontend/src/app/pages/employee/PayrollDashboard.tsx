@@ -93,13 +93,13 @@ export default function PayrollDashboard() {
         </Card>
 
         {/* Previous Salary/Stipend Card */}
-        {kpiData?.previousAmount > 0 && (
+        {(kpiData?.previousAmount ?? 0) > 0 && (
           <Card className="p-6 rounded-2xl border-l-4 border-l-muted">
             <div className="flex items-start justify-between mb-4">
               <div>
                 <p className="text-sm text-muted-foreground mb-1">Previous Amount</p>
                 <h3 className="text-2xl font-bold">
-                  ₹{kpiData?.previousAmount.toLocaleString()}
+                  ₹{(kpiData?.previousAmount ?? 0).toLocaleString()}
                 </h3>
               </div>
               <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
@@ -107,10 +107,10 @@ export default function PayrollDashboard() {
               </div>
             </div>
             <div className="text-xs text-muted-foreground">
-              <p>Increment: ₹{(kpiData?.currentAmount - kpiData?.previousAmount).toLocaleString()}</p>
+              <p>Increment: ₹{((kpiData?.currentAmount ?? 0) - (kpiData?.previousAmount ?? 0)).toLocaleString()}</p>
               <p>
                 Increase: {(
-                  ((kpiData?.currentAmount - kpiData?.previousAmount) / kpiData?.previousAmount) *
+                  (((kpiData?.currentAmount ?? 0) - (kpiData?.previousAmount ?? 0)) / (kpiData?.previousAmount ?? 1)) *
                   100
                 ).toFixed(1)}%
               </p>

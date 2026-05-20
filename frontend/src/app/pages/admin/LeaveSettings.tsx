@@ -91,7 +91,7 @@ export default function LeaveSettings() {
         }
       }
 
-      const response = await LeaveTypeSettingsService.getSettings(orgId);
+      const response = await LeaveTypeSettingsService.getSettings(orgId ?? 'system');
       if (response.success && response.data) {
         setSettings(response.data);
         setEnabledLeaveTypes(response.data.enabledLeaveTypes);
@@ -142,7 +142,7 @@ export default function LeaveSettings() {
       }
 
       const response = await LeaveTypeSettingsService.updateSettings(
-        orgId,
+        orgId ?? 'system',
         enabledLeaveTypes,
         user?.userId || user?.id || '',
         balanceKpiVisibility

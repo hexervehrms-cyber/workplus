@@ -38,6 +38,30 @@ interface Employee {
 }
 
 // Predefined roles
+const EMPTY_FORM_DATA = {
+  name: '',
+  email: '',
+  password: '',
+  designation: '',
+  department: '',
+  baseSalary: '',
+  hourlyRate: '',
+  dailyRate: '',
+  salaryCalculationType: 'fixed',
+  phone: '',
+  role: 'employee',
+  shiftStartTime: '09:00',
+  shiftEndTime: '18:00',
+  lateThreshold: '0',
+  workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+  aadharNumber: '',
+  panNumber: '',
+  bankAccount: '',
+  ifscCode: '',
+  employeeCode: '',
+  joiningDate: ''
+};
+
 const PREDEFINED_ROLES = [
   { id: 'recruiter', name: 'Recruiter' },
   { id: 'accountant', name: 'Accountant' },
@@ -66,29 +90,7 @@ export default function Employees() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   
-  const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    password: '',
-    designation: '',
-    department: '',
-    baseSalary: '',
-    hourlyRate: '',
-    dailyRate: '',
-    salaryCalculationType: 'fixed',
-    phone: '',
-    role: 'employee',
-    shiftStartTime: '09:00',
-    shiftEndTime: '18:00',
-    lateThreshold: '0',
-    workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-    aadharNumber: '',
-    panNumber: '',
-    bankAccount: '',
-    ifscCode: '',
-    employeeCode: '',
-    joiningDate: ''
-  });
+  const [formData, setFormData] = useState(EMPTY_FORM_DATA);
 
   useEffect(() => {
     fetchEmployees();
@@ -199,7 +201,7 @@ export default function Employees() {
       
       toast.success('Employee created successfully');
       setShowAddForm(false);
-      setFormData({ name: '', email: '', password: '', designation: '', department: '', baseSalary: '', phone: '', role: 'employee' });
+      setFormData(EMPTY_FORM_DATA);
     } catch (err: any) {
       console.error('Error creating employee:', err);
       toast.error(err.message || 'Failed to create employee');
@@ -278,7 +280,7 @@ export default function Employees() {
       toast.success('Employee updated successfully');
       setShowEditForm(false);
       setEditingEmployee(null);
-      setFormData({ name: '', email: '', password: '', designation: '', department: '', baseSalary: '', hourlyRate: '', dailyRate: '', salaryCalculationType: 'fixed', phone: '' });
+      setFormData(EMPTY_FORM_DATA);
     } catch (err: any) {
       console.error('Error updating employee:', err);
       toast.error(err.message || 'Failed to update employee');
@@ -839,7 +841,7 @@ export default function Employees() {
                       onChange={(e) => setFormData({...formData, aadharNumber: e.target.value})}
                       placeholder="12-digit Aadhar number"
                       className="mt-1"
-                      maxLength="12"
+                      maxLength={12}
                     />
                   </div>
                   <div>
@@ -849,7 +851,7 @@ export default function Employees() {
                       onChange={(e) => setFormData({...formData, panNumber: e.target.value})}
                       placeholder="10-character PAN"
                       className="mt-1"
-                      maxLength="10"
+                      maxLength={10}
                     />
                   </div>
                   <div>
@@ -868,7 +870,7 @@ export default function Employees() {
                       onChange={(e) => setFormData({...formData, ifscCode: e.target.value})}
                       placeholder="11-character IFSC code"
                       className="mt-1"
-                      maxLength="11"
+                      maxLength={11}
                     />
                   </div>
                 </div>

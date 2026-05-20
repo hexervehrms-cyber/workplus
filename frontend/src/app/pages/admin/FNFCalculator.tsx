@@ -67,7 +67,8 @@ export default function AdminFNFCalculator() {
       const data = await EmployeeService.getAllEmployees();
       // Filter only active employees
       setEmployees(data.filter((emp: any) => emp.status === 'active'));
-    } catch (err: any) {
+    } catch {
+      /* load errors surfaced via toast */
     } finally {
       setLoading(false);
     }

@@ -73,14 +73,14 @@ export default function BulkOperations() {
 
       // Download the file
       const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      const blobUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url;
+      link.href = blobUrl;
       link.download = filename;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
+      window.URL.revokeObjectURL(blobUrl);
 
       toast.success(`${activeTab} exported successfully as ${format.toUpperCase()}`);
     } catch (error: any) {

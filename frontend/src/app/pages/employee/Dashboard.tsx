@@ -96,10 +96,42 @@ interface BreakRecord {
   breakType?: string;
 }
 
+interface Holiday {
+  _id?: string;
+  id?: string;
+  date: string;
+  name: string;
+  description?: string;
+}
+
+interface TodayAttendanceRow {
+  checkIn?: string | Date;
+  checkOut?: string | Date;
+  hoursWorked?: number;
+  status?: string;
+  breaks?: BreakRecord[];
+}
+
+interface TodayLiveStatus {
+  status?: string;
+  isOnBreak?: boolean;
+  currentBreakDuration?: number;
+  currentHours?: number;
+  breakType?: string;
+}
+
+interface TodayAttendanceApiData {
+  attendance?: TodayAttendanceRow;
+  liveStatus?: TodayLiveStatus;
+  hoursThisWeek?: number;
+  weekKey?: string;
+}
+
 // ============================================================================
 // DEBUG UTILITY - Conditional logging based on environment
 // ============================================================================
-const DEBUG_ENABLED = import.meta.env.VITE_ENABLE_DEBUG === 'true';
+const DEBUG_ENABLED =
+  (import.meta as { env?: { VITE_ENABLE_DEBUG?: string } }).env?.VITE_ENABLE_DEBUG === 'true';
 const debug = {
   log: (...args: any[]) => DEBUG_ENABLED && console.log(...args),
   error: (...args: any[]) => DEBUG_ENABLED && console.error(...args),
@@ -323,9 +355,9 @@ export default function EmployeeDashboard() {
     }
   }, [user?.id]);
 
-  const [holidays, setHolidays] = useState<any[]>([]);
-  const [attendanceHistory, setAttendanceHistory] = useState<any[]>([]);
-  const [breakHistory, setBreakHistory] = useState<any[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
+  const [breakHistory, setBreakHistory] = useState<BreakRecord[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [currentBreakDuration, setCurrentBreakDuration] = useState(0);
   const [workingHours, setWorkingHours] = useState(0);
@@ -419,7 +451,7 @@ export default function EmployeeDashboard() {
       const cachedHolidays = localStorage.getItem('cached_holidays');
       if (cachedHolidays) {
         try {
-          const parsed = JSON.parse(cachedHolidays);
+          const parsed = JSON.parse(cachedHolidays) as Holiday[];
           setHolidays(parsed);
         } catch (e) {
           console.warn('Failed to parse cached holidays');
@@ -432,11 +464,11 @@ export default function EmployeeDashboard() {
         holidaysResult.value.data &&
         (holidaysResult.value.data as { success?: boolean }).success !== false
       ) {
-        const holidayPayload = holidaysResult.value.data as { data?: unknown[] };
-        const list = Array.isArray(holidayPayload.data)
+        const holidayPayload = holidaysResult.value.data as { data?: Holiday[] };
+        const list: Holiday[] = Array.isArray(holidayPayload.data)
           ? holidayPayload.data
           : Array.isArray(holidayPayload)
-            ? (holidayPayload as unknown as unknown[])
+            ? (holidayPayload as Holiday[])
             : [];
         if (list.length > 0) {
           console.log('✅ Loaded', list.length, 'holidays');
@@ -445,7 +477,7 @@ export default function EmployeeDashboard() {
         }
       } else if (cachedHolidays) {
         try {
-          const parsed = JSON.parse(cachedHolidays);
+          const parsed = JSON.parse(cachedHolidays) as Holiday[];
           console.log('📦 Using cached holidays:', parsed.length);
           setHolidays(parsed);
         } catch (e) {
@@ -473,8 +505,8 @@ export default function EmployeeDashboard() {
         attendanceResolved?.ok === true &&
         (attendanceResolved.data as { success?: boolean })?.success === true;
 
-      const attendanceData = attendanceApiOk
-        ? ((attendanceResolved!.data as { data?: Record<string, unknown> }).data ?? null)
+      const attendanceData: TodayAttendanceApiData | null = attendanceApiOk
+        ? ((attendanceResolved!.data as { data?: TodayAttendanceApiData }).data ?? null)
         : null;
 
       if (!attendanceApiOk) {
@@ -653,9 +685,9 @@ export default function EmployeeDashboard() {
       }
 
       setKpiMetrics((prev) => ({
+        ...prev,
         leaveBalance: leaveBalanceLabel,
         leaveBalanceSubtitle,
-        hoursThisWeek: prev.hoursThisWeek,
         performance: "85%",
       }));
 
@@ -1072,12 +1104,17 @@ export default function EmployeeDashboard() {
       const day = localDayKey();
       const idempotencyKey = `break-start-${resolvedEmployeeId || user?.id || 'me'}-${day}-${Date.now()}`;
       
-      const payload: { breakType: string; notes: string; idempotencyKey: string; employeeId?: string | null } = {
+      const requestPayload: {
+        breakType: string;
+        notes: string;
+        idempotencyKey: string;
+        employeeId?: string | null;
+      } = {
         breakType,
         notes: `Break started`,
         idempotencyKey
       };
-      if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
+      if (isLikelyMongoObjectId(resolvedEmployeeId)) requestPayload.employeeId = resolvedEmployeeId;
       
       debug.log('🔄 [BREAK START] Sending request:', { breakType, employeeId: resolvedEmployeeId });
       
@@ -1088,8 +1125,11 @@ export default function EmployeeDashboard() {
         currentBreakDuration: 0
       }, 'action');
       
-      try {
-        const result = await postAttendanceAction('/attendance/break-start', payload, idempotencyKey);
+        const result = await postAttendanceAction(
+          '/attendance/break-start',
+          requestPayload,
+          idempotencyKey
+        );
 
         if (!result.ok) {
           if (result.status === 409) {
@@ -1148,9 +1188,6 @@ export default function EmployeeDashboard() {
         }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
         toast.success('Break started');
         setLastSocketEventTime(Date.now());
-      } catch (innerErr) {
-        throw innerErr;
-      }
     } catch (error) {
       debug.error('❌ [BREAK START] Error:', error);
       toast.error(error instanceof Error ? error.message : 'Could not start break');
@@ -1199,7 +1236,6 @@ export default function EmployeeDashboard() {
         currentBreakDuration: 0
       }, 'action');
       
-      try {
         const result = await postAttendanceAction('/attendance/break-end', payload, idempotencyKey);
 
         if (!result.ok) {
@@ -1252,6 +1288,11 @@ export default function EmployeeDashboard() {
         writePersistedAttendance(uid, {
           checkedIn: true,
           isCheckedIn: true,
+          checkInTime: todayAttendance.checkInTime,
+          checkOutTime: todayAttendance.checkOutTime,
+          currentHours: todayAttendance.hoursWorked,
+          hoursWorked: todayAttendance.hoursWorked,
+          status: todayAttendance.status || 'present',
           isOnBreak: false,
           currentBreakDuration: 0,
           breakType: 'regular',
@@ -1265,9 +1306,6 @@ export default function EmployeeDashboard() {
         setTimeout(() => {
           disableRefreshRef.current = false;
         }, 4000);
-      } catch (innerErr) {
-        throw innerErr;
-      }
     } catch (error) {
       debug.error('❌ [BREAK END] Error:', error);
       toast.error(error instanceof Error ? error.message : 'Could not end break');
@@ -1297,7 +1335,6 @@ export default function EmployeeDashboard() {
         idempotencyKey
       };
 
-      try {
         const result = await postAttendanceAction('/attendance/check-in', payload, idempotencyKey);
 
         if (!result.ok) {
@@ -1362,9 +1399,6 @@ export default function EmployeeDashboard() {
         setTimeout(() => {
           runSafe('post-check-in', () => fetchDashboardDataRef.current?.(true));
         }, 400);
-      } catch (innerErr) {
-        throw innerErr;
-      }
     } catch (error) {
       console.error('Check-in error:', error);
       const message = error instanceof Error ? error.message : 'Check-in failed';
@@ -1397,7 +1431,6 @@ export default function EmployeeDashboard() {
       };
       if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
 
-      try {
         const result = await postAttendanceAction('/attendance/check-out', payload, idempotencyKey);
 
         if (!result.ok) {
@@ -1469,9 +1502,6 @@ export default function EmployeeDashboard() {
         setTimeout(() => {
           runSafe('post-check-in', () => fetchDashboardDataRef.current?.(true));
         }, 400);
-      } catch (innerErr) {
-        throw innerErr;
-      }
     } catch (error) {
       console.error('Check-out error:', error);
       toast.error(error instanceof Error ? error.message : 'Check-out failed');

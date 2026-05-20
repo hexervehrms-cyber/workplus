@@ -152,18 +152,13 @@ export default function AdminRoles() {
         Object.values(PERMISSIONS).find(p => p.id === id)
       ).filter(Boolean) as Permission[];
 
-      await apiPost('/roles', {
+      const result = await apiPost<{ data?: { id?: string; _id?: string } }>('/roles', {
         name: newRole.name,
         description: newRole.description,
         level: newRole.level,
         permissions: rolePermissions
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to create role');
-      }
-
-      const result = await response.json();
       const createdRole: CustomRole = {
         id: result.data?.id || result.data?._id || `CUSTOM_${Date.now()}`,
         name: newRole.name,
@@ -486,7 +481,7 @@ export default function AdminRoles() {
                 onClick={editingRole ? handleUpdateRole : handleCreateRole}
                 className="rounded-xl"
                 disabled={!((editingRole ? editingRole.name : newRole.name) && 
-                         ((editingRole ? editingRole.selectedPermissions : newRole.selectedPermissions)?.length > 0))}
+                         ((editingRole?.selectedPermissions ?? newRole.selectedPermissions).length > 0))}
               >
                 {editingRole ? 'Update Role' : 'Create Role'}
               </Button>

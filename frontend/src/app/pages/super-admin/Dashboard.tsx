@@ -34,11 +34,81 @@ import { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, Cartesia
 import { apiClient } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
 
+interface SuperAdminKpiChanges {
+  revenueChange: number;
+  organizationChange: number;
+  userChange: number;
+  sessionChange: number;
+  expenseChange: number;
+}
+
+interface SuperAdminStatsPayload {
+  totalRevenue?: number;
+  totalOrganizations?: number;
+  totalEmployees?: number;
+  liveSessions?: number;
+  totalSales?: number;
+  pipelineValue?: number;
+  commissionPaid?: number;
+  churnRate?: number;
+  kpiChanges?: SuperAdminKpiChanges;
+}
+
+interface GrowthTrendPoint {
+  month: string;
+  revenue?: number;
+  users?: number;
+}
+
+interface OrganizationApiRow {
+  _id: string;
+  name?: string;
+  employeeCount?: number;
+  status?: string;
+  subscriptionPlan?: string;
+  monthlyRevenue?: number;
+}
+
+interface OrganizationRow {
+  id: string;
+  name: string;
+  users: number;
+  status: string;
+  plan: string;
+  revenue: number;
+}
+
+interface LiveUserRow {
+  name: string;
+  org: string;
+  status: string;
+  lastActive: string;
+}
+
+interface DashboardUpdateData {
+  type: 'stats' | 'chart' | 'table' | 'activity';
+  component: string;
+  data: unknown;
+  timestamp?: Date;
+}
+
+interface DashboardStatsState {
+  totalRevenue: number;
+  totalOrganizations: number;
+  activeUsers: number;
+  liveSessions: number;
+  totalSales: number;
+  pipelineValue: number;
+  commissionPaid: number;
+  churnRate: number;
+  kpiChanges: SuperAdminKpiChanges;
+}
+
 export default function SuperAdminDashboard() {
   const { formatCurrency } = useCurrency();
   const [selectedTab, setSelectedTab] = useState('overview');
   const [loading, setLoading] = useState(true);
-  const [dashboardStats, setDashboardStats] = useState({
+  const [dashboardStats, setDashboardStats] = useState<DashboardStatsState>({
     totalRevenue: 0,
     totalOrganizations: 0,
     activeUsers: 0,
@@ -55,9 +125,9 @@ export default function SuperAdminDashboard() {
       expenseChange: 0
     }
   });
-  const [revenueData, setRevenueData] = useState<any[]>([]);
-  const [organizations, setOrganizations] = useState<any[]>([]);
-  const [liveUsers, setLiveUsers] = useState<any[]>([]);
+  const [revenueData, setRevenueData] = useState<GrowthTrendPoint[]>([]);
+  const [organizations, setOrganizations] = useState<OrganizationRow[]>([]);
+  const [liveUsers, setLiveUsers] = useState<LiveUserRow[]>([]);
   const [showOnboardingGenerator, setShowOnboardingGenerator] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
@@ -66,26 +136,26 @@ export default function SuperAdminDashboard() {
     dashboardType: 'superadmin',
     autoRefresh: true,
     refreshInterval: 5 * 60 * 1000, // 5 minutes
-    onUpdate: useCallback((data) => {
+    onUpdate: useCallback((data: DashboardUpdateData) => {
       console.log('Super Admin dashboard update:', data);
       setLastUpdated(new Date());
       
       // Handle different types of updates
       if (data.type === 'stats' && data.component === 'kpi') {
-        setDashboardStats(prev => ({ ...prev, ...data.data }));
+        setDashboardStats(prev => ({ ...prev, ...(data.data as Partial<DashboardStatsState>) }));
       } else if (data.type === 'chart' && data.component === 'growth') {
-        setRevenueData(data.data);
+        setRevenueData(data.data as GrowthTrendPoint[]);
       } else if (data.type === 'table' && data.component === 'organizations') {
-        setOrganizations(data.data);
+        setOrganizations(data.data as OrganizationRow[]);
       } else if (data.component === 'live_users') {
-        setLiveUsers(data.data);
+        setLiveUsers(data.data as LiveUserRow[]);
       }
     }, []),
-    onActivity: useCallback((activity) => {
+    onActivity: useCallback((activity: unknown) => {
       console.log('New activity:', activity);
       // Could update activity feed here
     }, []),
-    onError: useCallback((error) => {
+    onError: useCallback((error: unknown) => {
       console.error('Real-time dashboard error:', error);
       // toast removed
     }, [])
@@ -100,9 +170,9 @@ export default function SuperAdminDashboard() {
       setLoading(true);
 
       // Fetch super admin dashboard stats
-      const statsResponse = await apiClient.get('/dashboard/superadmin');
-      if (statsResponse.data?.success && statsResponse.data?.data) {
-        const stats = statsResponse.data.data;
+      const statsResponse = await apiClient.get<SuperAdminStatsPayload>('/dashboard/superadmin');
+      if (statsResponse.success && statsResponse.data) {
+        const stats = statsResponse.data;
         setDashboardStats({
           totalRevenue: stats.totalRevenue || 0,
           totalOrganizations: stats.totalOrganizations || 0,
@@ -123,15 +193,15 @@ export default function SuperAdminDashboard() {
       }
 
       // Fetch growth trends for charts
-      const trendsResponse = await apiClient.get('/dashboard/superadmin/growth-trends');
-      if (trendsResponse.data?.success && trendsResponse.data?.data) {
-        setRevenueData(trendsResponse.data.data);
+      const trendsResponse = await apiClient.get<GrowthTrendPoint[]>('/dashboard/superadmin/growth-trends');
+      if (trendsResponse.success && trendsResponse.data) {
+        setRevenueData(trendsResponse.data);
       }
 
       // Fetch organizations
-      const orgsResponse = await apiClient.get('/organizations?limit=10');
-      if (orgsResponse.data?.success && orgsResponse.data?.data) {
-        setOrganizations(orgsResponse.data.data.map((org: any) => ({
+      const orgsResponse = await apiClient.get<OrganizationApiRow[]>('/organizations?limit=10');
+      if (orgsResponse.success && orgsResponse.data) {
+        setOrganizations(orgsResponse.data.map((org) => ({
           id: org._id,
           name: org.name || 'Organization',
           users: org.employeeCount || 0,
@@ -142,12 +212,12 @@ export default function SuperAdminDashboard() {
       }
 
       // Fetch live users
-      const liveUsersResponse = await apiClient.get('/dashboard/superadmin/live-users?limit=5');
-      if (liveUsersResponse.data?.success && liveUsersResponse.data?.data) {
-        setLiveUsers(liveUsersResponse.data.data);
+      const liveUsersResponse = await apiClient.get<LiveUserRow[]>('/dashboard/superadmin/live-users?limit=5');
+      if (liveUsersResponse.success && liveUsersResponse.data) {
+        setLiveUsers(liveUsersResponse.data);
       }
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error fetching dashboard data:', error);
       // toast removed
       

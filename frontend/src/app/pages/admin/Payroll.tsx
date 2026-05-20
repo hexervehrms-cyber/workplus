@@ -608,18 +608,15 @@ export default function Payroll() {
     });
   };
 
-  // Calculate totals
-  const grossEarnings = Object.values(earnings).reduce((sum, val) => {
-    if (typeof val === 'number') return sum + val;
-    if (Array.isArray(val)) return sum + val.reduce((s, item) => s + (item.amount || 0), 0);
-    return sum;
-  }, 0);
+  const sumSalarySection = (section: typeof earnings | typeof deductions): number =>
+    (Object.values(section) as (number | SalaryField[])[]).reduce<number>((sum, val) => {
+      if (typeof val === 'number') return sum + val;
+      if (Array.isArray(val)) return sum + val.reduce((s, item) => s + (item.amount || 0), 0);
+      return sum;
+    }, 0);
 
-  const totalDeductions = Object.values(deductions).reduce((sum, val) => {
-    if (typeof val === 'number') return sum + val;
-    if (Array.isArray(val)) return sum + val.reduce((s, item) => s + (item.amount || 0), 0);
-    return sum;
-  }, 0);
+  const grossEarnings = sumSalarySection(earnings);
+  const totalDeductions = sumSalarySection(deductions);
 
   const netSalary = grossEarnings - totalDeductions;
 

@@ -56,9 +56,10 @@ export default function AdminManagement() {
   const loadAdmins = async () => {
     try {
       setPageLoading(true);
-      const response = await apiClient.get('/users?role=admin&isActive=true');
+      const response = await apiClient.get<AdminUser[] | { users: AdminUser[] }>('/users?role=admin&isActive=true');
       if (response.success && response.data) {
-        const userList = Array.isArray(response.data) ? response.data : response.data.users || [];
+        const data = response.data;
+        const userList = Array.isArray(data) ? data : data.users ?? [];
         setAdmins(
           userList
             .filter((user: any) => user.role === 'admin')

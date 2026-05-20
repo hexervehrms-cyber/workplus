@@ -353,17 +353,23 @@ export const apiClient = new ApiClient();
 export class AuthService {
   static async login(email: string, password: string) {
     try {
-      const response = await apiClient.post<any>('/auth/login', {
+      type LoginPayload = {
+        token?: string;
+        user?: Record<string, unknown>;
+        refreshToken?: string;
+      };
+      const response = await apiClient.post<LoginPayload>('/auth/login', {
         email: email.toLowerCase().trim(),
         password
       });
 
       console.log('Login response:', response);
 
-      // Backend returns token and user in response.data
-      const token = response.data?.token || response.token;
-      const user = response.data?.user || response.user;
-      const refreshToken = response.data?.refreshToken || response.refreshToken;
+      // Backend may return token and user in response.data or at top level
+      const loginPayload = response.data ?? (response as ApiResponse<LoginPayload> & LoginPayload);
+      const token = loginPayload.token;
+      const user = loginPayload.user;
+      const refreshToken = loginPayload.refreshToken;
 
       if (response.success && user) {
         // Extract role from JWT token

@@ -328,26 +328,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         // Validate role is one of the expected values
         const validRoles = ['super_admin', 'admin', 'hr', 'manager', 'accountant', 'employee'];
-        if (!validRoles.includes(result.user.role)) {
-          console.error('❌ Invalid role received:', result.user.role, 'Type:', typeof result.user.role);
+        const userRole = String(result.user.role) as UserRole;
+        if (!validRoles.includes(userRole)) {
+          console.error('❌ Invalid role received:', userRole, 'Type:', typeof userRole);
           setLoading(false);
           return { success: false, error: 'Invalid user role' };
         }
 
+        const normalizedUser: User = {
+          id: String(result.user.id),
+          userId: result.user.userId != null ? String(result.user.userId) : undefined,
+          name: String(result.user.name ?? ''),
+          email: String(result.user.email ?? ''),
+          role: userRole,
+          avatar: result.user.avatar != null ? String(result.user.avatar) : undefined,
+          organization: result.user.organization != null ? String(result.user.organization) : undefined,
+          tenantId: result.user.tenantId != null ? String(result.user.tenantId) : undefined,
+          orgId: result.user.orgId != null ? String(result.user.orgId) : undefined,
+          employeeId: result.user.employeeId != null ? String(result.user.employeeId) : undefined,
+          employeeCode: result.user.employeeCode != null ? String(result.user.employeeCode) : undefined,
+        };
+
         console.log('✅ Login successful - User data:', {
-          id: result.user.id,
-          email: result.user.email,
-          role: result.user.role,
-          roleType: typeof result.user.role,
-          name: result.user.name
+          id: normalizedUser.id,
+          email: normalizedUser.email,
+          role: normalizedUser.role,
+          roleType: typeof normalizedUser.role,
+          name: normalizedUser.name
         });
 
         // Update user state - this will trigger RoleBasedRedirect
-        console.log('🔐 Setting user state with role:', result.user.role);
-        setUser(result.user);
+        console.log('🔐 Setting user state with role:', normalizedUser.role);
+        setUser(normalizedUser);
         setLoading(false);
         setIsInitialized(true);
-        connectSocketsInBackground(result.user);
+        connectSocketsInBackground(normalizedUser);
 
         return { success: true };
       }

@@ -101,9 +101,9 @@ export const apiRequest = async <T = any>(
   const url = buildApiUrl(endpoint);
   const token = await ensureAccessToken();
 
-  const headers: HeadersInit = {
-    ...(token && { Authorization: `Bearer ${token}` }),
-    ...options.headers
+  const headers: Record<string, string> = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers as Record<string, string> | undefined),
   };
 
   // Only set Content-Type if not FormData and not skipped

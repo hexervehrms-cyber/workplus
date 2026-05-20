@@ -422,8 +422,8 @@ function CallVideoArea({
 }: {
   withVideo: boolean;
   videoOff: boolean;
-  remoteVideoRef: React.RefObject<HTMLVideoElement | null>;
-  localVideoRef: React.RefObject<HTMLVideoElement | null>;
+  remoteVideoRef: React.Ref<HTMLVideoElement>;
+  localVideoRef: React.Ref<HTMLVideoElement>;
   peerName: string;
   phase: string;
 }) {

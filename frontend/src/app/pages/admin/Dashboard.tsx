@@ -204,7 +204,6 @@ export default function AdminDashboard() {
   const [expenseData, setExpenseData] = useState<ExpenseTrendRow[]>([]);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequestRow[]>([]);
   const [todaysAttendance, setTodaysAttendance] = useState<AttendanceRow[]>([]);
-  const [employeesOnBreak, setEmployeesOnBreak] = useState<EmployeeOnBreakRow[]>([]);
   const [todayBreakLog, setTodayBreakLog] = useState<BreakRow[]>([]);
   const [lastUpdate, setLastUpdate] = useState(Date.now()); // Force re-render timestamp
   
@@ -223,14 +222,13 @@ export default function AdminDashboard() {
     console.log('⚡ [ADMIN-DASHBOARD] Fetching all data in parallel...');
     
     // Fetch all data in parallel using Promise.allSettled for resilience
-    const [statsResponse, quickStatsResponse, expenseTrendsResponse, leaveResponse, attendanceResponse, onBreakResponse, todayBreaksResponse] =
+    const [statsResponse, quickStatsResponse, expenseTrendsResponse, leaveResponse, attendanceResponse, todayBreaksResponse] =
       await Promise.allSettled([
         apiClient.get<DashboardStats>(`/dashboard/stats?${params.toString()}`),
         apiClient.get<QuickStats>(`/dashboard/quick-stats?${params.toString()}&_t=${Date.now()}`),
         apiClient.get<ExpenseTrendRow[]>('/dashboard/expense-trends'),
         apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests'),
         apiClient.get<AttendanceRow[]>('/dashboard/todays-attendance'),
-        apiClient.get<EmployeeOnBreakRow[]>(`/attendance/on-break?_t=${Date.now()}`),
         apiClient.get<BreakRow[]>(`/attendance/today-breaks?_t=${Date.now()}`)
       ]);
 
@@ -254,9 +252,6 @@ export default function AdminDashboard() {
     }
     if (attendanceResponse.status === 'fulfilled' && attendanceResponse.value.success) {
       setTodaysAttendance(attendanceResponse.value.data ?? []);
-    }
-    if (onBreakResponse.status === 'fulfilled' && onBreakResponse.value.success) {
-      setEmployeesOnBreak(onBreakResponse.value.data ?? []);
     }
     if (todayBreaksResponse.status === 'fulfilled' && todayBreaksResponse.value.success) {
       setTodayBreakLog(todayBreaksResponse.value.data ?? []);
@@ -288,15 +283,11 @@ export default function AdminDashboard() {
 
   const refreshBreakSections = useCallback(async () => {
     try {
-      const [onBreakResponse, todayBreaksResponse, attendanceResponse] = await Promise.all([
-        apiClient.get<EmployeeOnBreakRow[]>(`/attendance/on-break?_t=${Date.now()}`),
+      const [todayBreaksResponse, attendanceResponse] = await Promise.all([
         apiClient.get<BreakRow[]>(`/attendance/today-breaks?_t=${Date.now()}`),
         apiClient.get<AttendanceRow[]>('/dashboard/todays-attendance'),
       ]);
       if (!mounted.current) return;
-      if (onBreakResponse.success) {
-        setEmployeesOnBreak(onBreakResponse.data ?? []);
-      }
       if (todayBreaksResponse.success) {
         setTodayBreakLog(todayBreaksResponse.data ?? []);
       }
@@ -345,20 +336,6 @@ export default function AdminDashboard() {
       totalIncentive: num(kpis.totalIncentive, prev.totalIncentive),
     }));
     setLastUpdate(Date.now());
-  }, []);
-
-  const refreshEmployeesOnBreak = useCallback(async () => {
-    try {
-      console.log('☕ [REFRESH] Fetching employees on break...');
-      const response = await apiClient.get<EmployeeOnBreakRow[]>('/attendance/on-break');
-      if (response.success) {
-        const rows = response.data ?? [];
-        setEmployeesOnBreak(rows);
-        console.log('☕ [REFRESH] Employees on break updated:', rows.length);
-      }
-    } catch (error) {
-      console.error('Error refreshing employees on break:', error);
-    }
   }, []);
 
   // Fetch dashboard data
@@ -498,12 +475,12 @@ export default function AdminDashboard() {
     };
   }, [scheduleDashboardRefresh, refreshBreakSections, applyKpiPayload]);
 
-  // Tick break durations while someone is on break
+  // Tick live durations for active breaks in the log table
   useEffect(() => {
-    if (employeesOnBreak.length === 0) return;
+    if (!todayBreakLog.some((r) => r.status === 'active')) return;
     const timer = setInterval(() => setLastUpdate(Date.now()), 60000);
     return () => clearInterval(timer);
-  }, [employeesOnBreak.length]);
+  }, [todayBreakLog]);
 
   const handleApproveLeave = async (requestId: string) => {
     try {
@@ -1089,8 +1066,8 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
       <Card className="rounded-2xl overflow-hidden">
         <div className="p-6 border-b border-border flex items-center justify-between">
           <div>
-            <h3 className="font-semibold text-lg">Today's Breaks</h3>
-            <p className="text-sm text-muted-foreground">Stored break start and end times for all employees</p>
+            <h3 className="font-semibold text-lg">All Employees Break Records</h3>
+            <p className="text-sm text-muted-foreground">Break start and end times stored for every employee today</p>
           </div>
           <Badge variant="secondary">{todayBreakLog.length} entries</Badge>
         </div>
@@ -1139,61 +1116,6 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             )}
           </TableBody>
         </Table>
-      </Card>
-
-      {/* Employees On Break */}
-      <Card className="rounded-2xl overflow-hidden">
-        <div className="p-6 border-b border-border flex items-center justify-between">
-          <div>
-            <h3 className="font-semibold text-lg">Employees On Break</h3>
-            <p className="text-sm text-muted-foreground">Real-time break tracking</p>
-          </div>
-          <Badge variant="secondary" className="bg-accent/20 text-accent">{employeesOnBreak.length} On Break</Badge>
-        </div>
-        <div className="p-6">
-          <div className="space-y-4">
-            {employeesOnBreak.length === 0 ? (
-              <div className="text-center text-muted-foreground py-8">
-                <Coffee className="w-12 h-12 mx-auto mb-3 opacity-30" />
-                <p>No employees on break</p>
-              </div>
-            ) : (
-              employeesOnBreak.map((employee) => {
-                const rowKey = String(employee.employeeId || employee.employeeName);
-                const liveMinutes = employee.breakStartTime
-                  ? breakMinutesSince(employee.breakStartTime)
-                  : employee.breakDuration;
-                return (
-                <div key={rowKey} className="flex items-center justify-between p-4 rounded-xl bg-accent/10 border border-accent/20">
-                  <div className="flex items-center gap-4 flex-1">
-                    <div className="w-10 h-10 rounded-full bg-accent/30 flex items-center justify-center">
-                      <Coffee className="w-5 h-5 text-accent" />
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium">{employee.employeeName}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {employee.department} • {employee.designation}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-6 text-right">
-                    <div>
-                      <p className="text-sm font-medium">{employee.breakType}</p>
-                      <p className="text-xs text-muted-foreground">{liveMinutes} min on break</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Start {formatTime(employee.breakStartTime)} · End —
-                      </p>
-                    </div>
-                    <Badge variant="outline" className="bg-accent/20 text-accent border-accent/30">
-                      On break
-                    </Badge>
-                  </div>
-                </div>
-              );
-              })
-            )}
-          </div>
-        </div>
       </Card>
 
       {/* Chat Widget */}

@@ -15,6 +15,8 @@ import { cn } from '../../components/ui/utils';
 import { apiGet, apiPost, apiPut, apiDelete, buildApiUrl, getBearerToken, appendOrgIdParam, resolveAuthOrgId } from '../../utils/apiHelper';
 import { TokenManager } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
+import { OrgRequiredNotice } from '../../components/OrgRequiredNotice';
+import { ensureArray, safeFormatInr } from '../../utils/safeUi';
 
 interface SalaryStructure {
   _id: string;
@@ -255,8 +257,8 @@ export default function Payroll() {
         }
         params.set('orgId', oid);
       }
-      const data = await apiGet(`salary/structures?${params.toString()}`, false);
-      setStructures(data.data || []);
+      const data = await apiGet<{ data?: unknown }>(`salary/structures?${params.toString()}`, false);
+      setStructures(ensureArray<SalaryStructure>(data?.data));
     } catch (error) {
       console.error('Error fetching structures:', error);
     } finally {
@@ -278,8 +280,8 @@ export default function Payroll() {
         }
         params.set('orgId', oid);
       }
-      const data = await apiGet(`/salary/slips/all?${params.toString()}`, false);
-      setSalarySlips(data.data || []);
+      const data = await apiGet<{ data?: unknown }>(`/salary/slips/all?${params.toString()}`, false);
+      setSalarySlips(ensureArray<SalarySlip>(data?.data));
     } catch (error) {
       console.error('Error fetching salary slips:', error);
     } finally {
@@ -290,9 +292,8 @@ export default function Payroll() {
   // Fetch employees
   const fetchEmployees = async () => {
     try {
-      const data = await apiGet(appendOrgIdParam('/employees?simple=true&limit=1000', user), false);
-      console.log('Employees fetched:', data.data);
-      setEmployees(data.data || []);
+      const data = await apiGet<{ data?: unknown }>(appendOrgIdParam('/employees?simple=true&limit=1000', user), false);
+      setEmployees(ensureArray(data?.data));
     } catch (error) {
       console.error('Error fetching employees:', error);
     }
@@ -649,6 +650,7 @@ export default function Payroll() {
 
   return (
     <div className="p-6 space-y-6">
+      <OrgRequiredNotice user={user} />
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold">Payroll Management</h1>
@@ -723,15 +725,15 @@ export default function Payroll() {
                   <div className="grid grid-cols-3 gap-4 mb-4">
                     <div>
                       <p className="text-sm text-muted-foreground">Gross Earnings</p>
-                      <p className="text-lg font-semibold">₹{structure.grossEarnings.toLocaleString()}</p>
+                      <p className="text-lg font-semibold">₹{safeFormatInr(structure.grossEarnings)}</p>
                     </div>
                     <div>
                       <p className="text-sm text-muted-foreground">Deductions</p>
-                      <p className="text-lg font-semibold">₹{(structure.grossEarnings - structure.netSalary).toLocaleString()}</p>
+                      <p className="text-lg font-semibold">₹{safeFormatInr((structure.grossEarnings ?? 0) - (structure.netSalary ?? 0))}</p>
                     </div>
                     <div>
                       <p className="text-sm text-muted-foreground">Net Salary</p>
-                      <p className="text-lg font-semibold">₹{structure.netSalary.toLocaleString()}</p>
+                      <p className="text-lg font-semibold">₹{safeFormatInr(structure.netSalary)}</p>
                     </div>
                   </div>
 
@@ -819,15 +821,15 @@ export default function Payroll() {
                   <div className="grid grid-cols-3 gap-4 mb-4">
                     <div>
                       <p className="text-sm text-muted-foreground">Gross Earnings</p>
-                      <p className="text-lg font-semibold">₹{slip.grossEarnings.toLocaleString()}</p>
+                      <p className="text-lg font-semibold">₹{safeFormatInr(slip.grossEarnings)}</p>
                     </div>
                     <div>
                       <p className="text-sm text-muted-foreground">Deductions</p>
-                      <p className="text-lg font-semibold">₹{(slip.grossEarnings - slip.netSalary).toLocaleString()}</p>
+                      <p className="text-lg font-semibold">₹{safeFormatInr((slip.grossEarnings ?? 0) - (slip.netSalary ?? 0))}</p>
                     </div>
                     <div>
                       <p className="text-sm text-muted-foreground">Net Salary</p>
-                      <p className="text-lg font-semibold">₹{slip.netSalary.toLocaleString()}</p>
+                      <p className="text-lg font-semibold">₹{safeFormatInr(slip.netSalary)}</p>
                     </div>
                   </div>
 
@@ -1303,15 +1305,15 @@ export default function Payroll() {
             <div className="bg-muted p-4 rounded-lg space-y-2">
               <div className="flex justify-between">
                 <span>Gross Earnings:</span>
-                <span className="font-semibold">₹{grossEarnings.toLocaleString()}</span>
+                <span className="font-semibold">₹{safeFormatInr(grossEarnings)}</span>
               </div>
               <div className="flex justify-between">
                 <span>Total Deductions:</span>
-                <span className="font-semibold">₹{totalDeductions.toLocaleString()}</span>
+                <span className="font-semibold">₹{safeFormatInr(totalDeductions)}</span>
               </div>
               <div className="flex justify-between text-lg border-t border-border pt-2">
                 <span>Net Salary:</span>
-                <span className="font-bold">₹{netSalary.toLocaleString()}</span>
+                <span className="font-bold">₹{safeFormatInr(netSalary)}</span>
               </div>
             </div>
 
@@ -1409,24 +1411,24 @@ export default function Payroll() {
                   <div className="space-y-2">
                     <div className="flex justify-between">
                       <span className="text-sm">Gross Earnings</span>
-                      <span className="font-medium">₹{viewingSlip.grossEarnings.toLocaleString()}</span>
+                      <span className="font-medium">₹{safeFormatInr(viewingSlip.grossEarnings)}</span>
                     </div>
                     {viewingSlip.earnings?.basic ? (
                       <div className="flex justify-between text-sm py-1 border-b">
                         <span>Basic</span>
-                        <span>₹{viewingSlip.earnings.basic.toLocaleString()}</span>
+                        <span>₹{safeFormatInr(viewingSlip.earnings.basic)}</span>
                       </div>
                     ) : null}
                     {viewingSlip.earnings?.hra ? (
                       <div className="flex justify-between text-sm py-1 border-b">
                         <span>HRA</span>
-                        <span>₹{viewingSlip.earnings.hra.toLocaleString()}</span>
+                        <span>₹{safeFormatInr(viewingSlip.earnings.hra)}</span>
                       </div>
                     ) : null}
                     {viewingSlip.earnings?.bonus ? (
                       <div className="flex justify-between text-sm py-1 border-b">
                         <span>Bonus</span>
-                        <span>₹{viewingSlip.earnings.bonus.toLocaleString()}</span>
+                        <span>₹{safeFormatInr(viewingSlip.earnings.bonus)}</span>
                       </div>
                     ) : null}
                     {viewingSlip.earnings?.incentives ? (
@@ -1445,23 +1447,23 @@ export default function Payroll() {
                     {viewingSlip.deductions?.providentFund ? (
                       <div className="flex justify-between text-sm py-1 border-b">
                         <span>PF</span>
-                        <span>₹{viewingSlip.deductions.providentFund.toLocaleString()}</span>
+                        <span>₹{safeFormatInr(viewingSlip.deductions.providentFund)}</span>
                       </div>
                     ) : null}
                     {viewingSlip.deductions?.professionalTax ? (
                       <div className="flex justify-between text-sm py-1 border-b">
                         <span>Prof. Tax</span>
-                        <span>₹{viewingSlip.deductions.professionalTax.toLocaleString()}</span>
+                        <span>₹{safeFormatInr(viewingSlip.deductions.professionalTax)}</span>
                       </div>
                     ) : null}
                     <div className="flex justify-between pt-2 font-semibold text-sm">
                       <span>Total Deductions</span>
                       <span>
                         ₹
-                        {(
+                        {safeFormatInr(
                           viewingSlip.totalDeductions ??
-                          viewingSlip.grossEarnings - viewingSlip.netSalary
-                        ).toLocaleString()}
+                            (viewingSlip.grossEarnings ?? 0) - (viewingSlip.netSalary ?? 0)
+                        )}
                       </span>
                     </div>
                   </div>
@@ -1472,7 +1474,7 @@ export default function Payroll() {
               <div className="bg-primary/10 p-4 rounded-lg">
                 <div className="flex justify-between items-center">
                   <span className="text-lg font-semibold">Net Salary</span>
-                  <span className="text-2xl font-bold text-primary">₹{viewingSlip.netSalary.toLocaleString()}</span>
+                  <span className="text-2xl font-bold text-primary">₹{safeFormatInr(viewingSlip.netSalary)}</span>
                 </div>
               </div>
 

@@ -4,7 +4,8 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { Send, MessageSquare, X, Minimize2, Maximize2, Loader2 } from 'lucide-react';
+import { Send, MessageSquare, X, Minimize2, Maximize2, Loader2, UserPlus, UsersRound } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Card } from './ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Button } from './ui/button';
@@ -43,8 +44,21 @@ interface ChatWidgetProps {
   compact?: boolean;
 }
 
+function resolveAuthUserId(user: { id?: string; userId?: string } | null | undefined): string {
+  if (!user) return '';
+  return String(user.userId || user.id || '');
+}
+
+function chatPathForRole(role?: string): string {
+  if (role === 'super_admin') return '/super-admin/chat';
+  if (role === 'admin' || role === 'hr' || role === 'manager') return '/admin/chat';
+  return '/employee/chat';
+}
+
 export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatWidgetProps) {
   const { user: authUser } = useAuth();
+  const navigate = useNavigate();
+  const authUserId = resolveAuthUserId(authUser);
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [selectedUser, setSelectedUser] = useState<ChatUser | null>(null);
@@ -59,7 +73,7 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
   selectedUserRef.current = selectedUser;
 
   useEffect(() => {
-    if (!authUser?.id) return;
+    if (!authUserId) return;
 
     let cancelled = false;
 
@@ -118,7 +132,7 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
       try {
         if (!chatSocket.isConnected()) {
           await chatSocket.connect(
-            authUser.id,
+            authUserId,
             authUser.role,
             authUser.orgId || authUser.tenantId || undefined
           );
@@ -138,11 +152,11 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
       chatSocket.off('chat:new_message', onNewMessage);
       chatSocket.off('chat:message_read', onMessageRead);
     };
-  }, [authUser?.id, authUser?.role, authUser?.orgId, authUser?.tenantId]);
+  }, [authUserId, authUser?.role, authUser?.orgId, authUser?.tenantId]);
 
   useEffect(() => {
     const fetchUsers = async () => {
-      if (!authUser?.id) {
+      if (!authUserId) {
         setLoading(false);
         return;
       }
@@ -178,12 +192,12 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
     };
 
     void fetchUsers();
-  }, [authUser?.id, authUser?.role]);
+  }, [authUserId, authUser?.role]);
 
   useEffect(() => {
-    if (!selectedUser?.id || !chatSocket.isConnected() || !authUser?.id) return;
+    if (!selectedUser?.id || !chatSocket.isConnected() || !authUserId) return;
 
-    const myId = String(authUser.id);
+    const myId = authUserId;
     const conversationId = [myId, selectedUser.id].sort().join('_');
 
     const handleHistory = (data: { messages?: any[] }) => {
@@ -215,16 +229,16 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
     return () => {
       chatSocket?.off('chat:history', handleHistory);
     };
-  }, [selectedUser?.id, authUser?.id]);
+  }, [selectedUser?.id, authUserId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !selectedUser || !chatSocket.isConnected() || !authUser?.id) return;
+    if (!messageInput.trim() || !selectedUser || !chatSocket.isConnected() || !authUserId) return;
 
-    const myId = String(authUser.id);
+    const myId = authUserId;
     const text = messageInput.trim();
     const tempId = `temp-${Date.now()}`;
 
@@ -294,6 +308,24 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
           {unreadCount > 0 && <Badge variant="default" className="ml-auto">{unreadCount}</Badge>}
         </div>
         <div className="flex gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            title="Add contact"
+            onClick={() => navigate(`${chatPathForRole(authUser?.role)}?open=add`)}
+          >
+            <UserPlus className="w-4 h-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            title="Create group"
+            onClick={() => navigate(`${chatPathForRole(authUser?.role)}?open=group`)}
+          >
+            <UsersRound className="w-4 h-4" />
+          </Button>
           <Button variant="ghost" size="sm" onClick={() => setIsMinimized(!isMinimized)}>
             {isMinimized ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
           </Button>

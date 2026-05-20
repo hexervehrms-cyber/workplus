@@ -57,7 +57,7 @@ const navigationItems: NavItem[] = [
   { icon: Users, label: 'Employees', path: '/admin/employees', roles: ['admin'] },
   { icon: Users, label: 'Admin Management', path: '/admin/admin-management', roles: ['admin'] },
   { icon: FolderOpen, label: 'Company Docs', path: '/admin/company-docs', roles: ['admin'] },
-  { icon: Building2, label: 'Departments', path: '/admin/departments', roles: ['admin'] },
+  { icon: Building2, label: 'Departments', path: '/admin/departments', roles: ['admin', 'hr'] },
   { icon: ShieldCheck, label: 'Roles', path: '/admin/roles', roles: ['admin'] },
   { 
     icon: Calendar, 

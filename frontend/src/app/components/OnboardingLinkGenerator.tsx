@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useDepartments } from '../hooks/useDepartments';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -25,6 +26,7 @@ interface GeneratedLink {
 }
 
 const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpen, onClose, onSuccess }) => {
+  const { departmentNames, loading: deptLoading } = useDepartments();
   const [step, setStep] = useState<'form' | 'result'>('form');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -221,14 +223,19 @@ try {
                     <SelectValue placeholder="Select department" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Engineering">Engineering</SelectItem>
-                    <SelectItem value="Sales">Sales</SelectItem>
-                    <SelectItem value="Marketing">Marketing</SelectItem>
-                    <SelectItem value="HR">HR</SelectItem>
-                    <SelectItem value="Finance">Finance</SelectItem>
-                    <SelectItem value="Operations">Operations</SelectItem>
-                    <SelectItem value="Support">Support</SelectItem>
-                    <SelectItem value="Other">Other</SelectItem>
+                    {deptLoading ? (
+                      <SelectItem value="_loading" disabled>
+                        Loading departments…
+                      </SelectItem>
+                    ) : departmentNames.length === 0 ? (
+                      <SelectItem value="General">General</SelectItem>
+                    ) : (
+                      departmentNames.map((dept) => (
+                        <SelectItem key={dept} value={dept}>
+                          {dept}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
               </div>

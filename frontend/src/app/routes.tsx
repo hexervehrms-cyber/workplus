@@ -1,5 +1,23 @@
 import { createBrowserRouter, Outlet } from 'react-router';
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, type ComponentType } from 'react';
+
+/** Retry dynamic import once (handles stale CDN chunks after deploy). */
+function lazyPage<T extends ComponentType<unknown>>(
+  loader: () => Promise<{ default: T }>
+) {
+  return lazy(async () => {
+    try {
+      return await loader();
+    } catch (first) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        return await loader();
+      } catch {
+        throw first;
+      }
+    }
+  });
+}
 import { MainLayout } from './layouts/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import Login from './pages/Login';
@@ -30,18 +48,18 @@ const AdminRoles = lazy(() => import('./pages/admin/Roles'));
 const LeaveRequests = lazy(() => import('./pages/admin/LeaveRequests'));
 const AttendanceAdmin = lazy(() => import('./pages/admin/Attendance'));
 const ExpensesAdmin = lazy(() => import('./pages/admin/Expenses'));
-const AnnouncementsAdmin = lazy(() => import('./pages/admin/Announcements'));
-const AdminChat = lazy(() => import('./pages/admin/Chat'));
+const AnnouncementsAdmin = lazyPage(() => import('./pages/admin/Announcements'));
+const AdminChat = lazyPage(() => import('./pages/admin/Chat'));
 const HREmployeeOnboarding = lazy(() => import('./pages/admin/EmployeeOnboarding'));
 const AdminCompanyDocs = lazy(() => import('./pages/admin/CompanyDocs'));
 const AdminHolidayCalendar = lazy(() => import('./pages/admin/HolidayCalendar'));
-const AdminPayroll = lazy(() => import('./pages/admin/Payroll'));
+const AdminPayroll = lazyPage(() => import('./pages/admin/Payroll'));
 const AdminPayrollRuns = lazy(() => import('./pages/admin/PayrollCalculation'));
 const AttendanceCalendar = lazy(() => import('./pages/admin/AttendanceCalendar'));
 const AttendanceHistory = lazy(() => import('./pages/admin/AttendanceHistory'));
 const LeaveAllocation = lazy(() => import('./pages/admin/LeaveAllocation'));
 const LeaveSettings = lazy(() => import('./pages/admin/LeaveSettings'));
-const AdminSettings = lazy(() => import('./pages/admin/Settings'));
+const AdminSettings = lazyPage(() => import('./pages/admin/Settings'));
 const AdminManagement = lazy(() => import('./pages/admin/AdminManagement'));
 
 // Sales Pages - Lazy loaded
@@ -65,7 +83,7 @@ const EmployeeCompanyDocs = lazy(() => import('./pages/employee/CompanyDocs'));
 const EmployeeSettings = lazy(() => import('./pages/employee/Settings'));
 
 // Public Pages
-import Onboarding from './pages/public/Onboarding';
+import OnboardingPage from './pages/public/OnboardingPage';
 
 const routes = [
   {
@@ -207,7 +225,7 @@ const routes = [
       {
         path: 'admin/departments',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={['admin', 'hr']}>
             <AdminDepartments />
           </ProtectedRoute>
         ),
@@ -481,7 +499,7 @@ const routes = [
       },
       {
         path: 'onboarding/:token',
-        element: <Onboarding />,
+        element: <OnboardingPage />,
       },
     ],
   },

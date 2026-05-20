@@ -284,6 +284,7 @@ export default function EmployeeDashboard() {
     leaveBalance: "0 days",
     leaveBalanceSubtitle: "",
     hoursThisWeek: "0h",
+    breakTodayMinutes: 0,
     weekHoursSubtitle: "Mon–Sun · check-in/out sessions",
     performance: "0%"
   });
@@ -546,33 +547,38 @@ export default function EmployeeDashboard() {
         let calculatedBreakType = 'regular';
         let calculatedBreakDuration = 0;
 
+        if (attendance.breaks && attendance.breaks.length > 0) {
+          const lastBreak = attendance.breaks[attendance.breaks.length - 1] as BreakRecord;
+          if (lastBreak.startTime && !lastBreak.endTime) {
+            calculatedIsOnBreak = true;
+            const breakStart = new Date(lastBreak.startTime).getTime();
+            calculatedBreakDuration = Math.round((Date.now() - breakStart) / (1000 * 60));
+            calculatedBreakType = lastBreak.breakType || lastBreak.type || 'regular';
+          }
+        }
+
         calculatedIsOnBreak = resolveOnBreakFromServer(
           ls as Record<string, unknown> | undefined,
           attendance.breaks as BreakRecord[] | undefined,
-          todayAttendance.isOnBreak
+          calculatedIsOnBreak
         );
 
         if (calculatedIsOnBreak) {
-          calculatedBreakDuration =
-            typeof (ls as { currentBreakDuration?: number })?.currentBreakDuration === 'number'
-              ? Math.round((ls as { currentBreakDuration: number }).currentBreakDuration)
-              : calculatedBreakDuration;
+          const fromLs = (ls as { currentBreakDuration?: number })?.currentBreakDuration;
+          if (typeof fromLs === 'number' && fromLs > 0) {
+            calculatedBreakDuration = Math.round(fromLs);
+          }
         }
 
         setCurrentBreakDuration(calculatedBreakDuration);
         breakSecondsRef.current = calculatedBreakDuration * 60;
 
-        if (attendance.breaks && attendance.breaks.length > 0) {
-          const lastBreak = attendance.breaks[attendance.breaks.length - 1] as BreakRecord;
-          if (lastBreak.startTime && !lastBreak.endTime) {
-            if (!calculatedIsOnBreak) {
-              calculatedIsOnBreak = true;
-              const breakStart = new Date(lastBreak.startTime).getTime();
-              const now = new Date().getTime();
-              calculatedBreakDuration = Math.round((now - breakStart) / (1000 * 60));
-            }
-            calculatedBreakType = lastBreak.breakType || lastBreak.type || 'regular';
-          }
+        const totalBreakMin =
+          typeof (ls as { totalBreakTime?: number })?.totalBreakTime === 'number'
+            ? Math.round((ls as { totalBreakTime: number }).totalBreakTime)
+            : 0;
+        if (mountedRef.current) {
+          setKpiMetrics((prev) => ({ ...prev, breakTodayMinutes: totalBreakMin }));
         }
 
         debug.log('✅ Updating attendance from API:', {
@@ -835,6 +841,7 @@ export default function EmployeeDashboard() {
       if (String(data.employeeId) === String(employeeIdRef.current)) {
         debug.log('📡 [EMPLOYEE-DASHBOARD] Break started for current employee, updating state');
         setLastSocketEventTime(Date.now());
+        resetBreakTimer();
         updateAttendance({
           isOnBreak: true,
           breakType: data.breakType || 'regular',
@@ -914,6 +921,11 @@ export default function EmployeeDashboard() {
   }, [user?.id, employeeId]);
 
   // Fetch attendance history
+  const resetBreakTimer = useCallback(() => {
+    breakSecondsRef.current = 0;
+    setCurrentBreakDuration(0);
+  }, []);
+
   const fetchAttendanceHistory = useCallback(async () => {
     try {
       setAttendanceLoading(true);
@@ -1062,7 +1074,7 @@ export default function EmployeeDashboard() {
   useEffect(() => {
     if (!todayAttendance.isCheckedIn) return;
     const tick = () => {
-      const todayPart = todayAttendance.isOnBreak ? 0 : workingHours;
+      const todayPart = workingHours;
       applyWeekHours(weekHoursExclTodayRef.current + todayPart, calendarWeekKey(), true);
     };
     tick();
@@ -1119,7 +1131,7 @@ export default function EmployeeDashboard() {
       
       debug.log('🔄 [BREAK START] Sending request:', { breakType, employeeId: resolvedEmployeeId });
       
-      // Optimistic update - immediately show break started
+      resetBreakTimer();
       updateAttendance({
         isOnBreak: true,
         breakType: breakType,
@@ -1184,6 +1196,7 @@ export default function EmployeeDashboard() {
 
         clearApiCache('/attendance/today');
         disableRefreshRef.current = true;
+        void fetchAttendanceHistory();
         setTimeout(() => {
           disableRefreshRef.current = false;
         }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
@@ -1192,6 +1205,7 @@ export default function EmployeeDashboard() {
     } catch (error) {
       debug.error('❌ [BREAK START] Error:', error);
       toast.error(error instanceof Error ? error.message : 'Could not start break');
+      resetBreakTimer();
       updateAttendance({
         isOnBreak: false,
         breakType: 'regular',
@@ -1301,6 +1315,7 @@ export default function EmployeeDashboard() {
         });
 
         clearApiCache('/attendance/today');
+        void fetchAttendanceHistory();
         setLastSocketEventTime(Date.now());
         disableRefreshRef.current = true;
         toast.success('Break ended');
@@ -1658,7 +1673,9 @@ export default function EmployeeDashboard() {
           <KPICard
             title="Hours This Week"
             value={kpiMetrics.hoursThisWeek}
-            subtitle={kpiMetrics.weekHoursSubtitle}
+            subtitle={
+              kpiMetrics.weekHoursSubtitle || 'Mon–Sun · working hours only (breaks excluded)'
+            }
             icon={Clock}
             color="secondary"
           />

@@ -25,8 +25,9 @@ import {
   Save,
   FileText
 } from 'lucide-react';
-import { appendOrgIdParam, getBearerToken } from '../utils/apiHelper';
+import { appendOrgIdParam, buildApiUrl, getBearerToken } from '../utils/apiHelper';
 import { useAuth } from '../context/AuthContext';
+import { toast } from '../utils/portalToast';
 
 interface Holiday {
   id: string;
@@ -61,6 +62,8 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
   const [activeTab, setActiveTab] = useState<'generate' | 'manage' | 'view'>('generate');
   const [showAddHoliday, setShowAddHoliday] = useState(false);
   const [showCalendarPreview, setShowCalendarPreview] = useState(false);
+  const [previewHolidays, setPreviewHolidays] = useState<Holiday[]>([]);
+  const [previewTitle, setPreviewTitle] = useState('');
   const [editingHoliday, setEditingHoliday] = useState<Holiday | null>(null);
   const [calendars, setCalendars] = useState<HolidayCalendarRecord[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
@@ -102,7 +105,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         return;
       }
       const response = await fetch(
-        appendOrgIdParam(`/api/holidays?year=${selectedYear}`, user),
+        appendOrgIdParam(buildApiUrl(`/holidays?year=${selectedYear}&limit=500`), user),
         {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -132,7 +135,9 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         setCalendars([]);
         return;
       }
-      const response = await fetch(`/api/holidays/calendar/${selectedYear}`, {
+      const response = await fetch(
+        appendOrgIdParam(buildApiUrl(`/holidays/calendar/${selectedYear}`), user),
+        {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -203,7 +208,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       return;
     }
     try {
-      const response = await fetch(`/api/holidays/${holidayId}`, { 
+      const response = await fetch(buildApiUrl(`/holidays/${holidayId}`), { 
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -248,7 +253,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       if (editingHoliday) {
         // Update existing holiday - use _id if available, otherwise use id
         const holidayId = editingHoliday._id || editingHoliday.id;
-        const response = await fetch(`/api/holidays/${holidayId}`, {
+        const response = await fetch(buildApiUrl(`/holidays/${holidayId}`), {
           method: 'PUT',
           headers,
           body: JSON.stringify({
@@ -274,7 +279,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         }
       } else {
         // Add new holiday
-        const response = await fetch('/api/holidays', {
+        const response = await fetch(buildApiUrl('/holidays'), {
           method: 'POST',
           headers,
           body: JSON.stringify({
@@ -327,7 +332,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
 
   const handleGenerateCalendar = async () => {
     if (!calendarName.trim()) {
-      alert('Please enter a calendar name');
+      toast.error('Please enter a calendar name');
       return;
     }
 
@@ -338,7 +343,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
     });
 
     if (holidaysForYear.length === 0) {
-      alert(`No holidays found for year ${selectedYear}. Please add holidays first.`);
+      toast.error(`No holidays found for year ${selectedYear}. Add holidays in Manage Holidays first.`);
       return;
     }
 
@@ -362,10 +367,11 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       setCalendars(prev => [...prev, newCalendar]);
       setCalendarName('');
       setIsPublished(false);
-      alert(`Holiday calendar for ${selectedYear} generated successfully with ${holidaysForYear.length} holidays!`);
+      toast.success(`Calendar "${calendarName}" created with ${holidaysForYear.length} holidays`);
+      setActiveTab('view');
     } catch (error) {
       console.error('Error generating calendar:', error);
-      alert('Failed to generate calendar: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      toast.error('Failed to generate calendar');
     } finally {
       setLoading(false);
     }
@@ -393,9 +399,14 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
     }
   };
 
-  const handleViewCalendar = (calendar: HolidayCalendarRecord) => {
+  const openCalendarPreview = (title: string, list: Holiday[]) => {
+    setPreviewTitle(title);
+    setPreviewHolidays(list);
     setShowCalendarPreview(true);
-    // You can add more logic here to show the specific calendar
+  };
+
+  const handleViewCalendar = (calendar: HolidayCalendarRecord) => {
+    openCalendarPreview(calendar.name, calendar.holidays || []);
   };
 
   const handleDownloadCalendar = async (calendarId: string) => {
@@ -461,6 +472,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       {/* Tabs */}
       <div className="flex gap-2">
         <Button
+          type="button"
           variant={activeTab === 'generate' ? 'default' : 'outline'}
           onClick={() => setActiveTab('generate')}
           className="rounded-xl"
@@ -469,6 +481,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
           Generate Calendar
         </Button>
         <Button
+          type="button"
           variant={activeTab === 'manage' ? 'default' : 'outline'}
           onClick={() => setActiveTab('manage')}
           className="rounded-xl"
@@ -477,6 +490,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
           Manage Holidays
         </Button>
         <Button
+          type="button"
           variant={activeTab === 'view' ? 'default' : 'outline'}
           onClick={() => setActiveTab('view')}
           className="rounded-xl"
@@ -531,7 +545,8 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
             </div>
             <div className="mt-6 flex gap-2">
               <Button
-                onClick={handleGenerateCalendar}
+                type="button"
+                onClick={() => void handleGenerateCalendar()}
                 disabled={loading || !calendarName.trim()}
                 className="rounded-xl"
               >
@@ -548,8 +563,15 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
                 )}
               </Button>
               <Button
+                type="button"
                 variant="outline"
-                onClick={() => setShowCalendarPreview(true)}
+                onClick={() => {
+                  const holidaysForYear = holidays.filter((h) => {
+                    const holidayYear = new Date(h.date).getFullYear();
+                    return holidayYear === selectedYear;
+                  });
+                  openCalendarPreview(`Preview ${selectedYear}`, holidaysForYear);
+                }}
                 disabled={holidays.length === 0}
                 className="rounded-xl"
               >
@@ -639,7 +661,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
                 </SelectContent>
               </Select>
             </div>
-            <Button onClick={handleAddHoliday} className="rounded-xl">
+            <Button type="button" onClick={handleAddHoliday} className="rounded-xl">
               <Plus className="w-4 h-4 mr-2" />
               Add Holiday
             </Button>
@@ -742,6 +764,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
+                      type="button"
                       variant="outline"
                       size="sm"
                       className="rounded-xl"
@@ -859,8 +882,8 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <Card className="w-full max-w-4xl mx-4 p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-semibold">Calendar Preview</h2>
-              <Button variant="ghost" onClick={() => setShowCalendarPreview(false)}>
+              <h2 className="text-xl font-semibold">{previewTitle || 'Calendar Preview'}</h2>
+              <Button type="button" variant="ghost" onClick={() => setShowCalendarPreview(false)}>
                 <X className="w-4 h-4" />
               </Button>
             </div>
@@ -868,7 +891,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
             <div className="space-y-6">
               {/* Calendar Header */}
               <div className="text-center">
-                <h3 className="text-2xl font-bold">Holiday Calendar {selectedYear}</h3>
+                <h3 className="text-2xl font-bold">{previewTitle || `Holiday Calendar ${selectedYear}`}</h3>
                 <p className="text-muted-foreground">Organization: {organizationId}</p>
               </div>
 
@@ -877,7 +900,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
                 {Array.from({ length: 12 }, (_, monthIndex) => {
                   const monthDate = new Date(selectedYear, monthIndex, 1);
                   const monthName = monthDate.toLocaleDateString('en-US', { month: 'long' });
-                  const monthHolidays = holidays.filter(holiday => {
+                  const monthHolidays = previewHolidays.filter(holiday => {
                     const holidayDate = new Date(holiday.date);
                     return holidayDate.getMonth() === monthIndex && holidayDate.getFullYear() === selectedYear;
                   });
@@ -921,7 +944,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
               <Card className="p-4 rounded-xl bg-accent/30">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
                   <div>
-                    <p className="text-2xl font-bold text-primary">{holidays.filter(h => new Date(h.date).getFullYear() === selectedYear).length}</p>
+                    <p className="text-2xl font-bold text-primary">{previewHolidays.filter(h => new Date(h.date).getFullYear() === selectedYear).length}</p>
                     <p className="text-sm text-muted-foreground">Total Holidays</p>
                   </div>
                   <div>
@@ -929,7 +952,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
                     <p className="text-sm text-muted-foreground">Public Holidays</p>
                   </div>
                   <div>
-                    <p className="text-2xl font-bold text-green-600">{holidays.filter(h => h.type === 'optional' && new Date(h.date).getFullYear() === selectedYear).length}</p>
+                    <p className="text-2xl font-bold text-green-600">{previewHolidays.filter(h => h.type === 'optional' && new Date(h.date).getFullYear() === selectedYear).length}</p>
                     <p className="text-sm text-muted-foreground">Optional Holidays</p>
                   </div>
                 </div>

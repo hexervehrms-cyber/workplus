@@ -14,6 +14,8 @@ const slugCode = (name) =>
     .substring(0, 8)
     .toUpperCase() || "DEPT";
 
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 async function attachEmployeeCounts(departments, orgId) {
   const names = departments.map((d) => d.name).filter(Boolean);
   if (!names.length) return departments;
@@ -29,11 +31,50 @@ async function attachEmployeeCounts(departments, orgId) {
     { $group: { _id: "$department", count: { $sum: 1 } } },
   ]);
 
-  const countByName = new Map(counts.map((c) => [c._id, c.count]));
+  const countByName = new Map(
+    counts.map((c) => [String(c._id || "").toLowerCase(), c.count])
+  );
   return departments.map((d) => ({
     ...d,
-    employeeCount: countByName.get(d.name) || 0,
+    employeeCount:
+      countByName.get(String(d.name || "").toLowerCase()) || d.employeeCount || 0,
   }));
+}
+
+/** Include departments that exist on employee records but not in Department collection */
+async function mergeEmployeeDepartments(departments, orgId, searchQuery = "") {
+  const dbNames = new Set(departments.map((d) => String(d.name).toLowerCase()));
+  const q = String(searchQuery || "").trim().toLowerCase();
+  const fromEmployees = await Employee.aggregate([
+    {
+      $match: {
+        orgId: String(orgId),
+        status: { $ne: "terminated" },
+        department: { $exists: true, $nin: [null, ""] },
+      },
+    },
+    { $group: { _id: "$department", count: { $sum: 1 } } },
+    { $sort: { _id: 1 } },
+  ]);
+
+  const merged = [...departments];
+  for (const row of fromEmployees) {
+    const name = String(row._id || "").trim();
+    if (!name || dbNames.has(name.toLowerCase())) continue;
+    merged.push({
+      _id: null,
+      name,
+      code: slugCode(name),
+      description: "",
+      headName: "",
+      orgId: String(orgId),
+      isActive: true,
+      employeeCount: row.count,
+      source: "employees",
+    });
+    dbNames.add(name.toLowerCase());
+  }
+  return merged;
 }
 
 /**
@@ -65,10 +106,56 @@ router.get(
       ];
     }
 
+    const searchQ = search && String(search).trim() ? String(search).trim() : "";
     let departments = await Department.find(filter).sort({ name: 1 }).lean();
+    if (status !== "inactive") {
+      departments = await mergeEmployeeDepartments(departments, orgId, searchQ);
+    }
     departments = await attachEmployeeCounts(departments, orgId);
+    departments.sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
     res.json({ success: true, data: departments });
+  })
+);
+
+/**
+ * GET /api/departments/:id — department detail + employees
+ */
+router.get(
+  "/:id",
+  authorize("super_admin", "admin", "hr", "manager"),
+  asyncHandler(async (req, res) => {
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid department ID" });
+    }
+
+    const department = await Department.findOne({ _id: id, orgId }).lean();
+    if (!department) {
+      return res.status(404).json({ success: false, message: "Department not found" });
+    }
+
+    const employees = await Employee.find({
+      orgId,
+      department: {
+        $regex: new RegExp(`^${escapeRegex(department.name)}$`, "i"),
+      },
+      status: { $ne: "terminated" },
+    })
+      .populate("userId", "name email")
+      .select("employeeCode designation department status joiningDate userId")
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
+
+    const [withCount] = await attachEmployeeCounts([department], orgId);
+    res.json({
+      success: true,
+      data: { ...withCount, employees, source: "database" },
+    });
   })
 );
 
@@ -87,7 +174,16 @@ router.post(
       return res.status(400).json({ success: false, message: "Department name is required" });
     }
 
+    const trimmedName = String(name).trim();
     const deptCode = (code && String(code).trim().toUpperCase()) || slugCode(name);
+    const nameExists = await Department.findOne({
+      orgId,
+      name: { $regex: new RegExp(`^${trimmedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      isActive: true,
+    });
+    if (nameExists) {
+      return res.status(400).json({ success: false, message: "A department with this name already exists" });
+    }
     const existing = await Department.findOne({ orgId, code: deptCode, isActive: true });
     if (existing) {
       return res.status(400).json({ success: false, message: "Department code already exists" });
@@ -100,7 +196,7 @@ router.post(
       headName: headName ? String(headName).trim() : "",
       orgId,
       isActive: isActive !== false,
-      createdBy: req.user.userId,
+      createdBy: req.user.userId || req.user.id,
     });
 
     const [withCount] = await attachEmployeeCounts([department.toObject()], orgId);

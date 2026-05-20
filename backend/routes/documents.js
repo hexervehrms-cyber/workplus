@@ -86,7 +86,11 @@ async function assertCanAccessEmployeeDocuments(req, employeeIdParam) {
     .select("_id userId")
     .lean();
 
-  if (!self || String(self._id) !== String(employeeIdParam)) {
+  const param = String(employeeIdParam);
+  if (
+    !self ||
+    (String(self._id) !== param && String(self.userId) !== param)
+  ) {
     return { ok: false, status: 403, message: "Unauthorized access" };
   }
   return { ok: true, userId: String(self.userId) };
@@ -1189,6 +1193,66 @@ router.post(
       });
       return sendError(res, error.message || "Failed to issue document", 500, "ISSUE_ERROR");
     }
+  })
+);
+
+/**
+ * PATCH /api/documents/issued/:docId
+ * Update an issued document (admin/hr)
+ */
+router.patch(
+  "/issued/:docId",
+  authenticate,
+  authorize(...MANAGE_DOC_ROLES),
+  asyncHandler(async (req, res) => {
+    const { docId } = req.params;
+    const doc = await IssuedDocument.findOne({ id: docId });
+    if (!doc) {
+      return sendError(res, "Issued document not found", 404, "NOT_FOUND");
+    }
+    if (!isSuperAdmin(req) && String(doc.organizationId) !== String(req.user.orgId)) {
+      return sendError(res, "Unauthorized org access", 403, "FORBIDDEN");
+    }
+    const { title, description, category, notes, status } = req.body || {};
+    if (title != null) doc.title = String(title);
+    if (description != null) doc.description = String(description);
+    if (category != null) doc.category = String(category);
+    if (notes != null) doc.notes = String(notes);
+    if (status != null) doc.status = String(status);
+    await doc.save();
+    return sendSuccess(res, { document: doc.toObject() }, "Issued document updated");
+  })
+);
+
+/**
+ * DELETE /api/documents/issued/:docId
+ */
+router.delete(
+  "/issued/:docId",
+  authenticate,
+  authorize(...MANAGE_DOC_ROLES),
+  asyncHandler(async (req, res) => {
+    const { docId } = req.params;
+    const doc = await IssuedDocument.findOne({ id: docId });
+    if (!doc) {
+      return sendError(res, "Issued document not found", 404, "NOT_FOUND");
+    }
+    if (!isSuperAdmin(req) && String(doc.organizationId) !== String(req.user.orgId)) {
+      return sendError(res, "Unauthorized org access", 403, "FORBIDDEN");
+    }
+    if (doc.fileUrl) {
+      const absolutePath = resolveDocumentAbsolutePath(doc.fileUrl);
+      if (absolutePath) {
+        try {
+          fs.unlinkSync(absolutePath);
+        } catch {
+          /* ignore missing file */
+        }
+      }
+    }
+    await IssuedDocument.deleteOne({ id: docId });
+    await GeneratedDocument.deleteMany({ id: `gen_${docId}` });
+    return sendSuccess(res, null, "Issued document deleted");
   })
 );
 

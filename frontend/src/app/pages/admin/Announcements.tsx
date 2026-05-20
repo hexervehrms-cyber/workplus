@@ -4,6 +4,8 @@ import { Button } from '../../components/ui/button';
 import { Plus, Send, Calendar, Loader2 } from 'lucide-react';
 import { apiClient, ApiError } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
+import { useAuth } from '../../context/AuthContext';
+import { OrgRequiredNotice } from '../../components/OrgRequiredNotice';
 
 interface AnnouncementRow {
   _id: string;
@@ -19,6 +21,7 @@ interface AnnouncementRow {
 }
 
 export default function AnnouncementsAdmin() {
+  const { user } = useAuth();
   const formRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState('');
@@ -51,6 +54,9 @@ export default function AnnouncementsAdmin() {
       }
     } catch (e) {
       console.error(e);
+      if (e instanceof ApiError && (e.code === 'MISSING_ORG_CONTEXT' || e.status === 403)) {
+        toast.error('Organization context missing. Please sign out and sign in again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -103,6 +109,7 @@ export default function AnnouncementsAdmin() {
 
   return (
     <div className="p-6 space-y-6">
+      <OrgRequiredNotice user={user} />
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold">Announcements</h1>

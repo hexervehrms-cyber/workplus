@@ -296,12 +296,17 @@ export default function Profile() {
   });
 
   const loadDocuments = async () => {
-    const userId = authUser?.id || authUser?.userId;
-    if (!userId) return;
+    const employeeDocKey = employee?._id || authUser?.employeeId;
+    const fallbackUserId = authUser?.userId || authUser?.id;
+    const docScopeId = employeeDocKey || fallbackUserId;
+    if (!docScopeId) return;
 
     try {
-      clearApiCache(`/documents/employee/${userId}`);
-      const data = await apiGet(`/documents/employee/${userId}`, false);
+      clearApiCache(`/documents/employee/${docScopeId}`);
+      const data = await apiGet<{
+        success?: boolean;
+        data?: Record<string, unknown>[];
+      }>(`/documents/employee/${docScopeId}?limit=200`, false);
       const list = Array.isArray(data?.data) ? data.data : [];
       const mapped: Document[] = list.map((d: Record<string, unknown>) => ({
         _id: String(d._id || ''),
@@ -328,10 +333,10 @@ export default function Profile() {
   }, []);
 
   useEffect(() => {
-    if (authUser?.id || authUser?.userId) {
+    if (employee?._id || authUser?.userId || authUser?.id) {
       void loadDocuments();
     }
-  }, [authUser?.id, authUser?.userId]);
+  }, [employee?._id, authUser?.userId, authUser?.id]);
 
   // Update form when employee data changes
   useEffect(() => {
@@ -1970,6 +1975,7 @@ export default function Profile() {
                         </div>
                         <div className="flex items-center gap-2 ml-2">
                           <Button
+                            type="button"
                             size="sm"
                             variant="ghost"
                             className="h-8 w-8 p-0"
@@ -1979,6 +1985,7 @@ export default function Profile() {
                             <Eye className="w-4 h-4" />
                           </Button>
                           <Button
+                            type="button"
                             size="sm"
                             variant="ghost"
                             className="h-8 w-8 p-0"
@@ -1988,6 +1995,7 @@ export default function Profile() {
                             <Download className="w-4 h-4" />
                           </Button>
                           <Button
+                            type="button"
                             size="sm"
                             variant="ghost"
                             className="h-8 w-8 p-0 text-destructive hover:text-destructive"

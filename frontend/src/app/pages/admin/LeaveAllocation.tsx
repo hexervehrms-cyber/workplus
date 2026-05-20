@@ -108,7 +108,7 @@ export default function LeaveAllocation() {
   const [showForm, setShowForm] = useState(false);
   const [selectedAllocation, setSelectedAllocation] = useState<LeaveAllocationRecord | null>(null);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
+  const [selectedMonth, setSelectedMonth] = useState(0);
   const [selectedEmployee, setSelectedEmployee] = useState('');
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
@@ -179,46 +179,43 @@ export default function LeaveAllocation() {
       const orgId = resolveAuthOrgId(user);
       if (!orgId) {
         toast.error('Organization context is required.');
+        setAllocations([]);
         return;
       }
-      
-      if (orgId) {
-        const allocationsData = await LeaveAllocationService.getOrganizationAllocations(
-          orgId,
-          selectedYear,
-          selectedMonth
-        );
-        
-        let rows: LeaveAllocationRecord[] = [];
-        if (Array.isArray(allocationsData)) {
-          rows = allocationsData;
-        } else if (allocationsData?.data) {
-          rows = allocationsData.data;
-        }
-        setAllocations(rows);
 
-        const balanceMap: Record<string, number> = {};
-        await Promise.all(
-          rows.map(async (row) => {
-            const empId = row.employeeId?._id;
-            if (!empId) return;
-            try {
-              const balanceRes = await LeaveAllocationService.getEmployeeBalance(
-                empId,
-                selectedYear,
-                selectedMonth
-              );
-              if (balanceRes?.success) {
-                const parsed = parseBalanceApiResponse(balanceRes);
-                balanceMap[empId] = sumRemainingDays(parsed.balances);
-              }
-            } catch {
-              /* non-fatal */
+      const allocationsData = await LeaveAllocationService.getOrganizationAllocations(
+        orgId,
+        selectedYear,
+        selectedMonth > 0 ? selectedMonth : null
+      );
+
+      const rows: LeaveAllocationRecord[] = Array.isArray(allocationsData)
+        ? allocationsData
+        : [];
+      setAllocations(rows);
+
+      const balanceMonth = selectedMonth > 0 ? selectedMonth : new Date().getMonth() + 1;
+      const balanceMap: Record<string, number> = {};
+      await Promise.all(
+        rows.map(async (row) => {
+          const empId = row.employeeId?._id;
+          if (!empId) return;
+          try {
+            const balanceRes = await LeaveAllocationService.getEmployeeBalance(
+              empId,
+              selectedYear,
+              balanceMonth
+            );
+            if (balanceRes?.success) {
+              const parsed = parseBalanceApiResponse(balanceRes);
+              balanceMap[empId] = sumRemainingDays(parsed.balances);
             }
-          })
-        );
-        setAvailableByEmployee(balanceMap);
-      }
+          } catch {
+            /* non-fatal */
+          }
+        })
+      );
+      setAvailableByEmployee(balanceMap);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -438,6 +435,9 @@ export default function LeaveAllocation() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="rounded-xl">
+                <SelectItem value="0" className="rounded-lg">
+                  All months
+                </SelectItem>
                 {Array.from({ length: 12 }, (_, i) => i + 1).map(month => (
                   <SelectItem key={month} value={month.toString()} className="rounded-lg">
                     {getMonthName(month)}
@@ -459,7 +459,9 @@ export default function LeaveAllocation() {
         ) : allocations.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">
             <Calendar className="w-12 h-12 text-muted-foreground mb-4 opacity-50" />
-            <p className="text-muted-foreground">No allocations found for {getMonthName(selectedMonth)} {selectedYear}</p>
+            <p className="text-muted-foreground">
+              No allocations found for {selectedMonth > 0 ? `${getMonthName(selectedMonth)} ` : ''}{selectedYear}
+            </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -467,6 +469,7 @@ export default function LeaveAllocation() {
               <thead>
                 <tr className="border-b">
                   <th className="p-4 text-left">Employee</th>
+                  {selectedMonth === 0 ? <th className="p-4 text-left">Month</th> : null}
                   <th className="p-4 text-left">Department</th>
                   <th className="p-4 text-center">Vacation</th>
                   <th className="p-4 text-center">Sick</th>
@@ -492,6 +495,11 @@ export default function LeaveAllocation() {
                        allocation.employeeId?.employeeCode ||
                        'Unknown'}
                     </td>
+                    {selectedMonth === 0 ? (
+                      <td className="p-4 text-sm text-muted-foreground">
+                        {getMonthName(allocation.month)} {allocation.year}
+                      </td>
+                    ) : null}
                     <td className="p-4 text-sm text-muted-foreground">
                       {allocation.employeeId?.department || '-'}
                     </td>

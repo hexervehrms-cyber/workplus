@@ -171,7 +171,13 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
   }
   
   if (department) {
-    query.department = department;
+    const dept = String(department).trim();
+    query.department = {
+      $regex: new RegExp(
+        `^${dept.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+        "i"
+      ),
+    };
   }
   
   if (search) {

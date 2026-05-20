@@ -1,7 +1,7 @@
 /**
  * Organization ID validation — strict tenant context (no "system" fallback for tenants).
  */
-import logger from './logger.js';
+import logger from '../utils/logger.js';
 import { isSuperAdmin, userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
 
 export const validateOrgId = (req, res, next) => {

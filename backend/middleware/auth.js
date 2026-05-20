@@ -59,17 +59,37 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     }
 
     if (cachedData?.userData?.role) {
-      const cachedOrg = normalizeAuthOrgId({
+      let authOrg = normalizeAuthOrgId({
         orgId: cachedData.userData.orgId,
         role: cachedData.userData.role
       });
+
+      // Stale JWT cache may still carry orgId "system" after tenant migration — refresh from DB
+      if (!authOrg && cachedData.userData.role !== 'super_admin') {
+        const freshUser = await User.findById(cachedData.userData.userId)
+          .select('orgId tenantId organizationId role isActive')
+          .lean();
+        if (!freshUser || !freshUser.isActive) {
+          return res.status(401).json({
+            success: false,
+            message: 'Invalid token. User not found.',
+            code: 'USER_NOT_FOUND'
+          });
+        }
+        authOrg = normalizeAuthOrgId(freshUser);
+        if (authOrg) {
+          cachedData.userData.orgId = authOrg;
+          await JWTCache.cacheToken(token, freshUser._id, cachedData.userData);
+        }
+      }
+
       req.user = {
         userId: cachedData.userData.userId,
         email: cachedData.userData.email,
         name: cachedData.userData.name,
         role: cachedData.userData.role,
-        orgId: cachedOrg,
-        tenantId: cachedOrg,
+        orgId: authOrg,
+        tenantId: authOrg,
         departmentId: cachedData.userData.departmentId,
         permissions: cachedData.userData.permissions || [],
         sessionId: cachedData.userData.sessionId,

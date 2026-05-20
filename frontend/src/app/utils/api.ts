@@ -622,6 +622,50 @@ export class EmployeeService {
 }
 
 // ============================================
+// Department Service
+// ============================================
+export interface DepartmentRecord {
+  _id: string | null;
+  name: string;
+  description?: string;
+  headName?: string;
+  code?: string;
+  employeeCount?: number;
+  isActive?: boolean;
+  source?: 'database' | 'employees';
+}
+
+export class DepartmentService {
+  static async getAll(options?: {
+    search?: string;
+    status?: 'active' | 'inactive' | 'all';
+    orgId?: string;
+  }): Promise<DepartmentRecord[]> {
+    const params = new URLSearchParams();
+    if (options?.search?.trim()) params.set('search', options.search.trim());
+    if (options?.status && options.status !== 'active') params.set('status', options.status);
+    if (options?.orgId) params.set('orgId', options.orgId);
+    const qs = params.toString();
+    const response = await apiClient.get<unknown>(`/departments${qs ? `?${qs}` : ''}`);
+    return extractApiList<DepartmentRecord>(response);
+  }
+
+  static async getEmployeesByDepartment(
+    departmentName: string,
+    orgId?: string
+  ): Promise<unknown[]> {
+    const params = new URLSearchParams({
+      department: departmentName,
+      simple: 'true',
+      limit: '500',
+    });
+    if (orgId) params.set('orgId', orgId);
+    const response = await apiClient.get<unknown>(`/employees?${params.toString()}`);
+    return extractApiList(response);
+  }
+}
+
+// ============================================
 // Expense Service
 // ============================================
 export class ExpenseService {
@@ -671,20 +715,22 @@ export class ExpenseService {
   }
 }
 
+/** Normalize list payloads from paginated or flat API responses. */
+export function extractApiList<T = unknown>(response: unknown): T[] {
+  if (Array.isArray(response)) return response as T[];
+  if (!response || typeof response !== 'object') return [];
+  const body = response as { data?: unknown };
+  if (Array.isArray(body.data)) return body.data as T[];
+  return [];
+}
+
 // ============================================
 // Leave Request Service
 // ============================================
 export class LeaveRequestService {
   static async getAllLeaveRequests() {
-    const response = await apiClient.get<any>('/leave-requests');
-    // Handle paginated response
-    if (response.data?.data) {
-      return response.data.data;
-    }
-    if (Array.isArray(response.data)) {
-      return response.data;
-    }
-    return [];
+    const response = await apiClient.get<any>('/leave-requests?limit=500');
+    return extractApiList(response);
   }
 
   static async getLeaveRequestsByUserId(userId: string) {
@@ -931,19 +977,20 @@ export class LeaveAllocationService {
     return response.data;
   }
 
-  static async getOrganizationAllocations(orgId: string, year?: number, month?: number, status?: string) {
+  static async getOrganizationAllocations(
+    orgId: string,
+    year?: number,
+    month?: number | null,
+    status?: string
+  ) {
     let endpoint = `/leave-allocation/organization/${orgId}`;
-    const params = new URLSearchParams();
+    const params = new URLSearchParams({ limit: '500' });
     if (year) params.append('year', year.toString());
-    if (month) params.append('month', month.toString());
+    if (month != null && month > 0) params.append('month', month.toString());
     if (status) params.append('status', status);
-    
-    if (params.toString()) {
-      endpoint += `?${params.toString()}`;
-    }
-    
+    endpoint += `?${params.toString()}`;
     const response = await apiClient.get<any>(endpoint);
-    return response.data;
+    return extractApiList(response);
   }
 
   static async createAllocation(data: any) {

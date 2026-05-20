@@ -58,6 +58,7 @@ const DEFAULT_ENABLED_LEAVE_TYPES: Record<string, boolean> = {
 
 export default function Leave() {
   const { user } = useAuth();
+  const authUserId = user?.userId || user?.id ? String(user.userId || user.id) : '';
   const [leaveHistory, setLeaveHistory] = useState<LeaveRequest[]>([]);
   const [leaveBalance, setLeaveBalance] = useState<LeaveBalanceMap>({});
   const [hasLeaveAllocation, setHasLeaveAllocation] = useState(false);
@@ -80,7 +81,7 @@ export default function Leave() {
 
   useEffect(() => {
     const fetchData = async () => {
-      if (!user?.id) return;
+      if (!authUserId) return;
       
       try {
         setLoading(true);
@@ -90,7 +91,7 @@ export default function Leave() {
         console.log('🔄 [LEAVE] Fetching fresh leave data...');
         
         // Fetch leave requests
-        const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
+        const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
         console.log('📊 [LEAVE] Leave requests response:', leaveResponse);
         
         if (leaveResponse.success && leaveResponse.data) {
@@ -107,7 +108,7 @@ export default function Leave() {
         if (!employeeId) {
           console.log('⚠️ [LEAVE] employeeId not found in user context, fetching from backend...');
           try {
-            const employeeResponse = await EmployeeService.getEmployeeByUserId(user.id);
+            const employeeResponse = await EmployeeService.getEmployeeByUserId(authUserId);
             if (employeeResponse && employeeResponse._id) {
               employeeId = employeeResponse._id;
               console.log('✅ [LEAVE] Employee ID fetched:', employeeId);
@@ -176,7 +177,7 @@ export default function Leave() {
     };
 
     fetchData();
-  }, [user]);
+  }, [authUserId, user?.employeeId]);
 
   useEffect(() => {
     const refreshBalances = async () => {
@@ -213,7 +214,7 @@ export default function Leave() {
       window.removeEventListener('focus', onVisible);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [user?.id, user?.employeeId]);
+  }, [authUserId, user?.employeeId]);
 
   const leaveBalanceCards = useMemo(() => {
     const cardDefs: Array<{ type: string; key: string; color: string }> = [
@@ -256,9 +257,9 @@ export default function Leave() {
     console.log('📊 Form data:', formData);
     console.log('👤 User:', user);
     
-    if (!user?.id || !formData.type || !formData.startDate || !formData.reason) {
+    if (!authUserId || !formData.type || !formData.startDate || !formData.reason) {
       console.error('❌ Validation failed:', {
-        userId: !!user?.id,
+        userId: !!authUserId,
         type: !!formData.type,
         startDate: !!formData.startDate,
         reason: !!formData.reason
@@ -363,7 +364,7 @@ export default function Leave() {
 
       // Prepare leave data with time information
       const leaveData: any = {
-        userId: user.id,
+        userId: authUserId,
         employeeId: employeeId,
         leaveType: formData.type,
         startDate: startDate.toISOString(),
@@ -390,21 +391,19 @@ export default function Leave() {
 
       let response;
       if (editingLeaveId) {
-        // Update existing leave request
         response = await LeaveRequestService.updateLeaveRequest(editingLeaveId, leaveData);
-        toast.success('Leave request updated successfully');
       } else {
-        // Create new leave request
         response = await LeaveRequestService.createLeaveRequest(leaveData);
+      }
 
-        if (isHourly) {
+      if (response?.success !== false) {
+        if (editingLeaveId) {
+          toast.success('Leave request updated successfully');
+        } else if (isHourly) {
           toast.success(`Hourly leave submitted successfully (${hours.toFixed(1)} hours)`);
         } else {
           toast.success('Leave request submitted successfully');
         }
-      }
-      
-      if (response.success) {
         setShowLeaveForm(false);
         setEditingLeaveId(null);
         setFormData({
@@ -417,7 +416,7 @@ export default function Leave() {
           leaveDuration: 'full'
         });
         
-        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
+        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
         if (updatedLeaves.success && updatedLeaves.data) {
           // Handle both array and paginated response
           const leaveData = Array.isArray(updatedLeaves.data) ? updatedLeaves.data : updatedLeaves.data.data || [];
@@ -428,7 +427,7 @@ export default function Leave() {
         let refreshEmployeeId = user.employeeId;
         if (!refreshEmployeeId) {
           try {
-            const employeeResponse = await EmployeeService.getEmployeeByUserId(user.id);
+            const employeeResponse = await EmployeeService.getEmployeeByUserId(authUserId);
             if (employeeResponse && employeeResponse._id) {
               refreshEmployeeId = employeeResponse._id;
             }
@@ -685,7 +684,7 @@ Reason: ${leave.reason}
                     variant="destructive"
                     className="rounded-lg flex-1 text-xs sm:text-sm"
                     onClick={async () => {
-                      if (!user?.id) return;
+                      if (!authUserId) return;
                       if (confirm('Are you sure you want to delete this leave request?')) {
                         try {
                           // Calculate days to restore
@@ -696,7 +695,7 @@ Reason: ${leave.reason}
                           // Get employeeId
                           let employeeId = user.employeeId;
                           if (!employeeId) {
-                            const employeeResponse = await EmployeeService.getEmployeeByUserId(user.id);
+                            const employeeResponse = await EmployeeService.getEmployeeByUserId(authUserId);
                             if (employeeResponse && employeeResponse._id) {
                               employeeId = employeeResponse._id;
                             }
@@ -713,7 +712,7 @@ Reason: ${leave.reason}
                           // toast.success('Leave request deleted and leaves restored');
                           
                           // Refresh leave history
-                          const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
+                          const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
                           if (updatedLeaves.success && updatedLeaves.data) {
                             const leaveData = Array.isArray(updatedLeaves.data) ? updatedLeaves.data : updatedLeaves.data.data || [];
                             setLeaveHistory(leaveData);
@@ -940,9 +939,10 @@ Reason: ${leave.reason}
               >
                 Cancel
               </Button>
-              <Button 
-                className="flex-1 rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl" 
-                onClick={handleSubmitLeave}
+              <Button
+                type="button"
+                className="flex-1 rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl"
+                onClick={() => void handleSubmitLeave()}
               >
                 {editingLeaveId ? 'Save Changes' : 'Submit Request'}
               </Button>

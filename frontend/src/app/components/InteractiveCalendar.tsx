@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
-import { LeaveRequestService } from '../utils/api';
+import { LeaveRequestService, ApiError } from '../utils/api';
 import { apiGetSafe } from '../utils/apiHelper';
 import { useAuth } from '../context/AuthContext';
 import { toast } from '../utils/portalToast';
@@ -52,6 +52,7 @@ export default function InteractiveCalendar() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [showLeaveForm, setShowLeaveForm] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string>('');
+  const [submittingLeave, setSubmittingLeave] = useState(false);
   const [formData, setFormData] = useState({
     type: '',
     startDate: '',
@@ -227,7 +228,8 @@ export default function InteractiveCalendar() {
 
   // Submit leave request
   const handleSubmitLeave = async () => {
-    if (!user?.id || !formData.type || !formData.startDate || !formData.endDate || !formData.reason) {
+    const authUserId = user?.userId || user?.id;
+    if (!authUserId || !formData.type || !formData.startDate || !formData.endDate || !formData.reason) {
       toast.error('Please fill in all required fields');
       return;
     }
@@ -238,15 +240,16 @@ export default function InteractiveCalendar() {
     }
 
     try {
+      setSubmittingLeave(true);
       const { resolveEmployeeMongoId } = await import('../utils/resolveEmployeeId');
       const employeeId = await resolveEmployeeMongoId(user);
       if (!employeeId) {
         toast.error('Employee profile not found. Please contact HR.');
         return;
       }
-      const orgId = user.orgId || user.tenantId;
-      if (!orgId) {
-        toast.error('Organization not set on your account.');
+      const orgId = user?.orgId || user?.tenantId;
+      if (!orgId || orgId === 'system') {
+        toast.error('Organization not set on your account. Please sign out and sign in again.');
         return;
       }
 
@@ -254,7 +257,7 @@ export default function InteractiveCalendar() {
       const endDate = new Date(formData.endDate);
 
       const leaveData = {
-        userId: user.id,
+        userId: authUserId,
         employeeId: employeeId,
         leaveType: formData.type,
         startDate: startDate.toISOString(),
@@ -269,11 +272,16 @@ export default function InteractiveCalendar() {
       const response = await LeaveRequestService.createLeaveRequest(leaveData);
       
       if (response.success) {
-        toast.success('Leave request submitted successfully');
+        const autoApproved = !!(response.data as { autoApproved?: boolean })?.autoApproved;
+        toast.success(
+          autoApproved
+            ? 'Leave request was auto-approved by policy'
+            : 'Leave request submitted — pending admin approval'
+        );
         setShowLeaveForm(false);
         setFormData({ type: '', startDate: '', endDate: '', startTime: '09:00', endTime: '10:00', isHourlyLeave: false, reason: '' });
         
-        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
+        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
         if (updatedLeaves.success && updatedLeaves.data) {
           const raw = updatedLeaves.data as LeaveRequest[] | { data?: LeaveRequest[] };
           setLeaveHistory(Array.isArray(raw) ? raw : raw.data ?? []);
@@ -283,7 +291,9 @@ export default function InteractiveCalendar() {
       }
     } catch (error) {
       console.error('Error submitting leave request:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to submit leave request');
+      toast.error(error instanceof ApiError ? error.getUserMessage() : error instanceof Error ? error.message : 'Failed to submit leave request');
+    } finally {
+      setSubmittingLeave(false);
     }
   };
 
@@ -595,10 +605,12 @@ export default function InteractiveCalendar() {
                 Cancel
               </Button>
               <Button 
+                type="button"
                 className="flex-1 rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl" 
                 onClick={handleSubmitLeave}
+                disabled={submittingLeave}
               >
-                Submit Request
+                {submittingLeave ? 'Submitting…' : 'Submit Request'}
               </Button>
             </div>
           </div>

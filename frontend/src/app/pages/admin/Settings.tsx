@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { apiClient } from '../../utils/api';
+import { apiClient, ApiError } from '../../utils/api';
+import { OrgRequiredNotice } from '../../components/OrgRequiredNotice';
 import { toast } from '../../utils/portalToast';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -142,6 +143,11 @@ export default function AdminSettings() {
         }
       } catch (e) {
         console.error(e);
+        if (e instanceof ApiError && (e.code === 'MISSING_ORG_CONTEXT' || e.status === 403 || e.status === 400)) {
+          toast.error(
+            e.getUserMessage() || 'Could not load notification settings. Try signing out and back in.'
+          );
+        }
       } finally {
         setNotifLoading(false);
       }
@@ -279,6 +285,7 @@ export default function AdminSettings() {
   return (
     <div className="min-h-screen bg-background p-6">
       <div className="max-w-3xl mx-auto space-y-6">
+        <OrgRequiredNotice user={user} />
         {/* Header */}
         <div>
           <h1 className="text-3xl font-bold text-foreground">Settings</h1>

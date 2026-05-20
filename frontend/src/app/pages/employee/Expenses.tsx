@@ -3,7 +3,13 @@ import { Receipt, Plus, Upload, Filter, Calendar, DollarSign, CheckCircle, Clock
 import { useCurrency } from '../../context/CurrencyContext';
 import { useAuth } from '../../context/AuthContext';
 import { socketService } from '../../utils/socket';
-import { apiGet, apiPost, apiPut, apiDelete, apiUpload, buildFileUrl, getBearerToken } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, apiDelete, apiUpload, getBearerToken } from '../../utils/apiHelper';
+import { extractApiList } from '../../utils/api';
+import {
+  openExpenseReceiptInDialog,
+  downloadExpenseReceipt,
+  receiptFilenameFromPath,
+} from '../../utils/expenseReceipt';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -114,6 +120,8 @@ export default function Expenses() {
   const [toDate, setToDate] = useState('');
   const [viewReceiptOpen, setViewReceiptOpen] = useState(false);
   const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
+  const [viewingReceiptBlobUrl, setViewingReceiptBlobUrl] = useState<string | null>(null);
+  const [viewingReceiptIsPdf, setViewingReceiptIsPdf] = useState(false);
   const [importingFile, setImportingFile] = useState(false);
   const [exportFormat, setExportFormat] = useState<'csv' | 'excel'>('csv');
   const [formData, setFormData] = useState({
@@ -141,15 +149,8 @@ export default function Expenses() {
     try {
       setLoading(true);
       setError(null);
-      const data = await apiGet(`/expenses/user/${stableUserId}`);
-      
-      if (data.data && Array.isArray(data.data)) {
-        setExpenses(data.data);
-      } else if (Array.isArray(data)) {
-        setExpenses(data);
-      } else {
-        setExpenses([]);
-      }
+      const data = await apiGet(`/expenses/user/${stableUserId}?limit=500`);
+      setExpenses(extractApiList<Expense>(data));
     } catch (error) {
       console.error('Error fetching expenses:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to load expenses';
@@ -257,70 +258,52 @@ export default function Expenses() {
     }
   };
 
-  // Handle receipt download
-  const handleDownloadReceipt = (receiptPath: string, expenseTitle: string) => {
-    if (!receiptPath) {
+  const handleDownloadReceipt = async (receiptPath: string, expenseTitle: string) => {
+    if (!receiptPath || !receiptFilenameFromPath(receiptPath)) {
       toast.error('No receipt available');
       return;
     }
-
     try {
-      console.log('Download receipt - receiptPath:', receiptPath);
-      
-      const fullUrl = buildFileUrl(receiptPath);
-      
-      console.log('Download URL:', fullUrl);
-      
-      // Create a link element
-      const link = document.createElement('a');
-      link.href = fullUrl;
-      link.download = `${expenseTitle}-receipt${receiptPath.substring(receiptPath.lastIndexOf('.'))}`;
-      link.target = '_blank';
-      
-      // Trigger download
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
+      await downloadExpenseReceipt(receiptPath, `${expenseTitle}-receipt`);
       toast.success('Receipt download started');
     } catch (error) {
       console.error('Download error:', error);
-      toast.error('Failed to download receipt');
+      toast.error(error instanceof Error ? error.message : 'Failed to download receipt');
     }
   };
 
-  // Handle view receipt
-  const handleViewReceipt = (receiptPath: string) => {
-    if (!receiptPath) {
+  const handleViewReceipt = async (receiptPath: string) => {
+    if (!receiptPath || !receiptFilenameFromPath(receiptPath)) {
       toast.error('No receipt available');
       return;
     }
-    
-    console.log('=== VIEW RECEIPT DEBUG ===');
-    console.log('Receipt path from expense:', receiptPath);
-    console.log('Receipt path type:', typeof receiptPath);
-    console.log('Receipt path length:', receiptPath.length);
-    
-    const fullUrl = buildFileUrl(receiptPath);
-    
-    console.log('Full URL:', fullUrl);
-    console.log('=== END DEBUG ===');
-    
-    setViewingReceipt(fullUrl);
-    setViewReceiptOpen(true);
+    try {
+      if (viewingReceiptBlobUrl) {
+        URL.revokeObjectURL(viewingReceiptBlobUrl);
+      }
+      const blobUrl = await openExpenseReceiptInDialog(receiptPath);
+      const label = receiptFilenameFromPath(receiptPath)?.toLowerCase() || '';
+      setViewingReceiptIsPdf(label.endsWith('.pdf'));
+      setViewingReceiptBlobUrl(blobUrl);
+      setViewingReceipt(blobUrl);
+      setViewReceiptOpen(true);
+    } catch (error) {
+      console.error('View receipt error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to view receipt');
+    }
   };
 
   // Handle expense submission
   const handleSubmitExpense = async () => {
-    if (!user?.id || !formData.title || !formData.category || !formData.amount || !formData.date) {
+    const stableUserId = user?.userId || user?.id;
+    if (!stableUserId || !formData.title || !formData.category || !formData.amount || !formData.date) {
       toast.error('Please fill in all required fields (Title, Category, Amount, Date)');
       return;
     }
 
     try {
       setSubmitting(true);
-      const token = getBearerToken();
-      console.log(editingId ? 'Updating expense:' : 'Submitting expense for user:', user.id);
+      console.log(editingId ? 'Updating expense:' : 'Submitting expense for user:', stableUserId);
       console.log('Form data:', formData);
       
       // If there's a receipt file, upload it first
@@ -936,7 +919,7 @@ export default function Expenses() {
                 <Button variant="outline" className="flex-1 rounded-xl" onClick={handleCloseDialog} disabled={submitting}>
                   Cancel
                 </Button>
-                <Button className="flex-1 rounded-xl" onClick={handleSubmitExpense} disabled={submitting}>
+                <Button type="button" className="flex-1 rounded-xl" onClick={() => void handleSubmitExpense()} disabled={submitting}>
                   {submitting ? <Loader className="w-4 h-4 mr-2 animate-spin" /> : null}
                   {editingId ? 'Update Claim' : 'Submit Claim'}
                 </Button>
@@ -1121,22 +1104,24 @@ export default function Expenses() {
                     </Badge>
                     <div className="flex items-center gap-2">
                       {/* View and Download buttons - always show, disable if no receipt */}
-                      <Button 
+                      <Button
+                        type="button"
                         variant="outline" 
                         size="sm" 
                         className="rounded-xl"
-                        onClick={() => handleViewReceipt(expense.receipt || '')}
+                        onClick={() => void handleViewReceipt(expense.receipt || '')}
                         disabled={!expense.receipt}
                         title={expense.receipt ? "View receipt" : "No receipt uploaded"}
                       >
                         <Eye className="w-4 h-4 mr-1" />
                         View
                       </Button>
-                      <Button 
+                      <Button
+                        type="button"
                         variant="outline" 
                         size="sm" 
                         className="rounded-xl"
-                        onClick={() => handleDownloadReceipt(expense.receipt || '', expense.title || 'receipt')}
+                        onClick={() => void handleDownloadReceipt(expense.receipt || '', expense.title || 'receipt')}
                         disabled={!expense.receipt}
                         title={expense.receipt ? "Download receipt" : "No receipt uploaded"}
                       >
@@ -1146,7 +1131,8 @@ export default function Expenses() {
                       {/* Edit and Delete buttons for pending expenses */}
                       {expense.status === 'pending' && (
                         <>
-                          <Button 
+                          <Button
+                            type="button"
                             variant="outline" 
                             size="sm" 
                             className="rounded-xl"
@@ -1155,11 +1141,12 @@ export default function Expenses() {
                             <Edit className="w-4 h-4 mr-1" />
                             Edit
                           </Button>
-                          <Button 
+                          <Button
+                            type="button"
                             variant="outline" 
                             size="sm" 
                             className="rounded-xl text-destructive hover:text-destructive"
-                            onClick={() => handleDeleteExpense(expense._id)}
+                            onClick={() => void handleDeleteExpense(expense._id)}
                           >
                             <Trash2 className="w-4 h-4 mr-1" />
                             Delete
@@ -1176,7 +1163,18 @@ export default function Expenses() {
       </Card>
 
       {/* View Receipt Dialog */}
-      <Dialog open={viewReceiptOpen} onOpenChange={setViewReceiptOpen}>
+      <Dialog
+        open={viewReceiptOpen}
+        onOpenChange={(open) => {
+          setViewReceiptOpen(open);
+          if (!open && viewingReceiptBlobUrl) {
+            URL.revokeObjectURL(viewingReceiptBlobUrl);
+            setViewingReceiptBlobUrl(null);
+            setViewingReceipt(null);
+            setViewingReceiptIsPdf(false);
+          }
+        }}
+      >
         <DialogContent className="max-w-4xl max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>View Receipt</DialogTitle>
@@ -1187,65 +1185,21 @@ export default function Expenses() {
           <div className="overflow-auto max-h-[70vh]">
             {viewingReceipt && viewingReceipt.trim() && viewingReceipt !== 'undefined' ? (
               <div className="flex items-center justify-center bg-gray-50 rounded-lg p-4">
-                {viewingReceipt.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
+                {!viewingReceiptIsPdf ? (
                   <div className="w-full">
-                    <img 
-                      src={viewingReceipt} 
-                      alt="Receipt" 
+                    <img
+                      src={viewingReceipt}
+                      alt="Receipt"
                       className="max-w-full h-auto rounded-lg shadow-lg mx-auto"
-                      onError={(e) => {
-                        console.error('Image load error:', viewingReceipt);
-                        e.currentTarget.style.display = 'none';
-                        const parent = e.currentTarget.parentElement;
-                        if (parent) {
-                          parent.innerHTML = `
-                            <div class="text-center py-8">
-                              <svg class="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                              </svg>
-                              <p class="text-gray-600 mb-4">Receipt file not found</p>
-                              <p class="text-sm text-gray-500 mb-4">The receipt file could not be loaded from the server</p>
-                            </div>
-                          `;
-                        }
-                      }}
-                    />
-                  </div>
-                ) : viewingReceipt.match(/\.pdf$/i) ? (
-                  <div className="w-full">
-                    <iframe 
-                      src={viewingReceipt} 
-                      className="w-full h-[600px] rounded-lg shadow-lg"
-                      title="Receipt PDF"
-                      onError={(e) => {
-                        console.error('PDF load error:', viewingReceipt);
-                        const parent = e.currentTarget.parentElement;
-                        if (parent) {
-                          parent.innerHTML = `
-                            <div class="text-center py-8">
-                              <svg class="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                              </svg>
-                              <p class="text-gray-600 mb-4">PDF file not found</p>
-                              <p class="text-sm text-gray-500 mb-4">The receipt file could not be loaded from the server</p>
-                            </div>
-                          `;
-                        }
-                      }}
                     />
                   </div>
                 ) : (
-                  <div className="text-center py-8">
-                    <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
-                    <p className="text-muted-foreground mb-4">Preview not available for this file type</p>
-                    <p className="text-xs text-gray-500 mb-4 break-all">{viewingReceipt}</p>
-                    <Button 
-                      onClick={() => window.open(viewingReceipt, '_blank')}
-                      className="rounded-xl"
-                    >
-                      <Download className="w-4 h-4 mr-2" />
-                      Open in New Tab
-                    </Button>
+                  <div className="w-full">
+                    <iframe
+                      src={viewingReceipt}
+                      className="w-full h-[600px] rounded-lg shadow-lg"
+                      title="Receipt PDF"
+                    />
                   </div>
                 )}
               </div>

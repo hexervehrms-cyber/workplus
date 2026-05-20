@@ -954,8 +954,8 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     logger.warn('Could not fetch user name for leave request', { userId });
   }
 
-  // Use Leave Policy Engine if available
-  if (global.leavePolicyEngine) {
+  // Smart policy engine is for HR/admin only — employees always get pending requests for approval
+  if (global.leavePolicyEngine && isPrivilegedCreator) {
     try {
       const result = await global.leavePolicyEngine.processLeaveRequest({
         employeeId,

@@ -13,6 +13,7 @@ import {
   FileText, Loader2, Briefcase, Calendar, DollarSign, IndianRupee, Link as LinkIcon, Key
 } from 'lucide-react';
 import { EmployeeService } from '../../utils/api';
+import { useDepartments } from '../../hooks/useDepartments';
 import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useCurrency } from '../../context/CurrencyContext';
@@ -75,6 +76,7 @@ export default function Employees() {
   const mounted = useIsMounted();
   const navigate = useNavigate();
   const { formatCurrency, selectedCurrency } = useCurrency();
+  const { departmentNames, loading: deptOptionsLoading } = useDepartments();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -448,12 +450,26 @@ export default function Employees() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Department</Label>
-                  <Input
-                    value={formData.department}
-                    onChange={(e) => setFormData({...formData, department: e.target.value})}
-                    placeholder="e.g. Engineering"
-                    className="mt-1"
-                  />
+                  <Select
+                    value={formData.department || undefined}
+                    onValueChange={(v) => setFormData({ ...formData, department: v })}
+                    disabled={deptOptionsLoading}
+                  >
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="Select department" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {departmentNames.length === 0 ? (
+                        <SelectItem value="General">General</SelectItem>
+                      ) : (
+                        departmentNames.map((d) => (
+                          <SelectItem key={d} value={d}>
+                            {d}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label>Designation</Label>
@@ -666,12 +682,26 @@ export default function Employees() {
                   </div>
                   <div>
                     <Label>Department</Label>
-                    <Input
-                      value={formData.department}
-                      onChange={(e) => setFormData({...formData, department: e.target.value})}
-                      placeholder="e.g. Engineering"
-                      className="mt-1"
-                    />
+                    <Select
+                      value={formData.department || undefined}
+                      onValueChange={(v) => setFormData({ ...formData, department: v })}
+                      disabled={deptOptionsLoading}
+                    >
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select department" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {departmentNames.length === 0 ? (
+                          <SelectItem value="General">General</SelectItem>
+                        ) : (
+                          departmentNames.map((d) => (
+                            <SelectItem key={d} value={d}>
+                              {d}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
                     <Label>Designation</Label>

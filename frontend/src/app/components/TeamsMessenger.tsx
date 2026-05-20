@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Send,
   Search,
@@ -106,6 +107,11 @@ interface Conversation {
   messageCount: number;
 }
 
+function resolveAuthUserId(user: { id?: string; userId?: string } | null | undefined): string {
+  if (!user) return '';
+  return String(user.userId || user.id || '');
+}
+
 function getActiveConversationId(selected: ChatUser | null, myId: string): string {
   if (!selected) return '';
   if (selected.chatKind === 'group' && selected.conversationId) {
@@ -116,6 +122,8 @@ function getActiveConversationId(selected: ChatUser | null, myId: string): strin
 
 export default function TeamsMessenger() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const myAuthId = resolveAuthUserId(user);
   const [selectedUser, setSelectedUser] = useState<ChatUser | null>(null);
   const [users, setUsers] = useState<ChatUser[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -158,7 +166,7 @@ export default function TeamsMessenger() {
   const [avatarUploading, setAvatarUploading] = useState(false);
   const profileAvatarInputRef = useRef<HTMLInputElement>(null);
 
-  const hiddenStorageKey = user?.id ? `workplus-chat-hidden-${user.id}` : null;
+  const hiddenStorageKey = myAuthId ? `workplus-chat-hidden-${myAuthId}` : null;
 
   const resolveAvatarUrl = (avatar?: string) => {
     if (!avatar) return undefined;
@@ -219,13 +227,13 @@ export default function TeamsMessenger() {
   const fetchSidebarRef = useRef<() => Promise<void>>(async () => {});
 
   const fetchSidebar = useCallback(async () => {
-    if (!user?.id) {
+    if (!myAuthId) {
       setLoading(false);
       return;
     }
     try {
       setLoading(true);
-      const myId = String(user.id);
+      const myId = myAuthId;
       const [usersRes, convRes, groupsRes] = await Promise.all([
         apiClient.get<any[]>('/chat/users'),
         apiClient.get<any[]>('/chat/conversations').catch(() => ({ success: false, data: [] })),
@@ -308,7 +316,7 @@ export default function TeamsMessenger() {
     } finally {
       setLoading(false);
     }
-  }, [user?.id, user?.role]);
+  }, [myAuthId, user?.role]);
 
   fetchSidebarRef.current = fetchSidebar;
 
@@ -316,9 +324,25 @@ export default function TeamsMessenger() {
     fetchSidebar();
   }, [fetchSidebar]);
 
+  useEffect(() => {
+    const open = searchParams.get('open');
+    if (open === 'add') {
+      setShowAddContactDialog(true);
+    } else if (open === 'group') {
+      setNewGroupName('');
+      setCreateGroupMemberIds(new Set());
+      setShowCreateGroupDialog(true);
+    }
+    if (open) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('open');
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   // Initialize Socket.IO connection (AuthContext + token mirror; avoids cleared localStorage)
   useEffect(() => {
-    if (!user?.id) return;
+    if (!myAuthId) return;
 
     let cancelled = false;
 
@@ -331,13 +355,13 @@ export default function TeamsMessenger() {
       try {
         if (!appSocket.isConnected()) {
           await appSocket.connect(
-            user.id,
+            myAuthId,
             user.role,
             user.orgId || user.tenantId || undefined
           );
         }
 
-        const myId = String(user.id);
+        const myId = myAuthId;
         const listeners: Array<{ event: string; handler: (...args: unknown[]) => void }> = [];
         const reg = (event: string, handler: (...args: unknown[]) => void) => {
           listeners.push({ event, handler });
@@ -528,13 +552,13 @@ export default function TeamsMessenger() {
       socketListenersRef.current = [];
       appSocket.off('chat:group_created', onGroupCreated);
     };
-  }, [user?.id, user?.role, user?.orgId, user?.tenantId, fetchSidebar]);
+  }, [myAuthId, user?.role, user?.orgId, user?.tenantId, fetchSidebar]);
 
   // Load messages when user is selected
   useEffect(() => {
-    if (!selectedUser || !appSocket || !user?.id) return;
+    if (!selectedUser || !appSocket || !myAuthId) return;
 
-    const myId = String(user.id);
+    const myId = myAuthId;
     const conversationId = getActiveConversationId(selectedUser, myId);
       
       // Remove old listener before adding new one
@@ -579,7 +603,7 @@ export default function TeamsMessenger() {
       return () => {
         appSocket?.off('chat:history', handleHistory);
       };
-  }, [selectedUser, user?.id]);
+  }, [selectedUser, myAuthId]);
 
   // Auto-scroll chat pane only (not the main layout)
   useEffect(() => {
@@ -613,7 +637,7 @@ export default function TeamsMessenger() {
 
   // Handle sending message
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !selectedUser || !appSocket || !user?.id) return;
+    if (!messageInput.trim() || !selectedUser || !appSocket || !myAuthId) return;
 
     try {
       setSending(true);
@@ -623,7 +647,7 @@ export default function TeamsMessenger() {
       // Create the message object
       const newMessage: Message = {
         messageId: `temp-${Date.now()}`, // Temporary ID until server confirms
-        senderId: user.id,
+        senderId: myAuthId,
         senderName: user.name || 'You',
         recipientId: isGroup ? undefined : selectedUser.id,
         content: messageInput,
@@ -775,7 +799,7 @@ export default function TeamsMessenger() {
   // Handle file upload
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file || !selectedUser || !appSocket || !user?.id) return;
+    if (!file || !selectedUser || !appSocket || !myAuthId) return;
 
     try {
       setSending(true);
@@ -798,7 +822,7 @@ export default function TeamsMessenger() {
       if (fileUrl) {
         const newMessage: Message = {
           messageId: payload?.messageId || `temp-${Date.now()}`,
-          senderId: String(user.id),
+          senderId: myAuthId,
           senderName: user.name || 'You',
           recipientId: selectedUser.chatKind === 'group' ? undefined : selectedUser.id,
           content: fileUrl,
@@ -864,14 +888,14 @@ export default function TeamsMessenger() {
   };
 
   const handleAvatarUpload = async (file: File) => {
-    if (!selectedUser || !user?.id) return;
+    if (!selectedUser || !myAuthId) return;
     if (selectedUser.chatKind === 'group') {
       toast.error('Profile photos are only available in direct chats');
       return;
     }
     const canEditOther =
       user.role === 'admin' || user.role === 'super_admin';
-    const isSelf = selectedUser.id === String(user.id);
+    const isSelf = selectedUser.id === myAuthId;
     if (!isSelf && !canEditOther) {
       toast.error('You can only change your own profile photo here');
       return;
@@ -924,7 +948,7 @@ export default function TeamsMessenger() {
   const createGroupCandidates = visibleUsers.filter((u) => !u.chatKind);
 
   const addContactCandidates = users
-    .filter((u) => u.id !== String(user?.id))
+    .filter((u) => u.id !== myAuthId)
     .filter((u) => user?.role === 'super_admin' || u.role !== 'super_admin')
     .filter(
       (u) =>
@@ -1163,7 +1187,7 @@ export default function TeamsMessenger() {
                     {selectedUser.chatKind === 'group' ? (
                       <UsersRound className="h-5 w-5 text-muted-foreground" />
                     ) : (
-                      selectedUser.name.charAt(0)
+                      (selectedUser.name || 'U').charAt(0)
                     )}
                   </AvatarFallback>
                 </Avatar>
@@ -1507,7 +1531,7 @@ export default function TeamsMessenger() {
             <ul className="list-disc pl-5 space-y-1 max-h-52 overflow-y-auto">
               {(selectedUser.memberIds || []).map((mid) => (
                 <li key={mid}>
-                  {mid === String(user?.id)
+                  {mid === myAuthId
                     ? `${user?.name || 'You'} (you)`
                     : users.find((u) => u.id === mid)?.name || `User`}
                 </li>
@@ -1558,7 +1582,7 @@ export default function TeamsMessenger() {
     </Dialog>
 
     <Dialog open={showCreateGroupDialog} onOpenChange={setShowCreateGroupDialog}>
-      <DialogContent className="max-w-md rounded-2xl max-h-[90vh] flex flex-col">
+      <DialogContent className="z-[200] max-w-md rounded-2xl max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Create group</DialogTitle>
           <DialogDescription>
@@ -1625,7 +1649,7 @@ export default function TeamsMessenger() {
     </Dialog>
 
     <Dialog open={showAddContactDialog} onOpenChange={setShowAddContactDialog}>
-      <DialogContent className="max-w-md rounded-2xl">
+      <DialogContent className="z-[200] max-w-md rounded-2xl">
         <DialogHeader>
           <DialogTitle>Add contact</DialogTitle>
           <DialogDescription>

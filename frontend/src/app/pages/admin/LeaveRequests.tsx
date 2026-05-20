@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Calendar, Loader2, CheckCircle, XCircle } from 'lucide-react';
-import { LeaveRequestService } from '../../utils/api';
+import { LeaveRequestService, extractApiList } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
 import {
@@ -53,9 +53,10 @@ export default function LeaveRequests() {
       setLoading(true);
       setError(null);
       const requestsData = await LeaveRequestService.getAllLeaveRequests();
-      
-      if (Array.isArray(requestsData)) {
-        const formattedRequests = requestsData.map((req: any) => ({
+      const list = extractApiList(requestsData);
+
+      if (list.length > 0) {
+        const formattedRequests = list.map((req: any) => ({
           _id: req._id || req.id,
           id: req._id || req.id,
           employeeId: req.employeeId?._id || req.employeeId,

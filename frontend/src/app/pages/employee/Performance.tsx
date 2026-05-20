@@ -90,11 +90,11 @@ export default function Performance() {
   const [error, setError] = useState<string | null>(null);
 
   const loadPerformanceData = useCallback(async () => {
-    if (!user?.id) return;
+    if (!user?.id && !(user as { userId?: string })?.userId) return;
     try {
       setError(null);
       const res = await apiGet<PerformancePayload | { data?: PerformancePayload }>(
-        `/performance/${user.id}?_t=${Date.now()}`,
+        `/performance/me?_t=${Date.now()}`,
         false
       );
       const data: PerformancePayload =
@@ -130,7 +130,7 @@ export default function Performance() {
     } finally {
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [user?.id, user?.userId]);
 
   useEffect(() => {
     loadPerformanceData();

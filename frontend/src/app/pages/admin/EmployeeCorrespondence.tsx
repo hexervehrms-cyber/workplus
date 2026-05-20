@@ -18,6 +18,8 @@ import {
   Filter,
   Plus,
   Eye,
+  Pen,
+  Trash2,
   Send,
   AlertCircle,
   CheckCircle,
@@ -27,7 +29,7 @@ import {
   Briefcase
 } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
-import { apiGet, apiPut, apiPost, buildFileUrl, getBearerToken } from '../../utils/apiHelper';
+import { apiGet, apiPut, apiPost, apiDelete, buildFileUrl, getBearerToken } from '../../utils/apiHelper';
 
 interface Employee {
   _id: string;
@@ -109,6 +111,9 @@ export default function EmployeeCorrespondence() {
     notes: ''
   });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
+  const [editingDoc, setEditingDoc] = useState<Document | null>(null);
+  const [editForm, setEditForm] = useState({ title: '', description: '', category: '', notes: '', status: 'pending' });
 
   useEffect(() => {
     if (employeeId) {
@@ -188,9 +193,18 @@ export default function EmployeeCorrespondence() {
           status: (doc.status === 'Pending' ? 'pending' : doc.status === 'Verified' ? 'approved' : 'pending') as Document['status'],
         })),
         ...(issuedData.data || issuedData || []).map((doc: any) => ({
-          ...doc,
+          id: String(doc.id || doc._id),
+          title: doc.title || 'Document',
+          description: doc.description || '',
+          category: doc.category || 'Other',
+          fileName: doc.fileName,
+          fileSize: doc.fileSize,
+          fileUrl: doc.fileUrl ? buildFileUrl(String(doc.fileUrl)) : undefined,
+          createdAt: doc.createdAt,
+          updatedAt: doc.updatedAt,
+          notes: doc.notes,
           type: 'issued' as const,
-          status: doc.acknowledgedAt ? 'acknowledged' : 'pending'
+          status: doc.acknowledgedAt ? 'acknowledged' : (doc.status === 'pending' ? 'pending' : 'pending') as Document['status'],
         }))
       ];
 
@@ -255,6 +269,72 @@ export default function EmployeeCorrespondence() {
       window.open(document.fileUrl, '_blank');
     } else {
       toast.error('No file available for download');
+    }
+  };
+
+  const handleViewDocument = (doc: Document) => {
+    if (doc.fileUrl) {
+      window.open(doc.fileUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    setViewingDoc(doc);
+  };
+
+  const openEditDocument = (doc: Document) => {
+    setEditingDoc(doc);
+    setEditForm({
+      title: doc.title,
+      description: doc.description || '',
+      category: doc.category,
+      notes: doc.notes || '',
+      status: doc.status,
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingDoc) return;
+    if (!editForm.title.trim() || !editForm.category.trim()) {
+      toast.error('Title and category are required');
+      return;
+    }
+    try {
+      if (editingDoc.type === 'issued') {
+        await apiPut(`/documents/issued/${editingDoc.id}`, {
+          title: editForm.title.trim(),
+          description: editForm.description.trim(),
+          category: editForm.category,
+          notes: editForm.notes.trim(),
+          status: editForm.status,
+        });
+      } else {
+        await apiPut(`/documents/${editingDoc.id}`, {
+          name: editForm.title.trim(),
+          type: editForm.category,
+          status: editForm.status === 'approved' ? 'Verified' : 'Pending',
+        });
+      }
+      toast.success('Document updated');
+      setEditingDoc(null);
+      fetchDocuments();
+    } catch (error) {
+      console.error('Error updating document:', error);
+      toast.error('Failed to update document');
+    }
+  };
+
+  const handleDeleteDocument = async (doc: Document) => {
+    if (!window.confirm(`Delete "${doc.title}"? This cannot be undone.`)) return;
+    try {
+      if (doc.type === 'issued') {
+        await apiDelete(`/documents/issued/${doc.id}`);
+      } else {
+        await apiDelete(`/documents/${doc.id}`);
+      }
+      toast.success('Document deleted');
+      fetchDocuments();
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      toast.error('Failed to delete document');
     }
   };
 
@@ -496,16 +576,30 @@ export default function EmployeeCorrespondence() {
                     </div>
                   )}
 
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" type="button" onClick={() => handleViewDocument(document)}>
+                      <Eye className="w-4 h-4 mr-2" />
+                      View
+                    </Button>
                     {document.fileUrl && (
-                      <Button variant="outline" size="sm" onClick={() => handleDownload(document)}>
+                      <Button variant="outline" size="sm" type="button" onClick={() => handleDownload(document)}>
                         <Download className="w-4 h-4 mr-2" />
                         Download
                       </Button>
                     )}
-                    <Button variant="outline" size="sm">
-                      <Eye className="w-4 h-4 mr-2" />
-                      View Details
+                    <Button variant="outline" size="sm" type="button" onClick={() => openEditDocument(document)}>
+                      <Pen className="w-4 h-4 mr-2" />
+                      Edit
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => handleDeleteDocument(document)}
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Delete
                     </Button>
                   </div>
                 </div>
@@ -514,6 +608,53 @@ export default function EmployeeCorrespondence() {
           ))
         )}
       </div>
+
+      {viewingDoc && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-lg p-6">
+            <h3 className="text-lg font-semibold mb-2">{viewingDoc.title}</h3>
+            <p className="text-sm text-muted-foreground mb-4">{viewingDoc.description || 'No description'}</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" type="button" onClick={() => setViewingDoc(null)}>Close</Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {editingDoc && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-lg p-6 space-y-4">
+            <h3 className="text-lg font-semibold">Edit document</h3>
+            <div>
+              <label className="text-sm font-medium">Title</label>
+              <Input className="mt-1" value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Category</label>
+              <Select value={editForm.category} onValueChange={(v) => setEditForm({ ...editForm, category: v })}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {documentCategories.map((cat) => (
+                    <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Description</label>
+              <Textarea className="mt-1" rows={2} value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Notes</label>
+              <Textarea className="mt-1" rows={2} value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} />
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" type="button" onClick={() => setEditingDoc(null)}>Cancel</Button>
+              <Button className="flex-1" type="button" onClick={handleSaveEdit}>Save</Button>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {/* Issue Document Modal */}
       {showIssueForm && (

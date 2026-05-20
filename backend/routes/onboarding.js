@@ -534,6 +534,28 @@ router.post('/submit',
       password = req.body.password;
     }
 
+    const parsedEducationDetails = (() => {
+      try {
+        if (typeof req.body.educationDetails === "string") {
+          return JSON.parse(req.body.educationDetails || "{}");
+        }
+        return req.body.educationDetails || {};
+      } catch {
+        return {};
+      }
+    })();
+
+    const parsedPreviousEmployment = (() => {
+      try {
+        if (typeof req.body.previousEmployment === "string") {
+          return JSON.parse(req.body.previousEmployment || "[]");
+        }
+        return Array.isArray(req.body.previousEmployment) ? req.body.previousEmployment : [];
+      } catch {
+        return [];
+      }
+    })();
+
     try {
       logger.info('Onboarding submit request received', {
         token: token?.substring(0, 10) + '...',
@@ -618,13 +640,8 @@ router.post('/submit',
           phone: emergencyContact?.phone
         },
         educationalDocuments: educationalDocuments || {},
-        previousEmployment: (() => {
-          try {
-            return JSON.parse(req.body.previousEmployment || '[]');
-          } catch {
-            return [];
-          }
-        })(),
+        educationDetails: parsedEducationDetails,
+        previousEmployment: parsedPreviousEmployment,
         employmentDocuments: employmentDocuments || [],
         documents: employmentDocuments || [],
         status: 'pending'
@@ -901,10 +918,23 @@ router.get('/links',
   authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
     const { status, page = 1, limit = 20 } = req.query;
-    const orgId = req.user.orgId;
+    const orgId =
+      (req.query.orgId && String(req.query.orgId).trim()) ||
+      req.validatedOrgId ||
+      req.user.orgId ||
+      req.user.tenantId ||
+      req.user.organizationId;
+
+    if (!orgId || String(orgId) === 'system') {
+      return res.status(400).json({
+        success: false,
+        message: 'Organization context is required',
+        code: 'MISSING_ORG_CONTEXT',
+      });
+    }
 
     try {
-      const query = { organizationId: orgId };
+      const query = { organizationId: String(orgId) };
 
       // Filter by status
       if (status === 'active') {
@@ -933,13 +963,14 @@ router.get('/links',
         data: {
           links: links.map(link => ({
             id: link._id,
+            token: link.token,
             employeeEmail: link.employeeEmail,
             employeeName: link.employeeName,
             department: link.department,
             status: link.isUsed ? 'used' : (link.expiresAt < new Date() ? 'expired' : 'active'),
             expiresAt: link.expiresAt,
             createdBy: link.createdBy?.name,
-            createdAt: link.createdAt
+            createdAt: link.createdAt,
           })),
           pagination: {
             page: parseInt(page),

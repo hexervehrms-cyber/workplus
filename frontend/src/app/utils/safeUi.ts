@@ -19,6 +19,22 @@ export function hasCheckOutValue(checkOut: unknown): boolean {
   return safeLocaleTime(checkOut) != null;
 }
 
+/** Format currency without throwing when API returns null/undefined/strings. */
+export function safeFormatInr(value: unknown): string {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return '0';
+  return n.toLocaleString('en-IN');
+}
+
+/** Coerce API list payloads to arrays (paginated wrappers sometimes nest data). */
+export function ensureArray<T>(value: unknown): T[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object' && Array.isArray((value as { data?: unknown }).data)) {
+    return (value as { data: T[] }).data;
+  }
+  return [];
+}
+
 /** Run async work without bubbling rejections to the error boundary. */
 export function runSafe(
   label: string,

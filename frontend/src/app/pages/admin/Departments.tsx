@@ -1,4 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router';
+import { useAuth } from '../../context/AuthContext';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -10,19 +12,31 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../../components/ui/select';
-import { Building2, Plus, Search, Filter, Edit, Trash2, X, Loader2 } from 'lucide-react';
-import { apiClient, ApiError } from '../../utils/api';
+import {
+  Building2,
+  Plus,
+  Search,
+  Filter,
+  Edit,
+  Trash2,
+  X,
+  Loader2,
+  Users,
+  ChevronRight,
+} from 'lucide-react';
+import { apiClient, ApiError, DepartmentService, extractApiList, type DepartmentRecord } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
+import realTimeSocket from '../../utils/realTimeSocket';
 
-interface Department {
+type Department = DepartmentRecord;
+
+interface DeptEmployee {
   _id: string;
-  name: string;
-  description?: string;
-  headName?: string;
-  code?: string;
-  employeeCount?: number;
-  isActive?: boolean;
-  createdAt?: string;
+  employeeCode?: string;
+  designation?: string;
+  department?: string;
+  status?: string;
+  userId?: { name?: string; email?: string } | string;
 }
 
 const emptyForm = {
@@ -33,7 +47,23 @@ const emptyForm = {
   isActive: true,
 };
 
+function deptKey(dept: Department) {
+  return dept._id || `name:${dept.name}`;
+}
+
+function employeeDisplayName(emp: DeptEmployee) {
+  const u = emp.userId;
+  if (u && typeof u === 'object' && u.name) return u.name;
+  return emp.employeeCode || 'Employee';
+}
+
 export default function AdminDepartments() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const tenantOrgId = user?.orgId || user?.tenantId;
+  const needsOrgContext =
+    user?.role === 'super_admin' && (!tenantOrgId || String(tenantOrgId) === 'system');
+
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -44,20 +74,28 @@ export default function AdminDepartments() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'active' | 'inactive' | 'all'>('active');
   const [formData, setFormData] = useState(emptyForm);
+  const [selectedDept, setSelectedDept] = useState<Department | null>(null);
+  const [detailEmployees, setDetailEmployees] = useState<DeptEmployee[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadDepartments = useCallback(async () => {
+    if (needsOrgContext) {
+      setDepartments([]);
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
-      const params = new URLSearchParams();
-      if (searchTerm.trim()) params.set('search', searchTerm.trim());
-      if (filterStatus !== 'active') params.set('status', filterStatus);
-      const qs = params.toString();
-      const response = await apiClient.get<Department[]>(`/departments${qs ? `?${qs}` : ''}`);
-      if (response.success && Array.isArray(response.data)) {
-        setDepartments(response.data);
-      } else {
-        setDepartments([]);
-      }
+      const list = await DepartmentService.getAll({
+        search: searchTerm.trim() || undefined,
+        status: filterStatus,
+        orgId:
+          user?.role === 'super_admin' && tenantOrgId
+            ? String(tenantOrgId)
+            : undefined,
+      });
+      setDepartments(list);
     } catch (err) {
       console.error('Error loading departments:', err);
       toast.error('Failed to load departments');
@@ -65,22 +103,97 @@ export default function AdminDepartments() {
     } finally {
       setLoading(false);
     }
-  }, [searchTerm, filterStatus]);
+  }, [searchTerm, filterStatus, needsOrgContext, tenantOrgId, user?.role]);
+
+  const loadDepartmentDetail = useCallback(
+    async (dept: Department) => {
+      setDetailLoading(true);
+      try {
+        if (dept._id) {
+          let url = `/departments/${dept._id}`;
+          if (user?.role === 'super_admin' && tenantOrgId) {
+            url += `?orgId=${encodeURIComponent(String(tenantOrgId))}`;
+          }
+          const res = await apiClient.get<{ employees?: DeptEmployee[] } & Department>(url);
+          if (res.success && res.data) {
+            const data = res.data as { employees?: DeptEmployee[] } & Department;
+            setDetailEmployees(Array.isArray(data.employees) ? data.employees : []);
+            return;
+          }
+        }
+        const list = await DepartmentService.getEmployeesByDepartment(
+          dept.name,
+          user?.role === 'super_admin' && tenantOrgId ? String(tenantOrgId) : undefined
+        );
+        setDetailEmployees(list as DeptEmployee[]);
+      } catch (err) {
+        console.error('Error loading department employees:', err);
+        toast.error('Failed to load employees for this department');
+        setDetailEmployees([]);
+      } finally {
+        setDetailLoading(false);
+      }
+    },
+    [tenantOrgId, user?.role]
+  );
+
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      void loadDepartments();
+      if (selectedDept) void loadDepartmentDetail(selectedDept);
+    }, 400);
+  }, [loadDepartments, loadDepartmentDetail, selectedDept]);
+
+  const openDepartmentDetail = (dept: Department) => {
+    setSelectedDept(dept);
+    void loadDepartmentDetail(dept);
+  };
+
+  const closeDepartmentDetail = () => {
+    setSelectedDept(null);
+    setDetailEmployees([]);
+  };
 
   useEffect(() => {
     const timer = setTimeout(() => {
       void loadDepartments();
     }, searchTerm ? 300 : 0);
     return () => clearTimeout(timer);
-  }, [loadDepartments, searchTerm]);
+  }, [loadDepartments, searchTerm, filterStatus]);
 
-  const openAddForm = () => {
+  useEffect(() => {
+    if (!user?.id) return;
+    realTimeSocket.connectFromAuth({
+      id: user.id,
+      role: user.role || 'admin',
+      orgId: user.orgId,
+      tenantId: user.tenantId,
+    });
+    const unsub = realTimeSocket.onEmployeeUpdate(() => {
+      scheduleRefresh();
+    });
+    const onFocus = () => void loadDepartments();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      unsub();
+      window.removeEventListener('focus', onFocus);
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    };
+  }, [user, scheduleRefresh, loadDepartments]);
+
+  const openAddForm = (prefillName?: string) => {
     setEditingDepartment(null);
-    setFormData(emptyForm);
+    setFormData(prefillName ? { ...emptyForm, name: prefillName } : emptyForm);
     setShowForm(true);
   };
 
-  const openEditForm = (department: Department) => {
+  const openEditForm = (department: Department, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!department._id) {
+      openAddForm(department.name);
+      return;
+    }
     setEditingDepartment(department);
     setFormData({
       name: department.name || '',
@@ -106,20 +219,29 @@ export default function AdminDepartments() {
 
     setSaving(true);
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         name: formData.name.trim(),
         description: formData.description.trim(),
         headName: formData.headName.trim(),
         code: formData.code.trim() || undefined,
         isActive: formData.isActive,
       };
+      const oid = user?.orgId || user?.tenantId;
+      if (oid && user?.role === 'super_admin') {
+        payload.orgId = String(oid);
+      }
 
-      if (editingDepartment) {
+      if (editingDepartment?._id) {
         const res = await apiClient.put<Department>(`/departments/${editingDepartment._id}`, payload);
         if (res.success) {
           toast.success('Department updated');
           closeForm();
           await loadDepartments();
+          if (selectedDept?._id === editingDepartment._id) {
+            const updated = { ...selectedDept, ...payload, name: formData.name.trim() } as Department;
+            setSelectedDept(updated);
+            void loadDepartmentDetail(updated);
+          }
         } else {
           throw new Error(res.message || 'Update failed');
         }
@@ -129,6 +251,9 @@ export default function AdminDepartments() {
           toast.success('Department created');
           closeForm();
           await loadDepartments();
+          if (selectedDept?.source === 'employees' && res.data?.name) {
+            setSelectedDept({ ...res.data, source: 'database' });
+          }
         } else {
           throw new Error(res.message || 'Create failed');
         }
@@ -155,6 +280,7 @@ export default function AdminDepartments() {
         toast.success('Department deleted');
         setShowDeleteConfirm(false);
         setDeletingDepartmentId(null);
+        if (selectedDept?._id === deletingDepartmentId) closeDepartmentDetail();
         await loadDepartments();
       }
     } catch (err: unknown) {
@@ -175,6 +301,11 @@ export default function AdminDepartments() {
     );
   });
 
+  const totalEmployees = useMemo(
+    () => departments.reduce((sum, d) => sum + (d.employeeCount ?? 0), 0),
+    [departments]
+  );
+
   return (
     <div className="p-6 space-y-6">
       {showForm && (
@@ -182,9 +313,9 @@ export default function AdminDepartments() {
           <Card className="w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">
-                {editingDepartment ? 'Edit Department' : 'Add New Department'}
+                {editingDepartment ? 'Edit Department' : 'Create Department'}
               </h2>
-              <Button variant="ghost" size="icon" onClick={closeForm} disabled={saving}>
+              <Button type="button" variant="ghost" size="icon" onClick={closeForm} disabled={saving}>
                 <X className="w-4 h-4" />
               </Button>
             </div>
@@ -249,10 +380,10 @@ export default function AdminDepartments() {
               )}
             </div>
             <div className="flex gap-2 mt-6">
-              <Button variant="outline" onClick={closeForm} disabled={saving} className="flex-1">
+              <Button type="button" variant="outline" onClick={closeForm} disabled={saving} className="flex-1">
                 Cancel
               </Button>
-              <Button onClick={() => void handleSave()} disabled={saving} className="flex-1">
+              <Button type="button" onClick={() => void handleSave()} disabled={saving} className="flex-1">
                 {saving ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -261,7 +392,7 @@ export default function AdminDepartments() {
                 ) : editingDepartment ? (
                   'Update Department'
                 ) : (
-                  'Save Department'
+                  'Create Department'
                 )}
               </Button>
             </div>
@@ -282,6 +413,7 @@ export default function AdminDepartments() {
               </p>
               <div className="flex gap-2 justify-center">
                 <Button
+                  type="button"
                   variant="outline"
                   onClick={() => {
                     setShowDeleteConfirm(false);
@@ -291,7 +423,7 @@ export default function AdminDepartments() {
                 >
                   Cancel
                 </Button>
-                <Button variant="destructive" onClick={() => void confirmDelete()} disabled={saving}>
+                <Button type="button" variant="destructive" onClick={() => void confirmDelete()} disabled={saving}>
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Delete'}
                 </Button>
               </div>
@@ -300,16 +432,138 @@ export default function AdminDepartments() {
         </div>
       )}
 
-      <div className="flex justify-between items-center">
+      {selectedDept && (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex justify-end"
+          onClick={closeDepartmentDetail}
+          role="presentation"
+        >
+          <Card
+            className="w-full max-w-md h-full rounded-none rounded-l-2xl p-6 overflow-y-auto shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h2 className="text-2xl font-bold">{selectedDept.name}</h2>
+                {selectedDept.code && (
+                  <p className="text-sm text-muted-foreground mt-1">Code: {selectedDept.code}</p>
+                )}
+                {selectedDept.source === 'employees' && (
+                  <span className="inline-block mt-2 text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-900">
+                    From employee records — create to manage formally
+                  </span>
+                )}
+              </div>
+              <Button type="button" variant="ghost" size="icon" onClick={closeDepartmentDetail}>
+                <X className="w-5 h-5" />
+              </Button>
+            </div>
+
+            <div className="space-y-4 text-sm mb-6">
+              <p className="text-muted-foreground">{selectedDept.description || 'No description'}</p>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Head</span>
+                <span className="font-medium">{selectedDept.headName || '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Employees</span>
+                <span className="font-medium">{selectedDept.employeeCount ?? 0}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Status</span>
+                <span className="font-medium">
+                  {selectedDept.isActive !== false ? 'Active' : 'Inactive'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mb-6">
+              {selectedDept._id ? (
+                <Button type="button" variant="outline" className="flex-1" onClick={(e) => openEditForm(selectedDept, e)}>
+                  <Edit className="w-4 h-4 mr-1" />
+                  Edit
+                </Button>
+              ) : (
+                <Button type="button" className="flex-1" onClick={() => openAddForm(selectedDept.name)}>
+                  <Plus className="w-4 h-4 mr-1" />
+                  Create formal dept
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="secondary"
+                className="flex-1"
+                onClick={() => navigate('/admin/employees')}
+              >
+                <Users className="w-4 h-4 mr-1" />
+                All employees
+              </Button>
+            </div>
+
+            <h3 className="font-semibold mb-3 flex items-center gap-2">
+              <Users className="w-4 h-4" />
+              Team members
+            </h3>
+            {detailLoading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : detailEmployees.length === 0 ? (
+              <p className="text-sm text-muted-foreground italic py-4">No employees in this department yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {detailEmployees.map((emp) => (
+                  <li
+                    key={emp._id}
+                    className="flex items-center justify-between p-3 rounded-lg border border-border hover:bg-muted/50 cursor-pointer"
+                    onClick={() => navigate(`/admin/employees/${emp._id}/correspondence`)}
+                  >
+                    <div>
+                      <p className="font-medium text-sm">{employeeDisplayName(emp)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {emp.designation || '—'}
+                        {emp.employeeCode ? ` · ${emp.employeeCode}` : ''}
+                      </p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {needsOrgContext && (
+        <Card className="p-4 rounded-xl border-amber-200 bg-amber-50 text-amber-900 text-sm">
+          Super admin accounts need a valid organization on their profile to load departments. Assign an orgId to
+          your user or log in as admin.
+        </Card>
+      )}
+
+      <div className="flex justify-between items-center flex-wrap gap-4">
         <div>
           <h1 className="text-3xl font-bold">Departments</h1>
-          <p className="text-muted-foreground">Manage organization departments</p>
+          <p className="text-muted-foreground">Live data from your organization and employee records</p>
         </div>
-        <Button className="rounded-xl" onClick={openAddForm}>
+        <Button type="button" className="rounded-xl" onClick={() => openAddForm()}>
           <Plus className="w-4 h-4 mr-2" />
-          Add Department
+          Create Department
         </Button>
       </div>
+
+      {!loading && departments.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Card className="p-4 rounded-xl">
+            <p className="text-xs text-muted-foreground">Departments</p>
+            <p className="text-2xl font-bold">{departments.length}</p>
+          </Card>
+          <Card className="p-4 rounded-xl">
+            <p className="text-xs text-muted-foreground">Employees assigned</p>
+            <p className="text-2xl font-bold">{totalEmployees}</p>
+          </Card>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-4">
         <div className="relative flex-1 min-w-[200px] max-w-md">
@@ -333,6 +587,9 @@ export default function AdminDepartments() {
             <SelectItem value="all">All departments</SelectItem>
           </SelectContent>
         </Select>
+        <Button type="button" variant="outline" className="rounded-xl" onClick={() => void loadDepartments()} disabled={loading}>
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Refresh'}
+        </Button>
       </div>
 
       {loading ? (
@@ -341,35 +598,54 @@ export default function AdminDepartments() {
         </div>
       ) : filteredDepartments.length === 0 ? (
         <Card className="p-12 text-center rounded-xl">
-          <p className="text-muted-foreground mb-4">No departments match your search or filter.</p>
-          <Button onClick={openAddForm}>
+          <p className="text-muted-foreground mb-4">No departments yet. Create one or assign employees to a department.</p>
+          <Button type="button" onClick={() => openAddForm()}>
             <Plus className="w-4 h-4 mr-2" />
-            Add Department
+            Create Department
           </Button>
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredDepartments.map((department) => (
-            <Card key={department._id} className="p-6 rounded-xl">
+            <Card
+              key={deptKey(department)}
+              role="button"
+              tabIndex={0}
+              className="p-6 rounded-xl cursor-pointer transition-all hover:shadow-md hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              onClick={() => openDepartmentDetail(department)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  openDepartmentDetail(department);
+                }
+              }}
+            >
               <div className="flex items-start justify-between mb-4">
                 <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center">
                   <Building2 className="w-6 h-6 text-primary" />
                 </div>
-                <span
-                  className={`px-2 py-1 text-xs rounded-full ${
-                    department.isActive !== false
-                      ? 'bg-green-100 text-green-800'
-                      : 'bg-gray-100 text-gray-600'
-                  }`}
-                >
-                  {department.isActive !== false ? 'Active' : 'Inactive'}
-                </span>
+                <div className="flex flex-col items-end gap-1">
+                  <span
+                    className={`px-2 py-1 text-xs rounded-full ${
+                      department.isActive !== false
+                        ? 'bg-green-100 text-green-800'
+                        : 'bg-gray-100 text-gray-600'
+                    }`}
+                  >
+                    {department.isActive !== false ? 'Active' : 'Inactive'}
+                  </span>
+                  {department.source === 'employees' && (
+                    <span className="px-2 py-0.5 text-[10px] rounded-full bg-amber-100 text-amber-900">
+                      From employees
+                    </span>
+                  )}
+                </div>
               </div>
               <h3 className="font-semibold mb-1">{department.name}</h3>
               {department.code && (
                 <p className="text-xs text-muted-foreground mb-2">Code: {department.code}</p>
               )}
-              <p className="text-sm text-muted-foreground mb-4 min-h-[2.5rem]">
+              <p className="text-sm text-muted-foreground mb-4 min-h-[2.5rem] line-clamp-2">
                 {department.description || 'No description'}
               </p>
               <div className="space-y-2 text-sm text-muted-foreground mb-4">
@@ -382,22 +658,35 @@ export default function AdminDepartments() {
                   <span className="font-medium text-foreground">{department.employeeCount ?? 0}</span>
                 </div>
               </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" className="rounded-lg flex-1" onClick={() => openEditForm(department)}>
+              <div className="flex items-center justify-between text-xs text-primary font-medium mb-3">
+                <span>View details</span>
+                <ChevronRight className="w-4 h-4" />
+              </div>
+              <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg flex-1"
+                  onClick={(e) => openEditForm(department, e)}
+                >
                   <Edit className="w-4 h-4 mr-1" />
                   Edit
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="rounded-lg text-destructive hover:bg-destructive/10"
-                  onClick={() => {
-                    setDeletingDepartmentId(department._id);
-                    setShowDeleteConfirm(true);
-                  }}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+                {department._id && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg text-destructive hover:bg-destructive/10"
+                    onClick={() => {
+                      setDeletingDepartmentId(department._id);
+                      setShowDeleteConfirm(true);
+                    }}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                )}
               </div>
             </Card>
           ))}

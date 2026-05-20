@@ -30,11 +30,10 @@ function scoreAttendanceRow(row) {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
-router.get(
-  '/:userId',
-  authenticate,
-  asyncHandler(async (req, res) => {
-    const { userId } = req.params;
+async function performanceForUserHandler(req, res) {
+    const paramId = req.params.userId;
+    const userId =
+      !paramId || paramId === 'me' ? String(req.user.userId) : String(paramId);
     const requestUserId = String(req.user.userId);
     const isPrivileged = ['admin', 'hr', 'super_admin', 'manager'].includes(req.user.role);
     if (userId !== requestUserId && !isPrivileged) {
@@ -252,7 +251,10 @@ router.get(
       },
       'Performance data loaded'
     );
-  })
-);
+}
+
+router.get('/me', authenticate, asyncHandler(performanceForUserHandler));
+
+router.get('/:userId', authenticate, asyncHandler(performanceForUserHandler));
 
 export default router;

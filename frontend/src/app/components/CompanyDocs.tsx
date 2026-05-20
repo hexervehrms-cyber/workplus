@@ -11,6 +11,7 @@ import DigitalDocumentGenerator from './DigitalDocumentGenerator';
 import DocumentTracking from './DocumentTracking';
 import { apiClient, TokenManager } from '../utils/api';
 import { buildApiUrl, buildFileUrl } from '../utils/apiHelper';
+import { downloadCompanyGeneratedDocument } from '../utils/documentFile';
 import { useAuth } from '../context/AuthContext';
 import { toast } from '../utils/portalToast';
 import { 
@@ -144,25 +145,63 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
       if (response.ok) {
         const result = await response.json();
         const documentsList = result.data || [];
+        const mapRow = (d: Record<string, unknown>): CompanyDocument => ({
+          id: String(d.id || d._id || ''),
+          title: String(d.title || 'Untitled'),
+          description: String(d.description || ''),
+          category: String(d.category || d.documentType || 'Other'),
+          content: String(d.content || d.description || ''),
+          organizationId: String(d.organizationId || orgId),
+          createdBy: String(d.createdBy || 'admin'),
+          createdAt: String(d.createdAt || new Date().toISOString()),
+          updatedAt: String(d.updatedAt || new Date().toISOString()),
+          status: mapApiStatusToUi(String(d.status || '')),
+          documentUrl: d.fileUrl ? buildFileUrl(String(d.fileUrl)) : '',
+          fileName: String(d.fileName || d.title || 'document'),
+          fileSize: String(d.fileSize || '—'),
+          downloadCount: 0,
+          isPublic: true,
+        });
+
         const mapped: CompanyDocument[] = (Array.isArray(documentsList) ? documentsList : []).map(
-          (d: Record<string, unknown>) => ({
-            id: String(d.id || d._id || ''),
-            title: String(d.title || 'Untitled'),
-            description: String(d.description || ''),
-            category: String(d.category || d.documentType || 'Other'),
-            organizationId: String(d.organizationId || orgId),
-            createdBy: String(d.createdBy || 'admin'),
-            createdAt: String(d.createdAt || new Date().toISOString()),
-            updatedAt: String(d.updatedAt || new Date().toISOString()),
-            status: mapApiStatusToUi(String(d.status || '')),
-            documentUrl: d.fileUrl ? buildFileUrl(String(d.fileUrl)) : '',
-            fileName: String(d.fileName || d.title || 'document'),
-            fileSize: String(d.fileSize || '—'),
-            downloadCount: 0,
-            isPublic: true,
-          })
+          mapRow
         );
-        setDocuments(mapped);
+
+        if (!isAdmin && !isSuperAdmin && user?.employeeId) {
+          try {
+            const issuedRes = await fetch(
+              buildApiUrl(`/documents/issued/${encodeURIComponent(String(user.employeeId))}`),
+              {
+                credentials: 'include',
+                headers: {
+                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+              }
+            );
+            if (issuedRes.ok) {
+              const issuedJson = await issuedRes.json();
+              const issuedList = issuedJson.data || [];
+              const issuedMapped = (Array.isArray(issuedList) ? issuedList : []).map(
+                (d: Record<string, unknown>) =>
+                  mapRow({
+                    ...d,
+                    id: String(d.id || d._id || ''),
+                    fileUrl: d.fileUrl,
+                    content: d.description || d.title,
+                  })
+              );
+              const byId = new Map<string, CompanyDocument>();
+              [...mapped, ...issuedMapped].forEach((doc) => byId.set(doc.id, doc));
+              setDocuments([...byId.values()]);
+            } else {
+              setDocuments(mapped);
+            }
+          } catch {
+            setDocuments(mapped);
+          }
+        } else {
+          setDocuments(mapped);
+        }
       } else {
         setDocuments([]);
       }
@@ -181,7 +220,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
 
   const loadAcknowledgments = async () => {
     try {
-      const currentEmployeeId = user?.id;
+      const currentEmployeeId = user?.userId || user?.id;
       if (!currentEmployeeId) {
         setAcknowledgments({});
         return;
@@ -226,7 +265,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
 
   const handleAcknowledgmentSubmit = async (documentId: string, accepted: boolean, ipAddress: string) => {
     try {
-      const currentEmployeeId = user?.id;
+      const currentEmployeeId = user?.userId || user?.id;
       const currentEmployeeName = user?.name;
       const orgId = organizationId || user?.orgId || user?.tenantId;
 
@@ -299,13 +338,13 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
       title: newDocument.title,
       description: newDocument.description || '',
       category: newDocument.category || 'Other',
-      content: newDocument.content,
+      content: newDocument.content || newDocument.description || '',
       organizationId: newDocument.organizationId,
       createdBy: newDocument.createdBy || 'admin',
       createdAt: newDocument.createdAt || new Date().toISOString(),
       updatedAt: newDocument.updatedAt || new Date().toISOString(),
       status: mapApiStatusToUi(String(newDocument.status || '')),
-      documentUrl: newDocument.fileUrl || '',
+      documentUrl: newDocument.fileUrl ? buildFileUrl(String(newDocument.fileUrl)) : '',
       fileName: newDocument.fileName || newDocument.title,
       fileSize: newDocument.fileSize || '0 KB',
       downloadCount: 0,
@@ -360,6 +399,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         updatedAt: String(raw.updatedAt || new Date().toISOString()),
         status: 'Published',
         documentUrl: raw.fileUrl ? buildFileUrl(String(raw.fileUrl)) : '',
+        content: String(raw.description || formData.description || ''),
         fileName: String(raw.fileName || selectedFile.name),
         fileSize: String(raw.fileSize || `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`),
         downloadCount: 0,
@@ -380,12 +420,22 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
     }
   };
 
-  const handleDownload = (document: CompanyDocument) => {
-    const url = document.documentUrl?.startsWith('http')
-      ? document.documentUrl
-      : buildFileUrl(document.documentUrl || '');
+  const handleDownload = async (doc: CompanyDocument) => {
+    if (doc.documentUrl && doc.id) {
+      try {
+        await downloadCompanyGeneratedDocument(doc.id, doc.fileName || doc.title);
+        return;
+      } catch (e) {
+        console.warn('Authenticated download failed, trying direct URL', e);
+      }
+    }
+    const url = doc.documentUrl?.startsWith('http')
+      ? doc.documentUrl
+      : buildFileUrl(doc.documentUrl || '');
     if (url) {
       window.open(url, '_blank', 'noopener,noreferrer');
+    } else if (doc.content) {
+      handleReadDocument(doc);
     } else {
       toast.error('No file available for this document');
     }
@@ -926,7 +976,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         isOpen={showDocumentReader}
         onClose={() => setShowDocumentReader(false)}
         onSubmit={handleAcknowledgmentSubmit}
-        employeeId={employeeId}
+        employeeId={String(user?.userId || user?.id || '')}
         isAlreadyAcknowledged={selectedDocument ? !!acknowledgments[selectedDocument.id] : false}
       />
 

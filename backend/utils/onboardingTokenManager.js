@@ -282,6 +282,41 @@ class OnboardingTokenManager {
   }
 
   /**
+   * Resolve onboarding context from Redis, falling back to JWT payload when Redis is unavailable
+   * or the token was never stored (generate-link still returns a valid JWT).
+   */
+  static async resolveTokenData(token) {
+    const redisData = await this.getToken(token);
+    if (redisData) {
+      return redisData;
+    }
+
+    try {
+      const decoded = this.verifyToken(token);
+      logger.warn('Using JWT payload for onboarding (Redis miss)', {
+        employeeEmail: decoded.employeeEmail,
+        tokenPrefix: token.substring(0, 20),
+      });
+      return {
+        token,
+        employeeEmail: decoded.employeeEmail,
+        employeeName: decoded.employeeName,
+        department: decoded.department || 'General',
+        organizationId: decoded.organizationId,
+        organizationName: decoded.organizationName || 'WorkPlus',
+        isUsed: false,
+        usedAt: null,
+        fromJwtFallback: true,
+      };
+    } catch (error) {
+      logger.warn('Failed to resolve onboarding token data', {
+        error: error.message,
+      });
+      return null;
+    }
+  }
+
+  /**
    * Validate token is still active
    * @param {string} token - JWT token
    * @returns {Promise<boolean>}

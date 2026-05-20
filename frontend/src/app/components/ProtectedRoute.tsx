@@ -3,7 +3,6 @@
  * Features: Role-based access, loading states, redirect handling
  */
 
-import { useEffect, useState } from 'react';
 import { Navigate, useLocation } from 'react-router';
 import { useAuth, useRoleRedirect } from '../context/AuthContext';
 import { Loader2 } from 'lucide-react';
@@ -22,16 +21,6 @@ export function ProtectedRoute({
   const { user, loading: authLoading } = useAuth();
   const location = useLocation();
   const roleRedirect = useRoleRedirect();
-  const [slowAuthHint, setSlowAuthHint] = useState(false);
-
-  useEffect(() => {
-    if (!authLoading) {
-      setSlowAuthHint(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setSlowAuthHint(true), 5000);
-    return () => window.clearTimeout(timer);
-  }, [authLoading]);
 
   // Show loading while checking authentication
   if (authLoading) {

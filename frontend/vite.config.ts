@@ -90,6 +90,8 @@ export default defineConfig({
           'vendor-charts': ['recharts'],
           'vendor-forms': ['react-hook-form', 'react-dnd', 'react-dnd-html5-backend'],
           'vendor-utils': ['date-fns', 'clsx', 'tailwind-merge', 'class-variance-authority'],
+          'vendor-three': ['three', '@react-three/fiber', '@react-three/drei'],
+          'vendor-motion': ['framer-motion'],
         },
       },
     },

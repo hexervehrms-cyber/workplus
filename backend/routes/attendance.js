@@ -635,6 +635,7 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   );
 
   let attendance = await Attendance.findOne(withOpenSessionFilter(todayQuery)).sort({ _id: -1 });
+  // note: may be reassigned when auto-closing open breaks at checkout
 
   if (!attendance || !attendance.checkIn) {
     const lastClosed = await Attendance.findOne(todayQuery).sort({ _id: -1 });
@@ -655,24 +656,31 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     });
   }
 
-  // Calculate hours worked
   const checkOutTime = new Date();
-  let hoursWorked = (checkOutTime - attendance.checkIn) / (1000 * 60 * 60);
 
-  // Subtract break time from hours worked
-  if (attendance.breaks && attendance.breaks.length > 0) {
-    let totalBreakTime = 0;
-    attendance.breaks.forEach(breakItem => {
-      if (breakItem.startTime && breakItem.endTime) {
-        const breakDuration = (breakItem.endTime - breakItem.startTime) / (1000 * 60 * 60);
-        totalBreakTime += breakDuration;
-      }
-    });
-    hoursWorked -= totalBreakTime;
+  // Auto-close any open break at checkout so hours are accurate
+  if (attendance.breaks?.some((b) => isOpenBreak(b))) {
+    attendance = await endOpenBreakOnDocument(attendance, checkOutTime, 'Auto-ended at check-out');
+    if (!attendance) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to close active break before check-out',
+      });
+    }
   }
 
-  // Ensure hoursWorked is not negative
-  hoursWorked = Math.max(0, hoursWorked);
+  let hoursWorked = (checkOutTime - attendance.checkIn) / (1000 * 60 * 60);
+  if (attendance.breaks?.length) {
+    let totalBreakTime = 0;
+    for (const breakItem of attendance.breaks) {
+      if (breakItem.startTime && breakItem.endTime) {
+        totalBreakTime +=
+          (new Date(breakItem.endTime) - new Date(breakItem.startTime)) / (1000 * 60 * 60);
+      }
+    }
+    hoursWorked -= totalBreakTime;
+  }
+  hoursWorked = Math.max(0, Math.round(hoursWorked * 100) / 100);
 
   // Update attendance record
   const updatedAttendance = await Attendance.findByIdAndUpdate(
@@ -1013,6 +1021,12 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
     }
 
     const liveStatus = buildLiveStatus(updatedAttendance);
+    const hoursThisWeek = await sumHoursThisWeekForUser(
+      currentUserId,
+      effectiveOrgId,
+      authOrgId,
+      effectiveEmployeeId
+    );
 
     // Send response immediately with updated data
     res.status(201).json({
@@ -1020,7 +1034,9 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
       message: 'Break started successfully',
       data: {
         attendance: updatedAttendance,
-        liveStatus
+        liveStatus,
+        hoursThisWeek,
+        weekKey: calendarWeekKey(),
       }
     });
 
@@ -1052,6 +1068,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
           try {
             global.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
               employeeId: effectiveEmployeeId,
+              userId: currentUserId,
               breakType,
               timestamp: new Date().toISOString(),
               attendance: updatedAttendance,
@@ -1252,6 +1269,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
           try {
             global.io.to(`tenant_${effectiveOrgId}`).emit('break:ended', {
               employeeId: effectiveEmployeeId,
+              userId: currentUserId,
               breakType: activeBreak?.breakType || 'regular',
               timestamp: new Date().toISOString(),
               breakDuration,

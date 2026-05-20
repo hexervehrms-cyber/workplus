@@ -8,7 +8,7 @@ import { Textarea } from '../../components/ui/textarea';
 import { Separator } from '../../components/ui/separator';
 import { Progress } from '../../components/ui/progress';
 import { buildApiUrl } from '../../utils/apiHelper';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { 
   User, 
   Mail, 

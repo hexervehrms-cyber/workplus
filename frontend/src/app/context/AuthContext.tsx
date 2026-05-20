@@ -9,7 +9,7 @@ import { socketService, ConnectionState } from '../utils/socket';
 import realTimeSocket from '../utils/realTimeSocket';
 import { clearApiCache } from '../utils/apiHelper';
 import { clearPersistedAttendance } from '../utils/attendancePersistence';
-import { toast } from 'sonner';
+import { isPublicBootstrapPath, hasStoredSessionHint } from '../utils/publicPaths';
 
 export type UserRole = 'super_admin' | 'admin' | 'hr' | 'manager' | 'accountant' | 'employee';
 
@@ -86,7 +86,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem('cached_holidays');
 
       setLoading(false);
-      toast.info('You have been logged out.');
 
       // Force redirect to login
       window.location.href = '/login';
@@ -100,6 +99,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await performLogout();
   }, [performLogout]);
 
+  const connectSocketsInBackground = useCallback((sessionUser: User) => {
+    void (async () => {
+      try {
+        const connectionPromise = socketService.connect(
+          sessionUser.id,
+          sessionUser.role,
+          sessionUser.tenantId || sessionUser.orgId
+        );
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Socket connection timeout')), 8000)
+        );
+        await Promise.race([connectionPromise, timeoutPromise]);
+
+        realTimeSocket.connectFromAuth({
+          id: sessionUser.id,
+          role: sessionUser.role,
+          orgId: sessionUser.orgId,
+          tenantId: sessionUser.tenantId || sessionUser.orgId,
+        });
+
+        setSocketConnected(socketService.getState() === 'connected');
+      } catch (error) {
+        console.warn('[AUTH] Socket connect deferred failed:', error);
+        setSocketConnected(false);
+      }
+    })();
+  }, []);
+
   // Socket state callback — registered first so connect() in bootstrap can update UI.
   useEffect(() => {
     let isMounted = true;
@@ -112,7 +139,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.log('🔄 [AUTH] Socket reconnecting...');
       } else if (state === 'disconnected' && socketWasConnectedRef.current && userRef.current) {
         console.warn('⚠️ [AUTH] Socket disconnected');
-        toast.error('Lost connection to real-time server');
       }
     });
     return () => {
@@ -141,59 +167,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
+    const finish = (sessionUser: User | null) => {
+      if (cancelled) return;
+      setLoading(false);
+      setIsInitialized(true);
+      if (sessionUser) connectSocketsInBackground(sessionUser);
+    };
+
+    const fetchCurrentUser = async () => {
+      const timeoutMs = 8000;
+      return Promise.race([
+        AuthService.getCurrentUser(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+      ]);
+    };
+
     const initializeAuth = async () => {
       let userForSocket: User | null = null;
 
-      const finish = async () => {
-        if (cancelled) return;
-        if (userForSocket) {
-          try {
-            // Connect to Socket.IO with proper error handling and timeout
-            const connectionPromise = socketService.connect(
-              userForSocket.id,
-              userForSocket.role,
-              userForSocket.tenantId || userForSocket.orgId
-            );
-            
-            // Add timeout to prevent hanging
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Socket connection timeout')), 10000)
-            );
-            
-            await Promise.race([connectionPromise, timeoutPromise]);
-
-            realTimeSocket.connectFromAuth({
-              id: userForSocket.id,
-              role: userForSocket.role,
-              orgId: userForSocket.orgId,
-              tenantId: userForSocket.tenantId || userForSocket.orgId
-            });
-            
-            if (!cancelled) {
-              const state = socketService.getState();
-              setSocketConnected(state === 'connected');
-              console.log('✅ [AUTH] Socket.IO connected successfully, state:', state);
-            }
-          } catch (error) {
-            console.error('❌ [AUTH] Failed to connect to Socket.IO during bootstrap:', error);
-            if (!cancelled) {
-              setSocketConnected(false);
-              // Show warning but don't block app initialization
-              toast.warning('Real-time updates unavailable. Some features may be limited.');
-            }
-          }
-        }
-        if (!cancelled) {
-          setLoading(false);
-          setIsInitialized(true);
-        }
-      };
-
       try {
         await TokenManager.hydrateFromIndexedDB();
-        // Try to get current user from backend (uses httpOnly cookie + Redis session)
+
+        if (
+          isPublicBootstrapPath() &&
+          !TokenManager.get() &&
+          !hasStoredSessionHint()
+        ) {
+          finish(null);
+          return;
+        }
+
         try {
-          const currentUser = await AuthService.getCurrentUser();
+          const currentUser = await fetchCurrentUser();
           if (currentUser) {
             console.log('✅ User restored from Redis session:', {
               id: currentUser.id,
@@ -202,7 +207,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             });
             setUser(currentUser);
             userForSocket = currentUser;
-            await finish();
+            finish(userForSocket);
             return;
           }
         } catch (error) {
@@ -210,7 +215,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const recovered = await tryRefreshAccessToken();
             if (recovered) {
               try {
-                const retryUser = await AuthService.getCurrentUser();
+                const retryUser = await fetchCurrentUser();
                 if (retryUser) {
                   console.log('✅ User restored after token refresh:', {
                     id: retryUser.id,
@@ -219,21 +224,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   });
                   setUser(retryUser);
                   userForSocket = retryUser;
-                  await finish();
+                  finish(userForSocket);
                   return;
                 }
               } catch {
                 console.log('No valid session found');
                 setUser(null);
-                userForSocket = null;
-                await finish();
+                finish(null);
                 return;
               }
             } else {
               console.log('Token refresh failed, no session');
               setUser(null);
-              userForSocket = null;
-              await finish();
+              finish(null);
               return;
             }
           } else {
@@ -244,7 +247,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error('Auth initialization error:', error);
       }
 
-      await finish();
+      finish(userForSocket);
     };
 
     // Only initialize on mount, not after login
@@ -255,7 +258,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [connectSocketsInBackground, isInitialized]);
 
   // Session check interval — attempt refresh before forcing logout when access token expires
   useEffect(() => {
@@ -283,14 +286,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const exp = payload.exp * 1000;
 
           const timeUntilExpiry = exp - Date.now();
-          if (timeUntilExpiry < 5 * 60 * 1000 && timeUntilExpiry > 0) {
-            toast.warning('Your session will expire soon. Please save your work.');
-          }
-
           if (Date.now() >= exp) {
             const refreshed = await tryRefreshAccessToken();
             if (!refreshed) {
-              toast.error('Your session has expired. Please log in again.');
               await performLogout();
             }
           }
@@ -324,7 +322,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Verify role is present and valid
         if (!result.user.role) {
           console.error('❌ Login response missing role field', result.user);
-          toast.error('Login failed: Invalid user data');
           setLoading(false);
           return { success: false, error: 'Invalid user data' };
         }
@@ -333,7 +330,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const validRoles = ['super_admin', 'admin', 'hr', 'manager', 'accountant', 'employee'];
         if (!validRoles.includes(result.user.role)) {
           console.error('❌ Invalid role received:', result.user.role, 'Type:', typeof result.user.role);
-          toast.error('Login failed: Invalid user role');
           setLoading(false);
           return { success: false, error: 'Invalid user role' };
         }
@@ -350,10 +346,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.log('🔐 Setting user state with role:', result.user.role);
         setUser(result.user);
         setLoading(false);
-        setIsInitialized(true); // Mark as initialized so we don't re-fetch
-        toast.success(`Welcome back, ${result.user.name}!`);
-        
-        // Return success - RoleBasedRedirect will handle navigation
+        setIsInitialized(true);
+        connectSocketsInBackground(result.user);
+
         return { success: true };
       }
 
@@ -370,11 +365,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         errorMessage = error.message;
       }
 
-      toast.error(errorMessage);
       setLoading(false);
       return { success: false, error: errorMessage };
     }
-  }, []);
+  }, [connectSocketsInBackground]);
 
   // Switch role (for demo/testing)
   const switchRole = useCallback((role: UserRole) => {

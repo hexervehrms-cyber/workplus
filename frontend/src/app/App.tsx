@@ -4,7 +4,6 @@ import { ThemeProvider } from './context/ThemeContext';
 import { AuthProvider } from './context/AuthContext';
 import { CurrencyProvider } from './context/CurrencyContext';
 import { AttendanceProvider } from '../context/AttendanceContext';
-import { Toaster } from './components/ui/sonner';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './styles/animations.css';
 
@@ -17,7 +16,6 @@ export default function App() {
           <CurrencyProvider>
             <AttendanceProvider>
               <RouterProvider router={router} />
-              <Toaster />
             </AttendanceProvider>
           </CurrencyProvider>
         </AuthProvider>

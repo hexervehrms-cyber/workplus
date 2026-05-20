@@ -126,6 +126,9 @@ try {
         onboardingUrl: generatedLink.onboardingUrl
       });
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90_000);
+
       const response = await fetch(buildApiUrl('/onboarding/send-email'), {
         method: 'POST',
         headers: {
@@ -133,6 +136,7 @@ try {
           'Content-Type': 'application/json'
         },
         credentials: 'include',
+        signal: controller.signal,
         body: JSON.stringify({
           token: generatedLink.token,
           employeeEmail: generatedLink.employeeEmail,
@@ -140,6 +144,7 @@ try {
           onboardingUrl: generatedLink.onboardingUrl
         })
       });
+      clearTimeout(timeoutId);
 
       let data;
       try {
@@ -150,10 +155,14 @@ try {
       }
 
       if (!response.ok) {
-        const hint =
-          data.code === 'SMTP_NOT_CONFIGURED'
-            ? ' Configure SMTP (hr@hexerve.com) in server environment or Admin Settings.'
-            : '';
+        let hint = '';
+        if (data.code === 'SMTP_NOT_CONFIGURED') {
+          hint = ' Configure SMTP (hr@hexerve.com) in Render environment or Admin → Notification Settings.';
+        } else if (data.code === 'SMTP_CIRCUIT_OPEN') {
+          hint = ' Email service is recovering; wait a minute and try again.';
+        } else if (data.code === 'EMAIL_RATE_LIMIT') {
+          hint = ' Too many emails sent recently; try again later.';
+        }
         throw new Error((data.message || `Failed to send email (${response.status})`) + hint);
       }
 
@@ -163,7 +172,13 @@ try {
       handleSuccess();
     } catch (error) {
       console.error('Send email error:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to send email');
+      const msg =
+        error instanceof Error && error.name === 'AbortError'
+          ? 'Email request timed out. Check SMTP settings on the server or try again.'
+          : error instanceof Error
+            ? error.message
+            : 'Failed to send email';
+      toast.error(msg);
     } finally {
       setLoading(false);
     }

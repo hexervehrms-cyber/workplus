@@ -184,6 +184,33 @@ const strictLimiter = rateLimit({
   }
 });
 
+/**
+ * Outbound email rate limiter (onboarding invites, etc.)
+ * Per authenticated user — avoids Microsoft 365 throttling when many HR users send at once.
+ * Limit: 15 emails per 15 minutes per user
+ */
+const emailSendLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: parseInt(process.env.EMAIL_SEND_RATE_MAX, 10) || 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const userId = req.user?.userId || req.user?.id;
+    if (userId) return `email:${userId}`;
+    return `email-ip:${getClientIP(req)}`;
+  },
+  skip: shouldSkip,
+  handler: (req, res) => {
+    res.status(429).json({
+      success: false,
+      code: 'EMAIL_RATE_LIMIT',
+      message:
+        'Too many emails sent in a short period. Please wait before sending more onboarding emails.',
+      retryAfter: Math.ceil((req.rateLimit?.resetTime || Date.now() + 60_000) / 1000),
+    });
+  },
+});
+
 export {
   loginLimiter,
   registerLimiter,
@@ -191,5 +218,6 @@ export {
   passwordResetLimiter,
   apiLimiter,
   strictLimiter,
+  emailSendLimiter,
   getClientIP
 };

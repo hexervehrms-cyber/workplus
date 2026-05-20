@@ -38,14 +38,67 @@ const resolveReadableOrgId = (req, requestedOrgId) => {
   return userOrgId;
 };
 
-const findGeneratedDocumentForUser = async (documentId, userOrgId, role) => {
-  const doc = await GeneratedDocument.findOne({ id: documentId }).lean();
+const findGeneratedDocumentForUser = async (documentId, req, orgIds = []) => {
+  const role = req.user?.role;
+  const authOrgId = String(req.user?.orgId || "");
+
+  const byCustomId = await GeneratedDocument.findOne({ id: documentId }).lean();
+  const doc =
+    byCustomId ||
+    (mongoose.Types.ObjectId.isValid(String(documentId))
+      ? await GeneratedDocument.findById(documentId).lean()
+      : null);
+
   if (!doc) return { error: "NOT_FOUND" };
-  if (role !== "super_admin" && String(doc.organizationId) !== String(userOrgId)) {
-    return { error: "FORBIDDEN" };
+
+  if (role !== "super_admin") {
+    const allowed = new Set([authOrgId, ...orgIds.map(String)].filter(Boolean));
+    if (!allowed.has(String(doc.organizationId))) {
+      return { error: "FORBIDDEN" };
+    }
+    if (role === "employee") {
+      const uid = String(req.user.userId);
+      const assignAll = !doc.assignTo || doc.assignTo === "all";
+      const targeted =
+        Array.isArray(doc.targetUsers) &&
+        doc.targetUsers.some((t) => String(t) === uid);
+      if (!assignAll && !targeted) {
+        return { error: "FORBIDDEN" };
+      }
+    }
   }
   return { doc };
 };
+
+/** Collect org ids (JWT + employee row) for tenant-safe queries. */
+async function collectOrgIds(req, requestedOrgId) {
+  const ids = new Set();
+  const authOrg = String(req.user?.orgId || req.user?.tenantId || "").trim();
+  if (authOrg) ids.add(authOrg);
+  if (requestedOrgId) ids.add(String(requestedOrgId).trim());
+
+  const userId = req.user?.userId;
+  if (userId) {
+    const empQuery = mongoose.Types.ObjectId.isValid(String(userId))
+      ? { userId: { $in: [String(userId), new mongoose.Types.ObjectId(String(userId))] } }
+      : { userId: String(userId) };
+    const emp = await Employee.findOne(empQuery).select("orgId").lean();
+    if (emp?.orgId) ids.add(String(emp.orgId));
+  }
+  return [...ids].filter(Boolean);
+}
+
+function employeeVisibilityFilter(userId) {
+  const uid = String(userId);
+  const clauses = [{ assignTo: "all" }, { assignTo: { $exists: false } }];
+  if (mongoose.Types.ObjectId.isValid(uid)) {
+    const oid = new mongoose.Types.ObjectId(uid);
+    clauses.push({ targetUsers: uid }, { targetUsers: oid });
+  } else {
+    clauses.push({ targetUsers: uid });
+  }
+  return { $or: clauses };
+}
 
 // Configure multer for document uploads
 const documentStorage = multer.diskStorage({
@@ -588,23 +641,17 @@ router.post(
       const documentData = {
         id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         documentType: category || "General",
-        organizationId,
+        organizationId: String(organizationId),
         content,
         status: "generated",
         title,
         description,
         category,
-        assignTo,
-        targetUsers: assignTo === "specific" ? targetUsers : [],
-        requiresAcknowledgment
+        assignTo: assignTo || "all",
+        targetUsers: assignTo === "specific" ? targetUsers || [] : [],
+        requiresAcknowledgment: requiresAcknowledgment !== false,
+        createdBy: req.user?.userId,
       };
-
-      // Only add createdBy if it's a valid ObjectId, otherwise skip it
-      if (createdBy && typeof createdBy === 'string' && createdBy.length === 24) {
-        documentData.createdBy = createdBy;
-      } else if (req.user?._id) {
-        documentData.createdBy = req.user._id;
-      }
 
       const generatedDocument = new GeneratedDocument(documentData);
       await generatedDocument.save();
@@ -641,18 +688,31 @@ router.get(
   authenticate,
   asyncHandler(async (req, res) => {
     try {
-      const scopedOrgId = resolveReadableOrgId(req, req.params.organizationId);
-      if (!scopedOrgId) {
-        return sendError(res, "Unauthorized org access", 403, "FORBIDDEN");
+      const orgIds = await collectOrgIds(req, req.params.organizationId);
+      if (!orgIds.length) {
+        return sendError(res, "Organization not found", 400, "VALIDATION_ERROR");
       }
 
-      const documents = await GeneratedDocument.find({ organizationId: scopedOrgId })
+      if (req.user.role !== "super_admin") {
+        const authOrg = String(req.user.orgId || "");
+        if (authOrg && !orgIds.includes(authOrg)) {
+          return sendError(res, "Unauthorized org access", 403, "FORBIDDEN");
+        }
+      }
+
+      const query = { organizationId: { $in: orgIds } };
+      if (req.user.role === "employee") {
+        Object.assign(query, employeeVisibilityFilter(req.user.userId));
+      }
+
+      const documents = await GeneratedDocument.find(query)
         .sort({ createdAt: -1 })
         .lean();
 
       logger.info("Organization documents fetched", {
-        organizationId,
-        count: documents.length
+        organizationIds: orgIds,
+        count: documents.length,
+        role: req.user.role,
       });
 
       return sendSuccess(res, documents, "Documents fetched successfully");
@@ -667,6 +727,73 @@ router.get(
 );
 
 /**
+ * GET /api/documents/generated/:documentId/file
+ * Stream uploaded company document (authenticated)
+ */
+router.get(
+  "/generated/:documentId/file",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const { documentId } = req.params;
+      const orgIds = await collectOrgIds(req, null);
+      const lookup = await findGeneratedDocumentForUser(documentId, req, orgIds);
+      if (lookup.error === "NOT_FOUND") {
+        return sendError(res, "Document not found", 404, "NOT_FOUND");
+      }
+      if (lookup.error === "FORBIDDEN") {
+        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      }
+
+      const doc = lookup.doc;
+      if (!doc.fileUrl) {
+        return sendError(res, "This document has no file attachment", 404, "NOT_FOUND");
+      }
+
+      const absolutePath = resolveDocumentAbsolutePath(doc.fileUrl);
+      if (!absolutePath) {
+        return sendError(
+          res,
+          "File not found on server. Ask HR to re-upload the document.",
+          404,
+          "NOT_FOUND"
+        );
+      }
+
+      const ext = path.extname(doc.fileName || doc.fileUrl || "").toLowerCase();
+      const mimeByExt = {
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".doc": "application/msword",
+        ".docx":
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".txt": "text/plain",
+      };
+      const contentType = mimeByExt[ext] || "application/octet-stream";
+      const fileName = doc.fileName || doc.title || "document";
+      const asDownload =
+        req.query.download === "1" || req.query.download === "true";
+
+      res.setHeader("Content-Type", contentType);
+      res.setHeader(
+        "Content-Disposition",
+        `${asDownload ? "attachment" : "inline"}; filename="${encodeURIComponent(fileName)}"`
+      );
+      return res.sendFile(absolutePath);
+    } catch (error) {
+      logger.error("Generated document file error", {
+        error: error.message,
+        documentId: req.params.documentId,
+      });
+      return sendError(res, "Failed to open document", 500, "DOCUMENT_ERROR");
+    }
+  })
+);
+
+/**
  * GET /api/documents/generated/:documentId
  * Get a specific generated document
  */
@@ -676,12 +803,9 @@ router.get(
   asyncHandler(async (req, res) => {
     try {
       const { documentId } = req.params;
+      const orgIds = await collectOrgIds(req, null);
 
-      const lookup = await findGeneratedDocumentForUser(
-        documentId,
-        req.user.orgId,
-        req.user.role
-      );
+      const lookup = await findGeneratedDocumentForUser(documentId, req, orgIds);
       if (lookup.error === "NOT_FOUND") {
         return sendError(res, "Document not found", 404, "NOT_FOUND");
       }
@@ -716,11 +840,8 @@ router.put(
       const { documentId } = req.params;
       const { title, description, content, category, status } = req.body;
 
-      const lookup = await findGeneratedDocumentForUser(
-        documentId,
-        req.user.orgId,
-        req.user.role
-      );
+      const orgIds = await collectOrgIds(req, null);
+      const lookup = await findGeneratedDocumentForUser(documentId, req, orgIds);
       if (lookup.error === "NOT_FOUND") {
         return sendError(res, "Document not found", 404, "NOT_FOUND");
       }
@@ -769,12 +890,9 @@ router.delete(
   asyncHandler(async (req, res) => {
     try {
       const { documentId } = req.params;
+      const orgIds = await collectOrgIds(req, null);
 
-      const lookup = await findGeneratedDocumentForUser(
-        documentId,
-        req.user.orgId,
-        req.user.role
-      );
+      const lookup = await findGeneratedDocumentForUser(documentId, req, orgIds);
       if (lookup.error === "NOT_FOUND") {
         return sendError(res, "Document not found", 404, "NOT_FOUND");
       }
@@ -835,11 +953,13 @@ router.get(
 
 /**
  * POST /api/documents/issue
- * Issue a document to an employee
+ * Issue a document to an employee (optional file) — visible in employee Company Docs
  */
 router.post(
   "/issue",
   authenticate,
+  authorize(...MANAGE_DOC_ROLES),
+  documentUpload.single("document"),
   asyncHandler(async (req, res) => {
     try {
       const {
@@ -848,92 +968,128 @@ router.post(
         category,
         targetEmployeeId,
         acknowledgmentRequired,
-        notes
+        notes,
       } = req.body;
 
-      // Validate required fields
       if (!title || !category || !targetEmployeeId) {
-        return sendError(res, "Title, category, and target employee are required", 400, "VALIDATION_ERROR");
+        return sendError(
+          res,
+          "Title, category, and target employee are required",
+          400,
+          "VALIDATION_ERROR"
+        );
       }
 
-      // Get organization ID from user context (you may need to adjust this based on your auth setup)
-      const organizationId = req.user.organizationId || 'ORG-001';
+      const employee = await Employee.findById(targetEmployeeId)
+        .select("orgId userId firstName lastName")
+        .lean();
+      if (!employee) {
+        return sendError(res, "Employee not found", 404, "NOT_FOUND");
+      }
 
-      // Create issued document
-      const issuedDocumentData = {
-        id: `issued_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      const organizationId = String(
+        employee.orgId || req.user.orgId || req.user.tenantId || "system"
+      );
+
+      let fileUrl;
+      let fileName;
+      let fileSize;
+      if (req.file) {
+        fileUrl = `/uploads/documents/${req.file.filename}`;
+        fileName = req.file.originalname;
+        fileSize = `${(req.file.size / (1024 * 1024)).toFixed(2)} MB`;
+      }
+
+      const issuedId = `issued_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
+      const issuedDocument = await IssuedDocument.create({
+        id: issuedId,
         title,
-        description,
+        description: description || "",
         category,
-        targetEmployeeId,
-        issuedBy: req.user._id,
-        issuedByName: req.user.name,
-        acknowledgmentRequired: acknowledgmentRequired || false,
-        notes,
+        targetEmployeeId: String(targetEmployeeId),
+        issuedBy: req.user.userId,
+        issuedByName: req.user.name || "HR",
+        acknowledgmentRequired:
+          acknowledgmentRequired === true ||
+          acknowledgmentRequired === "true",
+        notes: notes || "",
         organizationId,
-        status: "pending"
-      };
+        status: "pending",
+        fileUrl,
+        fileName,
+        fileSize,
+      });
 
-      const issuedDocument = new IssuedDocument(issuedDocumentData);
-      await issuedDocument.save();
+      // Mirror into company library so it appears in employee Company Docs
+      await GeneratedDocument.create({
+        id: `gen_${issuedId}`,
+        title,
+        description: description || "",
+        documentType: category,
+        category,
+        content: description || title,
+        employeeId: String(targetEmployeeId),
+        organizationId,
+        status: "generated",
+        fileUrl,
+        fileName,
+        createdBy: req.user.userId,
+        assignTo: "specific",
+        targetUsers: employee.userId ? [employee.userId] : [],
+        requiresAcknowledgment:
+          acknowledgmentRequired === true ||
+          acknowledgmentRequired === "true",
+      });
 
       logger.info("Document issued to employee", {
         documentId: issuedDocument.id,
         targetEmployeeId,
-        issuedBy: req.user._id,
-        title
+        issuedBy: req.user.userId,
+        title,
       });
 
-      return sendSuccess(
-        res,
-        { document: issuedDocument },
-        "Document issued successfully"
-      );
+      return sendSuccess(res, { document: issuedDocument }, "Document issued successfully");
     } catch (error) {
       logger.error("Issue document error", {
         error: error.message,
         stack: error.stack,
-        body: req.body
+        body: req.body,
       });
       return sendError(res, error.message || "Failed to issue document", 500, "ISSUE_ERROR");
     }
   })
 );
 
-export default router;
-
-
 /**
  * GET /api/documents/acknowledgments/employee/:employeeId
- * Get all acknowledgments for an employee
+ * employeeId may be User id or Employee Mongo id
  */
 router.get(
   "/acknowledgments/employee/:employeeId",
   authenticate,
   asyncHandler(async (req, res) => {
     try {
-      const { employeeId } = req.params;
+      const userId = await resolveDocumentUserId(req.params.employeeId);
 
-      // Check authorization - employees can only see their own acknowledgments
-      if (req.user.role === "employee" && req.user.userId !== employeeId) {
+      if (
+        req.user.role === "employee" &&
+        String(req.user.userId) !== String(userId)
+      ) {
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
-      // Query acknowledgments from database
-      const acknowledgments = await DocumentAcknowledgment.find({ employeeId })
+      const acknowledgments = await DocumentAcknowledgment.find({
+        employeeId: userId,
+      })
         .sort({ acknowledgedAt: -1 })
         .lean();
-
-      logger.info("Employee acknowledgments fetched", {
-        employeeId,
-        count: acknowledgments.length
-      });
 
       return sendSuccess(res, acknowledgments, "Acknowledgments fetched successfully");
     } catch (error) {
       logger.error("Get employee acknowledgments error", {
         error: error.message,
-        employeeId: req.params.employeeId
+        employeeId: req.params.employeeId,
       });
       return sendError(res, "Failed to fetch acknowledgments", 500, "ACKNOWLEDGMENTS_ERROR");
     }
@@ -942,7 +1098,6 @@ router.get(
 
 /**
  * POST /api/documents/acknowledgments
- * Create a document acknowledgment
  */
 router.post(
   "/acknowledgments",
@@ -956,68 +1111,62 @@ router.post(
         organizationId,
         acknowledgedAt,
         ipAddress,
-        accepted
+        accepted,
       } = req.body;
 
-      // Validate required fields
-      if (!documentId || !employeeId) {
-        return sendError(res, "Document ID and Employee ID are required", 400, "VALIDATION_ERROR");
+      const resolvedEmployeeId = employeeId
+        ? await resolveDocumentUserId(employeeId)
+        : req.user.userId;
+
+      if (!documentId || !resolvedEmployeeId) {
+        return sendError(
+          res,
+          "Document ID and employee are required",
+          400,
+          "VALIDATION_ERROR"
+        );
       }
 
-      // Check authorization - employees can only acknowledge for themselves
-      if (req.user.role === "employee" && req.user.userId !== employeeId) {
+      if (
+        req.user.role === "employee" &&
+        String(req.user.userId) !== String(resolvedEmployeeId)
+      ) {
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
-      // Check if acknowledgment already exists
       const existingAcknowledgment = await DocumentAcknowledgment.findOne({
         documentId,
-        employeeId
+        employeeId: resolvedEmployeeId,
       });
 
       if (existingAcknowledgment) {
-        logger.info("Document already acknowledged", {
-          documentId,
-          employeeId,
-          existingId: existingAcknowledgment._id
-        });
-        
         return sendSuccess(
-          res, 
-          existingAcknowledgment, 
+          res,
+          existingAcknowledgment,
           "Document already acknowledged"
         );
       }
 
-      // Create new acknowledgment
-      const acknowledgmentData = {
+      const acknowledgment = await DocumentAcknowledgment.create({
         documentId,
-        employeeId,
+        employeeId: resolvedEmployeeId,
         employeeName,
         organizationId,
         acknowledgedAt: acknowledgedAt || new Date(),
         ipAddress,
         accepted,
-        status: accepted ? 'Completed' : 'Rejected'
-      };
-
-      const acknowledgment = await DocumentAcknowledgment.create(acknowledgmentData);
-
-      logger.info("Document acknowledgment created", {
-        documentId,
-        employeeId,
-        accepted,
-        acknowledgmentId: acknowledgment._id
+        status: accepted ? "Completed" : "Rejected",
       });
 
       return sendSuccess(res, acknowledgment, "Document acknowledged successfully");
     } catch (error) {
       logger.error("Create acknowledgment error", {
         error: error.message,
-        stack: error.stack,
-        documentId: req.body.documentId
+        documentId: req.body.documentId,
       });
       return sendError(res, "Failed to create acknowledgment", 500, "ACKNOWLEDGMENT_ERROR");
     }
   })
 );
+
+export default router;

@@ -111,7 +111,9 @@ export function buildLiveStatus(attendance) {
       (new Date(attendance.checkOut) - new Date(attendance.checkIn)) / (1000 * 60 * 60);
   } else {
     liveStatus = 'checked_in';
-    currentHours = (now - new Date(attendance.checkIn)) / (1000 * 60 * 60);
+    let grossHours = (now - new Date(attendance.checkIn)) / (1000 * 60 * 60);
+    const breakH = breakHoursInRow(attendance, now);
+    currentHours = Math.max(0, grossHours - breakH);
 
     if (attendance.breaks?.length) {
       const lastBreak = attendance.breaks[attendance.breaks.length - 1];

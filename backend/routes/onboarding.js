@@ -25,6 +25,12 @@ import {
   buildEnvSmtp,
   getHrInboxEmail,
 } from '../utils/workflowNotifications.js';
+import { emailSendLimiter } from '../middleware/rateLimiter.js';
+import {
+  normalizeSmtpConfig,
+  testSmtpConnection,
+  getSmtpServiceStatus,
+} from '../utils/smtpService.js';
 
 const router = express.Router();
 
@@ -108,13 +114,14 @@ router.post('/generate-link',
         });
       }
 
-      // Determine the correct orgId
-      // Priority: 1) organizationId from request body, 2) user's orgId, 3) user's company
-      let finalOrgId = organizationId || req.user.orgId;
-      
-      // Fallback: use a default if still not set
+      // Priority: explicit body orgId, then authenticated admin's org
+      const finalOrgId = organizationId || req.user.orgId;
       if (!finalOrgId) {
-        finalOrgId = 'ORG-DEFAULT';
+        return res.status(400).json({
+          success: false,
+          message:
+            'Your account has no organization assigned. Set organization on your admin profile before generating onboarding links.',
+        });
       }
 
       logger.info('Generating onboarding link', {
@@ -219,6 +226,7 @@ router.post('/generate-link',
 router.post('/send-email',
   authenticate,
   authorize('super_admin', 'admin', 'hr'),
+  emailSendLimiter,
   asyncHandler(async (req, res) => {
     const { token, employeeEmail, employeeName, onboardingUrl } = req.body;
 
@@ -287,10 +295,21 @@ router.post('/send-email',
       });
 
       if (!sent) {
+        const smtpStatus = getSmtpServiceStatus();
+        if (smtpStatus.circuitBreaker?.state === 'OPEN') {
+          return res.status(503).json({
+            success: false,
+            code: 'SMTP_CIRCUIT_OPEN',
+            message:
+              'Email service is temporarily overloaded or unavailable. Wait a minute and try again.',
+            retryAfterMs: smtpStatus.circuitBreaker.timeUntilRetry,
+          });
+        }
         return res.status(500).json({
           success: false,
+          code: 'SMTP_SEND_FAILED',
           message:
-            'Failed to send email. Verify SMTP credentials for hr@hexerve.com (Microsoft 365 app password) on the server.',
+            'Failed to send email. Verify SMTP_HOST, SMTP_USER, and SMTP_PASS (Microsoft 365 app password) on Render or in Admin → Notification Settings.',
         });
       }
 
@@ -338,12 +357,20 @@ router.get('/email-status',
   asyncHandler(async (req, res) => {
     const smtp =
       (await resolveOrganizationSmtp(req.user.orgId)) || buildEnvSmtp();
+    const config = normalizeSmtpConfig(smtp);
+    const runTest = req.query.test === 'true' || req.query.test === '1';
+    let connectionTest = null;
+    if (runTest && config) {
+      connectionTest = await testSmtpConnection(config);
+    }
     res.json({
       success: true,
       data: {
-        configured: !!smtp,
-        from: smtp?.fromEmail || smtp?.user || process.env.FROM_EMAIL || null,
-        host: smtp?.host || process.env.SMTP_HOST || null,
+        configured: !!config,
+        from: config?.fromEmail || smtp?.fromEmail || smtp?.user || process.env.FROM_EMAIL || null,
+        host: config?.host || smtp?.host || process.env.SMTP_HOST || null,
+        service: getSmtpServiceStatus(),
+        connectionTest,
       },
     });
   })
@@ -368,8 +395,7 @@ router.get('/validate/:token',
         });
       }
 
-      // Get token data from Redis
-      const tokenData = await OnboardingTokenManager.getToken(token);
+      const tokenData = await OnboardingTokenManager.resolveTokenData(token);
       if (!tokenData) {
         return res.status(404).json({
           success: false,
@@ -490,13 +516,21 @@ router.post('/submit',
         });
       }
 
-      // Get token data from Redis
-      const tokenData = await OnboardingTokenManager.getToken(token);
+      const tokenData = await OnboardingTokenManager.resolveTokenData(token);
       if (!tokenData) {
-        logger.warn('Token data not found in Redis', { token: token?.substring(0, 10) + '...' });
+        logger.warn('Onboarding token data could not be resolved', {
+          token: token?.substring(0, 10) + '...',
+        });
         return res.status(404).json({
           success: false,
-          message: 'Onboarding link not found'
+          message: 'Onboarding link not found or expired',
+        });
+      }
+
+      if (tokenData.isUsed) {
+        return res.status(400).json({
+          success: false,
+          message: 'This onboarding link has already been used',
         });
       }
 

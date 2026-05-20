@@ -1,6 +1,5 @@
 import { KPICard } from '../../components/KPICard';
 import ChatWidget from '../../components/ChatWidget';
-import LoadingProgressBar from '../../components/LoadingProgressBar';
 import {
   Users,
   TrendingUp,
@@ -541,7 +540,6 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
 
   return (
     <>
-      <LoadingProgressBar isLoading={loading} color="bg-green-500" />
       <div className="p-8 space-y-8">
       {/* Page Header */}
       <div>

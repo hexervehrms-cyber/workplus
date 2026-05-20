@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { KPICard } from '../../components/KPICard';
 import InteractiveCalendar from '../../components/InteractiveCalendar';
 import ChatWidget from '../../components/ChatWidget';
-import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useAuth } from '../../context/AuthContext';
 import { TokenManager, LeaveAllocationService } from '../../utils/api';
 import { parseBalanceApiResponse, sumAllocatedDays, sumRemainingDays } from '../../utils/leaveBalance';
@@ -22,6 +21,27 @@ import {
   isPayloadFresh,
   localDayKey,
 } from '../../utils/attendancePersistence';
+
+/** Apply server liveStatus without flipping break off due to stale/partial payloads. */
+function resolveOnBreakFromServer(
+  liveStatus: Record<string, unknown> | null | undefined,
+  breaks: BreakRecord[] | undefined,
+  fallback: boolean
+): boolean {
+  if (liveStatus?.isOnBreak === true || liveStatus?.status === 'on_break') return true;
+  if (liveStatus?.isOnBreak === false && liveStatus?.status !== 'on_break') {
+    if (Array.isArray(breaks) && breaks.length > 0) {
+      const last = breaks[breaks.length - 1];
+      if (last?.startTime && !last?.endTime) return true;
+    }
+    return false;
+  }
+  if (Array.isArray(breaks) && breaks.length > 0) {
+    const last = breaks[breaks.length - 1];
+    if (last?.startTime && !last?.endTime) return true;
+  }
+  return fallback;
+}
 import realTimeSocket from '../../utils/realTimeSocket';
 import { onPageVisible } from '../../utils/pageVisibility';
 import { useAttendance } from '../../../context/AttendanceContext';
@@ -106,6 +126,7 @@ const SYNC_CONFIG = {
   PERIODIC_REFRESH_MS: 90_000,
   ACTION_TIMEOUT_MS: 8000,
   WEEK_HOURS_SYNC_MS: 60_000,
+  BREAK_ACTION_GUARD_MS: 12_000,
 };
 
 function isLikelyMongoObjectId(id: string | null | undefined): boolean {
@@ -189,6 +210,7 @@ export default function EmployeeDashboard() {
   const safeRefreshRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
   const lastWeekSyncRef = useRef(0);
   const breakSecondsRef = useRef(0);
+  const isOnBreakRef = useRef(false);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -230,6 +252,7 @@ export default function EmployeeDashboard() {
     leaveBalance: "0 days",
     leaveBalanceSubtitle: "",
     hoursThisWeek: "0h",
+    weekHoursSubtitle: "Mon–Sun · check-in/out sessions",
     performance: "0%"
   });
 
@@ -279,6 +302,13 @@ export default function EmployeeDashboard() {
           (data as { weekKey?: string }).weekKey,
           todayLive
         );
+        if (mountedRef.current) {
+          const todayLabel =
+            todayLive > 0
+              ? `${formatWeekHours(todayLive)} today · Mon–Sun total`
+              : 'Mon–Sun · from check-in/out';
+          setKpiMetrics((prev) => ({ ...prev, weekHoursSubtitle: todayLabel }));
+        }
       }
     } catch (err) {
       debug.warn('syncWeeklyHours failed', err);
@@ -310,6 +340,10 @@ export default function EmployeeDashboard() {
 
   // Debug: Log todayAttendance changes
   useEffect(() => {
+    isOnBreakRef.current = todayAttendance.isOnBreak;
+  }, [todayAttendance.isOnBreak]);
+
+  useEffect(() => {
     debug.group('[ATTENDANCE STATE]');
     debug.log('🔍 [DASHBOARD] todayAttendance changed:', {
       isOnBreak: todayAttendance.isOnBreak,
@@ -334,8 +368,10 @@ export default function EmployeeDashboard() {
 
     const recentAction = timeSinceAction < SYNC_CONFIG.STALE_PROTECTION_MS;
     const recentSocket = timeSinceSocket < SYNC_CONFIG.SOCKET_PROTECTION_MS;
+    const onBreakGuard =
+      isOnBreakRef.current && timeSinceAction < SYNC_CONFIG.BREAK_ACTION_GUARD_MS;
 
-    if (recentAction || recentSocket) {
+    if (recentAction || recentSocket || onBreakGuard) {
       debug.log('🛡️ [STALE PROTECTION] Blocking refresh:', {
         recentAction,
         recentSocket,
@@ -477,19 +513,24 @@ export default function EmployeeDashboard() {
         let calculatedBreakType = 'regular';
         let calculatedBreakDuration = 0;
 
-        if (ls?.isOnBreak || ls?.status === 'on_break') {
-          calculatedIsOnBreak = true;
+        calculatedIsOnBreak = resolveOnBreakFromServer(
+          ls as Record<string, unknown> | undefined,
+          attendance.breaks as BreakRecord[] | undefined,
+          todayAttendance.isOnBreak
+        );
+
+        if (calculatedIsOnBreak) {
           calculatedBreakDuration =
-            typeof ls.currentBreakDuration === 'number'
-              ? Math.round(ls.currentBreakDuration)
-              : 0;
+            typeof (ls as { currentBreakDuration?: number })?.currentBreakDuration === 'number'
+              ? Math.round((ls as { currentBreakDuration: number }).currentBreakDuration)
+              : calculatedBreakDuration;
         }
 
         setCurrentBreakDuration(calculatedBreakDuration);
         breakSecondsRef.current = calculatedBreakDuration * 60;
 
         if (attendance.breaks && attendance.breaks.length > 0) {
-          const lastBreak = attendance.breaks[attendance.breaks.length - 1];
+          const lastBreak = attendance.breaks[attendance.breaks.length - 1] as BreakRecord;
           if (lastBreak.startTime && !lastBreak.endTime) {
             if (!calculatedIsOnBreak) {
               calculatedIsOnBreak = true;
@@ -497,7 +538,7 @@ export default function EmployeeDashboard() {
               const now = new Date().getTime();
               calculatedBreakDuration = Math.round((now - breakStart) / (1000 * 60));
             }
-            calculatedBreakType = lastBreak.breakType || 'regular';
+            calculatedBreakType = lastBreak.breakType || lastBreak.type || 'regular';
           }
         }
 
@@ -782,13 +823,17 @@ export default function EmployeeDashboard() {
         const ls = data.liveStatus;
         updateAttendance(
           {
-            isOnBreak: ls?.isOnBreak === true,
-            currentBreakDuration: ls?.currentBreakDuration || 0,
-            breakType: ls?.breakType || 'regular',
+            isOnBreak: false,
+            currentBreakDuration: 0,
+            breakType: (ls?.breakType as string) || 'regular',
             isCheckedIn: true,
           },
           'socket'
         );
+        disableRefreshRef.current = true;
+        setTimeout(() => {
+          disableRefreshRef.current = false;
+        }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
       }
     };
 
@@ -886,11 +931,12 @@ export default function EmployeeDashboard() {
   // FIXED: Removed safeRefresh and isRecentlyUpdated from deps to prevent recreation
   // ============================================================================
   useEffect(() => {
-    if (!todayAttendance.isCheckedIn || disableRefresh) return;
+    if (!todayAttendance.isCheckedIn || disableRefresh || todayAttendance.isOnBreak) return;
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       if (Date.now() - lastUserActivityRef.current > 120_000) return;
+      if (isOnBreakRef.current) return;
 
       // Use refs directly to avoid dependency array issues
       if (!actionInProgressRef.current && !disableRefreshRef.current && !isRecentlyUpdated()) {
@@ -900,7 +946,7 @@ export default function EmployeeDashboard() {
     }, SYNC_CONFIG.PERIODIC_REFRESH_MS);
 
     return () => clearInterval(interval);
-  }, [todayAttendance.isCheckedIn, disableRefresh, isRecentlyUpdated]);
+  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, disableRefresh, isRecentlyUpdated]);
 
   // Refresh KPIs from server (hours + leave balance) — single interval to reduce load
   useEffect(() => {
@@ -979,11 +1025,12 @@ export default function EmployeeDashboard() {
     );
   }, [todayAttendance.isOnBreak, todayAttendance.currentBreakDuration]);
 
-  // Live "Hours This Week" — server baseline + today's running timer (throttled)
+  // Live "Hours This Week" — server baseline + today's worked hours (pauses live increment on break)
   useEffect(() => {
-    if (!todayAttendance.isCheckedIn || todayAttendance.isOnBreak) return;
+    if (!todayAttendance.isCheckedIn) return;
     const tick = () => {
-      applyWeekHours(weekHoursExclTodayRef.current + workingHours, calendarWeekKey(), true);
+      const todayPart = todayAttendance.isOnBreak ? 0 : workingHours;
+      applyWeekHours(weekHoursExclTodayRef.current + todayPart, calendarWeekKey(), true);
     };
     tick();
     const interval = setInterval(tick, 5000);
@@ -1022,7 +1069,8 @@ export default function EmployeeDashboard() {
       lastActionTimeRef.current = Date.now();
 
       const resolvedEmployeeId = await ensureEmployeeId();
-      const idempotencyKey = `break-start-${resolvedEmployeeId || 'me'}-${Date.now()}`;
+      const day = localDayKey();
+      const idempotencyKey = `break-start-${resolvedEmployeeId || user?.id || 'me'}-${day}`;
       
       const payload: { breakType: string; notes: string; idempotencyKey: string; employeeId?: string | null } = {
         breakType,
@@ -1045,8 +1093,13 @@ export default function EmployeeDashboard() {
 
         if (!result.ok) {
           if (result.status === 409) {
+            disableRefreshRef.current = true;
             clearApiCache('/attendance/today');
-            runSafe('attendance-sync', () => fetchDashboardDataRef.current?.(true));
+            await new Promise((r) => setTimeout(r, 2000));
+            await fetchDashboardDataRef.current?.(true);
+            setTimeout(() => {
+              disableRefreshRef.current = false;
+            }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
             return;
           }
           throw new Error(result.message);
@@ -1054,17 +1107,44 @@ export default function EmployeeDashboard() {
 
         debug.log('✅ [BREAK START] Success:', result);
 
-        const liveStatus = (result.data as { liveStatus?: Record<string, unknown> })?.liveStatus;
-        if (liveStatus) {
-          updateAttendance({
-            isOnBreak: liveStatus.isOnBreak || true,
-            breakType: liveStatus.breakType || breakType,
-            currentBreakDuration: liveStatus.currentBreakDuration || 0
-          }, 'action');
+        const payload = result.data as {
+          liveStatus?: Record<string, unknown>;
+          hoursThisWeek?: number;
+          weekKey?: string;
+          attendance?: { breaks?: BreakRecord[] };
+        };
+        const liveStatus = payload?.liveStatus;
+        updateAttendance(
+          {
+            isOnBreak: resolveOnBreakFromServer(
+              liveStatus,
+              payload?.attendance?.breaks,
+              true
+            ),
+            breakType: (liveStatus?.breakType as string) || breakType,
+            currentBreakDuration:
+              typeof liveStatus?.currentBreakDuration === 'number'
+                ? Math.round(liveStatus.currentBreakDuration as number)
+                : 0,
+          },
+          'action'
+        );
+
+        if (typeof payload?.hoursThisWeek === 'number') {
+          const liveH =
+            typeof liveStatus?.currentHours === 'number'
+              ? (liveStatus.currentHours as number)
+              : 0;
+          ingestWeekHoursFromServer(payload.hoursThisWeek, payload.weekKey, liveH);
+        } else {
+          void syncWeeklyHours();
         }
 
         clearApiCache('/attendance/today');
-        void syncWeeklyHours();
+        disableRefreshRef.current = true;
+        setTimeout(() => {
+          disableRefreshRef.current = false;
+        }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
         toast.success('Break started');
         setLastSocketEventTime(Date.now());
       } catch (innerErr) {
@@ -1107,7 +1187,7 @@ export default function EmployeeDashboard() {
       lastActionTimeRef.current = Date.now();
       
       const resolvedEmployeeId = await ensureEmployeeId();
-      const idempotencyKey = `break-end-${resolvedEmployeeId || 'me'}-${Date.now()}`;
+      const idempotencyKey = `break-end-${resolvedEmployeeId || user?.id || 'me'}-${localDayKey()}`;
       
       const payload: { notes: string; idempotencyKey: string; employeeId?: string | null } = {
         notes: 'Break ended',
@@ -1129,8 +1209,13 @@ export default function EmployeeDashboard() {
 
         if (!result.ok) {
           if (result.status === 409) {
+            disableRefreshRef.current = true;
             clearApiCache('/attendance/today');
-            runSafe('attendance-sync', () => fetchDashboardDataRef.current?.(true));
+            await new Promise((r) => setTimeout(r, 2000));
+            await fetchDashboardDataRef.current?.(true);
+            setTimeout(() => {
+              disableRefreshRef.current = false;
+            }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
             return;
           }
           throw new Error(result.message);
@@ -1142,13 +1227,18 @@ export default function EmployeeDashboard() {
           liveStatus?: Record<string, unknown>;
           hoursThisWeek?: number;
           weekKey?: string;
+          attendance?: { breaks?: BreakRecord[] };
         };
         const liveStatus = breakPayload?.liveStatus;
         updateAttendance(
           {
-            isOnBreak: liveStatus?.isOnBreak === true,
-            breakType: liveStatus?.breakType || 'regular',
-            currentBreakDuration: liveStatus?.currentBreakDuration || 0,
+            isOnBreak: resolveOnBreakFromServer(
+              liveStatus,
+              breakPayload?.attendance?.breaks,
+              false
+            ),
+            breakType: (liveStatus?.breakType as string) || 'regular',
+            currentBreakDuration: 0,
             isCheckedIn: true,
           },
           'action'
@@ -1399,18 +1489,14 @@ export default function EmployeeDashboard() {
 
   if (authLoading || !user) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
-          <p className="mt-4 text-muted-foreground">Loading dashboard...</p>
-        </div>
+      <div className="flex min-h-[40vh] items-center justify-center" role="status" aria-label="Loading">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
     );
   }
 
   return (
     <>
-      <LoadingProgressBar isLoading={loading} color="bg-blue-500" />
       <div className="p-8 space-y-8">
         {/* Welcome Header with Attendance Buttons */}
         <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-8 mb-2">
@@ -1545,6 +1631,7 @@ export default function EmployeeDashboard() {
           <KPICard
             title="Hours This Week"
             value={kpiMetrics.hoursThisWeek}
+            subtitle={kpiMetrics.weekHoursSubtitle}
             icon={Clock}
             color="secondary"
           />

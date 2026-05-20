@@ -4,7 +4,6 @@ import { FeatureShowcase } from '../../components/FeatureShowcase';
 import OnboardingLinkGenerator from '../../components/OnboardingLinkGenerator';
 import DocumentGenerator from '../../components/DocumentGenerator';
 import ChatWidget from '../../components/ChatWidget';
-import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useCurrency } from '../../context/CurrencyContext';
 import { useRealTimeDashboard } from '../../hooks/useRealTimeDashboard';
 import { useState, useEffect, useCallback } from 'react';
@@ -33,7 +32,7 @@ import {
 } from '../../components/ui/table';
 import { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { apiClient } from '../../utils/api';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 
 export default function SuperAdminDashboard() {
   const { formatCurrency } = useCurrency();
@@ -191,7 +190,6 @@ export default function SuperAdminDashboard() {
 
   return (
     <>
-      <LoadingProgressBar isLoading={loading} color="bg-purple-500" />
       <div className="p-8 space-y-8">
       {/* Page Header */}
       <div className="flex items-center justify-between">

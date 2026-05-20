@@ -4,6 +4,7 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { authenticate, authorize } from '../middleware/auth.js';
 import Organization from '../models/Organization.js';
 import logger from '../utils/logger.js';
+import { invalidateSmtpTransports } from '../utils/smtpService.js';
 
 const router = express.Router();
 
@@ -120,6 +121,10 @@ router.patch(
 
     org.markModified('settings');
     await org.save();
+
+    if (integrations?.smtp) {
+      invalidateSmtpTransports();
+    }
 
     logger.info('Notification integrations updated', { orgId, by: req.user.userId });
 

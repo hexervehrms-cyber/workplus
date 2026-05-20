@@ -8,6 +8,7 @@
 import mongoose from 'mongoose';
 import logger from './logger.js';
 import Notification from '../models/Notification.js';
+import { normalizeSmtpConfig, sendSmtpMail } from './smtpService.js';
 
 function toRecipientUserId(employee) {
   return employee?.userId || employee?.recipientUserId || employee?._id;
@@ -104,7 +105,7 @@ class EmailNotificationService {
    * Automatically retries with exponential backoff on failure
    */
   static async sendEmail(emailData) {
-    return this.sendEmailWithRetry(emailData, 3);
+    return this.sendEmailWithRetry(emailData, 2);
   }
 
   /**
@@ -112,86 +113,48 @@ class EmailNotificationService {
    * Supports sending from employee email addresses
    */
   static async _sendEmailInternal(emailData) {
-    try {
-      const o = emailData.organizationSmtp;
-      const useOrg = o && o.host && o.user && o.pass;
-      const host = useOrg ? o.host : process.env.SMTP_HOST;
-      const port = useOrg ? (parseInt(String(o.port), 10) || 587) : (parseInt(process.env.SMTP_PORT, 10) || 587);
-      const secure = useOrg ? !!o.secure : (String(process.env.SMTP_PORT) === '465');
-      const authUser = useOrg ? o.user : process.env.SMTP_USER;
-      const authPass = useOrg ? o.pass : process.env.SMTP_PASS;
+    const smtpConfig = normalizeSmtpConfig(emailData.organizationSmtp);
 
-      if (!host || !authUser || !authPass) {
-        logger.warn('Email service not configured', {
-          to: emailData.to,
-          useOrgSmtp: !!useOrg,
-          hasHost: !!host,
-          hasUser: !!authUser,
-          hasPass: !!authPass
-        });
-        return false;
-      }
-
-      const nodemailer = await import('nodemailer');
-
-      const transporter = nodemailer.default.createTransport({
-        host,
-        port,
-        secure,
-        auth: {
-          user: authUser,
-          pass: authPass
-        },
-        requireTLS: !secure && port === 587,
-        tls: {
-          minVersion: 'TLSv1.2',
-          rejectUnauthorized: false
-        }
-      });
-
-      try {
-        await transporter.verify();
-      } catch (verifyErr) {
-        logger.warn('SMTP verify failed; attempting send anyway', { error: verifyErr.message, host });
-      }
-
-      const fromEmail = useOrg
-        ? (o.fromEmail || o.user)
-        : (process.env.FROM_EMAIL || process.env.SMTP_USER);
-      const fromName = useOrg
-        ? (o.fromName || emailData.fromName || 'WorkPlus HR')
-        : (emailData.fromName || 'WorkPlus HR');
-      const replyToEmail = emailData.replyTo || emailData.from || fromEmail;
-
-      const info = await transporter.sendMail({
-        from: `"${fromName}" <${fromEmail}>`,
+    if (!smtpConfig) {
+      logger.warn('Email service not configured', {
         to: emailData.to,
-        subject: emailData.subject,
-        html: emailData.html,
-        text: emailData.text,
-        replyTo: replyToEmail
+        hasOrgSmtp: !!(emailData.organizationSmtp?.host && emailData.organizationSmtp?.user),
       });
+      return false;
+    }
 
+    const fromEmail = smtpConfig.fromEmail;
+    const fromName = emailData.fromName || smtpConfig.fromName || 'WorkPlus HR';
+    const replyToEmail = emailData.replyTo || emailData.from || fromEmail;
+
+    const result = await sendSmtpMail(smtpConfig, {
+      from: `"${fromName}" <${fromEmail}>`,
+      to: emailData.to,
+      subject: emailData.subject,
+      html: emailData.html,
+      text: emailData.text,
+      replyTo: replyToEmail,
+    });
+
+    if (result.success) {
       logger.info('Email sent successfully', {
         to: emailData.to,
         from: fromEmail,
         replyTo: replyToEmail,
         subject: emailData.subject,
-        messageId: info.messageId,
-        smtp: host,
-        viaOrgSmtp: !!useOrg
+        messageId: result.messageId,
+        smtp: smtpConfig.host,
       });
       return true;
-    } catch (error) {
-      logger.error('Email send failed', {
-        error: error.message,
-        code: error.code,
-        response: error.response,
-        to: emailData.to,
-        host
-      });
-      return false;
     }
+
+    logger.error('Email send failed', {
+      to: emailData.to,
+      host: smtpConfig.host,
+      code: result.code,
+      error: result.error,
+    });
+    return false;
   }
 
   /**
@@ -1194,15 +1157,18 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
     `;
     const html = this.getEmailTemplate(content, `Welcome to ${orgName}`);
 
-    return this.sendEmail({
-      to: String(to).trim(),
-      subject: `Welcome to ${orgName} — complete your onboarding`,
-      html,
-      text: `Hi ${employeeName},\n\nComplete your onboarding: ${onboardingUrl}\n\n— ${orgName} HR`,
-      organizationSmtp,
-      fromName: organizationSmtp?.fromName || `${orgName} HR`,
-      replyTo: process.env.HR_EMAIL || hrFrom
-    });
+    return this.sendEmailWithRetry(
+      {
+        to: String(to).trim(),
+        subject: `Welcome to ${orgName} — complete your onboarding`,
+        html,
+        text: `Hi ${employeeName},\n\nComplete your onboarding: ${onboardingUrl}\n\n— ${orgName} HR`,
+        organizationSmtp,
+        fromName: organizationSmtp?.fromName || `${orgName} HR`,
+        replyTo: process.env.HR_EMAIL || hrFrom
+      },
+      2
+    );
   }
 
   static async sendPasswordResetEmail(employee, newPassword, resetBy) {

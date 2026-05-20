@@ -1,117 +1,11 @@
-import { createBrowserRouter, Navigate } from 'react-router';
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { createBrowserRouter, Outlet } from 'react-router';
+import { lazy, Suspense } from 'react';
 import { MainLayout } from './layouts/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { RouteErrorBoundary } from './components/RouteErrorBoundary';
 import Login from './pages/Login';
-import { useAuth } from './context/AuthContext';
-
-// Role-based redirect component
-function RoleBasedRedirect() {
-  const { user, loading } = useAuth();
-  const [verifying, setVerifying] = useState(true);
-  const [redirectPath, setRedirectPath] = useState<string | null>(null);
-  
-  useEffect(() => {
-    console.log('🔍 RoleBasedRedirect - Auth state changed:', { 
-      userEmail: user?.email, 
-      userRole: user?.role,
-      userRoleType: typeof user?.role,
-      loading,
-      fullUser: user
-    });
-
-    if (loading) {
-      console.log('⏳ Still loading auth, waiting...');
-      setVerifying(true);
-      return;
-    }
-
-    const verifyAndRedirect = async () => {
-      console.log('🔍 RoleBasedRedirect - Checking user:', user);
-
-      if (!user) {
-        console.log('❌ No user found, redirecting to login');
-        setRedirectPath('/login');
-        setVerifying(false);
-        return;
-      }
-
-      // Verify role is valid
-      if (!user.role) {
-        console.error('❌ User object missing role field:', user);
-        setRedirectPath('/login');
-        setVerifying(false);
-        return;
-      }
-
-      // Validate role is one of the expected values
-      const validRoles = ['super_admin', 'admin', 'hr', 'manager', 'accountant', 'employee'];
-      if (!validRoles.includes(user.role)) {
-        console.error('❌ Invalid role:', user.role, 'Type:', typeof user.role);
-        setRedirectPath('/login');
-        setVerifying(false);
-        return;
-      }
-
-      // Determine redirect path based on role - CRITICAL: Must match role exactly
-      let path = '/employee'; // Default fallback
-      
-      switch (user.role) {
-        case 'super_admin':
-          path = '/super-admin';
-          console.log('✅ Role is super_admin, redirecting to /super-admin');
-          break;
-        case 'admin':
-          path = '/admin';
-          console.log('✅ Role is admin, redirecting to /admin');
-          break;
-        case 'employee':
-          path = '/employee';
-          console.log('✅ Role is employee, redirecting to /employee');
-          break;
-        case 'hr':
-          path = '/employee';
-          console.log('✅ Role is hr, redirecting to /employee');
-          break;
-        case 'manager':
-          path = '/employee';
-          console.log('✅ Role is manager, redirecting to /employee');
-          break;
-        case 'accountant':
-          path = '/employee';
-          console.log('✅ Role is accountant, redirecting to /employee');
-          break;
-        default:
-          path = '/employee';
-          console.warn('⚠️ Unknown role, defaulting to /employee');
-      }
-
-      console.log('✅ RoleBasedRedirect - User role:', user.role, 'Redirecting to:', path);
-      setRedirectPath(path);
-      setVerifying(false);
-    };
-
-    verifyAndRedirect();
-  }, [user?.id, user?.role, loading]);
-
-  if (verifying || loading) {
-    return (
-      <div className="flex min-h-[50vh] items-center justify-center" role="status" aria-label="Loading">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      </div>
-    );
-  }
-
-  if (!redirectPath) {
-    console.log('⚠️ No redirect path determined, going to login');
-    return <Navigate to="/login" replace />;
-  }
-
-  console.log('🔄 Navigating to:', redirectPath);
-  return <Navigate to={redirectPath} replace />;
-}
+import HomeGate from './components/landing/HomeGate';
 
 // Minimal loading fallback - no visible spinner for faster perceived performance
 const LazyLoader = () => null;
@@ -161,38 +55,34 @@ const Calls = lazy(() => import('./pages/sales/Calls'));
 const EmployeeDashboard = lazy(() => import('./pages/employee/Dashboard'));
 const Profile = lazy(() => import('./pages/employee/Profile'));
 const Leave = lazy(() => import('./pages/employee/Leave'));
-import Calendar from './pages/employee/Calendar';
-import Attendance from './pages/employee/Attendance';
-import Performance from './pages/employee/Performance';
-import Payroll from './pages/employee/Payroll';
-import Expenses from './pages/employee/Expenses';
-import Chat from './pages/employee/Chat';
-import EmployeeOnboarding from './pages/employee/OnboardingForm';
-import EmployeeCompanyDocs from './pages/employee/CompanyDocs';
-import EmployeeSettings from './pages/employee/Settings';
+const Calendar = lazy(() => import('./pages/employee/Calendar'));
+const Attendance = lazy(() => import('./pages/employee/Attendance'));
+const Performance = lazy(() => import('./pages/employee/Performance'));
+const Payroll = lazy(() => import('./pages/employee/Payroll'));
+const Expenses = lazy(() => import('./pages/employee/Expenses'));
+const Chat = lazy(() => import('./pages/employee/Chat'));
+const EmployeeOnboarding = lazy(() => import('./pages/employee/OnboardingForm'));
+const EmployeeCompanyDocs = lazy(() => import('./pages/employee/CompanyDocs'));
+const EmployeeSettings = lazy(() => import('./pages/employee/Settings'));
 
 // Public Pages
 import Onboarding from './pages/public/Onboarding';
 
 const routes = [
   {
-    path: '/login',
-    element: <Login />,
-  },
-  {
-    path: '/',
-    element: (
-      <ErrorBoundary>
-        <ProtectedRoute>
-          <MainLayout />
-        </ProtectedRoute>
-      </ErrorBoundary>
-    ),
+    element: <Outlet />,
     children: [
-      { 
-        index: true, 
-        element: <RoleBasedRedirect />
-      },
+      { index: true, element: <HomeGate /> },
+      { path: 'login', element: <Login /> },
+      {
+        element: (
+          <ErrorBoundary>
+            <ProtectedRoute>
+              <MainLayout />
+            </ProtectedRoute>
+          </ErrorBoundary>
+        ),
+        children: [
       {
         path: 'super-admin',
         element: (
@@ -586,11 +476,13 @@ const routes = [
           </ProtectedRoute>
         ),
       },
+        ],
+      },
+      {
+        path: 'onboarding/:token',
+        element: <Onboarding />,
+      },
     ],
-  },
-  {
-    path: '/onboarding/:token',
-    element: <Onboarding />,
   },
 ];
 

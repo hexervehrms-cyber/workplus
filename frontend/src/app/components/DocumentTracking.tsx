@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { buildApiUrl, getBearerToken } from '../utils/apiHelper';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -93,22 +94,77 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
   const loadData = async () => {
     try {
       setLoading(true);
-      
-      // Fetch documents
-      const docsResponse = await fetch('/api/company-documents');
-      const docsData = docsResponse.ok ? await docsResponse.json() : [];
-      
-      // Fetch employees
-      const empsResponse = await fetch('/api/employees');
-      const empsData = empsResponse.ok ? await empsResponse.json() : [];
-      
-      // Fetch acknowledgments
-      const acksResponse = await fetch('/api/document-acknowledgments/all');
-      const acksData = acksResponse.ok ? await acksResponse.json() : [];
-      
-      setDocuments(docsData);
-      setEmployees(empsData);
-      setAcknowledgments(acksData);
+      setError('');
+      const token = getBearerToken();
+      const authHeaders: HeadersInit = {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+
+      const docsResponse = await fetch(
+        buildApiUrl(`/documents/organization/${encodeURIComponent(organizationId)}`),
+        { credentials: 'include', headers: authHeaders }
+      );
+      const docsJson = docsResponse.ok ? await docsResponse.json() : {};
+      const docsList = Array.isArray(docsJson.data) ? docsJson.data : [];
+      const mappedDocs: Document[] = docsList.map((d: Record<string, unknown>) => ({
+        id: String(d.id || d._id || ''),
+        title: String(d.title || 'Untitled'),
+        description: String(d.description || ''),
+        category: String(d.category || d.documentType || 'Other'),
+        organizationId: String(d.organizationId || organizationId),
+        createdBy: String(d.createdBy || 'admin'),
+        createdAt: String(d.createdAt || new Date().toISOString()),
+        updatedAt: String(d.updatedAt || new Date().toISOString()),
+        status: (String(d.status || 'Published') as Document['status']),
+        documentUrl: String(d.fileUrl || d.documentUrl || ''),
+        fileName: String(d.fileName || d.title || 'document'),
+        fileSize: String(d.fileSize || '—'),
+        downloadCount: 0,
+        isPublic: true,
+        assignTo: (d.assignTo === 'specific' ? 'specific' : 'all') as Document['assignTo'],
+        targetUsers: Array.isArray(d.targetUsers) ? d.targetUsers.map(String) : [],
+        requiresAcknowledgment: Boolean(d.requiresAcknowledgment ?? d.acknowledgmentRequired),
+      }));
+
+      const empsResponse = await fetch(buildApiUrl('/employees?limit=500&simple=true'), {
+        credentials: 'include',
+        headers: authHeaders,
+      });
+      const empsJson = empsResponse.ok ? await empsResponse.json() : {};
+      const empsList = Array.isArray(empsJson.data)
+        ? empsJson.data
+        : Array.isArray(empsJson.employees)
+          ? empsJson.employees
+          : [];
+      const mappedEmployees: Employee[] = empsList.map((e: Record<string, unknown>) => ({
+        id: String(e.userId || e._id || e.id || ''),
+        name: String(e.name || `${e.firstName || ''} ${e.lastName || ''}`.trim() || 'Employee'),
+        email: String(e.email || ''),
+        department: String(e.department || '—'),
+        position: String(e.designation || e.position || '—'),
+      }));
+
+      const ackRes = await fetch(
+        buildApiUrl(`/documents/acknowledgments/organization/${encodeURIComponent(organizationId)}`),
+        { credentials: 'include', headers: authHeaders }
+      );
+      const ackJson = ackRes.ok ? await ackRes.json() : {};
+      const ackList = Array.isArray(ackJson.data) ? ackJson.data : [];
+      const mappedAcks: Acknowledgment[] = ackList.map((ack: Record<string, unknown>) => ({
+        id: String(ack._id || ack.id || `${ack.documentId}-${ack.employeeId}`),
+        documentId: String(ack.documentId || ''),
+        employeeId: String(ack.employeeId || ''),
+        employeeName: String(ack.employeeName || ''),
+        organizationId: String(ack.organizationId || organizationId),
+        acknowledgedAt: String(ack.acknowledgedAt || ack.createdAt || new Date().toISOString()),
+        status: (ack.status === 'Completed' ? 'Completed' : 'Pending') as Acknowledgment['status'],
+        ipAddress: String(ack.ipAddress || '—'),
+        userAgent: String(ack.userAgent || '—'),
+      }));
+
+      setDocuments(mappedDocs);
+      setEmployees(mappedEmployees.filter((e) => e.id));
+      setAcknowledgments(mappedAcks);
     } catch (error) {
       console.error('Error loading data:', error);
       setError('Failed to load data');
@@ -121,11 +177,10 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
     const doc = documents.find(d => d.id === documentId);
     if (!doc) return { total: 0, completed: 0, pending: 0 };
 
-    let targetEmployees = mockEmployees;
-    
-    // If document is assigned to specific users, filter them
+    let targetEmployees = employees;
+
     if (doc.assignTo === 'specific' && doc.targetUsers.length > 0) {
-      targetEmployees = mockEmployees.filter(emp => doc.targetUsers.includes(emp.id));
+      targetEmployees = employees.filter((emp) => doc.targetUsers.includes(emp.id));
     }
 
     const completedCount = acknowledgments.filter(ack => 
@@ -150,11 +205,8 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
     try {
       setSendingReminders(prev => [...prev, employeeId || 'all']);
       
-      const response = await fetch('/api/document-acknowledgments/remind', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentId, employeeId, organizationId })
-      });
+      // Reminder API not yet implemented — notify via in-app message for now
+      const response = { ok: false as boolean };
       
       if (response.ok) {
         const employee = employeeId ? employees.find(emp => emp.id === employeeId) : null;
@@ -163,8 +215,8 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
         setSuccessMessage(`Reminder sent${employee ? ` to ${employee.name}` : ' to all employees'} for "${doc?.title}"`);
         setTimeout(() => setSuccessMessage(''), 3000);
       } else {
-        setError('Failed to send reminder');
-        setTimeout(() => setError(''), 3000);
+        setError('Reminder emails are not configured yet. Acknowledgment tracking is available above.');
+        setTimeout(() => setError(''), 4000);
       }
       
     } catch (error) {

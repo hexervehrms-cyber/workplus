@@ -50,8 +50,9 @@ export function ExpenseLimitSettingsDialog({ readOnly = false, triggerClassName 
   const loadLimits = async () => {
     try {
       setLoading(true);
-      const res = await apiGet<{ data?: ExpenseLimitsConfig }>('/expenses/settings');
-      const data = (res as { data?: ExpenseLimitsConfig })?.data ?? res;
+      const res = await apiGet<{ data?: ExpenseLimitsConfig } | ExpenseLimitsConfig>('/expenses/settings');
+      const raw = (res as { data?: ExpenseLimitsConfig })?.data ?? res;
+      const data = raw as ExpenseLimitsConfig;
       if (data && typeof data === 'object') {
         setLimits({
           enabled: data.enabled !== false,

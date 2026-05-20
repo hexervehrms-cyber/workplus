@@ -1109,6 +1109,39 @@ router.post(
 );
 
 /**
+ * GET /api/documents/acknowledgments/organization/:organizationId
+ * List all document acknowledgments for an organization (admin/hr)
+ */
+router.get(
+  "/acknowledgments/organization/:organizationId",
+  authenticate,
+  authorize(...MANAGE_DOC_ROLES),
+  asyncHandler(async (req, res) => {
+    try {
+      const orgId = resolveReadableOrgId(req, req.params.organizationId);
+      if (!orgId) {
+        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      }
+
+      const orgIds = await collectOrgIds(req, orgId);
+      const acknowledgments = await DocumentAcknowledgment.find({
+        organizationId: { $in: orgIds.length ? orgIds : [orgId] },
+      })
+        .sort({ acknowledgedAt: -1 })
+        .lean();
+
+      return sendSuccess(res, acknowledgments, "Acknowledgments fetched successfully");
+    } catch (error) {
+      logger.error("Get organization acknowledgments error", {
+        error: error.message,
+        organizationId: req.params.organizationId,
+      });
+      return sendError(res, "Failed to fetch acknowledgments", 500, "ACKNOWLEDGMENTS_ERROR");
+    }
+  })
+);
+
+/**
  * GET /api/documents/acknowledgments/employee/:employeeId
  * employeeId may be User id or Employee Mongo id
  */

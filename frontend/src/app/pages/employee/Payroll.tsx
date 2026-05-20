@@ -15,8 +15,7 @@ import {
 import { ScrollArea } from '../../components/ui/scroll-area';
 import { Separator } from '../../components/ui/separator';
 import { toast } from '../../utils/portalToast';
-import { apiGet, buildApiUrl } from '../../utils/apiHelper';
-import { TokenManager } from '../../utils/api';
+import { apiFetchBlob, apiGet } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 
 interface SalarySlip {
@@ -56,19 +55,9 @@ interface SalarySlip {
 }
 
 async function fetchSalarySlipBlob(slipId: string): Promise<Blob> {
-  const url = buildApiUrl(`salary/slip/${slipId}/download`);
-  const token = TokenManager.get();
-  const response = await fetch(url, {
-    credentials: 'include',
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      Accept: 'text/html,application/pdf,*/*',
-    },
+  return apiFetchBlob(`salary/slip/${slipId}/download`, {
+    headers: { Accept: 'text/html,application/pdf,*/*' },
   });
-  if (!response.ok) {
-    throw new Error(`Download failed with status ${response.status}`);
-  }
-  return response.blob();
 }
 
 export default function Payroll() {
@@ -114,7 +103,7 @@ export default function Payroll() {
 
   const fetchSalarySlips = async (empId: string) => {
     try {
-      const data = await apiGet(`/salary/slips/${empId}`);
+      const data = await apiGet(`/salary/slips/${empId}`, false);
 
       if (data.data && Array.isArray(data.data)) {
         setSalarySlips(data.data);

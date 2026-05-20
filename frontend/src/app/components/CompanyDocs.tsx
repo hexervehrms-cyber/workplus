@@ -10,7 +10,7 @@ import DocumentReader from './DocumentReader';
 import DigitalDocumentGenerator from './DigitalDocumentGenerator';
 import DocumentTracking from './DocumentTracking';
 import { apiClient, TokenManager } from '../utils/api';
-import { buildApiUrl, buildFileUrl } from '../utils/apiHelper';
+import { apiGet, apiPost, buildFileUrl } from '../utils/apiHelper';
 import { downloadCompanyGeneratedDocument } from '../utils/documentFile';
 import { useAuth } from '../context/AuthContext';
 import { toast } from '../utils/portalToast';
@@ -134,17 +134,12 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         return;
       }
 
-      const token = TokenManager.get();
-      const response = await fetch(buildApiUrl(`/documents/organization/${encodeURIComponent(orgId)}`), {
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-      
-      if (response.ok) {
-        const result = await response.json();
-        const documentsList = result.data || [];
+      try {
+        const result = await apiGet<{ data?: unknown[] }>(
+          `documents/organization/${encodeURIComponent(orgId)}`,
+          false
+        );
+        const documentsList = result?.data || [];
         const mapRow = (d: Record<string, unknown>): CompanyDocument => ({
           id: String(d.id || d._id || ''),
           title: String(d.title || 'Untitled'),
@@ -169,18 +164,12 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
 
         if (!isAdmin && !isSuperAdmin && user?.employeeId) {
           try {
-            const issuedRes = await fetch(
-              buildApiUrl(`/documents/issued/${encodeURIComponent(String(user.employeeId))}`),
-              {
-                credentials: 'include',
-                headers: {
-                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                },
-              }
+            const issuedJson = await apiGet<{ data?: unknown[] }>(
+              `documents/issued/${encodeURIComponent(String(user.employeeId))}`,
+              false
             );
-            if (issuedRes.ok) {
-              const issuedJson = await issuedRes.json();
-              const issuedList = issuedJson.data || [];
+            const issuedList = issuedJson?.data || [];
+            if (issuedList) {
               const issuedMapped = (Array.isArray(issuedList) ? issuedList : []).map(
                 (d: Record<string, unknown>) =>
                   mapRow({
@@ -193,8 +182,6 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
               const byId = new Map<string, CompanyDocument>();
               [...mapped, ...issuedMapped].forEach((doc) => byId.set(doc.id, doc));
               setDocuments([...byId.values()]);
-            } else {
-              setDocuments(mapped);
             }
           } catch {
             setDocuments(mapped);
@@ -202,7 +189,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         } else {
           setDocuments(mapped);
         }
-      } else {
+      } catch {
         setDocuments([]);
       }
       
@@ -226,19 +213,12 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         return;
       }
 
-      const response = await fetch(
-        buildApiUrl(`/documents/acknowledgments/employee/${currentEmployeeId}`),
-        {
-          credentials: 'include',
-          headers: {
-            ...(TokenManager.get() ? { Authorization: `Bearer ${TokenManager.get()}` } : {}),
-          },
-        }
+      const result = await apiGet<{ data?: unknown[] }>(
+        `documents/acknowledgments/employee/${currentEmployeeId}`,
+        false
       );
-      
-      if (response.ok) {
-        const result = await response.json();
-        const acks = result.data || [];
+      const acks = result?.data || [];
+      if (acks) {
         
         // Convert array to object keyed by documentId for easy lookup
         const acknowledgementsMap: Record<string, any> = {};
@@ -248,9 +228,6 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         
         console.log('📄 [ACKNOWLEDGMENTS] Loaded:', acknowledgementsMap);
         setAcknowledgments(acknowledgementsMap);
-      } else {
-        console.warn('📄 [ACKNOWLEDGMENTS] Failed to load, using empty state');
-        setAcknowledgments({});
       }
     } catch (error) {
       console.error('Error loading acknowledgments:', error);
@@ -274,57 +251,37 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         return;
       }
 
-      const response = await fetch(buildApiUrl('/documents/acknowledgments'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(TokenManager.get() ? { Authorization: `Bearer ${TokenManager.get()}` } : {}),
-        },
-        body: JSON.stringify({
+      const result = await apiPost<{ data?: Record<string, unknown> }>(
+        'documents/acknowledgments',
+        {
           documentId,
           employeeId: currentEmployeeId,
           employeeName: currentEmployeeName || 'Employee',
           organizationId: String(orgId),
           acknowledgedAt: new Date().toISOString(),
           ipAddress: ipAddress,
-          accepted: accepted
-        }),
-      });
+          accepted: accepted,
+        }
+      );
 
-      if (response.ok) {
-        const result = await response.json();
-        console.log('📄 [ACKNOWLEDGMENT] Success:', result);
-        
-        // Extract acknowledgment from response (result.data contains the acknowledgment)
-        const newAcknowledgment = result.data || {
-          id: `ack_${Date.now()}`,
-          documentId,
-          employeeId: currentEmployeeId,
-          employeeName: currentEmployeeName,
-          acknowledgedAt: new Date().toISOString(),
-          status: 'Completed',
-          accepted
-        };
-        
-        // Update acknowledgments state immediately
-        setAcknowledgments(prev => ({
-          ...prev,
-          [documentId]: newAcknowledgment
-        }));
-        
-        console.log('📄 [ACKNOWLEDGMENT] State updated successfully');
-        
-        toast.success('Document acknowledged successfully');
-        
-        // Close the document reader modal
-        setShowDocumentReader(false);
-        setSelectedDocument(null);
-      } else {
-        const errorData = await response.json();
-        console.error('📄 [ACKNOWLEDGMENT] Error:', errorData);
-        toast.error(errorData.message || 'Failed to acknowledge document');
-      }
+      const newAcknowledgment = result?.data || {
+        id: `ack_${Date.now()}`,
+        documentId,
+        employeeId: currentEmployeeId,
+        employeeName: currentEmployeeName,
+        acknowledgedAt: new Date().toISOString(),
+        status: 'Completed',
+        accepted,
+      };
+
+      setAcknowledgments((prev) => ({
+        ...prev,
+        [documentId]: newAcknowledgment,
+      }));
+
+      toast.success('Document acknowledged successfully');
+      setShowDocumentReader(false);
+      setSelectedDocument(null);
     } catch (error) {
       console.error('Error submitting acknowledgment:', error);
       toast.error('Error submitting acknowledgment');

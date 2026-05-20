@@ -59,40 +59,68 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     }
 
     if (cachedData?.userData?.role) {
-      let authOrg = normalizeAuthOrgId({
-        orgId: cachedData.userData.orgId,
-        role: cachedData.userData.role
-      });
+      const freshUser = await User.findById(cachedData.userData.userId)
+        .select('orgId tenantId organizationId role isActive lockUntil name email departmentId permissions')
+        .lean();
 
-      // Stale JWT cache may still carry orgId "system" after tenant migration — refresh from DB
-      if (!authOrg && cachedData.userData.role !== 'super_admin') {
-        const freshUser = await User.findById(cachedData.userData.userId)
-          .select('orgId tenantId organizationId role isActive')
-          .lean();
-        if (!freshUser || !freshUser.isActive) {
-          return res.status(401).json({
-            success: false,
-            message: 'Invalid token. User not found.',
-            code: 'USER_NOT_FOUND'
-          });
-        }
-        authOrg = normalizeAuthOrgId(freshUser);
-        if (authOrg) {
-          cachedData.userData.orgId = authOrg;
-          await JWTCache.cacheToken(token, freshUser._id, cachedData.userData);
-        }
+      if (!freshUser) {
+        await JWTCache.clearTokenCache(token);
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid token. User not found.',
+          code: 'USER_NOT_FOUND'
+        });
       }
 
+      if (!freshUser.isActive) {
+        await JWTCache.clearTokenCache(token);
+        return res.status(401).json({
+          success: false,
+          message: 'Account is deactivated.',
+          code: 'ACCOUNT_DEACTIVATED'
+        });
+      }
+
+      if (freshUser.lockUntil && freshUser.lockUntil > new Date()) {
+        return res.status(423).json({
+          success: false,
+          message: 'Account is temporarily locked.',
+          code: 'ACCOUNT_LOCKED'
+        });
+      }
+
+      const authOrg = normalizeAuthOrgId(freshUser);
+      if (!authOrg && freshUser.role !== 'super_admin') {
+        await JWTCache.clearTokenCache(token);
+        return res.status(403).json({
+          success: false,
+          message: 'Organization context required. Please log in again.',
+          code: 'MISSING_ORG_CONTEXT'
+        });
+      }
+
+      const userData = {
+        userId: freshUser._id,
+        email: freshUser.email,
+        name: freshUser.name,
+        role: freshUser.role,
+        orgId: authOrg,
+        departmentId: freshUser.departmentId,
+        permissions: freshUser.permissions || cachedData.userData.permissions || [],
+        sessionId: cachedData.userData.sessionId
+      };
+      await JWTCache.cacheToken(token, freshUser._id, userData);
+
       req.user = {
-        userId: cachedData.userData.userId,
-        email: cachedData.userData.email,
-        name: cachedData.userData.name,
-        role: cachedData.userData.role,
+        userId: userData.userId,
+        email: userData.email,
+        name: userData.name,
+        role: userData.role,
         orgId: authOrg,
         tenantId: authOrg,
-        departmentId: cachedData.userData.departmentId,
-        permissions: cachedData.userData.permissions || [],
-        sessionId: cachedData.userData.sessionId,
+        departmentId: userData.departmentId,
+        permissions: userData.permissions,
+        sessionId: userData.sessionId,
         fromCache: true
       };
       return next();

@@ -18,6 +18,7 @@ import User from '../models/User.js';
 import Session from '../models/Session.js';
 import logger from '../utils/logger.js';
 import { normalizeAuthOrgId } from '../utils/orgScopeHelpers.js';
+import { upsertLoginSession, countActiveSocketUsers } from '../utils/sessionPresence.js';
 import bcrypt from 'bcrypt';
 
 const router = express.Router();
@@ -175,15 +176,12 @@ router.post('/auth/login', loginLimiter, async (req, res) => {
       });
     }
     try {
-      const session = await Session.create({
+      const session = await upsertLoginSession({
         userId: user._id,
         orgId,
-        socketId: null, // Will be updated when Socket.IO connects
         role: user.role,
-        isActive: true,
         ipAddress,
         userAgent,
-        loginTime: new Date()
       });
       
       logger.info('Session created on login', { 
@@ -195,11 +193,7 @@ router.post('/auth/login', loginLimiter, async (req, res) => {
       // Emit real-time dashboard update to all admins in the organization
       try {
         if (global.io) {
-          const activeCount = await Session.countDocuments({
-            orgId,
-            isActive: true,
-            role: 'employee'
-          });
+          const activeCount = await countActiveSocketUsers(orgId, { role: 'employee' });
           
           global.io.to(`tenant_${orgId}`).emit('dashboard_update', {
             type: 'active_users_updated',

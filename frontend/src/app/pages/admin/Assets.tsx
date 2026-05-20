@@ -13,7 +13,7 @@ import {
   Download, FileUp
 } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
-import { apiGet, apiPost, apiPut, apiDelete, apiUpload, buildFileUrl, getBearerToken } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, apiDelete, apiFetchBlob } from '../../utils/apiHelper';
 
 interface Asset {
   _id: string;
@@ -70,12 +70,7 @@ export default function Assets() {
   // Import/Export functions
   const handleExportCSV = async () => {
     try {
-      const fileUrl = buildFileUrl('/assets/export/csv');
-      const response = await fetch(fileUrl);
-
-      if (!response.ok) throw new Error('Failed to export assets');
-
-      const blob = await response.blob();
+      const blob = await apiFetchBlob('assets/export/csv');
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -94,12 +89,7 @@ export default function Assets() {
 
   const handleExportJSON = async () => {
     try {
-      const fileUrl = buildFileUrl('/assets/export/json');
-      const response = await fetch(fileUrl);
-
-      if (!response.ok) throw new Error('Failed to export assets');
-
-      const blob = await response.blob();
+      const blob = await apiFetchBlob('assets/export/json');
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -293,16 +283,8 @@ export default function Assets() {
   const fetchAssets = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/assets', {
-        headers: {
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to fetch assets');
-
-      const data = await response.json();
-      setAssets(data.data.assets || []);
+      const data = await apiGet<{ data?: { assets?: Asset[] } }>('assets', false);
+      setAssets(data?.data?.assets || []);
     } catch (error) {
       console.error('Error fetching assets:', error);
     } finally {
@@ -312,16 +294,8 @@ export default function Assets() {
 
   const fetchEmployees = async () => {
     try {
-      const response = await fetch('/api/employees', {
-        headers: {
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to fetch employees');
-
-      const data = await response.json();
-      setEmployees(data.data?.employees || []);
+      const data = await apiGet<{ data?: { employees?: unknown[] } }>('employees', false);
+      setEmployees((data?.data?.employees || []) as typeof employees);
     } catch (error) {
       console.error('Error fetching employees:', error);
     }
@@ -333,32 +307,24 @@ export default function Assets() {
     try {
       setSubmitting(true);
 
-      const response = await fetch('/api/assets', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getBearerToken() || ''}`
+      const data = await apiPost<{ data?: Asset }>('assets', {
+        assetName: formData.assetName,
+        assetType: formData.assetType,
+        category: formData.category,
+        specifications: {
+          model: formData.model,
+          serialNumber: formData.serialNumber,
         },
-        body: JSON.stringify({
-          assetName: formData.assetName,
-          assetType: formData.assetType,
-          category: formData.category,
-          specifications: {
-            model: formData.model,
-            serialNumber: formData.serialNumber
-          },
-          financial: {
-            purchasePrice: parseFloat(formData.purchasePrice) || 0,
-            currentValue: parseFloat(formData.currentValue) || parseFloat(formData.purchasePrice) || 0,
-            purchaseDate: formData.purchaseDate
-          }
-        })
+        financial: {
+          purchasePrice: parseFloat(formData.purchasePrice) || 0,
+          currentValue:
+            parseFloat(formData.currentValue) || parseFloat(formData.purchasePrice) || 0,
+          purchaseDate: formData.purchaseDate,
+        },
       });
 
-      if (!response.ok) throw new Error('Failed to create asset');
-
-      const data = await response.json();
-      const newAsset = data.data;
+      const newAsset = data?.data;
+      if (!newAsset) throw new Error('Failed to create asset');
 
       // Upload photos if any
       if (uploadedPhotos.length > 0) {
@@ -368,13 +334,8 @@ export default function Assets() {
         }));
 
         try {
-          await fetch(`/api/assets/${newAsset._id}/photos`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${getBearerToken() || ''}`
-            },
-            body: JSON.stringify({ photos: photosWithDescriptions })
+          await apiPost(`assets/${newAsset._id}/photos`, {
+            photos: photosWithDescriptions,
           });
         } catch (photoError) {
           console.error('Error uploading photos:', photoError);
@@ -416,23 +377,13 @@ export default function Assets() {
     try {
       setSubmitting(true);
 
-      const response = await fetch(`/api/assets/${selectedAsset._id}/assign`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        },
-        body: JSON.stringify({
-          assignedToId: assignData.assignedToId,
-          location: assignData.location,
-          reason: assignData.reason
-        })
+      const data = await apiPut<{ data?: Asset }>(`assets/${selectedAsset._id}/assign`, {
+        assignedToId: assignData.assignedToId,
+        location: assignData.location,
+        reason: assignData.reason,
       });
 
-      if (!response.ok) throw new Error('Failed to assign asset');
-
-      const data = await response.json();
-      setAssets(assets.map(a => a._id === selectedAsset._id ? data.data : a));
+      setAssets(assets.map((a) => (a._id === selectedAsset._id ? (data?.data ?? a) : a)));
       setShowAssignForm(false);
       setSelectedAsset(null);
       setAssignData({ assignedToId: '', location: '', reason: 'assignment' });
@@ -456,23 +407,13 @@ export default function Assets() {
     try {
       setSubmitting(true);
 
-      const response = await fetch(`/api/assets/${selectedAsset._id}/return`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        },
-        body: JSON.stringify({
-          condition: returnData.condition,
-          notes: returnData.notes,
-          returnedDate: returnData.returnedDate
-        })
+      const data = await apiPut<{ data?: Asset }>(`assets/${selectedAsset._id}/return`, {
+        condition: returnData.condition,
+        notes: returnData.notes,
+        returnedDate: returnData.returnedDate,
       });
 
-      if (!response.ok) throw new Error('Failed to return asset');
-
-      const data = await response.json();
-      setAssets(assets.map(a => a._id === selectedAsset._id ? data.data : a));
+      setAssets(assets.map((a) => (a._id === selectedAsset._id ? (data?.data ?? a) : a)));
       setShowReturnForm(false);
       setSelectedAsset(null);
       setReturnData({ condition: 'good', notes: '', returnedDate: new Date().toISOString().split('T')[0] });
@@ -489,14 +430,7 @@ export default function Assets() {
     if (!confirm('Are you sure you want to delete this asset?')) return;
 
     try {
-      const response = await fetch(`/api/assets/${assetId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to delete asset');
+      await apiDelete(`assets/${assetId}`);
 
       setAssets(assets.filter(a => a._id !== assetId));
       toast.success('Asset deleted successfully');

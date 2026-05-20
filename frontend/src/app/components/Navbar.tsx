@@ -17,7 +17,7 @@ import { Badge } from './ui/badge';
 import CurrencyChanger from './CurrencyChanger';
 import { useState, useEffect, useRef } from 'react';
 import { toast } from '../utils/portalToast';
-import { buildApiUrl } from '../utils/apiHelper';
+import { apiRequest } from '../utils/apiHelper';
 import { socketService } from '../utils/socket';
 
 interface Notification {
@@ -49,7 +49,7 @@ function profilePathForRole(role: string | undefined): string {
 
 export function Navbar() {
   const { theme, toggleTheme } = useTheme();
-  const { user, logout } = useAuth();
+  const { user, logout, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -67,26 +67,22 @@ export function Navbar() {
   const fetchNotifications = async () => {
     try {
       if (mountedRef.current) setLoading(true);
-      
-      const response = await fetch(buildApiUrl('/notifications?limit=10&status=all'), {
-        credentials: 'include',  // ✅ Send httpOnly cookies
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
+      const result = await apiRequest<{
+        success?: boolean;
+        data?: { notifications?: Notification[]; unreadCount?: number };
+      }>('/notifications?limit=10&status=all');
 
-      if (response.ok) {
-        const result = await response.json();
-        if (mountedRef.current && result.success && result.data) {
-          setNotifications(result.data.notifications || []);
-          setUnreadCount(result.data.unreadCount || 0);
-        }
-      } else if (response.status === 401) {
-        // Unauthorized - user session expired
-        console.warn('Notifications: Session expired');
+      if (mountedRef.current && result?.success && result.data) {
+        setNotifications(result.data.notifications || []);
+        setUnreadCount(result.data.unreadCount || 0);
       }
     } catch (error) {
-      console.error('Failed to fetch notifications:', error);
+      const msg = error instanceof Error ? error.message : '';
+      if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('token')) {
+        console.warn('Notifications: Session expired');
+      } else {
+        console.error('Failed to fetch notifications:', error);
+      }
     } finally {
       if (mountedRef.current) setLoading(false);
     }
@@ -95,21 +91,13 @@ export function Navbar() {
   // Mark notification as read
   const markAsRead = async (notificationId: string) => {
     try {
-      const response = await fetch(buildApiUrl(`/notifications/${notificationId}/read`), {
-        method: 'PATCH',
-        credentials: 'include',  // ✅ Send httpOnly cookies
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        // Update local state
-        setNotifications(prev => 
-          prev.map(n => n._id === notificationId ? { ...n, isRead: true, readAt: new Date().toISOString() } : n)
-        );
-        setUnreadCount(prev => Math.max(0, prev - 1));
-      }
+      await apiRequest(`/notifications/${notificationId}/read`, { method: 'PATCH' });
+      setNotifications((prev) =>
+        prev.map((n) =>
+          n._id === notificationId ? { ...n, isRead: true, readAt: new Date().toISOString() } : n
+        )
+      );
+      setUnreadCount((prev) => Math.max(0, prev - 1));
     } catch (error) {
       console.error('Failed to mark notification as read:', error);
     }
@@ -118,21 +106,12 @@ export function Navbar() {
   // Mark all as read
   const markAllAsRead = async () => {
     try {
-      const response = await fetch(buildApiUrl('/notifications/mark-all-read'), {
-        method: 'PATCH',
-        credentials: 'include',  // ✅ Send httpOnly cookies
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        setNotifications(prev => 
-          prev.map(n => ({ ...n, isRead: true, readAt: new Date().toISOString() }))
-        );
-        setUnreadCount(0);
-        toast.success('All notifications marked as read');
-      }
+      await apiRequest('/notifications/mark-all-read', { method: 'PATCH' });
+      setNotifications((prev) =>
+        prev.map((n) => ({ ...n, isRead: true, readAt: new Date().toISOString() }))
+      );
+      setUnreadCount(0);
+      toast.success('All notifications marked as read');
     } catch (error) {
       console.error('Failed to mark all as read:', error);
       toast.error('Failed to mark all as read');
@@ -193,8 +172,10 @@ export function Navbar() {
     return 'bg-muted';
   };
 
-  // Fetch notifications on mount, poll, and listen for real-time socket events
+  // Fetch notifications only when authenticated (avoids 401 before token hydrate)
   useEffect(() => {
+    if (authLoading || !user) return;
+
     fetchNotifications();
     const interval = setInterval(fetchNotifications, 30000);
 
@@ -245,7 +226,7 @@ export function Navbar() {
       socketService.off('notification', onSocketNotification);
       socketService.off('notification:received', onSocketNotification);
     };
-  }, []);
+  }, [user, authLoading]);
 
   return (
     <header className="h-16 border-b border-border bg-card/50 backdrop-blur-xl sticky top-0 z-40">

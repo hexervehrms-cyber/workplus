@@ -7,6 +7,7 @@
 
 import { io, Socket } from 'socket.io-client';
 import { TokenManager } from './api';
+import { ensureAccessToken } from './sessionAuth';
 
 // Socket configuration
 // In production, VITE_SOCKET_URL is set to the backend URL
@@ -87,7 +88,9 @@ export class SocketService {
 
       this.setState('connecting');
 
+      void (async () => {
       try {
+        await ensureAccessToken();
         const token = TokenManager.get();
         
         this.socket = io(SOCKET_URL, {
@@ -111,10 +114,9 @@ export class SocketService {
           this.setState('connected');
           this.reconnectAttempts = 0;
 
-          // Server derives identity from JWT; client payload is validated, not trusted for role
+          // Identity comes from JWT on the server; omit userId to avoid mismatch with stale client state
           this.socket?.emit('authenticate', {
-            userId,
-            tenantId
+            ...(tenantId ? { tenantId } : {}),
           });
 
           // Re-register all listeners
@@ -154,9 +156,13 @@ export class SocketService {
           this.reconnectAttempts = 0;
         });
 
-        this.socket.io.on('reconnect_attempt', (attemptNumber) => {
+        this.socket.io.on('reconnect_attempt', async (attemptNumber) => {
           console.log('🔄 Socket.IO reconnecting, attempt', attemptNumber);
           this.setState('reconnecting');
+          const fresh = await ensureAccessToken();
+          if (this.socket?.auth && typeof this.socket.auth === 'object') {
+            (this.socket.auth as { token?: string }).token = fresh || '';
+          }
         });
 
         this.socket.io.on('reconnect_failed', () => {
@@ -169,7 +175,20 @@ export class SocketService {
           console.log('✅ Socket.IO authenticated');
         });
 
-        this.socket.on('auth_error', (error: any) => {
+        this.socket.on('auth_error', async (error: { message?: string; code?: string }) => {
+          const code = error?.code || '';
+          if (code === 'IDENTITY_MISMATCH' || code === 'INVALID_AUTH_DATA') {
+            console.warn('Socket.IO auth warning:', error?.message || error);
+            return;
+          }
+          const refreshed = await ensureAccessToken();
+          if (refreshed && this.socket?.auth && typeof this.socket.auth === 'object') {
+            (this.socket.auth as { token?: string }).token = refreshed;
+            this.socket.emit('authenticate', {
+              ...(this.tenantId ? { tenantId: this.tenantId } : {}),
+            });
+            return;
+          }
           console.error('❌ Socket.IO auth error:', error);
         });
 
@@ -178,6 +197,7 @@ export class SocketService {
         this.setState('disconnected');
         reject(error);
       }
+      })();
     });
   }
 

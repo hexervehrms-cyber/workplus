@@ -6,8 +6,7 @@ import { useCurrency } from '../../context/CurrencyContext';
 import { toast } from '../../utils/portalToast';
 import { DollarSign, TrendingUp, TrendingDown, Calendar, Download, Loader2, BarChart3 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { apiGet, buildApiUrl } from '../../utils/apiHelper';
-import { TokenManager } from '../../utils/api';
+import { apiFetchBlob, apiGet } from '../../utils/apiHelper';
 
 interface SalaryBreakdown {
   month: string;
@@ -187,19 +186,9 @@ export default function EmployeeSalaryBreakdown() {
       return;
     }
     try {
-      const url = buildApiUrl(`salary/slip/${currentSlipId}/download`);
-      const token = TokenManager.get();
-      const response = await fetch(url, {
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          Accept: 'text/html,application/pdf,*/*'
-        }
+      const blob = await apiFetchBlob(`salary/slip/${currentSlipId}/download`, {
+        headers: { Accept: 'text/html,application/pdf,*/*' },
       });
-      if (!response.ok) {
-        throw new Error(`Download failed (${response.status})`);
-      }
-      const blob = await response.blob();
       const href = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = href;

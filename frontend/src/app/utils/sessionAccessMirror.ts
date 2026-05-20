@@ -66,9 +66,17 @@ async function persistAccessToken(token: string | null): Promise<void> {
 export function setAccessTokenMirror(token: string | null): void {
   memoryAccessToken = token && token.length > 0 ? token : null;
   void persistAccessToken(memoryAccessToken);
+  if (memoryAccessToken) {
+    void import('./clientSessionSync').then(({ broadcastTokenUpdated }) => {
+      broadcastTokenUpdated();
+    });
+  }
 }
 
 export function clearAccessTokenMirror(): void {
   memoryAccessToken = null;
   void persistAccessToken(null);
+  void import('./clientSessionSync').then(({ broadcastUserSessionCleared }) => {
+    broadcastUserSessionCleared();
+  });
 }

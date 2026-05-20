@@ -17,6 +17,11 @@ import User from '../models/User.js';
 import logger from '../utils/logger.js';
 import { assertScopedOrgId } from '../utils/orgScopeHelpers.js';
 import {
+  assertRecipientInOrg,
+  assertConversationAccess,
+  canAccessMessage,
+} from '../utils/chatAccessHelpers.js';
+import {
   sendTeamsMessage,
   getTeamsChatMessages,
   createTeamsChat,
@@ -94,6 +99,17 @@ router.post('/messages', authenticate, asyncHandler(async (req, res) => {
       success: false,
       message: 'Message content is required'
     });
+  }
+
+  if (recipientId) {
+    const recipientCheck = await assertRecipientInOrg(recipientId, orgId);
+    if (!recipientCheck.ok) {
+      return res.status(recipientCheck.status).json({
+        success: false,
+        message: recipientCheck.message,
+        code: 'CHAT_RECIPIENT_FORBIDDEN'
+      });
+    }
   }
 
   try {
@@ -443,30 +459,25 @@ router.get('/conversations/:conversationId', authenticate, asyncHandler(async (r
   if (!orgId) return;
 
   try {
-    // Verify user has access to this conversation
-    const messages = await ChatMessage.findConversation(conversationId, page, limit);
-    
-    // Check if user is part of this conversation
-    let isParticipant = messages.some(msg => 
-      msg.senderId.toString() === userId || 
-      msg.recipientId?.toString() === userId ||
-      msg.channelInfo?.participants?.some(p => p.toString() === userId)
-    );
-
-    if (!isParticipant && String(conversationId).startsWith('grp_')) {
-      const grp = await ChatGroup.findOne({
-        conversationId: String(conversationId),
-        orgId,
-      }).lean();
-      isParticipant = !!(grp && grp.members.some((m) => m.toString() === String(userId)));
-    }
-
-    if (!isParticipant) {
-      return res.status(403).json({
+    const access = await assertConversationAccess(conversationId, userId, orgId);
+    if (!access.ok) {
+      return res.status(access.status).json({
         success: false,
-        message: 'Access denied to this conversation'
+        message: access.message
       });
     }
+
+    const messages = await ChatMessage.find({
+      conversationId: String(conversationId),
+      orgId: String(orgId),
+      isDeleted: false
+    })
+      .populate('sender', 'name email avatar')
+      .populate('recipient', 'name email avatar')
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit, 10))
+      .skip((parseInt(page, 10) - 1) * parseInt(limit, 10))
+      .lean();
 
     res.json({
       success: true,
@@ -493,9 +504,22 @@ router.get('/conversations/:conversationId', authenticate, asyncHandler(async (r
  */
 router.get('/unread', authenticate, asyncHandler(async (req, res) => {
   const userId = req.user.userId;
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
 
   try {
-    const unreadMessages = await ChatMessage.findUnreadForUser(userId);
+    const unreadMessages = await ChatMessage.find({
+      orgId: String(orgId),
+      $or: [
+        { recipientId: userId },
+        { 'channelInfo.participants': userId }
+      ],
+      'readBy.userId': { $ne: userId },
+      isDeleted: false
+    })
+      .populate('sender', 'name email avatar')
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.json({
       success: true,
@@ -519,6 +543,8 @@ router.get('/unread', authenticate, asyncHandler(async (req, res) => {
 router.put('/messages/:messageId/read', authenticate, asyncHandler(async (req, res) => {
   const { messageId } = req.params;
   const userId = req.user.userId;
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
 
   try {
     const message = await ChatMessage.findById(messageId);
@@ -527,6 +553,13 @@ router.put('/messages/:messageId/read', authenticate, asyncHandler(async (req, r
       return res.status(404).json({
         success: false,
         message: 'Message not found'
+      });
+    }
+
+    if (!canAccessMessage(message, { userId, orgId })) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied to this message'
       });
     }
 
@@ -555,6 +588,8 @@ router.put('/messages/:messageId', authenticate, asyncHandler(async (req, res) =
   const { messageId } = req.params;
   const { content } = req.body;
   const userId = req.user.userId;
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
 
   try {
     const message = await ChatMessage.findById(messageId);
@@ -563,6 +598,13 @@ router.put('/messages/:messageId', authenticate, asyncHandler(async (req, res) =
       return res.status(404).json({
         success: false,
         message: 'Message not found'
+      });
+    }
+
+    if (!canAccessMessage(message, { userId, orgId })) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied to this message'
       });
     }
 
@@ -598,6 +640,8 @@ router.put('/messages/:messageId', authenticate, asyncHandler(async (req, res) =
 router.delete('/messages/:messageId', authenticate, asyncHandler(async (req, res) => {
   const { messageId } = req.params;
   const userId = req.user.userId;
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
 
   try {
     const message = await ChatMessage.findById(messageId);
@@ -606,6 +650,13 @@ router.delete('/messages/:messageId', authenticate, asyncHandler(async (req, res
       return res.status(404).json({
         success: false,
         message: 'Message not found'
+      });
+    }
+
+    if (String(message.orgId) !== String(orgId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied to this message'
       });
     }
 
@@ -738,11 +789,21 @@ router.get('/teams/status', authenticate, asyncHandler(async (_req, res) => {
 router.post('/teams/meeting', authenticate, asyncHandler(async (req, res) => {
   const { recipientId, withVideo = true } = req.body;
   const userId = req.user.userId;
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
 
   if (!recipientId) {
     return res.status(400).json({
       success: false,
       message: 'recipientId is required',
+    });
+  }
+
+  const recipientCheck = await assertRecipientInOrg(recipientId, orgId);
+  if (!recipientCheck.ok) {
+    return res.status(recipientCheck.status).json({
+      success: false,
+      message: recipientCheck.message
     });
   }
 
@@ -810,6 +871,16 @@ router.post('/teams/meeting', authenticate, asyncHandler(async (req, res) => {
 router.post('/teams/create', authenticate, asyncHandler(async (req, res) => {
   const { recipientId, topic } = req.body;
   const userId = req.user.userId;
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
+
+  const recipientCheck = await assertRecipientInOrg(recipientId, orgId);
+  if (!recipientCheck.ok) {
+    return res.status(recipientCheck.status).json({
+      success: false,
+      message: recipientCheck.message
+    });
+  }
 
   try {
     // Get user details

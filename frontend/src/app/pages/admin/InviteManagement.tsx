@@ -18,8 +18,7 @@ import { apiClient, ApiError } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
 import { useAuth } from '../../context/AuthContext';
 import { useDepartments } from '../../hooks/useDepartments';
-import { buildApiUrl } from '../../utils/apiHelper';
-import { TokenManager } from '../../utils/api';
+import { apiPost } from '../../utils/apiHelper';
 
 interface InviteLinkRow {
   id: string;
@@ -155,24 +154,13 @@ export default function InviteManagement() {
     const onboardingUrl = `${window.location.origin}/onboarding/${invite.token}`;
     setSubmitting(true);
     try {
-      const token = TokenManager.get();
-      const response = await fetch(buildApiUrl('/onboarding/send-email'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          token: invite.token,
-          employeeEmail: invite.email,
-          employeeName: invite.employeeName || invite.email,
-          onboardingUrl,
-        }),
+      const data = await apiPost<{ message?: string }>('onboarding/send-email', {
+        token: invite.token,
+        employeeEmail: invite.email,
+        employeeName: invite.employeeName || invite.email,
+        onboardingUrl,
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || 'Failed to send email');
-      toast.success('Invite email sent');
+      toast.success(data?.message || 'Invite email sent');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to send email');
     } finally {

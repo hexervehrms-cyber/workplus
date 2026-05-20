@@ -119,7 +119,6 @@ function writeLocalMirrors(
   }
   if (mirrorLegacy) {
     try {
-      localStorage.setItem(legacyCheckedInKey(), json);
       const uk = legacyEmployeeStateKey(userId);
       if (uk) localStorage.setItem(uk, json);
     } catch (e) {
@@ -283,6 +282,8 @@ export async function clearPersistedAttendance(userId: string | null): Promise<v
   try {
     localStorage.removeItem(key);
     localStorage.removeItem(legacyCheckedInKey());
+    const { purgeLegacyGlobalAttendanceKeys } = await import('./userScopedStorage');
+    purgeLegacyGlobalAttendanceKeys();
     const uk = legacyEmployeeStateKey(userId);
     if (uk) localStorage.removeItem(uk);
     sessionStorage.removeItem(sessionMirrorKey(userId, dayKey));

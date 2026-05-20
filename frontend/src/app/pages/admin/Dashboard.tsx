@@ -42,6 +42,7 @@ import {
 } from '../../components/ui/table';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useIsMounted } from '../../hooks/useIsMounted';
+import { useFetchGeneration } from '../../hooks/useFetchGeneration';
 import { apiClient } from '../../utils/api';
 import { TokenManager } from '../../utils/api';
 import realTimeSocket from '../../utils/realTimeSocket';
@@ -165,7 +166,16 @@ function getErrorMessage(err: unknown, fallback: string) {
 
 function formatTime(value?: string | null) {
   if (!value) return '—';
-  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString();
 }
 
 function breakMinutesSince(startTime: string) {
@@ -194,6 +204,7 @@ export default function AdminDashboard() {
   const { formatCurrency, convertAmount, selectedCurrency } = useCurrency();
   const { user } = useAuth();
   const mounted = useIsMounted();
+  const { nextGeneration, isStale } = useFetchGeneration();
   const [selectedTab, setSelectedTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [filterType, setFilterType] = useState('month');
@@ -212,6 +223,7 @@ export default function AdminDashboard() {
   const [editingLeave, setEditingLeave] = useState<EditingLeave | null>(null);
 
   const refreshDashboardData = useCallback(async () => {
+    const gen = nextGeneration();
     const params = new URLSearchParams();
     params.append('filterType', filterType);
     if (filterType === 'custom' && customStartDate && customEndDate) {
@@ -234,7 +246,7 @@ export default function AdminDashboard() {
 
     console.log('✅ [ADMIN-DASHBOARD] All requests completed');
 
-    if (!mounted.current) return;
+    if (!mounted.current || isStale(gen)) return;
 
     // Process results with fallbacks
     if (statsResponse.status === 'fulfilled' && statsResponse.value.success) {
@@ -256,7 +268,7 @@ export default function AdminDashboard() {
     if (todayBreaksResponse.status === 'fulfilled' && todayBreaksResponse.value.success) {
       setTodayBreakLog(todayBreaksResponse.value.data ?? []);
     }
-  }, [filterType, customStartDate, customEndDate, mounted]);
+  }, [filterType, customStartDate, customEndDate, mounted, nextGeneration, isStale]);
 
   const dashboardSocketDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -933,13 +945,18 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
                 const requestId = request._id || request.id || '';
                 const employeeName = request.userId?.name || request.employeeName || 'Unknown';
                 const leaveType = request.type || request.leaveType || 'N/A';
-                const days = Math.ceil((new Date(request.endDate).getTime() - new Date(request.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                const startMs = new Date(request.startDate).getTime();
+                const endMs = new Date(request.endDate).getTime();
+                const days =
+                  Number.isNaN(startMs) || Number.isNaN(endMs)
+                    ? '—'
+                    : Math.ceil((endMs - startMs) / (1000 * 60 * 60 * 24)) + 1;
                 return (
                   <TableRow key={requestId || `${employeeName}-${request.startDate}`}>
                     <TableCell className="font-medium">{employeeName}</TableCell>
                     <TableCell>{leaveType}</TableCell>
-                    <TableCell>{new Date(request.startDate).toLocaleDateString()}</TableCell>
-                    <TableCell>{new Date(request.endDate).toLocaleDateString()}</TableCell>
+                    <TableCell>{formatDate(request.startDate)}</TableCell>
+                    <TableCell>{formatDate(request.endDate)}</TableCell>
                     <TableCell>{days}</TableCell>
                     <TableCell>
                       <Badge variant={request.status === 'pending' ? 'secondary' : 'default'}>

@@ -7,7 +7,7 @@ import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Loader2, Package, Laptop, DollarSign, Calendar, MapPin, User, Image as ImageIcon, X, ChevronLeft, ChevronRight, Plus, Upload } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
-import { getBearerToken } from '../../utils/apiHelper';
+import { apiGet, apiPost } from '../../utils/apiHelper';
 
 interface Asset {
   _id: string;
@@ -151,27 +151,9 @@ export default function EmployeeAssets() {
         }
       };
 
-      console.log('Creating asset with payload:', assetPayload);
-      console.log('Using token:', token ? 'Found' : 'Not found');
-
-      const response = await fetch('/api/assets', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(assetPayload)
-      });
-
-      console.log('Response status:', response.status);
-      const responseData = await response.json();
-      console.log('Response data:', responseData);
-
-      if (!response.ok) {
-        throw new Error(responseData.message || 'Failed to create asset');
-      }
-
-      const newAsset = responseData.data;
+      const responseData = await apiPost<{ data?: { _id: string } }>('assets', assetPayload);
+      const newAsset = responseData?.data;
+      if (!newAsset) throw new Error('Failed to create asset');
       console.log('Asset created:', newAsset);
 
       // Upload photos if any
@@ -183,24 +165,9 @@ export default function EmployeeAssets() {
 
         try {
           console.log('Uploading photos...');
-          const photoResponse = await fetch(`/api/assets/${newAsset._id}/photos`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ photos: photosWithDescriptions })
+          await apiPost(`assets/${newAsset._id}/photos`, {
+            photos: photosWithDescriptions,
           });
-
-          const photoData = await photoResponse.json();
-          console.log('Photo upload response:', photoData);
-
-          if (!photoResponse.ok) {
-            console.error('Photo upload failed:', photoData);
-            toast.warning('Asset created but photos upload failed');
-          } else {
-            console.log('Photos uploaded successfully');
-          }
         } catch (photoError) {
           console.error('Error uploading photos:', photoError);
           toast.warning('Asset created but photos upload failed');
@@ -242,42 +209,26 @@ export default function EmployeeAssets() {
       setLoading(true);
 
       // Get current user's employee ID
-      const userResponse = await fetch('/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        }
-      });
-
-      if (!userResponse.ok) throw new Error('Failed to get user info');
-
-      const userData = await userResponse.json();
-      const userId = userData.data.id;
-
-      // Fetch employee record to get employeeId
-      const employeeResponse = await fetch(`/api/employees?userId=${userId}`, {
-        headers: {
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        }
-      });
+      const userData = await apiGet<{ data?: { id?: string } }>('auth/me', false);
+      const userId = userData?.data?.id;
+      if (!userId) throw new Error('Failed to get user info');
 
       let employeeId = userId;
-      if (employeeResponse.ok) {
-        const employeeData = await employeeResponse.json();
-        employeeId = employeeData.data?.[0]?._id || userId;
+      try {
+        const employeeData = await apiGet<{ data?: Array<{ _id?: string }> }>(
+          `employees?userId=${userId}`,
+          false
+        );
+        employeeId = employeeData?.data?.[0]?._id || userId;
+      } catch {
+        /* use userId */
       }
 
-      // Fetch assets for this employee
-      const response = await fetch(`/api/assets/employee/${employeeId}`, {
-        headers: {
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to fetch assets');
-
-      const data = await response.json();
-      setAssets(data.data.assets || []);
-      setTotalValue(data.data.totalValue || 0);
+      const data = await apiGet<{
+        data?: { assets?: Asset[]; totalValue?: number };
+      }>(`assets/employee/${employeeId}`, false);
+      setAssets(data?.data?.assets || []);
+      setTotalValue(data?.data?.totalValue || 0);
     } catch (error) {
       console.error('Error fetching assets:', error);
     } finally {
@@ -287,16 +238,11 @@ export default function EmployeeAssets() {
 
   const fetchAssetPhotos = async (assetId: string) => {
     try {
-      const response = await fetch(`/api/assets/${assetId}/photos`, {
-        headers: {
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to fetch photos');
-
-      const data = await response.json();
-      setAssetPhotos(data.data.photos || []);
+      const data = await apiGet<{ data?: { photos?: unknown[] } }>(
+        `assets/${assetId}/photos`,
+        false
+      );
+      setAssetPhotos(data?.data?.photos || []);
       setCurrentPhotoIndex(0);
     } catch (error) {
       console.error('Error fetching photos:', error);

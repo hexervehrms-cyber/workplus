@@ -1,51 +1,51 @@
 // @ts-nocheck — sales portal typed separately; excluded from strict CI scope
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { TrendingUp, TrendingDown, Users, Phone, Target, DollarSign, Award, AlertCircle } from 'lucide-react';
-import { getBearerToken } from '../../utils/apiHelper';
-
-function salesRequestHeaders() {
-  const t = getBearerToken();
-  return t ? { Authorization: `Bearer ${t}` } : {};
-}
+import { apiGet } from '../../utils/apiHelper';
+import { useAuth } from '../../context/AuthContext';
 
 const SalesDashboard = () => {
+  const { user } = useAuth();
+  const fetchGenRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const [revenueData, setRevenueData] = useState([]);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    fetchDashboardData();
-  }, []);
-
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = useCallback(async () => {
+    const gen = ++fetchGenRef.current;
     try {
       setLoading(true);
-      const headers = salesRequestHeaders();
+      setError(null);
 
-      // Fetch today's metrics
-      const metricsRes = await axios.get('/api/sales/performance/today', { headers });
-      setMetrics(metricsRes.data.data);
+      const [metricsRes, leaderboardRes, revenueRes] = await Promise.all([
+        apiGet('/sales/performance/today', false),
+        apiGet('/sales/performance/leaderboard/today', false),
+        apiGet('/sales/revenue/month', false),
+      ]);
 
-      // Fetch leaderboard
-      const leaderboardRes = await axios.get('/api/sales/performance/leaderboard/today', { headers });
-      setLeaderboard(leaderboardRes.data.data || []);
+      if (gen !== fetchGenRef.current) return;
 
-      // Fetch monthly revenue
-      const revenueRes = await axios.get('/api/sales/revenue/month', { headers });
-      setRevenueData(revenueRes.data.data || []);
+      setMetrics(metricsRes?.data ?? metricsRes);
+      setLeaderboard(leaderboardRes?.data ?? leaderboardRes ?? []);
+      setRevenueData(revenueRes?.data ?? revenueRes ?? []);
 
       setError(null);
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
-      setError(err.response?.data?.message || 'Failed to load dashboard data');
+      if (gen !== fetchGenRef.current) return;
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
     } finally {
-      setLoading(false);
+      if (gen === fetchGenRef.current) setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    void fetchDashboardData();
+  }, [user?.id, fetchDashboardData]);
 
   const KPICard = ({ title, value, icon: Icon, trend, color }) => (
     <div className="bg-white rounded-lg shadow p-6 border-l-4" style={{ borderColor: color }}>

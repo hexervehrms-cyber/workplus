@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { LeaveRequestService } from '../../utils/api';
-import { buildApiUrl, getBearerToken, holidaysStorageKey } from '../../utils/apiHelper';
+import { apiDelete, apiGet, apiPost, getBearerToken, holidaysStorageKey } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
@@ -87,24 +87,17 @@ export default function Calendar() {
           return;
         }
 
-        const holidayResponse = await fetch(buildApiUrl('/holidays'), {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (holidayResponse.ok) {
-          const holidayData = await holidayResponse.json();
-          if (holidayData.success && Array.isArray(holidayData.data)) {
-            console.log('✅ Loaded holidays:', holidayData.data.length, 'holidays');
-            setHolidays(holidayData.data);
-            // Cache holidays for offline access
-            const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
-            localStorage.setItem(hKey, JSON.stringify(holidayData.data));
-          }
+        const holidayData = await apiGet<{ success?: boolean; data?: unknown[] }>(
+          'holidays',
+          false
+        );
+        if (holidayData?.success && Array.isArray(holidayData.data)) {
+          console.log('✅ Loaded holidays:', holidayData.data.length, 'holidays');
+          setHolidays(holidayData.data);
+          const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
+          localStorage.setItem(hKey, JSON.stringify(holidayData.data));
         } else {
-          console.warn('Holiday fetch failed with status:', holidayResponse.status);
+          console.warn('Holiday fetch returned no data');
           // Try to use cached holidays
           const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
           const cachedHolidays = localStorage.getItem(hKey);
@@ -135,20 +128,14 @@ export default function Calendar() {
         const token = getBearerToken();
         if (!token) return;
 
-        const holidayResponse = await fetch(buildApiUrl('/holidays'), {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (holidayResponse.ok) {
-          const holidayData = await holidayResponse.json();
-          if (holidayData.success && Array.isArray(holidayData.data)) {
-            setHolidays(holidayData.data);
-            const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
-            localStorage.setItem(hKey, JSON.stringify(holidayData.data));
-          }
+        const holidayData = await apiGet<{ success?: boolean; data?: unknown[] }>(
+          'holidays',
+          false
+        );
+        if (holidayData?.success && Array.isArray(holidayData.data)) {
+          setHolidays(holidayData.data);
+          const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
+          localStorage.setItem(hKey, JSON.stringify(holidayData.data));
         }
       } catch (error) {
         console.error('Error refreshing holidays:', error);
@@ -327,43 +314,23 @@ export default function Calendar() {
     }
 
     try {
-      const token = getBearerToken();
-      
-      const response = await fetch('/api/holidays', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          date: holidayForm.date,
-          name: holidayForm.name,
-          description: holidayForm.description,
-          type: 'public'
-        })
+      await apiPost('holidays', {
+        date: holidayForm.date,
+        name: holidayForm.name,
+        description: holidayForm.description,
+        type: 'public',
       });
 
-      if (response.ok) {
-        toast.success('Holiday added successfully');
-        setShowHolidayForm(false);
-        setHolidayForm({ date: '', name: '', description: '' });
-        
-        // Refresh holidays
-        const holidayResponse = await fetch('/api/holidays', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
+      toast.success('Holiday added successfully');
+      setShowHolidayForm(false);
+      setHolidayForm({ date: '', name: '', description: '' });
 
-        if (holidayResponse.ok) {
-          const holidayData = await holidayResponse.json();
-          if (holidayData.success && Array.isArray(holidayData.data)) {
-            setHolidays(holidayData.data);
-          }
-        }
-      } else {
-        toast.error('Failed to add holiday');
+      const holidayData = await apiGet<{ success?: boolean; data?: unknown[] }>(
+        'holidays',
+        false
+      );
+      if (holidayData?.success && Array.isArray(holidayData.data)) {
+        setHolidays(holidayData.data);
       }
     } catch (error) {
       console.error('Error adding holiday:', error);
@@ -376,22 +343,9 @@ export default function Calendar() {
     if (!window.confirm('Are you sure you want to delete this holiday?')) return;
 
     try {
-      const token = getBearerToken();
-      
-      const response = await fetch(`/api/holidays/${holidayId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        toast.success('Holiday deleted successfully');
-        setHolidays(holidays.filter(h => (h._id || h.id) !== holidayId));
-      } else {
-        toast.error('Failed to delete holiday');
-      }
+      await apiDelete(`holidays/${holidayId}`);
+      toast.success('Holiday deleted successfully');
+      setHolidays(holidays.filter((h) => (h._id || h.id) !== holidayId));
     } catch (error) {
       console.error('Error deleting holiday:', error);
       toast.error('Failed to delete holiday');

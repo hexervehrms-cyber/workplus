@@ -8,7 +8,10 @@ import { AuthService, TokenManager, ApiError, TokenRefreshService } from '../uti
 import { socketService, ConnectionState } from '../utils/socket';
 import realTimeSocket from '../utils/realTimeSocket';
 import { clearApiCache, clearAllHolidayCaches } from '../utils/apiHelper';
+import { ensureAccessToken } from '../utils/sessionAuth';
 import { clearPersistedAttendance } from '../utils/attendancePersistence';
+import { clearUserScopedLocalStorage } from '../utils/userScopedStorage';
+import { broadcastUserSessionCleared } from '../utils/clientSessionSync';
 import { isPublicBootstrapPath, hasStoredSessionHint } from '../utils/publicPaths';
 
 export type UserRole = 'super_admin' | 'admin' | 'hr' | 'manager' | 'accountant' | 'employee';
@@ -86,7 +89,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem('cached_holidays');
       clearAllHolidayCaches();
 
+      clearUserScopedLocalStorage(uid);
       clearApiCache();
+      broadcastUserSessionCleared();
 
       setLoading(false);
 
@@ -105,8 +110,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const connectSocketsInBackground = useCallback((sessionUser: User) => {
     void (async () => {
       try {
+        await ensureAccessToken();
+        const socketUserId = String(sessionUser.userId || sessionUser.id);
         const connectionPromise = socketService.connect(
-          sessionUser.id,
+          socketUserId,
           sessionUser.role,
           sessionUser.tenantId || sessionUser.orgId
         );
@@ -116,7 +123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await Promise.race([connectionPromise, timeoutPromise]);
 
         realTimeSocket.connectFromAuth({
-          id: sessionUser.id,
+          id: socketUserId,
           role: sessionUser.role,
           orgId: sessionUser.orgId,
           tenantId: sessionUser.tenantId || sessionUser.orgId,
@@ -206,6 +213,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             currentUser = await AuthService.getCurrentUser();
           }
           if (currentUser) {
+            if (!TokenManager.get()) {
+              await tryRefreshAccessToken();
+            }
+            await ensureAccessToken();
             console.log('✅ User restored from Redis session:', {
               id: currentUser.id,
               email: currentUser.email,
@@ -223,6 +234,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               try {
                 const retryUser = await fetchCurrentUser();
                 if (retryUser) {
+                  await ensureAccessToken();
                   console.log('✅ User restored after token refresh:', {
                     id: retryUser.id,
                     email: retryUser.email,
@@ -365,6 +377,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         // Update user state - this will trigger RoleBasedRedirect
         console.log('🔐 Setting user state with role:', normalizedUser.role);
+        clearUserScopedLocalStorage(normalizedUser.id);
         setUser(normalizedUser);
         setLoading(false);
         setIsInitialized(true);

@@ -5,7 +5,7 @@ import ChatWidget from '../../components/ChatWidget';
 import { useAuth } from '../../context/AuthContext';
 import { TokenManager, LeaveAllocationService } from '../../utils/api';
 import { parseBalanceApiResponse, sumAllocatedDays, sumRemainingDays } from '../../utils/leaveBalance';
-import { apiGetSafe, buildApiUrl, clearApiCache, holidaysStorageKey } from '../../utils/apiHelper';
+import { apiGet, apiGetSafe, clearApiCache, holidaysStorageKey } from '../../utils/apiHelper';
 import { safeLocaleTime, safeFormatTime, runSafe } from '../../utils/safeUi';
 import { postAttendanceAction } from '../../utils/attendanceApi';
 import {
@@ -720,23 +720,15 @@ export default function EmployeeDashboard() {
     }
 
     try {
-      const token = TokenManager.get();
-      const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        const empId = result.data?._id || result.data?.id;
-        if (empId && isLikelyMongoObjectId(String(empId))) {
-          const idStr = String(empId);
-          setEmployeeId(idStr);
-          return idStr;
-        }
+      const result = await apiGet<{ data?: { _id?: string; id?: string } }>(
+        `employees/user/${user.id}`,
+        false
+      );
+      const empId = result?.data?._id || result?.data?.id;
+      if (empId && isLikelyMongoObjectId(String(empId))) {
+        const idStr = String(empId);
+        setEmployeeId(idStr);
+        return idStr;
       }
     } catch (err) {
       debug.error('Error fetching employee data:', err);
@@ -905,18 +897,17 @@ export default function EmployeeDashboard() {
     // Subscribe to events and store unsubscribe functions
     const unsubscribeBreakStarted = realTimeSocket.onBreakStarted(handleBreakStarted);
     const unsubscribeBreakEnded = realTimeSocket.onBreakEnded(handleBreakEnded);
-    realTimeSocket.on('attendance:checked_in', handleCheckedIn);
-    realTimeSocket.on('attendance:checked_out', handleCheckedOut);
+    const unsubscribeCheckedIn = realTimeSocket.on('attendance:checked_in', handleCheckedIn);
+    const unsubscribeCheckedOut = realTimeSocket.on('attendance:checked_out', handleCheckedOut);
 
     debug.groupEnd();
 
-    // CRITICAL FIX: Clean up all listeners on unmount
     return () => {
       debug.log('📡 [EMPLOYEE-DASHBOARD] Cleaning up Socket.IO listeners');
       unsubscribeBreakStarted?.();
       unsubscribeBreakEnded?.();
-      realTimeSocket.off('attendance:checked_in', handleCheckedIn);
-      realTimeSocket.off('attendance:checked_out', handleCheckedOut);
+      unsubscribeCheckedIn();
+      unsubscribeCheckedOut();
     };
   }, [user?.id, employeeId]);
 

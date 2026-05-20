@@ -7,6 +7,11 @@ import ChatMessage from '../models/ChatMessage.js';
 import ChatGroup from '../models/ChatGroup.js';
 import User from '../models/User.js';
 import logger from './logger.js';
+import {
+  assertRecipientInOrg,
+  assertConversationAccess,
+  canAccessMessage,
+} from './chatAccessHelpers.js';
 import { sendTeamsMessage } from '../config/teamsConfig.js';
 
 /**
@@ -100,6 +105,17 @@ export const initializeChatHandlers = (io) => {
 
         if (!recipientId || !content) {
           socket.emit('chat:error', { message: 'Invalid message data' });
+          return;
+        }
+
+        if (!tenantId) {
+          socket.emit('chat:error', { message: 'Organization context required' });
+          return;
+        }
+
+        const recipientCheck = await assertRecipientInOrg(recipientId, tenantId);
+        if (!recipientCheck.ok) {
+          socket.emit('chat:error', { message: recipientCheck.message });
           return;
         }
 
@@ -200,7 +216,7 @@ export const initializeChatHandlers = (io) => {
         const { messageId } = data;
         const message = await ChatMessage.findById(messageId);
 
-        if (message) {
+        if (message && canAccessMessage(message, { userId, orgId: tenantId })) {
           await message.markAsRead(userId);
 
           // Notify sender that message was read
@@ -248,6 +264,9 @@ export const initializeChatHandlers = (io) => {
       }
 
       if (!recipientId) return;
+      if (!tenantId) return;
+      const typingCheck = await assertRecipientInOrg(recipientId, tenantId);
+      if (!typingCheck.ok) return;
       io.to(`user_${recipientId}`).emit('chat:user_typing', {
         userId,
         isTyping,
@@ -264,7 +283,28 @@ export const initializeChatHandlers = (io) => {
       try {
         const { conversationId, page = 1, limit = 50 } = data;
 
-        const messages = await ChatMessage.findConversation(conversationId, page, limit);
+        if (!tenantId) {
+          socket.emit('chat:error', { message: 'Organization context required' });
+          return;
+        }
+
+        const access = await assertConversationAccess(conversationId, userId, tenantId);
+        if (!access.ok) {
+          socket.emit('chat:error', { message: access.message });
+          return;
+        }
+
+        const messages = await ChatMessage.find({
+          conversationId: String(conversationId),
+          orgId: String(tenantId),
+          isDeleted: false
+        })
+          .populate('sender', 'name email avatar')
+          .populate('recipient', 'name email avatar')
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .skip((page - 1) * limit)
+          .lean();
 
         socket.emit('chat:history', {
           conversationId,
@@ -287,7 +327,22 @@ export const initializeChatHandlers = (io) => {
      */
     socket.on('chat:get_unread', async () => {
       try {
-        const unreadMessages = await ChatMessage.findUnreadForUser(userId);
+        if (!tenantId) {
+          socket.emit('chat:unread_messages', { messages: [], count: 0 });
+          return;
+        }
+        const unreadMessages = await ChatMessage.find({
+          orgId: String(tenantId),
+          $or: [
+            { recipientId: userId },
+            { 'channelInfo.participants': userId }
+          ],
+          'readBy.userId': { $ne: userId },
+          isDeleted: false
+        })
+          .populate('sender', 'name email avatar')
+          .sort({ createdAt: -1 })
+          .lean();
 
         socket.emit('chat:unread_messages', {
           messages: unreadMessages,
@@ -310,6 +365,7 @@ export const initializeChatHandlers = (io) => {
         const conversations = await ChatMessage.aggregate([
           {
             $match: {
+              orgId: tenantId ? String(tenantId) : null,
               $or: [
                 { senderId: userId },
                 { recipientId: userId },
@@ -377,6 +433,11 @@ export const initializeChatHandlers = (io) => {
           return;
         }
 
+        if (!canAccessMessage(message, { userId, orgId: tenantId })) {
+          socket.emit('chat:error', { message: 'Access denied' });
+          return;
+        }
+
         if (message.senderId.toString() !== userId) {
           socket.emit('chat:error', { message: 'Not authorized to edit this message' });
           return;
@@ -418,6 +479,11 @@ export const initializeChatHandlers = (io) => {
 
         if (!message) {
           socket.emit('chat:error', { message: 'Message not found' });
+          return;
+        }
+
+        if (String(message.orgId) !== String(tenantId)) {
+          socket.emit('chat:error', { message: 'Access denied' });
           return;
         }
 

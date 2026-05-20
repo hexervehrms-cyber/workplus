@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useAuth } from '../../context/AuthContext';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -25,19 +26,19 @@ interface SalaryHistory {
 }
 
 export default function PayrollDashboard() {
+  const { user } = useAuth();
+  const fetchGenRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [kpiData, setKpiData] = useState<KPIData | null>(null);
   const [salaryHistory, setSalaryHistory] = useState<SalaryHistory[]>([]);
   const [employeeType, setEmployeeType] = useState<'intern' | 'employee'>('employee');
 
-  useEffect(() => {
-    fetchPayrollData();
-  }, []);
-
-  const fetchPayrollData = async () => {
+  const fetchPayrollData = useCallback(async () => {
+    const gen = ++fetchGenRef.current;
     try {
       setLoading(true);
-      const data = await apiGet('/payroll/employee/dashboard');
+      const data = await apiGet('/payroll/employee/dashboard', false);
+      if (gen !== fetchGenRef.current) return;
       if (data.success && data.data) {
         setKpiData(data.data.kpiData);
         setSalaryHistory(data.data.salaryHistory || []);
@@ -53,9 +54,14 @@ export default function PayrollDashboard() {
       setSalaryHistory([]);
       toast.error('Failed to load payroll dashboard');
     } finally {
-      setLoading(false);
+      if (gen === fetchGenRef.current) setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    void fetchPayrollData();
+  }, [user?.id, fetchPayrollData]);
 
   if (loading) {
     return (

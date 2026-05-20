@@ -69,6 +69,12 @@ export function withOpenSessionFilter(query) {
   return { ...query, ...OPEN_ATTENDANCE_SESSION_FILTER };
 }
 
+/** Filter for atomic check-out (open session only). */
+export const OPEN_CHECKOUT_CONDITION = {
+  checkIn: { $exists: true, $ne: null },
+  $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
+};
+
 export function buildTodayAttendanceQuery(
   authRole,
   currentUserId,

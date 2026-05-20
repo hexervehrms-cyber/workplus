@@ -93,6 +93,13 @@ export const getApiBaseUrl = (): string => {
  * @param endpoint - API endpoint (e.g., '/expenses', 'expenses/user/123')
  * @returns Full API URL
  */
+/** Strip leading `/api/` for buildApiUrl (which already includes `/api`). */
+export function normalizeApiEndpoint(endpoint: string): string {
+  const e = endpoint.trim();
+  if (e.startsWith('http://') || e.startsWith('https://')) return e;
+  return e.replace(/^\/api\//, '').replace(/^\//, '');
+}
+
 export const buildApiUrl = (endpoint: string): string => {
   const baseUrl = getApiBaseUrl();
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
@@ -171,6 +178,61 @@ export const apiRequest = async <T = any>(
 };
 
 /**
+ * Authenticated fetch returning the raw Response (blobs, CSV, custom parsing).
+ */
+export async function apiFetch(
+  endpoint: string,
+  options: RequestInit & { skipContentType?: boolean } = {},
+  retriedAuth = false
+): Promise<Response> {
+  const normalized = normalizeApiEndpoint(endpoint);
+  const url = normalized.startsWith('http') ? normalized : buildApiUrl(normalized);
+  const token = await ensureAccessToken();
+
+  const headers: Record<string, string> = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers as Record<string, string> | undefined),
+  };
+
+  if (!options.skipContentType && !(options.body instanceof FormData)) {
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+  }
+
+  const config: RequestInit = {
+    ...options,
+    headers,
+    credentials: options.credentials ?? 'include',
+  };
+
+  let response = await fetchWithTimeout(url, config, REQUEST_TIMEOUT_MS);
+
+  if (response.status === 401 && !retriedAuth) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      TokenManager.set(refreshed);
+      return apiFetch(endpoint, options, true);
+    }
+  }
+
+  return response;
+}
+
+export async function apiFetchBlob(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Blob> {
+  const response = await apiFetch(endpoint, options);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      (errorData as { message?: string }).message ||
+        `API request failed: ${response.status}`
+    );
+  }
+  return response.blob();
+}
+
+/**
  * GET request with caching
  */
 export const apiGet = async <T = any>(endpoint: string, useCache = true): Promise<T> => {
@@ -220,11 +282,21 @@ export async function apiGetSafe<T = unknown>(
 /**
  * Clear cache for specific endpoint or all
  */
-export const clearApiCache = (endpoint?: string) => {
+export const clearApiCache = (
+  endpoint?: string,
+  options?: { broadcast?: boolean }
+) => {
   if (endpoint) {
     requestCache.delete(cacheKeyForEndpoint(endpoint));
+    inFlightGet.delete(cacheKeyForEndpoint(endpoint));
   } else {
     requestCache.clear();
+    inFlightGet.clear();
+  }
+  if (options?.broadcast !== false && typeof window !== 'undefined') {
+    void import('./clientSessionSync').then(({ broadcastClearApiCache }) => {
+      broadcastClearApiCache(endpoint);
+    });
   }
 };
 

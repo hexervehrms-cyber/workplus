@@ -25,7 +25,14 @@ import {
   Save,
   FileText
 } from 'lucide-react';
-import { appendOrgIdParam, buildApiUrl, getBearerToken } from '../utils/apiHelper';
+import {
+  appendOrgIdParam,
+  apiDelete,
+  apiFetchBlob,
+  apiGet,
+  apiPost,
+  apiPut,
+} from '../utils/apiHelper';
 import { useAuth } from '../context/AuthContext';
 import { toast } from '../utils/portalToast';
 
@@ -98,28 +105,11 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         setHolidays([]);
         return;
       }
-      const token = getBearerToken();
-      if (!token) {
-        console.error('No authentication token found');
-        setHolidays([]);
-        return;
-      }
-      const response = await fetch(
-        appendOrgIdParam(buildApiUrl(`/holidays?year=${selectedYear}&limit=500`), user),
-        {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Holidays loaded:', data);
-        setHolidays(data.data || []);
-      } else {
-        console.error('Failed to load holidays:', response.status, response.statusText);
-        setHolidays([]);
-      }
+      const data = await apiGet<{ data?: Holiday[] }>(
+        appendOrgIdParam(`holidays?year=${selectedYear}&limit=500`, user),
+        false
+      );
+      setHolidays(data?.data || []);
     } catch (error) {
       console.error('Error loading holidays:', error);
       setHolidays([]);
@@ -129,25 +119,11 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
   const loadCalendars = async () => {
     try {
       // Get all holiday calendars
-      const token = getBearerToken();
-      if (!token) {
-        console.error('No authentication token found');
-        setCalendars([]);
-        return;
-      }
-      const response = await fetch(
-        appendOrgIdParam(buildApiUrl(`/holidays/calendar/${selectedYear}`), user),
-        {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Calendars loaded:', data);
-        // Convert calendar data to calendars format
-        if (data.data && data.data.calendar) {
+      const data = await apiGet<{ data?: { calendar?: Record<string, Holiday[]> } }>(
+        appendOrgIdParam(`holidays/calendar/${selectedYear}`, user),
+        false
+      );
+      if (data?.data?.calendar) {
           const calendarData: HolidayCalendarRecord = {
             id: `cal_${selectedYear}`,
             name: `Holiday Calendar ${selectedYear}`,
@@ -160,11 +136,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
             updatedAt: new Date().toISOString()
           };
           setCalendars([calendarData]);
-        } else {
-          setCalendars([]);
-        }
       } else {
-        console.error('Failed to load calendars:', response.status, response.statusText);
         setCalendars([]);
       }
     } catch (error) {
@@ -202,27 +174,10 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       return;
     }
 
-    const token = getBearerToken();
-    if (!token) {
-      alert('Authentication token not found. Please log in again.');
-      return;
-    }
     try {
-      const response = await fetch(buildApiUrl(`/holidays/${holidayId}`), { 
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      if (response.ok) {
-        setHolidays(prev => prev.filter(h => (h._id || h.id) !== holidayId));
-        alert('Holiday deleted successfully!');
-      } else {
-        const errorData = await response.json();
-        alert(`Failed to delete holiday: ${errorData.message}`);
-      }
+      await apiDelete(`holidays/${holidayId}`);
+      setHolidays((prev) => prev.filter((h) => (h._id || h.id) !== holidayId));
+      alert('Holiday deleted successfully!');
     } catch (error) {
       console.error('Error deleting holiday:', error);
       alert('Failed to delete holiday: ' + (error instanceof Error ? error.message : 'Unknown error'));
@@ -239,60 +194,40 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       return;
     }
 
-    const token = getBearerToken();
-    if (!token) {
-      alert('Authentication token not found. Please log in again.');
-      return;
-    }
-    const headers = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
-
     try {
       if (editingHoliday) {
-        // Update existing holiday - use _id if available, otherwise use id
         const holidayId = editingHoliday._id || editingHoliday.id;
-        const response = await fetch(buildApiUrl(`/holidays/${holidayId}`), {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify({
+        const updatedHoliday = await apiPut<{ data?: Holiday & { _id?: string } }>(
+          `holidays/${holidayId}`,
+          {
             name: holidayFormData.name,
             date: holidayFormData.date,
             type: holidayFormData.type,
             description: holidayFormData.description,
-            isRecurring: holidayFormData.isRecurring
-          })
-        });
-        
-        if (response.ok) {
-          const updatedHoliday = await response.json();
-          setHolidays(prev => prev.map(h => 
-            (h._id || h.id) === holidayId 
-              ? { ...h, ...updatedHoliday.data, id: updatedHoliday.data._id }
+            isRecurring: holidayFormData.isRecurring,
+          }
+        );
+        setHolidays((prev) =>
+          prev.map((h) =>
+            (h._id || h.id) === holidayId
+              ? { ...h, ...updatedHoliday?.data, id: updatedHoliday?.data?._id }
               : h
-          ));
-          alert('Holiday updated successfully!');
-        } else {
-          const errorData = await response.json();
-          alert(`Failed to update holiday: ${errorData.message}`);
-        }
+          )
+        );
+        alert('Holiday updated successfully!');
       } else {
-        // Add new holiday
-        const response = await fetch(buildApiUrl('/holidays'), {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
+        const newHolidayData = await apiPost<{ data?: Holiday & { _id?: string } }>(
+          'holidays',
+          {
             name: holidayFormData.name,
             date: holidayFormData.date,
             type: holidayFormData.type,
             description: holidayFormData.description,
-            isRecurring: holidayFormData.isRecurring
-          })
-        });
-        
-        if (response.ok) {
-          const newHolidayData = await response.json();
+            isRecurring: holidayFormData.isRecurring,
+          }
+        );
+
+        if (newHolidayData?.data) {
           const newHoliday: Holiday = {
             id: newHolidayData.data._id,
             _id: newHolidayData.data._id,
@@ -308,8 +243,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
           setHolidays(prev => [...prev, newHoliday]);
           alert('Holiday added successfully!');
         } else {
-          const errorData = await response.json();
-          alert(`Failed to add holiday: ${errorData.message}`);
+          alert('Failed to add holiday');
         }
       }
       
@@ -379,20 +313,15 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
 
   const handlePublishCalendar = async (calendarId: string) => {
     try {
-      const response = await fetch(`/api/holiday-calendars/${calendarId}/publish`, {
-        method: 'POST'
-      });
-
-      if (response.ok) {
-        setCalendars(prev => prev.map(cal => 
-          cal.id === calendarId 
+      await apiPost(`holiday-calendars/${calendarId}/publish`);
+      setCalendars((prev) =>
+        prev.map((cal) =>
+          cal.id === calendarId
             ? { ...cal, isPublished: true, updatedAt: new Date().toISOString() }
             : cal
-        ));
-        alert('Calendar published successfully!');
-      } else {
-        alert('Failed to publish calendar');
-      }
+        )
+      );
+      alert('Calendar published successfully!');
     } catch (error) {
       console.error('Error publishing calendar:', error);
       alert('Failed to publish calendar');
@@ -411,17 +340,13 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
 
   const handleDownloadCalendar = async (calendarId: string) => {
     try {
-      const response = await fetch(`/api/holiday-calendars/${calendarId}/download`);
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'holiday-calendar.pdf';
-        a.click();
-      } else {
-        alert('Failed to download calendar');
-      }
+      const blob = await apiFetchBlob(`holiday-calendars/${calendarId}/download`);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'holiday-calendar.pdf';
+      a.click();
+      window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Error downloading calendar:', error);
       alert('Failed to download calendar');

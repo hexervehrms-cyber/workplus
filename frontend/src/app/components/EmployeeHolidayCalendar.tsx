@@ -15,7 +15,7 @@ import {
   Clock,
   AlertCircle
 } from 'lucide-react';
-import { getBearerToken } from '../utils/apiHelper';
+import { apiFetchBlob, apiGet } from '../utils/apiHelper';
 
 interface Holiday {
   id: string;
@@ -59,44 +59,26 @@ const EmployeeHolidayCalendar: React.FC<{ organizationId?: string }> = ({
   const loadCalendars = async () => {
     setLoading(true);
     try {
-      const token = getBearerToken();
-      if (!token) {
-        console.error('No authentication token found');
-        setLoading(false);
-        return;
-      }
-      
-      // Load holidays for the selected year
-      const response = await fetch(`/api/holidays?year=${selectedYear}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        const holidays = data.data || [];
-        
-        // Create a calendar object from the holidays
-        const calendar: HolidayCalendar = {
-          id: `cal_${selectedYear}`,
-          name: `Holiday Calendar ${selectedYear}`,
-          year: selectedYear,
-          organizationId,
-          holidays: holidays,
-          isPublished: true,
-          createdBy: 'system',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        
-        setCalendars([calendar]);
-        setSelectedCalendar(calendar);
-      } else {
-        console.error('Failed to load holidays');
-        setCalendars([]);
-      }
+      const data = await apiGet<{ data?: Holiday[] }>(
+        `holidays?year=${selectedYear}`,
+        false
+      );
+      const holidays = data?.data || [];
+
+      const calendar: HolidayCalendar = {
+        id: `cal_${selectedYear}`,
+        name: `Holiday Calendar ${selectedYear}`,
+        year: selectedYear,
+        organizationId,
+        holidays: holidays,
+        isPublished: true,
+        createdBy: 'system',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      setCalendars([calendar]);
+      setSelectedCalendar(calendar);
     } catch (error) {
       console.error('Error loading calendars:', error);
       setCalendars([]);
@@ -107,17 +89,13 @@ const EmployeeHolidayCalendar: React.FC<{ organizationId?: string }> = ({
 
   const handleDownloadCalendar = async (calendarId: string) => {
     try {
-      const response = await fetch(`/api/holiday-calendars/${calendarId}/download`);
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'holiday-calendar.pdf';
-        a.click();
-      } else {
-        alert('Failed to download calendar');
-      }
+      const blob = await apiFetchBlob(`holiday-calendars/${calendarId}/download`);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'holiday-calendar.pdf';
+      a.click();
+      window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Error downloading calendar:', error);
       alert('Failed to download calendar');

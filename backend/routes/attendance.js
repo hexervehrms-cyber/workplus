@@ -25,6 +25,7 @@ import {
   isOpenBreak,
   buildTodayAttendanceQuery,
   withOpenSessionFilter,
+  OPEN_CHECKOUT_CONDITION,
   buildLiveStatus,
   recordWorkedHoursForRow,
   sumHoursFromAttendanceRows,
@@ -795,9 +796,12 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   }
   hoursWorked = Math.max(0, Math.round(hoursWorked * 100) / 100);
 
-  // Update attendance record
-  const updatedAttendance = await Attendance.findByIdAndUpdate(
-    attendance._id,
+  // Atomic check-out — only succeeds if session is still open (prevents double checkout races)
+  const updatedAttendance = await Attendance.findOneAndUpdate(
+    {
+      _id: attendance._id,
+      ...OPEN_CHECKOUT_CONDITION,
+    },
     {
       $set: {
         checkOut: checkOutTime,
@@ -808,8 +812,29 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       }
     },
     { new: true }
-  ).populate('userId', 'name email avatar')
-   .populate('employeeId', 'employeeCode department');
+  )
+    .populate('userId', 'name email avatar')
+    .populate('employeeId', 'employeeCode department');
+
+  if (!updatedAttendance) {
+    const closed = await Attendance.findById(attendance._id).lean();
+    if (closed?.checkOut) {
+      return res.status(200).json({
+        success: true,
+        message: 'Already checked out. You can check in again to start a new session.',
+        data: {
+          attendance: closed,
+          hoursThisWeek: hoursThisWeekBefore,
+          weekKey: calendarWeekKey(),
+        },
+      });
+    }
+    return res.status(409).json({
+      success: false,
+      message: 'Check-out conflict. Please refresh and try again.',
+      code: 'CHECKOUT_CONFLICT',
+    });
+  }
 
   await syncAttendanceHistoryFromRecord(updatedAttendance, {
     userId: effectiveUserId,

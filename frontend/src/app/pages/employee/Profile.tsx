@@ -19,6 +19,7 @@ import {
   openDocumentInNewTab,
 } from '../../utils/documentFile';
 import { useAuth } from '../../context/AuthContext';
+import { educationalDocumentsKey } from '../../utils/userScopedStorage';
 
 // IndexedDB helper functions
 const DB_NAME = 'WorkplusDB';
@@ -170,29 +171,35 @@ export default function Profile() {
   const [documentType, setDocumentType] = useState<'personal' | 'experience'>('personal');
   const [selectedCategory, setSelectedCategory] = useState<string>('Letter of Intent');
 
-  // Educational Documents State - Initialize from localStorage
+  const eduDocsStorageKey = educationalDocumentsKey(authUser?.id);
+
+  const defaultEducationalDocuments = {
+    '10th': {},
+    '12th': {},
+    'Graduation': {},
+    'Post Graduation': {},
+    'Diploma': {},
+    'Certificate': {},
+    'Drop out': {},
+  };
+
   const [educationalDocuments, setEducationalDocuments] = useState<{
     [key: string]: { certificate?: Document; marksheet?: Document; others?: Document };
-  }>(() => {
+  }>(defaultEducationalDocuments);
+
+  useEffect(() => {
     try {
-      const stored = localStorage.getItem('educationalDocuments');
+      const stored = localStorage.getItem(eduDocsStorageKey);
       if (stored) {
-        const parsed = JSON.parse(stored);
-        return parsed;
+        setEducationalDocuments(JSON.parse(stored));
+      } else {
+        setEducationalDocuments(defaultEducationalDocuments);
       }
     } catch (error) {
-      console.error('Error initializing educational documents from storage:', error);
+      console.error('Error loading educational documents from storage:', error);
+      setEducationalDocuments(defaultEducationalDocuments);
     }
-    return {
-      '10th': {},
-      '12th': {},
-      'Graduation': {},
-      'Post Graduation': {},
-      'Diploma': {},
-      'Certificate': {},
-      'Drop out': {}
-    };
-  });
+  }, [eduDocsStorageKey]);
   const [uploadingEducation, setUploadingEducation] = useState<string | null>(null);
   const [uploadingEducationType, setUploadingEducationType] = useState<'certificate' | 'marksheet' | 'others' | null>(null);
   const [submittingEducation, setSubmittingEducation] = useState(false);
@@ -410,14 +417,14 @@ export default function Profile() {
         console.warn('Educational documents exceed 5MB limit, may not persist');
       }
       
-      localStorage.setItem('educationalDocuments', serialized);
+      localStorage.setItem(eduDocsStorageKey, serialized);
     } catch (error) {
       console.error('Error saving educational documents to storage:', error);
       if (error instanceof Error && error.name === 'QuotaExceededError') {
         toast.error('Storage quota exceeded. Please delete some documents.');
       }
     }
-  }, [educationalDocuments]);
+  }, [educationalDocuments, eduDocsStorageKey]);
 
   // Fetch educational documents
   const fetchEducationalDocuments = async () => {

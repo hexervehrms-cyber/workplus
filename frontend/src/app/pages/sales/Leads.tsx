@@ -1,13 +1,7 @@
 // @ts-nocheck — sales portal typed separately; excluded from strict CI scope
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
 import { Plus, Edit2, Trash2, Search, Filter } from 'lucide-react';
-import { getBearerToken } from '../../utils/apiHelper';
-
-function salesRequestHeaders() {
-  const t = getBearerToken();
-  return t ? { Authorization: `Bearer ${t}` } : {};
-}
+import { salesApi } from '../../utils/salesApi';
 
 const Leads = () => {
   const [leads, setLeads] = useState([]);
@@ -34,11 +28,11 @@ const Leads = () => {
   const fetchLeads = async () => {
     try {
       setLoading(true);
-      const url = filterStatus
-        ? `/api/sales/leads/status/${filterStatus}`
-        : '/api/sales/leads';
-      const res = await axios.get(url, { headers: salesRequestHeaders() });
-      setLeads(res.data.data || []);
+      const path = filterStatus
+        ? `sales/leads/status/${filterStatus}`
+        : 'sales/leads';
+      const res = await salesApi.get<{ data?: unknown[] }>(path);
+      setLeads(res?.data || []);
     } catch (error) {
       console.error('Error fetching leads:', error);
     } finally {
@@ -50,9 +44,9 @@ const Leads = () => {
     e.preventDefault();
     try {
       if (editingLead) {
-        await axios.patch(`/api/sales/leads/${editingLead._id}`, formData, { headers: salesRequestHeaders() });
+        await salesApi.patch(`sales/leads/${editingLead._id}`, formData);
       } else {
-        await axios.post('/api/sales/leads', formData, { headers: salesRequestHeaders() });
+        await salesApi.post('sales/leads', formData);
       }
       fetchLeads();
       setShowModal(false);
@@ -81,7 +75,7 @@ const Leads = () => {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this lead?')) {
       try {
-        await axios.delete(`/api/sales/leads/${id}`, { headers: salesRequestHeaders() });
+        await salesApi.delete(`sales/leads/${id}`);
         fetchLeads();
       } catch (error) {
         console.error('Error deleting lead:', error);

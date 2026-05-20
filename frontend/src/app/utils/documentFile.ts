@@ -1,5 +1,4 @@
-import { buildApiUrl } from './apiHelper';
-import { ensureAccessToken } from './sessionAuth';
+import { apiFetch } from './apiHelper';
 
 function parseFilenameFromDisposition(header: string | null): string | null {
   if (!header) return null;
@@ -20,13 +19,10 @@ export async function fetchDocumentBlob(
   documentId: string,
   options?: { download?: boolean }
 ): Promise<{ blob: Blob; fileName: string }> {
-  const token = await ensureAccessToken();
   const qs = options?.download ? '?download=1' : '';
-  const url = buildApiUrl(`/documents/download/${documentId}${qs}`);
-
-  const response = await fetch(url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    credentials: 'include',
+  const response = await apiFetch(`/documents/download/${documentId}${qs}`, {
+    method: 'GET',
+    skipContentType: true,
   });
 
   if (!response.ok) {
@@ -72,14 +68,11 @@ export async function fetchCompanyGeneratedDocumentBlob(
   documentId: string,
   options?: { download?: boolean }
 ): Promise<{ blob: Blob; fileName: string }> {
-  const token = await ensureAccessToken();
   const qs = options?.download ? '?download=1' : '';
-  const url = buildApiUrl(`/documents/generated/${encodeURIComponent(documentId)}/file${qs}`);
-
-  const response = await fetch(url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    credentials: 'include',
-  });
+  const response = await apiFetch(
+    `/documents/generated/${encodeURIComponent(documentId)}/file${qs}`,
+    { method: 'GET', skipContentType: true }
+  );
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));

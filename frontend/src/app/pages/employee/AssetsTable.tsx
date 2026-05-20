@@ -9,7 +9,7 @@ import {
   Package, Plus, Search, Loader2, Eye, ChevronUp, ChevronDown, X
 } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
-import { getBearerToken } from '../../utils/apiHelper';
+import { apiGet, apiPost } from '../../utils/apiHelper';
 
 interface Asset {
   _id: string;
@@ -89,12 +89,6 @@ export default function EmployeeAssetsTable() {
         return;
       }
 
-      const token = getBearerToken() || '';
-      if (!token) {
-        toast.error('Authentication token not found. Please log in again.');
-        return;
-      }
-
       const assetPayload = {
         assetName: formData.assetName.trim(),
         assetType: formData.assetType,
@@ -110,22 +104,9 @@ export default function EmployeeAssetsTable() {
         }
       };
 
-      const response = await fetch('/api/assets', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(assetPayload)
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to create asset');
-      }
-
-      const responseData = await response.json();
-      const newAsset = responseData.data;
+      const responseData = await apiPost<{ data?: Asset }>('assets', assetPayload);
+      const newAsset = responseData?.data;
+      if (!newAsset) throw new Error('Failed to create asset');
 
       // Add new asset to list
       setAssets(prev => [newAsset, ...prev]);
@@ -157,42 +138,26 @@ export default function EmployeeAssetsTable() {
       setLoading(true);
 
       // Get current user's employee ID
-      const userResponse = await fetch('/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        }
-      });
-
-      if (!userResponse.ok) throw new Error('Failed to get user info');
-
-      const userData = await userResponse.json();
-      const userId = userData.data.id;
-
-      // Fetch employee record to get employeeId
-      const employeeResponse = await fetch(`/api/employees?userId=${userId}`, {
-        headers: {
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        }
-      });
+      const userData = await apiGet<{ data?: { id?: string } }>('auth/me', false);
+      const userId = userData?.data?.id;
+      if (!userId) throw new Error('Failed to get user info');
 
       let employeeId = userId;
-      if (employeeResponse.ok) {
-        const employeeData = await employeeResponse.json();
-        employeeId = employeeData.data?.[0]?._id || userId;
+      try {
+        const employeeData = await apiGet<{ data?: Array<{ _id?: string }> }>(
+          `employees?userId=${userId}`,
+          false
+        );
+        employeeId = employeeData?.data?.[0]?._id || userId;
+      } catch {
+        /* use userId */
       }
 
-      // Fetch assets for this employee
-      const response = await fetch(`/api/assets/employee/${employeeId}`, {
-        headers: {
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to fetch assets');
-
-      const data = await response.json();
-      setAssets(data.data.assets || []);
-      setTotalValue(data.data.totalValue || 0);
+      const data = await apiGet<{
+        data?: { assets?: Asset[]; totalValue?: number };
+      }>(`assets/employee/${employeeId}`, false);
+      setAssets(data?.data?.assets || []);
+      setTotalValue(data?.data?.totalValue || 0);
     } catch (error) {
       console.error('Error fetching assets:', error);
     } finally {

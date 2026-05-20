@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { buildApiUrl, getBearerToken } from '../utils/apiHelper';
+import { apiGet } from '../utils/apiHelper';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -95,17 +95,11 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
     try {
       setLoading(true);
       setError('');
-      const token = getBearerToken();
-      const authHeaders: HeadersInit = {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      };
-
-      const docsResponse = await fetch(
-        buildApiUrl(`/documents/organization/${encodeURIComponent(organizationId)}`),
-        { credentials: 'include', headers: authHeaders }
-      );
-      const docsJson = docsResponse.ok ? await docsResponse.json() : {};
-      const docsList = Array.isArray(docsJson.data) ? docsJson.data : [];
+      const docsJson = await apiGet<{ data?: unknown[] }>(
+        `documents/organization/${encodeURIComponent(organizationId)}`,
+        false
+      ).catch(() => ({ data: [] }));
+      const docsList = Array.isArray(docsJson?.data) ? docsJson.data : [];
       const mappedDocs: Document[] = docsList.map((d: Record<string, unknown>) => ({
         id: String(d.id || d._id || ''),
         title: String(d.title || 'Untitled'),
@@ -126,14 +120,13 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
         requiresAcknowledgment: Boolean(d.requiresAcknowledgment ?? d.acknowledgmentRequired),
       }));
 
-      const empsResponse = await fetch(buildApiUrl('/employees?limit=500&simple=true'), {
-        credentials: 'include',
-        headers: authHeaders,
-      });
-      const empsJson = empsResponse.ok ? await empsResponse.json() : {};
-      const empsList = Array.isArray(empsJson.data)
+      const empsJson = await apiGet<{ data?: unknown[]; employees?: unknown[] }>(
+        'employees?limit=500&simple=true',
+        false
+      ).catch(() => ({ data: [] }));
+      const empsList = Array.isArray(empsJson?.data)
         ? empsJson.data
-        : Array.isArray(empsJson.employees)
+        : Array.isArray(empsJson?.employees)
           ? empsJson.employees
           : [];
       const mappedEmployees: Employee[] = empsList.map((e: Record<string, unknown>) => ({
@@ -144,12 +137,11 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
         position: String(e.designation || e.position || '—'),
       }));
 
-      const ackRes = await fetch(
-        buildApiUrl(`/documents/acknowledgments/organization/${encodeURIComponent(organizationId)}`),
-        { credentials: 'include', headers: authHeaders }
-      );
-      const ackJson = ackRes.ok ? await ackRes.json() : {};
-      const ackList = Array.isArray(ackJson.data) ? ackJson.data : [];
+      const ackJson = await apiGet<{ data?: unknown[] }>(
+        `documents/acknowledgments/organization/${encodeURIComponent(organizationId)}`,
+        false
+      ).catch(() => ({ data: [] }));
+      const ackList = Array.isArray(ackJson?.data) ? ackJson.data : [];
       const mappedAcks: Acknowledgment[] = ackList.map((ack: Record<string, unknown>) => ({
         id: String(ack._id || ack.id || `${ack.documentId}-${ack.employeeId}`),
         documentId: String(ack.documentId || ''),

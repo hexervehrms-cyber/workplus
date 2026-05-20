@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { useAuth } from '../../context/AuthContext';
 import { ensureAccessToken } from '../../utils/sessionAuth';
@@ -15,8 +15,7 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { apiClient } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
-import { apiGet, apiPost, buildApiUrl, getBearerToken } from '../../utils/apiHelper';
-import { TokenManager } from '../../utils/api';
+import { apiFetch, apiGet, apiPost, getBearerToken } from '../../utils/apiHelper';
 import realTimeSocket from '../../utils/realTimeSocket';
 
 interface AttendanceRecord {
@@ -157,11 +156,15 @@ export default function AttendanceAdmin() {
   ]);
 
   // Separate function declarations for reuse
+  const fetchGenRef = useRef(0);
+
   const fetchAttendance = useCallback(async () => {
+    const gen = ++fetchGenRef.current;
     try {
       setLoading(true);
       await ensureAccessToken();
       const response = await apiClient.get<AttendanceRecord[]>(`/dashboard/todays-attendance?t=${Date.now()}`);
+      if (gen !== fetchGenRef.current) return;
       if (response?.success) {
         const records = response.data ?? [];
         setAttendance(records);
@@ -242,17 +245,13 @@ export default function AttendanceAdmin() {
     try {
       setExportLoading(true);
 
-      const apiUrl = buildApiUrl(`/attendance/bulk-export?startDate=${exportStartDate}&endDate=${exportEndDate}`);
-      const token = TokenManager.get();
-
-      const headers: HeadersInit = { 'Accept': 'text/csv, application/json' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-
-      const response = await fetch(apiUrl, {
-        method: 'GET',
-        headers,
-        credentials: 'include'
-      });
+      const response = await apiFetch(
+        `attendance/bulk-export?startDate=${exportStartDate}&endDate=${exportEndDate}`,
+        {
+          method: 'GET',
+          headers: { Accept: 'text/csv, application/json' },
+        }
+      );
 
       if (!response.ok) {
         let msg = `Export failed (${response.status})`;

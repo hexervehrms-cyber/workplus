@@ -1,5 +1,4 @@
-import { buildApiUrl } from './apiHelper';
-import { ensureAccessToken } from './sessionAuth';
+import { apiFetch } from './apiHelper';
 
 export function receiptFilenameFromPath(receiptPath: string): string | null {
   if (!receiptPath || typeof receiptPath !== 'string') return null;
@@ -18,13 +17,10 @@ export async function fetchExpenseReceiptBlob(
     throw new Error('Receipt file path is invalid');
   }
 
-  const token = await ensureAccessToken();
   const qs = options?.download ? '' : '?inline=1';
-  const url = buildApiUrl(`/expenses/receipt/${encodeURIComponent(filename)}${qs}`);
-
-  const response = await fetch(url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    credentials: 'include',
+  const response = await apiFetch(`/expenses/receipt/${encodeURIComponent(filename)}${qs}`, {
+    method: 'GET',
+    skipContentType: true,
   });
 
   if (!response.ok) {

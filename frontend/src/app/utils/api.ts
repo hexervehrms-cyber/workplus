@@ -421,7 +421,8 @@ export class AuthService {
     }
   }
 
-  static async register(userData: any) {
+  /** Requires `inviteToken` from an admin onboarding link; role/org are set server-side. */
+  static async register(userData: { name: string; email: string; password: string; inviteToken: string }) {
     try {
       const response = await apiClient.post<any>('/auth/register', userData);
 

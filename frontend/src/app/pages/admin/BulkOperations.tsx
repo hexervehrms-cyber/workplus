@@ -9,8 +9,7 @@ import {
   Users, DollarSign, Package
 } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
-import { apiPost, buildApiUrl } from '../../utils/apiHelper';
-import { TokenManager } from '../../utils/api';
+import { apiFetch, apiPost } from '../../utils/apiHelper';
 
 interface ExportStats {
   totalRecords: number;
@@ -36,29 +35,15 @@ export default function BulkOperations() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [importFormat, setImportFormat] = useState<'csv' | 'json'>('csv');
 
-  const getBearer = () =>
-    TokenManager.get();
-
   const handleExport = async (format: 'csv' | 'json') => {
-    const token = getBearer();
-    if (!token) {
-      toast.error('Authentication token not found. Please log in again.');
-      return;
-    }
-
     try {
       setLoading(true);
-      const url = buildApiUrl(`admin/bulk/${activeTab}/export/${format}`);
-
-      const response = await fetch(url, {
-        credentials: 'include',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const response = await apiFetch(`admin/bulk/${activeTab}/export/${format}`);
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to export ${activeTab}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(
+          (errorData as { message?: string }).message || `Failed to export ${activeTab}`
+        );
       }
 
       // Get the filename from response headers

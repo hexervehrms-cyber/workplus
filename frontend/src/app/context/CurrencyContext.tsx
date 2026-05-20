@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { useAuth } from './AuthContext';
-import { TokenManager } from '../utils/api';
+import { userCurrencyKey } from '../utils/userScopedStorage';
+import { apiGet, apiRequest } from '../utils/apiHelper';
 
 interface Currency {
   code: string;
@@ -55,14 +56,15 @@ interface CurrencyProviderProps {
 }
 
 export function CurrencyProvider({ children }: CurrencyProviderProps) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+  const currencyStorageKey = userCurrencyKey(user?.id);
   const [selectedCurrency, setSelectedCurrencyState] = useState<Currency>(defaultInr);
   const [loading, setLoading] = useState(true);
 
   const persistCurrency = useCallback(async (currency: Currency) => {
     setSelectedCurrencyState(currency);
     try {
-      localStorage.setItem('userCurrency', currency.code);
+      localStorage.setItem(currencyStorageKey, currency.code);
     } catch (error) {
       console.error('Error saving currency preference:', error);
     }
@@ -70,20 +72,14 @@ export function CurrencyProvider({ children }: CurrencyProviderProps) {
     if (!isAuthenticated) return;
 
     try {
-      const token = TokenManager.get();
-      await fetch('/api/currency/preference', {
+      await apiRequest('/currency/preference', {
         method: 'PUT',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
         body: JSON.stringify({ currencyCode: currency.code }),
       });
     } catch (error) {
       console.error('Error syncing currency to server:', error);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, currencyStorageKey]);
 
   const setSelectedCurrency = (currency: Currency) => {
     void persistCurrency(currency);
@@ -93,32 +89,26 @@ export function CurrencyProvider({ children }: CurrencyProviderProps) {
     setLoading(true);
     try {
       if (isAuthenticated) {
-        const token = TokenManager.get();
-        const response = await fetch('/api/currency/preference', {
-          credentials: 'include',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        });
-        if (response.ok) {
-          const data = await response.json();
-          const code = data?.data?.currencyCode || APP_DEFAULT_CURRENCY;
-          setSelectedCurrencyState(resolveCurrency(code));
-          localStorage.setItem('userCurrency', code);
-          return;
-        }
+        const data = await apiGet<{ success?: boolean; data?: { currencyCode?: string } }>(
+          '/currency/preference',
+          false
+        );
+        const code = data?.data?.currencyCode || APP_DEFAULT_CURRENCY;
+        setSelectedCurrencyState(resolveCurrency(code));
+        localStorage.setItem(currencyStorageKey, code);
+        return;
       }
 
-      const savedCurrency = localStorage.getItem('userCurrency');
+      const savedCurrency = localStorage.getItem(currencyStorageKey);
       setSelectedCurrencyState(resolveCurrency(savedCurrency || APP_DEFAULT_CURRENCY));
     } catch (error) {
       console.error('Error loading currency preference:', error);
       setSelectedCurrencyState(defaultInr);
-      localStorage.setItem('userCurrency', APP_DEFAULT_CURRENCY);
+      localStorage.setItem(currencyStorageKey, APP_DEFAULT_CURRENCY);
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, currencyStorageKey]);
 
   useEffect(() => {
     void loadCurrencyPreference();

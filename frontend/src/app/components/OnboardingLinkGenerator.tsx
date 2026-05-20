@@ -9,7 +9,7 @@ import { Card } from './ui/card';
 import { Copy, Check, Loader, Mail, Link as LinkIcon } from 'lucide-react';
 import { toast } from '../utils/portalToast';
 import { apiClient, TokenManager } from '../utils/api';
-import { buildApiUrl } from '../utils/apiHelper';
+import { apiPost } from '../utils/apiHelper';
 
 interface OnboardingLinkGeneratorProps {
   isOpen: boolean;
@@ -98,57 +98,19 @@ try {
 
     try {
       setLoading(true);
-      const token = TokenManager.get();
 
-      console.log('Sending email with data:', {
-        token: generatedLink.token,
-        employeeEmail: generatedLink.employeeEmail,
-        employeeName: generatedLink.employeeName,
-        onboardingUrl: generatedLink.onboardingUrl
-      });
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 90_000);
-
-      const response = await fetch(buildApiUrl('/onboarding/send-email'), {
-        method: 'POST',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        },
-        credentials: 'include',
-        signal: controller.signal,
-        body: JSON.stringify({
+      const data = await apiPost<{ message?: string; code?: string }>(
+        'onboarding/send-email',
+        {
           token: generatedLink.token,
           employeeEmail: generatedLink.employeeEmail,
           employeeName: generatedLink.employeeName,
-          onboardingUrl: generatedLink.onboardingUrl
-        })
-      });
-      clearTimeout(timeoutId);
-
-      let data;
-      try {
-        data = await response.json();
-      } catch (parseError) {
-        console.error('Parse error:', parseError);
-        throw new Error(`Server returned invalid response (${response.status})`);
-      }
-
-      if (!response.ok) {
-        let hint = '';
-        if (data.code === 'SMTP_NOT_CONFIGURED') {
-          hint = ' Configure SMTP (hr@hexerve.com) in Render environment or Admin → Notification Settings.';
-        } else if (data.code === 'SMTP_CIRCUIT_OPEN') {
-          hint = ' Email service is recovering; wait a minute and try again.';
-        } else if (data.code === 'EMAIL_RATE_LIMIT') {
-          hint = ' Too many emails sent recently; try again later.';
+          onboardingUrl: generatedLink.onboardingUrl,
         }
-        throw new Error((data.message || `Failed to send email (${response.status})`) + hint);
-      }
+      );
 
       toast.success(
-        data.message || `Onboarding email sent to ${generatedLink.employeeEmail}`
+        data?.message || `Onboarding email sent to ${generatedLink.employeeEmail}`
       );
       handleSuccess();
     } catch (error) {

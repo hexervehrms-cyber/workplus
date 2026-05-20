@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Calendar, Loader } from 'lucide-react';
-import { buildApiUrl } from '../../utils/apiHelper';
+import { apiGet } from '../../utils/apiHelper';
 import { apiClient } from '../../utils/api';
 import { safeLocaleTime, hasCheckOutValue } from '../../utils/safeUi';
-import { TokenManager } from '../../utils/api';
 import {
   readPersistedAttendance,
   isPayloadFresh,
@@ -149,21 +148,17 @@ export default function Attendance() {
           return eid;
         }
       }
-      const token = TokenManager.get();
-      const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.data?._id && isLikelyMongoObjectId(data.data._id)) {
+      try {
+        const data = await apiGet<{ data?: { _id?: string } }>(
+          `employees/user/${user.id}`,
+          false
+        );
+        if (data?.data?._id && isLikelyMongoObjectId(data.data._id)) {
           setEmployeeId(data.data._id);
           return data.data._id;
         }
+      } catch {
+        /* fall through */
       }
       setEmployeeId(user.id);
       return user.id;
@@ -208,19 +203,8 @@ export default function Attendance() {
     const uid = user?.id ? String(user.id) : null;
 
     try {
-      const token = TokenManager.get();
-      const response = await fetch(buildApiUrl('/attendance/today'), {
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) throw new Error('Failed to fetch attendance');
-
-      const data = await response.json();
-      const payload = data.data;
+      const data = await apiGet<{ data?: unknown }>('attendance/today', false);
+      const payload = data?.data;
       setTodayData(payload);
 
       const att = payload?.attendance;
@@ -319,24 +303,11 @@ export default function Attendance() {
     async (page: number, append: boolean) => {
       try {
         if (append) setHistoryLoadingMore(true);
-        const token = TokenManager.get();
-        const response = await fetch(
-          buildApiUrl(`/attendance?limit=${HISTORY_PAGE_SIZE}&page=${page}`),
-          {
-            credentials: 'include',
-            headers: {
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-              'Content-Type': 'application/json'
-            }
-          }
+        const data = await apiGet<{ data?: AttendanceRecord[] }>(
+          `attendance?limit=${HISTORY_PAGE_SIZE}&page=${page}`,
+          false
         );
-
-        if (!response.ok) {
-          console.warn('Failed to fetch history:', response.status);
-          return;
-        }
-        const data = await response.json();
-        const list: AttendanceRecord[] = data.data || [];
+        const list: AttendanceRecord[] = data?.data || [];
         setAttendanceHistory((prev) => (append ? [...prev, ...list] : list));
         const pages = data.pagination?.pages;
         if (typeof pages === 'number' && pages > 0) {

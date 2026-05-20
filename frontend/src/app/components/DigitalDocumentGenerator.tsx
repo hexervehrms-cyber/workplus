@@ -12,7 +12,7 @@ import {
   Clock,
   Edit3,
 } from 'lucide-react';
-import { buildApiUrl, getBearerToken } from '../utils/apiHelper';
+import { apiGet, apiPost } from '../utils/apiHelper';
 import { useAuth } from '../context/AuthContext';
 
 interface DigitalDocumentGeneratorProps {
@@ -61,19 +61,11 @@ const DigitalDocumentGenerator: React.FC<DigitalDocumentGeneratorProps> = ({
   const loadEmployees = async () => {
     try {
       setLoadingEmployees(true);
-      const token = getBearerToken();
-      const response = await fetch(buildApiUrl('/employees?limit=500&simple=true'), {
-        headers: {
-          Authorization: token ? `Bearer ${token}` : '',
-        },
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        setEmployees([]);
-        return;
-      }
-      const json = await response.json();
-      const list = Array.isArray(json.data) ? json.data : Array.isArray(json) ? json : [];
+      const json = await apiGet<{ data?: unknown[] }>(
+        'employees?limit=500&simple=true',
+        false
+      );
+      const list = Array.isArray(json?.data) ? json.data : [];
       const mapped: EmployeeOption[] = list
         .map((emp: any) => {
           const userId = String(emp.userId?._id || emp.userId || '');
@@ -137,31 +129,23 @@ const DigitalDocumentGenerator: React.FC<DigitalDocumentGeneratorProps> = ({
     setSuccess('');
 
     try {
-      const token = getBearerToken();
-
-      const response = await fetch(buildApiUrl('/documents/digital-generate'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          title: formData.title,
-          description: formData.description,
-          content: formData.content,
-          category: formData.category,
-          organizationId: effectiveOrgId,
-          createdBy,
-          assignTo: formData.assignTo,
-          targetUsers: formData.targetUsers,
-          requiresAcknowledgment: formData.requiresAcknowledgment,
-        }),
+      const data = await apiPost<{
+        success?: boolean;
+        data?: { document?: unknown };
+        document?: unknown;
+      }>('documents/digital-generate', {
+        title: formData.title,
+        description: formData.description,
+        content: formData.content,
+        category: formData.category,
+        organizationId: effectiveOrgId,
+        createdBy,
+        assignTo: formData.assignTo,
+        targetUsers: formData.targetUsers,
+        requiresAcknowledgment: formData.requiresAcknowledgment,
       });
 
-      const data = await response.json();
-
-      if (response.ok && data.success !== false) {
+      if (data?.success !== false) {
         const assignLabel =
           formData.assignTo === 'all'
             ? 'all employees'

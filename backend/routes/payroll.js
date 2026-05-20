@@ -630,28 +630,41 @@ router.put(
   authorize("super_admin", "admin", "hr"),
   asyncHandler(async (req, res) => {
     try {
-      const run = await PayrollRun.findById(req.params.id);
+      const orgFilter = isSuperAdmin(req)
+        ? {}
+        : { orgId: String(req.user.orgId) };
+
+      const run = await PayrollRun.findOneAndUpdate(
+        {
+          _id: req.params.id,
+          status: "calculated",
+          ...orgFilter,
+        },
+        {
+          $set: {
+            status: "approved",
+            approvedBy: req.user.userId,
+            approvalDate: new Date(),
+          },
+        },
+        { new: true }
+      );
+
       if (!run) {
-        return sendError(res, "Payroll run not found", 404, "NOT_FOUND");
-      }
-
-      if (!isSuperAdmin(req) && String(run.orgId) !== String(req.user.orgId)) {
-        return sendError(res, "Forbidden", 403, "FORBIDDEN");
-      }
-
-      if (run.status !== "calculated") {
+        const existing = await PayrollRun.findById(req.params.id).select("status orgId").lean();
+        if (!existing) {
+          return sendError(res, "Payroll run not found", 404, "NOT_FOUND");
+        }
+        if (!isSuperAdmin(req) && String(existing.orgId) !== String(req.user.orgId)) {
+          return sendError(res, "Forbidden", 403, "FORBIDDEN");
+        }
         return sendError(
           res,
           "Only calculated payroll runs can be approved",
-          400,
+          409,
           "INVALID_STATE"
         );
       }
-
-      run.status = "approved";
-      run.approvedBy = req.user.userId;
-      run.approvalDate = new Date();
-      await run.save();
 
       return sendSuccess(res, run, "Payroll approved successfully");
     } catch (error) {
@@ -671,28 +684,41 @@ router.put(
   authorize("super_admin", "admin", "hr"),
   asyncHandler(async (req, res) => {
     try {
-      const run = await PayrollRun.findById(req.params.id);
+      const orgFilter = isSuperAdmin(req)
+        ? {}
+        : { orgId: String(req.user.orgId) };
+
+      const run = await PayrollRun.findOneAndUpdate(
+        {
+          _id: req.params.id,
+          status: "approved",
+          ...orgFilter,
+        },
+        {
+          $set: {
+            status: "released",
+            releasedAt: new Date(),
+            releasedBy: req.user.userId,
+          },
+        },
+        { new: true }
+      );
+
       if (!run) {
-        return sendError(res, "Payroll run not found", 404, "NOT_FOUND");
-      }
-
-      if (!isSuperAdmin(req) && String(run.orgId) !== String(req.user.orgId)) {
-        return sendError(res, "Forbidden", 403, "FORBIDDEN");
-      }
-
-      if (run.status !== "approved") {
+        const existing = await PayrollRun.findById(req.params.id).select("status orgId").lean();
+        if (!existing) {
+          return sendError(res, "Payroll run not found", 404, "NOT_FOUND");
+        }
+        if (!isSuperAdmin(req) && String(existing.orgId) !== String(req.user.orgId)) {
+          return sendError(res, "Forbidden", 403, "FORBIDDEN");
+        }
         return sendError(
           res,
           "Only approved payroll runs can be marked paid",
-          400,
+          409,
           "INVALID_STATE"
         );
       }
-
-      run.status = "released";
-      run.releasedAt = new Date();
-      run.releasedBy = req.user.userId;
-      await run.save();
 
       return sendSuccess(res, run, "Payroll marked as paid successfully");
     } catch (error) {

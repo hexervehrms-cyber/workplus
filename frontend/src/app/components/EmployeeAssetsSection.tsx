@@ -3,7 +3,7 @@ import { Card } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Loader2, Package, Laptop, DollarSign, Calendar, MapPin, Plus } from 'lucide-react';
-import { getBearerToken } from '../utils/apiHelper';
+import { apiGet } from '../utils/apiHelper';
 
 interface Asset {
   _id: string;
@@ -45,17 +45,11 @@ export default function EmployeeAssetsSection({ employeeId, isAdmin = false, onA
     try {
       setLoading(true);
 
-      const response = await fetch(`/api/assets/employee/${employeeId}`, {
-        headers: {
-          'Authorization': `Bearer ${getBearerToken() || ''}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to fetch assets');
-
-      const data = await response.json();
-      setAssets(data.data.assets || []);
-      setTotalValue(data.data.totalValue || 0);
+      const data = await apiGet<{
+        data?: { assets?: Asset[]; totalValue?: number };
+      }>(`assets/employee/${employeeId}`, false);
+      setAssets(data?.data?.assets || []);
+      setTotalValue(data?.data?.totalValue || 0);
     } catch (error) {
       console.error('Error fetching assets:', error);
     } finally {

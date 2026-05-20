@@ -17,7 +17,7 @@ import {
   AlertCircle,
   Calendar,
 } from 'lucide-react';
-import { buildApiUrl, getBearerToken } from '../utils/apiHelper';
+import { apiDelete, apiGet, apiPost } from '../utils/apiHelper';
 import { useAuth } from '../context/AuthContext';
 import { toast } from '../utils/portalToast';
 import { downloadCompanyGeneratedDocument } from '../utils/documentFile';
@@ -99,25 +99,17 @@ const DocumentGenerator: React.FC<{ isSuperAdmin?: boolean }> = ({ isSuperAdmin 
     }
     try {
       setLoadingEmployees(true);
-      const token = getBearerToken();
       const params = new URLSearchParams();
       params.set('limit', '500');
       params.set('simple', 'true');
       if (isSuperAdmin && effectiveOrgId) {
         params.set('orgId', effectiveOrgId);
       }
-      const response = await fetch(buildApiUrl(`/employees?${params.toString()}`), {
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-      if (!response.ok) {
-        setEmployees([]);
-        return;
-      }
-      const json = await response.json();
-      const list = Array.isArray(json.data) ? json.data : Array.isArray(json) ? json : [];
+      const json = await apiGet<{ data?: unknown[] }>(
+        `employees?${params.toString()}`,
+        false
+      );
+      const list = Array.isArray(json?.data) ? json.data : [];
       const mapped: EmployeeOption[] = (list as Record<string, unknown>[])
         .map((emp) => {
           const userId = String(
@@ -151,22 +143,11 @@ const DocumentGenerator: React.FC<{ isSuperAdmin?: boolean }> = ({ isSuperAdmin 
     if (!effectiveOrgId) return;
     try {
       setLoadingDocuments(true);
-      const token = getBearerToken();
-      const response = await fetch(
-        buildApiUrl(`/documents/organization/${encodeURIComponent(effectiveOrgId)}`),
-        {
-          credentials: 'include',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        }
+      const json = await apiGet<{ data?: unknown[] }>(
+        `documents/organization/${encodeURIComponent(effectiveOrgId)}`,
+        false
       );
-      if (!response.ok) {
-        setGeneratedDocuments([]);
-        return;
-      }
-      const json = await response.json();
-      const rows = Array.isArray(json.data) ? json.data : [];
+      const rows = Array.isArray(json?.data) ? json.data : [];
       setGeneratedDocuments(
         rows.map((d: Record<string, unknown>) => {
           const customId = typeof d.id === 'string' && d.id ? String(d.id) : '';
@@ -245,32 +226,16 @@ const DocumentGenerator: React.FC<{ isSuperAdmin?: boolean }> = ({ isSuperAdmin 
     setError('');
 
     try {
-      const token = getBearerToken();
-      const response = await fetch(buildApiUrl('/documents/digital-generate'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          title,
-          description: template?.description || selectedTemplate,
-          content: buildContentFromForm(),
-          category: selectedTemplate,
-          organizationId: effectiveOrgId,
-          assignTo: 'specific',
-          targetUsers: [selectedUserId],
-          requiresAcknowledgment: true,
-        }),
+      await apiPost('documents/digital-generate', {
+        title,
+        description: template?.description || selectedTemplate,
+        content: buildContentFromForm(),
+        category: selectedTemplate,
+        organizationId: effectiveOrgId,
+        assignTo: 'specific',
+        targetUsers: [selectedUserId],
+        requiresAcknowledgment: true,
       });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        setError((data as { message?: string }).message || 'Failed to generate document');
-        return;
-      }
 
       setSelectedTemplate('');
       setSelectedUserId('');
@@ -289,25 +254,9 @@ const DocumentGenerator: React.FC<{ isSuperAdmin?: boolean }> = ({ isSuperAdmin 
     if (!customId || !confirm('Delete this generated document?')) return;
 
     try {
-      const token = getBearerToken();
-      const response = await fetch(
-        buildApiUrl(`/documents/generated/${encodeURIComponent(customId)}`),
-        {
-          method: 'DELETE',
-          credentials: 'include',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        }
-      );
-
-      if (response.ok) {
-        setGeneratedDocuments((prev) => prev.filter((d) => d.id !== customId));
-        toast.success('Document deleted');
-      } else {
-        const data = await response.json().catch(() => ({}));
-        toast.error((data as { message?: string }).message || 'Failed to delete document');
-      }
+      await apiDelete(`documents/generated/${encodeURIComponent(customId)}`);
+      setGeneratedDocuments((prev) => prev.filter((d) => d.id !== customId));
+      toast.success('Document deleted');
     } catch (err) {
       toast.error('Network error');
       console.error(err);

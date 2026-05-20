@@ -4,7 +4,9 @@ const sessionSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     orgId: { type: String, required: true, index: true },
-    socketId: { type: String, required: true },
+    socketId: { type: String, default: null },
+    /** All live Socket.IO connection ids for this user (multi-tab). */
+    socketIds: { type: [String], default: [] },
     userAgent: { type: String },
     ipAddress: { type: String },
     role: { type: String },

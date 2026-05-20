@@ -226,27 +226,49 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     resolvedHourly = false;
   }
 
-  if (leaveType) leaveRequest.type = leaveType;
-  if (startDate) leaveRequest.startDate = new Date(startDate);
-  if (endDate) leaveRequest.endDate = new Date(endDate);
-  if (reason) leaveRequest.reason = reason;
-
-  leaveRequest.isHalfDay = resolvedHalfDay;
-  leaveRequest.halfDaySession = resolvedHalfSession;
-  leaveRequest.isHourlyLeave = resolvedHourly;
+  const patchSet = {
+    isHalfDay: resolvedHalfDay,
+    halfDaySession: resolvedHalfSession,
+    isHourlyLeave: resolvedHourly,
+  };
+  if (leaveType) patchSet.type = leaveType;
+  if (startDate) patchSet.startDate = new Date(startDate);
+  if (endDate) patchSet.endDate = new Date(endDate);
+  if (reason) patchSet.reason = reason;
   if (resolvedHourly) {
-    if (startTime) leaveRequest.startTime = startTime;
-    if (endTime) leaveRequest.endTime = endTime;
+    if (startTime) patchSet.startTime = startTime;
+    if (endTime) patchSet.endTime = endTime;
   } else {
-    leaveRequest.startTime = undefined;
-    leaveRequest.endTime = undefined;
+    patchSet.startTime = undefined;
+    patchSet.endTime = undefined;
   }
 
-  await leaveRequest.save();
+  const version = leaveRequest.__v;
+  const updated = await LeaveRequest.findOneAndUpdate(
+    {
+      _id: id,
+      orgId: req.user.orgId,
+      status: 'pending',
+      __v: version,
+    },
+    {
+      $set: patchSet,
+      $inc: { __v: 1 },
+    },
+    { new: true }
+  );
+
+  if (!updated) {
+    return res.status(409).json({
+      success: false,
+      message: 'Leave request was modified by another user. Please refresh and try again.',
+      code: 'VERSION_CONFLICT',
+    });
+  }
 
   logger.info('Leave request updated', {
     leaveRequestId: id,
-    employeeId: leaveRequest.employeeId,
+    employeeId: updated.employeeId,
     orgId: req.user.orgId,
     userId: req.user.userId
   });
@@ -254,7 +276,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   res.json({
     success: true,
     message: 'Leave request updated successfully',
-    data: { leaveRequest }
+    data: { leaveRequest: updated }
   });
 }));
 

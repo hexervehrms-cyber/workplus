@@ -603,9 +603,9 @@ import {
 /** Authenticated API routes that require a real tenant org (non–super_admin). */
 const authedTenant = [authenticate, validateOrgId];
 
-// Registration keeps legacy 24h access-token flow (self-service signup); login uses routes/auth.js (15m + refresh + Redis session)
+// Registration: invite-only (OnboardingLink token), role fixed to employee — no client-supplied role/orgId
 app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) => {
-  const { name, email, password, role, organization, orgId: bodyOrgId } = req.body;
+  const { name, email, password, inviteToken } = req.body;
 
   if (!name || !email || !password) {
     return res.status(400).json({
@@ -614,7 +614,56 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
     });
   }
 
+  if (!inviteToken || typeof inviteToken !== 'string') {
+    return res.status(400).json({
+      success: false,
+      message: 'A valid invite token is required to register',
+      code: 'INVITE_REQUIRED'
+    });
+  }
+
+  const invite = await OnboardingLink.findOne({ token: inviteToken.trim() });
+  if (!invite) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or expired invite',
+      code: 'INVALID_INVITE'
+    });
+  }
+  if (invite.isUsed) {
+    return res.status(400).json({
+      success: false,
+      message: 'This invite has already been used',
+      code: 'INVITE_USED'
+    });
+  }
+  if (invite.expiresAt && new Date(invite.expiresAt) < new Date()) {
+    return res.status(400).json({
+      success: false,
+      message: 'This invite has expired',
+      code: 'INVITE_EXPIRED'
+    });
+  }
+
   const emailNorm = email.toLowerCase().trim();
+  const inviteEmail = String(invite.employeeEmail || '').toLowerCase().trim();
+  if (inviteEmail && inviteEmail !== emailNorm) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email does not match the invite',
+      code: 'INVITE_EMAIL_MISMATCH'
+    });
+  }
+
+  const inviteOrgId = String(invite.organizationId || '').trim();
+  if (!inviteOrgId || inviteOrgId === 'ORG-DEFAULT') {
+    return res.status(400).json({
+      success: false,
+      message: 'Invite is missing a valid organization',
+      code: 'INVALID_INVITE_ORG'
+    });
+  }
+
   const existingUser = await User.findOne({ email: emailNorm });
   if (existingUser) {
     return res.status(400).json({
@@ -628,9 +677,10 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
     name,
     email: emailNorm,
     password: hashedPassword,
-    role: role || 'employee',
-    organization: organization || 'WorkPlus Inc.',
-    ...(bodyOrgId ? { orgId: String(bodyOrgId) } : {})
+    role: 'employee',
+    organization: invite.organizationName || 'WorkPlus Inc.',
+    orgId: inviteOrgId,
+    tenantId: inviteOrgId
   });
 
   const authOrg = normalizeAuthOrgId(user);
@@ -638,10 +688,13 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
     await User.deleteOne({ _id: user._id });
     return res.status(400).json({
       success: false,
-      message: 'orgId is required to register',
+      message: 'Invalid organization on invite',
       code: 'MISSING_ORG_CONTEXT'
     });
   }
+
+  invite.isUsed = true;
+  await invite.save();
 
   const token = jwt.sign(
     {
@@ -666,7 +719,7 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
     organization: user.organization || 'WorkPlus Inc.'
   };
 
-  io.emit('employee_created', userData);
+  io.to(`tenant_${authOrg}`).emit('employee_created', { ...userData, orgId: authOrg, tenantId: authOrg });
 
   res.status(201).json({
     success: true,
@@ -1016,44 +1069,23 @@ io.on('connection', (socket) => {
         // Allow multiple tabs/devices per user (sibling sockets are not disconnected)
 
         try {
-          console.log('📝 Updating session for user:', userId);
-          
-          // Try to find existing session from login
-          let session = await Session.findOne({
+          const { attachSocketToSession, countActiveSocketUsers } = await import(
+            './utils/sessionPresence.js'
+          );
+          const session = await attachSocketToSession({
             userId,
-            ...(tenantId ? { orgId: tenantId } : {}),
-            isActive: true,
-            socketId: null // Session created during login without socketId
-          }).catch(err => {
-            throw new Error(`Failed to query session: ${err.message}`);
+            orgId: tenantId,
+            role,
+            socketId: socket.id,
+            userAgent: socket.handshake.headers['user-agent'],
+            ipAddress: socket.handshake.address,
           });
-          
-          if (session) {
-            // Update existing session with socketId
-            session.socketId = socket.id;
-            session.connectTime = new Date();
-            await session.save().catch(err => {
-              throw new Error(`Failed to save session: ${err.message}`);
-            });
-            console.log('✅ Session updated with socketId:', session._id);
-            logger.info(`Session updated for user ${userId}`, { sessionId: session._id, socketId: socket.id });
-          } else {
-            // Create new session if not found (fallback)
-            session = await Session.create({
-              userId,
-              ...(tenantId ? { orgId: tenantId } : {}),
-              socketId: socket.id,
-              role,
-              isActive: true,
-              connectTime: new Date()
-            }).catch(err => {
-              throw new Error(`Failed to create session: ${err.message}`);
-            });
-            console.log('✅ New session created:', session._id);
-            logger.info(`New session created for user ${userId}`, { sessionId: session._id });
-          }
-          
           socket.sessionId = session._id;
+          logger.info(`Socket attached to session`, {
+            sessionId: session._id,
+            socketId: socket.id,
+            socketCount: session.socketIds?.length,
+          });
         } catch (err) {
           sessionError = err;
           console.error('❌ Session update error:', err.message);
@@ -1106,10 +1138,8 @@ io.on('connection', (socket) => {
           if (!tenantId) {
             return;
           }
-          const activeCount = await Session.countDocuments({
-            orgId: tenantId,
-            isActive: true
-          });
+          const { countActiveSocketUsers } = await import('./utils/sessionPresence.js');
+          const activeCount = await countActiveSocketUsers(tenantId);
 
           io.to(`tenant_${tenantId}`).emit('dashboard_update', {
             type: 'active_users_updated',
@@ -1403,13 +1433,13 @@ io.on('connection', (socket) => {
           tenantId: socket.tenantId
         });
 
-        // Mark session as inactive
         if (socket.sessionId) {
           try {
-            await Session.findByIdAndUpdate(socket.sessionId, {
-              isActive: false
-            });
-            logger.info(`Session marked inactive: ${socket.sessionId}`);
+            const { detachSocketFromSession, countActiveSocketUsers } = await import(
+              './utils/sessionPresence.js'
+            );
+            await detachSocketFromSession(socket.sessionId, socket.id);
+            logger.info(`Socket detached from session: ${socket.sessionId}`);
           } catch (sessionError) {
             logger.warn(`Failed to update session: ${sessionError.message}`);
           }
@@ -1421,10 +1451,8 @@ io.on('connection', (socket) => {
           if (!tenantId) {
             return;
           }
-          const activeCount = await Session.countDocuments({
-            orgId: tenantId,
-            isActive: true
-          });
+          const { countActiveSocketUsers } = await import('./utils/sessionPresence.js');
+          const activeCount = await countActiveSocketUsers(tenantId);
 
           io.to(`tenant_${tenantId}`).emit('dashboard_update', {
             type: 'active_users_updated',

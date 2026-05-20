@@ -12,8 +12,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '
 import { Plus, Edit, Trash2, Download, Check, X, Loader, ChevronsUpDown, Eye } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
 import { cn } from '../../components/ui/utils';
-import { apiGet, apiPost, apiPut, apiDelete, buildApiUrl, getBearerToken, appendOrgIdParam, resolveAuthOrgId } from '../../utils/apiHelper';
-import { TokenManager } from '../../utils/api';
+import { apiGet, apiPost, apiPut, apiDelete, apiFetchBlob, appendOrgIdParam, resolveAuthOrgId } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 import { OrgRequiredNotice } from '../../components/OrgRequiredNotice';
 import { ensureArray, safeFormatInr } from '../../utils/safeUi';
@@ -76,19 +75,9 @@ interface SalarySlip {
 }
 
 async function fetchSalarySlipBlob(slipId: string): Promise<Blob> {
-  const url = buildApiUrl(`salary/slip/${slipId}/download`);
-  const token = TokenManager.get();
-  const response = await fetch(url, {
-    credentials: 'include',
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      Accept: 'text/html,application/pdf,*/*',
-    },
+  return apiFetchBlob(`salary/slip/${slipId}/download`, {
+    headers: { Accept: 'text/html,application/pdf,*/*' },
   });
-  if (!response.ok) {
-    throw new Error(`Download failed with status ${response.status}`);
-  }
-  return response.blob();
 }
 
 export default function Payroll() {

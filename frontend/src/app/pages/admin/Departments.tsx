@@ -24,7 +24,9 @@ import {
   Users,
   ChevronRight,
 } from 'lucide-react';
-import { apiClient, ApiError, DepartmentService, extractApiList, type DepartmentRecord } from '../../utils/api';
+import { ApiError, DepartmentService, type DepartmentRecord } from '../../utils/api';
+import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiHelper';
+import { ensureAccessToken } from '../../utils/sessionAuth';
 import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
 
@@ -47,6 +49,17 @@ const emptyForm = {
   isActive: true,
 };
 
+const PREDEFINED_DEPARTMENTS = [
+  'Human Resources',
+  'Engineering',
+  'Finance',
+  'Sales',
+  'Marketing',
+  'Operations',
+  'Customer Support',
+  'Information Technology',
+] as const;
+
 function deptKey(dept: Department) {
   return dept._id || `name:${dept.name}`;
 }
@@ -67,6 +80,7 @@ export default function AdminDepartments() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [seeding, setSeeding] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -88,6 +102,7 @@ export default function AdminDepartments() {
     }
     try {
       setLoading(true);
+      await ensureAccessToken();
       const list = await DepartmentService.getAll({
         search: searchTerm.trim() || undefined,
         status: filterStatus,
@@ -110,14 +125,18 @@ export default function AdminDepartments() {
     async (dept: Department) => {
       setDetailLoading(true);
       try {
+        await ensureAccessToken();
         if (dept._id) {
           let url = `/departments/${dept._id}`;
           if (user?.role === 'super_admin' && tenantOrgId) {
             url += `?orgId=${encodeURIComponent(String(tenantOrgId))}`;
           }
-          const res = await apiClient.get<{ employees?: DeptEmployee[] } & Department>(url);
-          if (res.success && res.data) {
-            const data = res.data as { employees?: DeptEmployee[] } & Department;
+          const res = await apiGet<{
+            success?: boolean;
+            data?: { employees?: DeptEmployee[] } & Department;
+          }>(url);
+          if (res?.success && res.data) {
+            const data = res.data;
             setDetailEmployees(Array.isArray(data.employees) ? data.employees : []);
             return;
           }
@@ -214,6 +233,47 @@ export default function AdminDepartments() {
     setFormError(null);
   };
 
+  const handleSeedPredefined = async () => {
+    if (needsOrgContext) {
+      toast.error('Organization context is required before adding departments.');
+      return;
+    }
+    setSeeding(true);
+    try {
+      await ensureAccessToken();
+      let url = '/departments/seed-defaults';
+      if (user?.role === 'super_admin' && tenantOrgId) {
+        url += `?orgId=${encodeURIComponent(String(tenantOrgId))}`;
+      }
+      const res = await apiPost<{
+        success?: boolean;
+        message?: string;
+        data?: { created?: Department[]; skipped?: { name: string; reason: string }[] };
+      }>(url, {});
+      if (res?.success) {
+        const createdCount = res.data?.created?.length ?? 0;
+        toast.success(res.message || `Added ${createdCount} predefined department(s)`);
+        await loadDepartments();
+      } else {
+        throw new Error(res?.message || 'Failed to add predefined departments');
+      }
+    } catch (err: unknown) {
+      const msg =
+        err instanceof ApiError
+          ? err.getUserMessage()
+          : err instanceof Error
+            ? err.message
+            : 'Failed to add predefined departments';
+      toast.error(
+        msg.toLowerCase().includes('invalid credentials')
+          ? 'Your session expired. Please sign out, sign in again, then try again.'
+          : msg
+      );
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!formData.name.trim()) {
       const msg = 'Department name is required';
@@ -225,6 +285,7 @@ export default function AdminDepartments() {
     setFormError(null);
     setSaving(true);
     try {
+      await ensureAccessToken();
       const payload: Record<string, unknown> = {
         name: formData.name.trim(),
         description: formData.description.trim(),
@@ -238,8 +299,11 @@ export default function AdminDepartments() {
       }
 
       if (editingDepartment?._id) {
-        const res = await apiClient.put<Department>(`/departments/${editingDepartment._id}`, payload);
-        if (res.success) {
+        const res = await apiPut<{ success?: boolean; message?: string; data?: Department }>(
+          `/departments/${editingDepartment._id}`,
+          payload
+        );
+        if (res?.success) {
           toast.success('Department updated');
           closeForm();
           await loadDepartments();
@@ -249,11 +313,14 @@ export default function AdminDepartments() {
             void loadDepartmentDetail(updated);
           }
         } else {
-          throw new Error(res.message || 'Update failed');
+          throw new Error(res?.message || 'Update failed');
         }
       } else {
-        const res = await apiClient.post<Department>('/departments', payload);
-        if (res.success) {
+        const res = await apiPost<{ success?: boolean; message?: string; data?: Department }>(
+          '/departments',
+          payload
+        );
+        if (res?.success) {
           toast.success('Department created');
           closeForm();
           await loadDepartments();
@@ -261,16 +328,19 @@ export default function AdminDepartments() {
             setSelectedDept({ ...res.data, source: 'database' });
           }
         } else {
-          throw new Error(res.message || 'Create failed');
+          throw new Error(res?.message || 'Create failed');
         }
       }
     } catch (err: unknown) {
-      const msg =
+      let msg =
         err instanceof ApiError
           ? err.getUserMessage()
           : err instanceof Error
             ? err.message
             : 'Failed to save department';
+      if (msg.toLowerCase().includes('invalid credentials')) {
+        msg = 'Your session expired. Please sign out, sign in again, then create the department.';
+      }
       setFormError(msg);
       toast.error(msg);
     } finally {
@@ -282,8 +352,9 @@ export default function AdminDepartments() {
     if (!deletingDepartmentId) return;
     setSaving(true);
     try {
-      const res = await apiClient.delete(`/departments/${deletingDepartmentId}`);
-      if (res.success) {
+      await ensureAccessToken();
+      const res = await apiDelete<{ success?: boolean }>(`/departments/${deletingDepartmentId}`);
+      if (res?.success) {
         toast.success('Department deleted');
         setShowDeleteConfirm(false);
         setDeletingDepartmentId(null);
@@ -558,11 +629,65 @@ export default function AdminDepartments() {
           <h1 className="text-3xl font-bold">Departments</h1>
           <p className="text-muted-foreground">Live data from your organization and employee records</p>
         </div>
-        <Button type="button" className="rounded-xl" onClick={() => openAddForm()}>
-          <Plus className="w-4 h-4 mr-2" />
-          Create Department
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-xl"
+            onClick={() => void handleSeedPredefined()}
+            disabled={loading || seeding || needsOrgContext}
+          >
+            {seeding ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <Building2 className="w-4 h-4 mr-2" />
+            )}
+            Add predefined departments
+          </Button>
+          <Button type="button" className="rounded-xl" onClick={() => openAddForm()}>
+            <Plus className="w-4 h-4 mr-2" />
+            Create Department
+          </Button>
+        </div>
       </div>
+
+      {!needsOrgContext && (
+        <Card className="p-4 rounded-xl border-dashed">
+          <p className="text-sm font-medium mb-2">Quick add predefined departments</p>
+          <p className="text-xs text-muted-foreground mb-3">
+            Creates {PREDEFINED_DEPARTMENTS.join(', ')} for your organization (skips names that already exist).
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {PREDEFINED_DEPARTMENTS.map((name) => {
+              const exists = departments.some(
+                (d) => d.name.toLowerCase() === name.toLowerCase() && d.isActive !== false
+              );
+              return (
+                <Button
+                  key={name}
+                  type="button"
+                  size="sm"
+                  variant={exists ? 'secondary' : 'outline'}
+                  className="rounded-lg text-xs"
+                  disabled={exists || saving || seeding}
+                  onClick={() => openAddForm(name)}
+                >
+                  {exists ? `${name} ✓` : name}
+                </Button>
+              );
+            })}
+            <Button
+              type="button"
+              size="sm"
+              className="rounded-lg text-xs"
+              disabled={seeding || saving}
+              onClick={() => void handleSeedPredefined()}
+            >
+              {seeding ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Add all'}
+            </Button>
+          </div>
+        </Card>
+      )}
 
       {!loading && departments.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -610,11 +735,19 @@ export default function AdminDepartments() {
         </div>
       ) : filteredDepartments.length === 0 ? (
         <Card className="p-12 text-center rounded-xl">
-          <p className="text-muted-foreground mb-4">No departments yet. Create one or assign employees to a department.</p>
-          <Button type="button" onClick={() => openAddForm()}>
-            <Plus className="w-4 h-4 mr-2" />
-            Create Department
-          </Button>
+          <p className="text-muted-foreground mb-4">
+            No departments yet. Add predefined departments or create a custom one.
+          </p>
+          <div className="flex flex-wrap gap-2 justify-center">
+            <Button type="button" variant="outline" onClick={() => void handleSeedPredefined()} disabled={seeding}>
+              {seeding ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Building2 className="w-4 h-4 mr-2" />}
+              Add predefined departments
+            </Button>
+            <Button type="button" onClick={() => openAddForm()}>
+              <Plus className="w-4 h-4 mr-2" />
+              Create Department
+            </Button>
+          </div>
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

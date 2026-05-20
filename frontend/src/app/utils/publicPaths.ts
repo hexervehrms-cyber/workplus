@@ -7,7 +7,11 @@ export function isPublicBootstrapPath(pathname?: string): boolean {
 export function hasStoredSessionHint(): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    return !!(localStorage.getItem('token') || localStorage.getItem('authToken'));
+    return !!(
+      localStorage.getItem('wp_session_hint') === '1' ||
+      localStorage.getItem('token') ||
+      localStorage.getItem('authToken')
+    );
   } catch {
     return false;
   }

@@ -2,7 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Plus, Search, Filter, Edit, Trash2, X, Eye, AlertCircle, Loader2 } from 'lucide-react';
-import { apiClient, ApiError } from '../../utils/api';
+import { ApiError } from '../../utils/api';
+import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiHelper';
+import { ensureAccessToken } from '../../utils/sessionAuth';
 import { toast } from '../../utils/portalToast';
 import { PasswordInput } from '../../components/PasswordInput';
 
@@ -56,19 +58,24 @@ export default function AdminManagement() {
   const loadAdmins = async () => {
     try {
       setPageLoading(true);
-      const response = await apiClient.get<AdminUser[] | { users: AdminUser[] }>('/users?role=admin&isActive=true');
-      if (response.success && response.data) {
+      await ensureAccessToken();
+      const response = await apiGet<{
+        success?: boolean;
+        data?: AdminUser[] | { users?: AdminUser[] };
+      }>('/users?role=admin&isActive=true');
+      if (response?.success && response.data) {
         const data = response.data;
         const userList = Array.isArray(data) ? data : data.users ?? [];
         setAdmins(
           userList
-            .filter((user: any) => user.role === 'admin')
+            .filter((user: { role?: string }) => user.role === 'admin')
             .map(mapAdminUser)
         );
       }
     } catch (err) {
       console.error('Error loading admins:', err);
-      toast.error('Failed to load admin users');
+      const msg = err instanceof Error ? err.message : 'Failed to load admin users';
+      toast.error(msg);
     } finally {
       setPageLoading(false);
     }
@@ -101,16 +108,21 @@ export default function AdminManagement() {
     setError(null);
 
     try {
-      const response = await apiClient.post('/users', {
-        name: formData.name,
-        email: formData.email,
+      await ensureAccessToken();
+      const response = await apiPost<{
+        success?: boolean;
+        message?: string;
+        data?: unknown;
+      }>('/users', {
+        name: formData.name.trim(),
+        email: formData.email.trim().toLowerCase(),
         password: formData.password,
         role: 'admin',
         adminRole: formData.adminRole,
         isActive: true
       });
 
-      if (response.success) {
+      if (response?.success) {
         setShowAddForm(false);
         setFormData({
           name: '',
@@ -122,16 +134,19 @@ export default function AdminManagement() {
         toast.success('Admin user created successfully!');
         await loadAdmins();
       } else {
-        throw new Error(response.message || 'Failed to create admin user');
+        throw new Error(response?.message || 'Failed to create admin user');
       }
     } catch (err: unknown) {
       console.error('Error creating admin:', err);
-      const errorMsg =
-        err instanceof ApiError
-          ? err.getUserMessage()
-          : err instanceof Error
-            ? err.message
-            : 'Failed to create admin user';
+      let errorMsg = 'Failed to create admin user';
+      if (err instanceof ApiError) {
+        errorMsg = err.getUserMessage();
+      } else if (err instanceof Error) {
+        errorMsg = err.message;
+        if (errorMsg.toLowerCase().includes('invalid credentials')) {
+          errorMsg = 'Your session expired. Please sign out, sign in again, then create the admin.';
+        }
+      }
       setError(errorMsg);
       toast.error(errorMsg);
     } finally {
@@ -161,8 +176,9 @@ export default function AdminManagement() {
 
     setLoading(true);
     try {
-      const response = await apiClient.delete(`/users/${deletingUserId}`);
-      if (response.success) {
+      await ensureAccessToken();
+      const response = await apiDelete<{ success?: boolean }>(`/users/${deletingUserId}`);
+      if (response?.success) {
         setShowDeleteConfirm(false);
         setDeletingUserId(null);
         toast.success('Admin user deleted successfully');
@@ -204,9 +220,13 @@ export default function AdminManagement() {
         updateData.password = formData.password;
       }
 
-      const response = await apiClient.put(`/users/${editingUser._id}`, updateData);
+      await ensureAccessToken();
+      const response = await apiPut<{ success?: boolean; message?: string }>(
+        `/users/${editingUser._id}`,
+        updateData
+      );
 
-      if (response.success) {
+      if (response?.success) {
         setShowEditForm(false);
         setEditingUser(null);
         setFormData({

@@ -13,6 +13,7 @@ import { Plus, Edit, Trash2, Download, Check, X, Loader, ChevronsUpDown, Eye } f
 import { toast } from '../../utils/portalToast';
 import { cn } from '../../components/ui/utils';
 import { apiGet, apiPost, apiPut, apiDelete, apiFetchBlob, appendOrgIdParam, resolveAuthOrgId } from '../../utils/apiHelper';
+import { ensureAccessToken } from '../../utils/sessionAuth';
 import { useAuth } from '../../context/AuthContext';
 import { OrgRequiredNotice } from '../../components/OrgRequiredNotice';
 import { ensureArray, safeFormatInr } from '../../utils/safeUi';
@@ -80,6 +81,28 @@ async function fetchSalarySlipBlob(slipId: string): Promise<Blob> {
   });
 }
 
+type PayrollEmployeeOption = {
+  _id: string;
+  firstName?: string;
+  lastName?: string;
+  employeeCode?: string;
+  userId?: { name?: string; email?: string } | string;
+};
+
+function payrollEmployeeId(emp: { _id?: unknown; id?: unknown }): string {
+  return String(emp._id ?? emp.id ?? '');
+}
+
+function payrollEmployeeLabel(emp: PayrollEmployeeOption): string {
+  if (emp.firstName || emp.lastName) {
+    return [emp.firstName, emp.lastName].filter(Boolean).join(' ').trim();
+  }
+  const u = emp.userId;
+  if (u && typeof u === 'object' && u.name) return u.name;
+  if (emp.employeeCode) return emp.employeeCode;
+  return 'Employee';
+}
+
 export default function Payroll() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'structure' | 'slips'>('structure');
@@ -130,7 +153,7 @@ export default function Payroll() {
     otherDeductions: [] as SalaryField[]
   });
 
-  const [employees, setEmployees] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<PayrollEmployeeOption[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [autoCalculateEnabled, setAutoCalculateEnabled] = useState(false);
   const [ctc, setCtc] = useState(0);
@@ -281,10 +304,21 @@ export default function Payroll() {
   // Fetch employees
   const fetchEmployees = async () => {
     try {
-      const data = await apiGet<{ data?: unknown }>(appendOrgIdParam('/employees?simple=true&limit=1000', user), false);
-      setEmployees(ensureArray(data?.data));
+      await ensureAccessToken();
+      const data = await apiGet<{ data?: unknown }>(
+        appendOrgIdParam('/employees?simple=true&limit=1000', user),
+        false
+      );
+      const list = ensureArray<PayrollEmployeeOption>(data?.data)
+        .map((emp) => ({ ...emp, _id: payrollEmployeeId(emp) }))
+        .filter((emp) => emp._id);
+      setEmployees(list);
     } catch (error) {
       console.error('Error fetching employees:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to load employees for payroll'
+      );
+      setEmployees([]);
     }
   };
 
@@ -351,11 +385,16 @@ export default function Payroll() {
         fetchStructures();
       } else {
         console.error('❌ [SALARY] Error response:', data);
-        toast.error(data.message || `Failed to create salary structure`);
+        toast.error((data as { message?: string }).message || 'Failed to create salary structure');
       }
     } catch (error) {
       console.error('❌ [SALARY] Error creating structure:', error);
-      toast.error('Failed to create salary structure: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      toast.error(
+        msg.toLowerCase().includes('invalid credentials')
+          ? 'Your session expired. Please sign in again, then create the salary structure.'
+          : `Failed to create salary structure: ${msg}`
+      );
     } finally {
       setSubmitting(false);
     }
@@ -495,11 +534,16 @@ export default function Payroll() {
         setSlipYear(new Date().getFullYear());
         fetchSalarySlips();
       } else {
-        toast.error(data.message || 'Failed to generate salary slip');
+        toast.error((data as { message?: string }).message || 'Failed to generate salary slip');
       }
     } catch (error) {
       console.error('Error generating salary slip:', error);
-      toast.error('Failed to generate salary slip');
+      const msg = error instanceof Error ? error.message : 'Failed to generate salary slip';
+      toast.error(
+        msg.toLowerCase().includes('invalid credentials')
+          ? 'Your session expired. Please sign in again, then generate the slip.'
+          : msg
+      );
     } finally {
       setSlipGenerating(false);
     }
@@ -882,7 +926,8 @@ export default function Payroll() {
           <DialogHeader>
             <DialogTitle>Generate Salary Slip</DialogTitle>
             <DialogDescription>
-              Generate salary slip for an employee for a specific month
+              Generate a salary slip for a month. The employee must have an approved salary structure
+              (create one under Salary Structure, then approve it).
             </DialogDescription>
           </DialogHeader>
 
@@ -900,41 +945,39 @@ export default function Payroll() {
                     {slipEmployeeId
                       ? (() => {
                           const emp = employees.find((e) => e._id === slipEmployeeId);
-                          return emp 
-                            ? (emp.firstName && emp.lastName 
-                                ? `${emp.firstName} ${emp.lastName}`
-                                : emp.userId?.name || 'Unknown')
-                            : "Select employee...";
+                          return emp ? payrollEmployeeLabel(emp) : 'Select employee...';
                         })()
-                      : "Select employee..."}
+                      : 'Select employee...'}
                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-full p-0">
                   <Command>
                     <CommandInput placeholder="Search employee..." />
-                    <CommandEmpty>No employee found.</CommandEmpty>
+                    <CommandEmpty>No employees match your search.</CommandEmpty>
                     <CommandGroup>
                       {employees.map((emp) => {
-                        const empName = emp.firstName && emp.lastName 
-                          ? `${emp.firstName} ${emp.lastName}`
-                          : emp.userId?.name || 'Unknown';
+                        const empName = payrollEmployeeLabel(emp);
+                        const searchValue = `${empName} ${emp.employeeCode || ''}`.trim();
                         return (
                           <CommandItem
                             key={emp._id}
-                            value={emp._id}
-                            onSelect={(currentValue) => {
-                              setSlipEmployeeId(currentValue === slipEmployeeId ? "" : currentValue);
+                            value={searchValue}
+                            onSelect={() => {
+                              setSlipEmployeeId(emp._id);
                               setOpenSlipEmployeePopover(false);
                             }}
                           >
                             <Check
                               className={cn(
-                                "mr-2 h-4 w-4",
-                                slipEmployeeId === emp._id ? "opacity-100" : "opacity-0"
+                                'mr-2 h-4 w-4',
+                                slipEmployeeId === emp._id ? 'opacity-100' : 'opacity-0'
                               )}
                             />
                             {empName}
+                            {emp.employeeCode ? (
+                              <span className="ml-2 text-xs text-muted-foreground">{emp.employeeCode}</span>
+                            ) : null}
                           </CommandItem>
                         );
                       })}
@@ -1036,41 +1079,39 @@ export default function Payroll() {
                       {selectedEmployee
                         ? (() => {
                             const emp = employees.find((e) => e._id === selectedEmployee);
-                            return emp 
-                              ? (emp.firstName && emp.lastName 
-                                  ? `${emp.firstName} ${emp.lastName}`
-                                  : emp.userId?.name || 'Unknown')
-                              : "Select employee...";
+                            return emp ? payrollEmployeeLabel(emp) : 'Select employee...';
                           })()
-                        : "Select employee..."}
+                        : 'Select employee...'}
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-full p-0">
                     <Command>
                       <CommandInput placeholder="Search employee..." />
-                      <CommandEmpty>No employee found.</CommandEmpty>
+                      <CommandEmpty>No employees match your search.</CommandEmpty>
                       <CommandGroup>
                         {employees.map((emp) => {
-                          const empName = emp.firstName && emp.lastName 
-                            ? `${emp.firstName} ${emp.lastName}`
-                            : emp.userId?.name || 'Unknown';
+                          const empName = payrollEmployeeLabel(emp);
+                          const searchValue = `${empName} ${emp.employeeCode || ''}`.trim();
                           return (
                             <CommandItem
                               key={emp._id}
-                              value={emp._id}
-                              onSelect={(currentValue) => {
-                                setSelectedEmployee(currentValue === selectedEmployee ? "" : currentValue);
+                              value={searchValue}
+                              onSelect={() => {
+                                setSelectedEmployee(emp._id);
                                 setOpenStructureEmployeePopover(false);
                               }}
                             >
                               <Check
                                 className={cn(
-                                  "mr-2 h-4 w-4",
-                                  selectedEmployee === emp._id ? "opacity-100" : "opacity-0"
+                                  'mr-2 h-4 w-4',
+                                  selectedEmployee === emp._id ? 'opacity-100' : 'opacity-0'
                                 )}
                               />
                               {empName}
+                              {emp.employeeCode ? (
+                                <span className="ml-2 text-xs text-muted-foreground">{emp.employeeCode}</span>
+                              ) : null}
                             </CommandItem>
                           );
                         })}

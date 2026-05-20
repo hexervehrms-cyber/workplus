@@ -8,6 +8,8 @@ const DB_VERSION = 1;
 const STORE = 'auth';
 const KEY_ACCESS = 'accessToken';
 const KEY_REFRESH = 'refreshToken';
+/** Non-secret hint so bootstrap knows a session may exist in IndexedDB */
+const SESSION_HINT_KEY = 'wp_session_hint';
 
 let memoryRefreshToken: string | null = null;
 
@@ -84,10 +86,30 @@ async function persistAccessToken(token: string | null): Promise<void> {
   }
 }
 
+function setSessionHint(active: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (active) localStorage.setItem(SESSION_HINT_KEY, '1');
+    else localStorage.removeItem(SESSION_HINT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function hasSessionHint(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(SESSION_HINT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export function setAccessTokenMirror(token: string | null): void {
   memoryAccessToken = token && token.length > 0 ? token : null;
   void persistAccessToken(memoryAccessToken);
   if (memoryAccessToken) {
+    setSessionHint(true);
     void import('./clientSessionSync').then(({ broadcastTokenUpdated }) => {
       broadcastTokenUpdated();
     });
@@ -118,11 +140,13 @@ async function persistRefreshToken(token: string | null): Promise<void> {
 export function setRefreshTokenMirror(token: string | null): void {
   memoryRefreshToken = token && token.length > 0 ? token : null;
   void persistRefreshToken(memoryRefreshToken);
+  if (memoryRefreshToken) setSessionHint(true);
 }
 
 export function clearAccessTokenMirror(): void {
   memoryAccessToken = null;
   memoryRefreshToken = null;
+  setSessionHint(false);
   void persistAccessToken(null);
   void persistRefreshToken(null);
   void import('./clientSessionSync').then(({ broadcastUserSessionCleared }) => {

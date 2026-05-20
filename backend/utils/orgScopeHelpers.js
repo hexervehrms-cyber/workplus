@@ -1,6 +1,8 @@
 /**
  * Multi-tenant org scoping for Mongo queries.
  */
+import mongoose from "mongoose";
+import Employee from "../models/Employee.js";
 
 export function isSuperAdmin(req) {
   return req.user?.role === 'super_admin';
@@ -88,11 +90,56 @@ export function orgFilter(req, extra = {}) {
 }
 
 export function employeeLookupQuery(req, employeeId) {
+  const orgId = userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId;
   if (isSuperAdmin(req)) return { _id: employeeId };
-  return { _id: employeeId, orgId: String(req.user.orgId) };
+  return { _id: employeeId, orgId: String(orgId) };
 }
 
 export function structureLookupQuery(req, structureId) {
+  const orgId = userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId;
   if (isSuperAdmin(req)) return { _id: structureId };
-  return { _id: structureId, orgId: String(req.user.orgId) };
+  return { _id: structureId, orgId: String(orgId) };
+}
+
+/**
+ * Resolve an employee by Mongo _id or linked userId, with tenant checks for non–super_admin.
+ */
+export async function findScopedEmployee(req, employeeId) {
+  const id = String(employeeId || "").trim();
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+    return null;
+  }
+
+  const scopedOrg = userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId;
+
+  if (isSuperAdmin(req)) {
+    let emp = await Employee.findById(id).lean();
+    if (!emp) {
+      emp = await Employee.findOne({ userId: id }).lean();
+    }
+    return emp;
+  }
+
+  if (scopedOrg) {
+    const org = String(scopedOrg);
+    let emp = await Employee.findOne({ _id: id, orgId: org }).lean();
+    if (!emp) {
+      emp = await Employee.findOne({ userId: id, orgId: org }).lean();
+    }
+    if (emp) return emp;
+  }
+
+  const emp = await Employee.findById(id).lean();
+  if (!emp) {
+    const byUser = await Employee.findOne({ userId: id }).lean();
+    if (!byUser) return null;
+    if (scopedOrg && byUser.orgId && String(byUser.orgId) !== String(scopedOrg)) {
+      return null;
+    }
+    return byUser;
+  }
+  if (scopedOrg && emp.orgId && String(emp.orgId) !== String(scopedOrg)) {
+    return null;
+  }
+  return emp;
 }

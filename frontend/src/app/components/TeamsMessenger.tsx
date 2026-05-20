@@ -58,7 +58,13 @@ import {
 } from './ui/popover';
 import { apiClient } from '../utils/api';
 import { ensureArray } from '../utils/safeUi';
-import { buildFileUrl } from '../utils/apiHelper';
+import {
+  apiGet,
+  apiPost,
+  apiDelete,
+  buildFileUrl,
+  resolveAuthOrgId,
+} from '../utils/apiHelper';
 import { socketService as appSocket } from '../utils/socket';
 import { toast } from '../utils/portalToast';
 import { useAuth } from '../context/AuthContext';
@@ -238,9 +244,13 @@ export default function TeamsMessenger() {
       setSidebarError(null);
       const myId = myAuthId;
       const [usersRes, convRes, groupsRes] = await Promise.all([
-        apiClient.get<unknown>('/chat/users'),
-        apiClient.get<unknown>('/chat/conversations').catch(() => ({ success: false, data: [] })),
-        apiClient.get<unknown>('/chat/groups').catch(() => ({ success: false, data: [] })),
+        apiGet<{ success: boolean; data?: unknown; message?: string }>('/chat/users', false),
+        apiGet<{ success: boolean; data?: unknown }>('/chat/conversations', false).catch(
+          () => ({ success: false, data: [] })
+        ),
+        apiGet<{ success: boolean; data?: unknown }>('/chat/groups', false).catch(
+          () => ({ success: false, data: [] })
+        ),
       ]);
 
       if (!usersRes.success) {
@@ -370,7 +380,7 @@ export default function TeamsMessenger() {
           await appSocket.connect(
             myAuthId,
             user?.role || 'admin',
-            user?.orgId || user?.tenantId || undefined
+            resolveAuthOrgId(user) || undefined
           );
         }
 
@@ -382,6 +392,14 @@ export default function TeamsMessenger() {
         };
 
         appSocket.on('chat:group_created', onGroupCreated);
+
+        reg('chat:error', (data: { message?: string }) => {
+          if (cancelled) return;
+          const msg = data?.message || 'Could not send message';
+          toast.error(msg);
+          setMessages((prev) => prev.filter((m) => !m.messageId.startsWith('temp-')));
+          setSending(false);
+        });
 
         reg('chat:new_message', (data: {
           messageId: string;
@@ -632,11 +650,14 @@ export default function TeamsMessenger() {
 
     const linkTeamsChat = async () => {
       try {
-        const res = await apiClient.post<{ teamsChatId?: string }>('/chat/teams/create', {
-          recipientId: selectedUser.id,
-          topic: `WorkPlus — ${user?.name} & ${selectedUser.name}`,
-        });
-        const chatId = (res.data as { teamsChatId?: string })?.teamsChatId;
+        const res = await apiPost<{ success?: boolean; data?: { teamsChatId?: string } }>(
+          '/chat/teams/create',
+          {
+            recipientId: selectedUser.id,
+            topic: `WorkPlus — ${user?.name} & ${selectedUser.name}`,
+          }
+        );
+        const chatId = res.data?.teamsChatId;
         if (chatId) {
           setTeamsChatIds((prev) => ({ ...prev, [selectedUser.id]: chatId }));
         }
@@ -650,7 +671,7 @@ export default function TeamsMessenger() {
 
   // Handle sending message
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !selectedUser || !appSocket || !myAuthId) return;
+    if (!messageInput.trim() || !selectedUser || !myAuthId) return;
 
     try {
       setSending(true);
@@ -677,23 +698,38 @@ export default function TeamsMessenger() {
       const messageToSend = messageInput;
       setMessageInput('');
 
-      if (isGroup) {
-        appSocket.emit('chat:send_message', {
-          conversationId: selectedUser.conversationId,
-          content: messageToSend,
+      const teamsChatId = teamsChatIds[selectedUser.id];
+      const teamsIntegration = teamsChatId
+        ? { enabled: true, chatId: teamsChatId }
+        : undefined;
+
+      if (appSocket?.isConnected()) {
+        if (isGroup) {
+          appSocket.emit('chat:send_message', {
+            conversationId: selectedUser.conversationId,
+            content: messageToSend,
+            messageType: 'text',
+          });
+        } else {
+          appSocket.emit('chat:send_message', {
+            recipientId: selectedUser.id,
+            content: messageToSend,
+            messageType: 'text',
+            teamsIntegration,
+          });
+        }
+      } else if (isGroup && selectedUser.conversationId) {
+        await apiPost('/chat/messages', {
+          channelInfo: { channelId: selectedUser.conversationId, channelType: 'group' },
+          content: { text: messageToSend },
           messageType: 'text',
         });
       } else {
-        const teamsChatId = teamsChatIds[selectedUser.id];
-
-        // Socket persists and delivers (single source — avoids duplicate DB rows)
-        appSocket.emit('chat:send_message', {
+        await apiPost('/chat/messages', {
           recipientId: selectedUser.id,
-          content: messageToSend,
+          content: { text: messageToSend },
           messageType: 'text',
-          teamsIntegration: teamsChatId
-            ? { enabled: true, chatId: teamsChatId }
-            : undefined,
+          teamsIntegration,
         });
       }
     } catch (error) {
@@ -870,7 +906,7 @@ export default function TeamsMessenger() {
       return;
     }
     try {
-      await apiClient.delete(`/chat/messages/${messageId}`);
+      await apiDelete(`/chat/messages/${messageId}`);
       setMessages((prev) => prev.filter((m) => m.messageId !== messageId));
       toast.success('Message deleted');
     } catch {

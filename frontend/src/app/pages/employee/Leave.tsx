@@ -24,6 +24,7 @@ import { LeaveRequestService, LeaveAllocationService, EmployeeService, LeaveType
 import { resolveAuthOrgId } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
+import realTimeSocket from '../../utils/realTimeSocket';
 import {
   type LeaveBalanceMap,
   parseBalanceApiResponse,
@@ -178,6 +179,22 @@ export default function Leave() {
 
     fetchData();
   }, [authUserId, user?.employeeId]);
+
+  useEffect(() => {
+    const refetchLeaves = () => {
+      if (!authUserId) return;
+      void LeaveRequestService.getLeaveRequestsByUserId(authUserId).then((leaveResponse) => {
+        if (leaveResponse?.success && leaveResponse.data) {
+          const leaveData = Array.isArray(leaveResponse.data)
+            ? leaveResponse.data
+            : (leaveResponse.data as { data?: LeaveRequest[] }).data || [];
+          setLeaveHistory(leaveData);
+        }
+      });
+    };
+    const unsub = realTimeSocket.onLeaveUpdate(refetchLeaves);
+    return () => unsub();
+  }, [authUserId]);
 
   useEffect(() => {
     const refreshBalances = async () => {
@@ -357,7 +374,7 @@ export default function Leave() {
       // For new requests, check if there's enough balance
       // For editing, skip the balance check since leaves are already deducted
       const remaining = balance?.remaining ?? 0;
-      if (!editingLeaveId && (!balance || remaining < days)) {
+      if (hasLeaveAllocation && !editingLeaveId && balance && remaining < days) {
         toast.error(`Insufficient ${formData.type} balance. Available: ${remaining} days, Requested: ${days.toFixed(2)} days`);
         return;
       }
@@ -396,7 +413,7 @@ export default function Leave() {
         response = await LeaveRequestService.createLeaveRequest(leaveData);
       }
 
-      if (response?.success !== false) {
+      if (response?.success) {
         if (editingLeaveId) {
           toast.success('Leave request updated successfully');
         } else if (isHourly) {
@@ -449,7 +466,7 @@ export default function Leave() {
           }
         }
       } else {
-        toast.error(response.message || 'Failed to save leave request');
+        toast.error(response?.message || 'Failed to save leave request');
       }
     } catch (error) {
       console.error('Error saving leave request:', error);

@@ -88,6 +88,15 @@ export default function AttendanceAdmin() {
   const [exportPeriod, setExportPeriod] = useState<'weekly' | 'monthly' | 'yearly'>('monthly');
   const [exportStartDate, setExportStartDate] = useState<string>('');
   const [exportEndDate, setExportEndDate] = useState<string>('');
+
+  useEffect(() => {
+    if (exportStartDate && exportEndDate) return;
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const fmt = (d: Date) => d.toISOString().split('T')[0];
+    setExportStartDate(fmt(start));
+    setExportEndDate(fmt(now));
+  }, [exportStartDate, exportEndDate]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filteredAttendance, setFilteredAttendance] = useState<AttendanceRecord[]>([]);
   const [activityStartDate, setActivityStartDate] = useState<string>('');
@@ -249,6 +258,7 @@ export default function AttendanceAdmin() {
         `attendance/bulk-export?startDate=${exportStartDate}&endDate=${exportEndDate}`,
         {
           method: 'GET',
+          skipContentType: true,
           headers: { Accept: 'text/csv, application/json' },
         }
       );
@@ -263,6 +273,11 @@ export default function AttendanceAdmin() {
       }
 
       const csvContent = await response.text();
+      const trimmed = csvContent.trim();
+      if (trimmed.startsWith('{')) {
+        const errBody = JSON.parse(trimmed) as { message?: string };
+        throw new Error(errBody.message || 'Export failed');
+      }
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -582,7 +597,7 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
               variant="outline" 
               className="rounded-xl"
               onClick={handleExport}
-              disabled={exportLoading || !exportStartDate || !exportEndDate}
+              disabled={exportLoading}
             >
               <Download className="w-4 h-4 mr-2" />
               {exportLoading ? 'Exporting...' : 'Export'}

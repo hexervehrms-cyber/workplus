@@ -14,7 +14,7 @@ import {
   ensureAccessToken,
   refreshAccessToken,
   hydrateAccessToken,
-  setRefreshToken,
+  setRefreshToken as persistRefreshToken,
 } from './sessionAuth';
 import { getApiBaseUrl } from './apiBaseUrl';
 
@@ -53,18 +53,28 @@ export class ApiError extends Error {
         return 'Service temporarily unavailable. Please try again in a moment.';
       case 'INVALID_TOKEN':
       case 'TOKEN_EXPIRED':
-        return 'Your session has expired. Please log in again.';
+        return 'Your session has expired. Please sign in again.';
+      case 'NO_TOKEN':
+      case 'AUTH_REQUIRED':
+      case 'AUTH_FAILED':
+        return this.message || 'Please sign in again to continue.';
       case 'UNAUTHORIZED':
         return 'Invalid credentials. Please check your email and password.';
       case 'FORBIDDEN':
-        return 'You do not have permission to perform this action.';
+      case 'INSUFFICIENT_PERMISSIONS':
+      case 'PERMISSION_DENIED':
+        return this.message || 'You do not have permission to perform this action.';
       case 'VALIDATION_ERROR':
         return this.message || 'Please check your input and try again.';
       case 'NETWORK_ERROR':
         return 'Unable to connect to server. Please check your internet connection.';
       default:
-        if (this.status === 401) return 'Invalid credentials. Please try again.';
-        if (this.status === 403) return 'Access denied.';
+        if (this.status === 401) {
+          return this.message || 'Please sign in again to continue.';
+        }
+        if (this.status === 403) {
+          return this.message || 'Access denied.';
+        }
         if (this.status === 404) return 'Resource not found.';
         if (this.status === 429) return 'Too many requests. Please wait a moment.';
         if (this.status && this.status >= 500) return 'Server error. Please try again later.';
@@ -96,10 +106,6 @@ export const TokenManager = {
     return getRefreshTokenMirror();
   },
   
-  setRefreshToken(refreshToken: string): void {
-    // Refresh token is set as httpOnly cookie by backend
-  },
-  
   remove(): void {
     // Cookies are cleared by backend on logout
   },
@@ -120,7 +126,7 @@ export const TokenManager = {
   },
 
   setRefresh(token: string): void {
-    setRefreshToken(token);
+    persistRefreshToken(token);
   },
 
   /** Remove only access tokens (keep user + refresh) — use when session uses httpOnly access cookie. */
@@ -196,17 +202,9 @@ export class ApiClient {
         if (refreshed) {
           authToken = refreshed;
           TokenManager.set(refreshed);
-        } else {
-          const refreshService = new TokenRefreshService();
-          const refreshResult = await refreshService.refreshToken();
-          if (refreshResult.success && refreshResult.data?.token) {
-            authToken = refreshResult.data.token;
-            TokenManager.set(authToken);
-          }
-          // Keep going with credentials + optional stale bearer; do not force logout here
         }
-      } catch (err) {
-        if (err instanceof ApiError) throw err;
+      } catch {
+        /* keep going with credentials:include */
       }
     }
 
@@ -467,6 +465,7 @@ export class AuthService {
 
   static async getCurrentUser() {
     try {
+      await ensureAccessToken();
       const response = await apiClient.get<any>('/auth/me');
       
       if (response.success && response.data) {
@@ -648,12 +647,15 @@ export class DepartmentService {
     status?: 'active' | 'inactive' | 'all';
     orgId?: string;
   }): Promise<DepartmentRecord[]> {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
     const params = new URLSearchParams();
     if (options?.search?.trim()) params.set('search', options.search.trim());
     if (options?.status && options.status !== 'active') params.set('status', options.status);
     if (options?.orgId) params.set('orgId', options.orgId);
     const qs = params.toString();
-    const response = await apiClient.get<unknown>(`/departments${qs ? `?${qs}` : ''}`);
+    const response = await apiGet<unknown>(`/departments${qs ? `?${qs}` : ''}`);
     return extractApiList<DepartmentRecord>(response);
   }
 
@@ -661,13 +663,16 @@ export class DepartmentService {
     departmentName: string,
     orgId?: string
   ): Promise<unknown[]> {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
     const params = new URLSearchParams({
       department: departmentName,
       simple: 'true',
       limit: '500',
     });
     if (orgId) params.set('orgId', orgId);
-    const response = await apiClient.get<unknown>(`/employees?${params.toString()}`);
+    const response = await apiGet<unknown>(`/employees?${params.toString()}`);
     return extractApiList(response);
   }
 }
@@ -736,29 +741,54 @@ export function extractApiList<T = unknown>(response: unknown): T[] {
 // ============================================
 export class LeaveRequestService {
   static async getAllLeaveRequests() {
-    const response = await apiClient.get<any>('/leave-requests?limit=500');
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    const response = await apiGet<{ success?: boolean; data?: unknown }>(
+      '/leave-requests?limit=500',
+      false
+    );
     return extractApiList(response);
   }
 
   static async getLeaveRequestsByUserId(userId: string) {
-    const response = await apiClient.get<any>(`/leave-requests/user/${userId}`);
-    // Return the full response so frontend can access response.success and response.data
-    return response;
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiGet<{ success?: boolean; data?: unknown }>(
+      `/leave-requests/user/${userId}?limit=200`,
+      false
+    );
   }
 
   static async createLeaveRequest(leaveData: any) {
-    const response = await apiClient.post<any>('/leave-requests', leaveData);
-    return response;
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; message?: string; data?: unknown }>(
+      '/leave-requests',
+      leaveData
+    );
   }
 
   static async approveLeaveRequest(requestId: string, data?: any) {
-    const response = await apiClient.patch<any>(`/leave-requests/${requestId}/approve`, data || {});
-    return response.data;
+    const { apiPatch } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPatch<{ success?: boolean; message?: string; data?: unknown }>(
+      `/leave-requests/${requestId}/approve`,
+      data || {}
+    );
   }
 
   static async rejectLeaveRequest(requestId: string, data?: any) {
-    const response = await apiClient.patch<any>(`/leave-requests/${requestId}/reject`, data || {});
-    return response.data;
+    const { apiPatch } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPatch<{ success?: boolean; message?: string; data?: unknown }>(
+      `/leave-requests/${requestId}/reject`,
+      data || {}
+    );
   }
 
   static async bulkApproveLeaveRequests(requestIds: string[]) {
@@ -943,7 +973,9 @@ export class TokenRefreshService {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        TokenManager.clear();
+        if (response.status === 401 || response.status === 403) {
+          TokenManager.clear();
+        }
         throw new ApiError(
           data.message || 'Token refresh failed',
           response.status,
@@ -953,6 +985,9 @@ export class TokenRefreshService {
 
       if (data.data?.accessToken) {
         TokenManager.set(data.data.accessToken);
+      }
+      if (data.data?.refreshToken) {
+        TokenManager.setRefresh(data.data.refreshToken);
       }
       if (data.data?.user) {
         TokenManager.setUser(data.data.user);

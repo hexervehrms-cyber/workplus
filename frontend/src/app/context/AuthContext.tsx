@@ -4,11 +4,12 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { AuthService, TokenManager, ApiError, TokenRefreshService } from '../utils/api';
+import { AuthService, TokenManager, ApiError } from '../utils/api';
 import { socketService, ConnectionState } from '../utils/socket';
 import realTimeSocket from '../utils/realTimeSocket';
 import { clearApiCache, clearAllHolidayCaches } from '../utils/apiHelper';
-import { ensureAccessToken } from '../utils/sessionAuth';
+import { ensureAccessToken, refreshAccessToken, hydrateAccessToken } from '../utils/sessionAuth';
+import { getRefreshTokenMirror } from '../utils/sessionAccessMirror';
 import { clearPersistedAttendance } from '../utils/attendancePersistence';
 import { clearUserScopedLocalStorage } from '../utils/userScopedStorage';
 import { broadcastUserSessionCleared } from '../utils/clientSessionSync';
@@ -43,8 +44,8 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Session check interval (15 minutes) — proactive refresh / expiry warnings only
-const SESSION_CHECK_INTERVAL = 15 * 60 * 1000;
+// Proactive JWT refresh (access token TTL is 15m on server)
+const SESSION_CHECK_INTERVAL = 4 * 60 * 1000;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -86,6 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem('authToken');
       localStorage.removeItem('token');
       localStorage.removeItem('refreshToken');
+      localStorage.removeItem('wp_session_hint');
       localStorage.removeItem('cached_holidays');
       clearAllHolidayCaches();
 
@@ -168,13 +170,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
 
     const tryRefreshAccessToken = async (): Promise<boolean> => {
-      try {
-        const svc = new TokenRefreshService();
-        const result = await svc.refreshToken();
-        return !!(result.success && result.data?.token);
-      } catch {
-        return false;
-      }
+      const token = await refreshAccessToken();
+      return !!token;
     };
 
     const finish = (sessionUser: User | null) => {
@@ -201,7 +198,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (
           isPublicBootstrapPath() &&
           !TokenManager.get() &&
-          !hasStoredSessionHint()
+          !hasStoredSessionHint() &&
+          !getRefreshTokenMirror()
         ) {
           finish(null);
           return;
@@ -209,8 +207,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         try {
           let currentUser = await fetchCurrentUser();
-          if (!currentUser && TokenManager.get()) {
-            currentUser = await AuthService.getCurrentUser();
+          if (!currentUser && (TokenManager.get() || getRefreshTokenMirror())) {
+            await tryRefreshAccessToken();
+            await ensureAccessToken();
+            currentUser = await fetchCurrentUser();
           }
           if (currentUser) {
             if (!TokenManager.get()) {
@@ -251,6 +251,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 finish(null);
                 return;
               }
+            } else if (getRefreshTokenMirror()) {
+              console.warn('[AUTH] Refresh token present but session restore failed');
+              setUser(null);
+              finish(null);
+              return;
             } else {
               console.log('Token refresh failed, no session');
               setUser(null);
@@ -259,6 +264,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
           } else {
             console.warn('Could not verify session with backend:', error);
+            if (getRefreshTokenMirror()) {
+              const recovered = await tryRefreshAccessToken();
+              if (recovered) {
+                try {
+                  const retryUser = await fetchCurrentUser();
+                  if (retryUser) {
+                    await ensureAccessToken();
+                    setUser(retryUser);
+                    userForSocket = retryUser;
+                    finish(userForSocket);
+                    return;
+                  }
+                } catch {
+                  /* fall through */
+                }
+              }
+            }
           }
         }
       } catch (error) {
@@ -282,46 +304,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user) return;
 
-    const tryRefreshAccessToken = async (): Promise<boolean> => {
-      try {
-        const svc = new TokenRefreshService();
-        const result = await svc.refreshToken();
-        return !!(result.success && result.data?.token);
-      } catch {
-        return false;
-      }
-    };
-
     const checkSession = () => {
       void (async () => {
-        const token = TokenManager.get();
-        if (!token) {
+        await hydrateAccessToken();
+        if (!TokenManager.get() && !getRefreshTokenMirror()) {
           return;
         }
-
         try {
-          const payload = JSON.parse(atob(token.split('.')[1]));
-          const exp = payload.exp * 1000;
-
-          const timeUntilExpiry = exp - Date.now();
-          if (Date.now() >= exp) {
-            const refreshed = await tryRefreshAccessToken();
-            if (!refreshed) {
-              const recovered = await ensureAccessToken();
-              if (!recovered) {
-                console.warn('[AUTH] Session expired; sign in again when API calls fail.');
-              }
-            }
-          }
+          await ensureAccessToken();
         } catch (error) {
-          console.error('Session check error (ignored; not forcing logout):', error);
+          console.warn('[AUTH] Proactive refresh failed (not logging out):', error);
         }
       })();
     };
 
     const interval = setInterval(checkSession, SESSION_CHECK_INTERVAL);
     return () => clearInterval(interval);
-  }, [user, performLogout]);
+  }, [user]);
 
   // Login function
   const login = useCallback(async (email: string, password: string) => {

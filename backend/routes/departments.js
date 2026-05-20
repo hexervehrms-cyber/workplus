@@ -16,6 +16,18 @@ const slugCode = (name) =>
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Standard departments for new organizations */
+const DEFAULT_DEPARTMENTS = [
+  { name: "Human Resources", code: "HR", description: "Recruitment, policies, and employee relations" },
+  { name: "Engineering", code: "ENG", description: "Product development and technical teams" },
+  { name: "Finance", code: "FIN", description: "Accounting, payroll, and financial planning" },
+  { name: "Sales", code: "SALES", description: "Revenue and customer acquisition" },
+  { name: "Marketing", code: "MKT", description: "Brand, growth, and communications" },
+  { name: "Operations", code: "OPS", description: "Day-to-day business operations" },
+  { name: "Customer Support", code: "CS", description: "Client service and support" },
+  { name: "Information Technology", code: "IT", description: "Infrastructure and internal systems" },
+];
+
 async function attachEmployeeCounts(departments, orgId) {
   const names = departments.map((d) => d.name).filter(Boolean);
   if (!names.length) return departments;
@@ -115,6 +127,73 @@ router.get(
     departments.sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
     res.json({ success: true, data: departments });
+  })
+);
+
+/**
+ * POST /api/departments/seed-defaults — create standard departments (skips existing names)
+ */
+router.post(
+  "/seed-defaults",
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
+
+    const created = [];
+    const skipped = [];
+
+    for (const def of DEFAULT_DEPARTMENTS) {
+      const trimmedName = String(def.name).trim();
+      const deptCode = String(def.code).trim().toUpperCase();
+
+      const nameExists = await Department.findOne({
+        orgId,
+        name: {
+          $regex: new RegExp(`^${escapeRegex(trimmedName)}$`, "i"),
+        },
+        isActive: true,
+      });
+      if (nameExists) {
+        skipped.push({ name: trimmedName, reason: "already_exists" });
+        continue;
+      }
+
+      const codeExists = await Department.findOne({
+        orgId,
+        code: deptCode,
+        isActive: true,
+      });
+      if (codeExists) {
+        skipped.push({ name: trimmedName, reason: "code_in_use" });
+        continue;
+      }
+
+      const department = await Department.create({
+        name: trimmedName,
+        code: deptCode,
+        description: def.description || "",
+        headName: "",
+        orgId,
+        isActive: true,
+        createdBy: req.user.userId || req.user.id,
+      });
+      created.push(department);
+    }
+
+    const createdLean = await attachEmployeeCounts(
+      created.map((d) => d.toObject()),
+      orgId
+    );
+
+    res.status(201).json({
+      success: true,
+      message:
+        created.length > 0
+          ? `Created ${created.length} department(s)${skipped.length ? `, skipped ${skipped.length} existing` : ""}`
+          : "All predefined departments already exist",
+      data: { created: createdLean, skipped },
+    });
   })
 );
 

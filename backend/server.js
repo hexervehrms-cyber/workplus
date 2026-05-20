@@ -1044,6 +1044,20 @@ io.on('connection', (socket) => {
     socket.tenantId = socketTenantIdFromDecoded(decoded);
     socket.email = decoded.email;
 
+    if (!socket.tenantId && socket.userId) {
+      User.findById(socket.userId)
+        .select('orgId tenantId organizationId role')
+        .lean()
+        .then((u) => {
+          const resolved = normalizeAuthOrgId(u);
+          if (resolved) {
+            socket.tenantId = resolved;
+            logger.info(`Socket tenant resolved from user record`, { userId: socket.userId });
+          }
+        })
+        .catch(() => {});
+    }
+
     // Session setup — identity comes only from verified JWT (connection), not client payload
     socket.on('authenticate', async (data) => {
       let sessionError = null;

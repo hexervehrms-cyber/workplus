@@ -245,21 +245,40 @@ router.post("/",
       });
     }
     
-    // Role validation - users can't create roles higher than their own
+    const targetRoleKey = String(role || 'employee').toLowerCase();
+
+    if (userRole !== 'super_admin' && targetRoleKey === 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only super admin can create super admin accounts',
+        code: 'INSUFFICIENT_PERMISSIONS'
+      });
+    }
+
+    // Role validation — org admin/HR may create peer admin accounts
     if (userRole !== 'super_admin') {
-      const currentUserRole = await Role.findOne({ 
-        name: userRole.toUpperCase(), 
-        orgId 
+      const currentUserRole = await Role.findOne({
+        name: userRole.toUpperCase(),
+        orgId
       });
-      const targetRole = await Role.findOne({ 
-        name: role.toUpperCase(), 
-        orgId 
+      const targetRole = await Role.findOne({
+        name: role.toUpperCase(),
+        orgId
       });
-      
-      if (targetRole && currentUserRole && targetRole.level > currentUserRole.level) {
+
+      const creatorCanAddOrgAdmin =
+        ['admin', 'hr'].includes(userRole) && targetRoleKey === 'admin';
+
+      if (
+        !creatorCanAddOrgAdmin &&
+        targetRole &&
+        currentUserRole &&
+        targetRole.level > currentUserRole.level
+      ) {
         return res.status(403).json({
           success: false,
-          message: "Cannot create user with role higher than your own"
+          message: 'Cannot create user with role higher than your own',
+          code: 'INSUFFICIENT_PERMISSIONS'
         });
       }
     }

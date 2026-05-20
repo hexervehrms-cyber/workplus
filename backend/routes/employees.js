@@ -133,7 +133,7 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
   const { page, limit, skip } = req.pagination;
   const { status, department, search, simple } = req.query;
   const userRole = req.user.role;
-  const userOrgId = req.user.orgId;
+  const userOrgId = req.validatedOrgId || req.user.orgId;
 
   // Build query based on role
   let query = {};

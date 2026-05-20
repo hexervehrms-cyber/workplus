@@ -258,8 +258,16 @@ router.get(
         queryUserId = new mongoose.Types.ObjectId(userId);
       }
 
-      // CRITICAL: Enforce orgId validation - users can only access their organization's data
-      const query = { userId: queryUserId, orgId: req.user.orgId };
+      const orgId =
+        req.validatedOrgId ||
+        req.user.orgId ||
+        req.user.tenantId ||
+        req.user.organizationId;
+      if (!orgId || String(orgId) === 'system') {
+        return sendError(res, 'Organization context required', 400, 'MISSING_ORG_CONTEXT');
+      }
+
+      const query = { userId: queryUserId, orgId: String(orgId) };
       if (status) {
         query.status = status;
       }
@@ -373,12 +381,16 @@ router.post(
     try {
       const { title, amount, category, description, receipt, employeeName, date } = req.body;
 
-      // Additional validation for orgId
-      if (!req.user.orgId) {
+      const orgId =
+        req.validatedOrgId ||
+        req.user.orgId ||
+        req.user.tenantId ||
+        req.user.organizationId;
+      if (!orgId || String(orgId) === 'system') {
         return sendError(res, "Organization not found", 400, "VALIDATION_ERROR");
       }
 
-      const employee = await Employee.findOne({ userId: req.user.userId, orgId: req.user.orgId })
+      const employee = await Employee.findOne({ userId: req.user.userId, orgId: String(orgId) })
         .select('_id firstName lastName')
         .lean();
 
@@ -387,7 +399,7 @@ router.post(
       }
 
       const limitCheck = await validateExpenseAgainstLimits({
-        orgId: req.user.orgId,
+        orgId: String(orgId),
         employeeId: employee._id,
         category,
         amount: Number(amount),
@@ -402,7 +414,7 @@ router.post(
         userId: req.user.userId,
         employeeId: employee._id,
         employeeName: employeeName || `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || req.user.name,
-        orgId: req.user.orgId,
+        orgId: String(orgId),
         title,
         amount: Number(amount),
         category,

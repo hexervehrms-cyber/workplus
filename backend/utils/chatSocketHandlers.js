@@ -11,8 +11,16 @@ import {
   assertRecipientInOrg,
   assertConversationAccess,
   canAccessMessage,
+  resolveUserTenantOrg,
 } from './chatAccessHelpers.js';
 import { sendTeamsMessage } from '../config/teamsConfig.js';
+
+async function effectiveTenantId(socket) {
+  if (socket.tenantId) return socket.tenantId;
+  const resolved = await resolveUserTenantOrg(socket.userId);
+  if (resolved) socket.tenantId = resolved;
+  return resolved;
+}
 
 /**
  * Initialize chat socket handlers
@@ -21,7 +29,7 @@ export const initializeChatHandlers = (io) => {
   io.on('connection', (socket) => {
     const userId = socket.userId;
     const role = socket.role;
-    const tenantId = socket.tenantId;
+    let tenantId = socket.tenantId;
 
     logger.info(`Chat socket connected: ${socket.id} for user ${userId}`);
 
@@ -108,6 +116,7 @@ export const initializeChatHandlers = (io) => {
           return;
         }
 
+        tenantId = await effectiveTenantId(socket);
         if (!tenantId) {
           socket.emit('chat:error', { message: 'Organization context required' });
           return;
@@ -159,19 +168,26 @@ export const initializeChatHandlers = (io) => {
           }
         }
 
-        // Send admin notification via Teams if employee sends message to admin
-        if (sender.role === 'employee' && (recipient.role === 'admin' || recipient.role === 'super_admin')) {
+        // Teams ping for employee ↔ admin/hr/manager (both directions when chat is linked)
+        const staffRoles = ['admin', 'hr', 'manager', 'super_admin'];
+        const isEmployeeToStaff =
+          sender.role === 'employee' && staffRoles.includes(recipient.role);
+        const isStaffToEmployee =
+          staffRoles.includes(sender.role) && recipient.role === 'employee';
+        if (
+          (isEmployeeToStaff || isStaffToEmployee) &&
+          teamsIntegration?.enabled &&
+          teamsIntegration?.chatId
+        ) {
           try {
-            // Send Teams notification to admin
-            if (teamsIntegration?.enabled && teamsIntegration?.adminChatId) {
-              await sendTeamsMessage(
-                teamsIntegration.adminChatId,
-                `📧 New message from ${sender.name}:\n\n"${content}"\n\nReply in WorkPlus Pro Chat`
-              );
-              logger.info(`Admin notification sent to Teams for message from ${sender.name}`);
-            }
+            const direction = isEmployeeToStaff ? 'New message from' : 'Message from';
+            await sendTeamsMessage(
+              teamsIntegration.chatId,
+              `📧 ${direction} ${sender.name}:\n\n"${content}"\n\nReply in WorkPlus Pro Chat`
+            );
+            logger.info(`Teams chat notification for ${sender.name} → ${recipient.name}`);
           } catch (notificationError) {
-            logger.warn('Failed to send admin Teams notification', notificationError);
+            logger.warn('Failed to send Teams chat notification', notificationError);
           }
         }
 
@@ -283,12 +299,13 @@ export const initializeChatHandlers = (io) => {
       try {
         const { conversationId, page = 1, limit = 50 } = data;
 
-        if (!tenantId) {
+        const orgId = await effectiveTenantId(socket);
+        if (!orgId) {
           socket.emit('chat:error', { message: 'Organization context required' });
           return;
         }
 
-        const access = await assertConversationAccess(conversationId, userId, tenantId);
+        const access = await assertConversationAccess(conversationId, userId, orgId);
         if (!access.ok) {
           socket.emit('chat:error', { message: access.message });
           return;
@@ -296,7 +313,7 @@ export const initializeChatHandlers = (io) => {
 
         const messages = await ChatMessage.find({
           conversationId: String(conversationId),
-          orgId: String(tenantId),
+          orgId: String(orgId),
           isDeleted: false
         })
           .populate('sender', 'name email avatar')
@@ -327,12 +344,13 @@ export const initializeChatHandlers = (io) => {
      */
     socket.on('chat:get_unread', async () => {
       try {
-        if (!tenantId) {
+        const orgId = await effectiveTenantId(socket);
+        if (!orgId) {
           socket.emit('chat:unread_messages', { messages: [], count: 0 });
           return;
         }
         const unreadMessages = await ChatMessage.find({
-          orgId: String(tenantId),
+          orgId: String(orgId),
           $or: [
             { recipientId: userId },
             { 'channelInfo.participants': userId }

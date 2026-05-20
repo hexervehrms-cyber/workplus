@@ -558,7 +558,10 @@ export default function AdminDashboard() {
         return;
       }
 
-      const response = await apiClient.patch(`/leave-requests/${requestId}/approve`, {
+      const { apiPatch, apiGet } = await import('../../utils/apiHelper');
+      const { ensureAccessToken } = await import('../../utils/sessionAuth');
+      await ensureAccessToken();
+      const response = await apiPatch<{ success?: boolean }>(`/leave-requests/${requestId}/approve`, {
         approvedBy: userId
       });
       console.log('✅ Approve response:', response);
@@ -566,8 +569,10 @@ export default function AdminDashboard() {
       if (response.success) {
         console.log('✅ Leave request approved successfully');
         // Refresh leave requests
-        const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
-        if (leaveResponse.success) {
+        const leaveResponse = await apiGet<{ success?: boolean; data?: unknown }>(
+          '/dashboard/recent-leave-requests'
+        );
+        if (leaveResponse?.success) {
           setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.data));
         }
         alert('Leave request approved successfully');
@@ -594,17 +599,21 @@ export default function AdminDashboard() {
         return;
       }
 
-      const response = await apiClient.patch(`/leave-requests/${requestId}/reject`, {
+      const { apiPatch, apiGet } = await import('../../utils/apiHelper');
+      const { ensureAccessToken } = await import('../../utils/sessionAuth');
+      await ensureAccessToken();
+      const response = await apiPatch<{ success?: boolean }>(`/leave-requests/${requestId}/reject`, {
         rejectedBy: userId,
         rejectionReason: reason
       });
       console.log('❌ Reject response:', response);
       
-      if (response.success) {
+      if (response?.success !== false) {
         console.log('✅ Leave request rejected successfully');
-        // Refresh leave requests
-        const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
-        if (leaveResponse.success) {
+        const leaveResponse = await apiGet<{ success?: boolean; data?: unknown }>(
+          '/dashboard/recent-leave-requests'
+        );
+        if (leaveResponse?.success) {
           setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.data));
         }
         alert('Leave request rejected successfully');

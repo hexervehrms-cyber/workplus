@@ -20,7 +20,9 @@ import { emitKPIUpdate } from "../utils/kpiUpdater.js";
 import {
   employeeLookupQuery,
   structureLookupQuery,
-  isSuperAdmin
+  isSuperAdmin,
+  findScopedEmployee,
+  userOrgIdFromReq
 } from "../utils/orgScopeHelpers.js";
 
 const router = express.Router();
@@ -33,22 +35,24 @@ const router = express.Router();
 async function assertCanAccessEmployeeSalaryData(req, employeeId) {
   const privileged = ["super_admin", "admin", "hr"];
   if (privileged.includes(req.user.role)) {
-    const emp = await Employee.findById(employeeId).select("orgId").lean();
+    const emp = await findScopedEmployee(req, employeeId);
     if (!emp) {
       return { ok: false, status: 404, message: "Employee not found" };
     }
     if (req.user.role === "super_admin") {
       return { ok: true };
     }
-    if (String(emp.orgId) !== String(req.user.orgId)) {
+    const callerOrg = userOrgIdFromReq(req) || req.user.orgId;
+    if (callerOrg && emp.orgId && String(emp.orgId) !== String(callerOrg)) {
       return { ok: false, status: 403, message: "Forbidden" };
     }
     return { ok: true };
   }
 
+  const callerOrg = userOrgIdFromReq(req) || req.user.orgId;
   const self = await Employee.findOne({
     userId: req.user.userId,
-    orgId: req.user.orgId
+    ...(callerOrg ? { orgId: String(callerOrg) } : {}),
   })
     .select("_id")
     .lean();
@@ -103,12 +107,12 @@ router.post(
         return sendError(res, "Missing required fields", 400, "VALIDATION_ERROR");
       }
 
-      const employee = await Employee.findOne(employeeLookupQuery(req, employeeId)).lean();
+      const employee = await findScopedEmployee(req, employeeId);
       if (!employee) {
         return sendError(res, "Employee not found", 404, "NOT_FOUND");
       }
 
-      const structureOrgId = employee.orgId || req.user.orgId;
+      const structureOrgId = employee.orgId || userOrgIdFromReq(req) || req.user.orgId;
       if (!isSuperAdmin(req) && String(structureOrgId) !== String(req.user.orgId)) {
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
@@ -117,7 +121,7 @@ router.post(
       const costToCompany = grossEarnings + (deductions?.providentFund || 0) * 0.12; // Employer PF contribution
 
       const salaryStructure = await SalaryStructure.create({
-        employeeId,
+        employeeId: employee._id,
         userId: employee.userId,
         employeeType,
         orgId: structureOrgId,
@@ -258,11 +262,11 @@ router.get(
         return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
       }
 
-      const emp = await Employee.findOne(employeeLookupQuery(req, employeeId)).select("orgId").lean();
-      const structureOrgId = emp?.orgId || req.user.orgId;
+      const emp = await findScopedEmployee(req, employeeId);
+      const structureOrgId = emp?.orgId || userOrgIdFromReq(req) || req.user.orgId;
 
       const salaryStructure = await SalaryStructure.findOne({
-        employeeId,
+        employeeId: emp?._id || employeeId,
         orgId: structureOrgId,
         status: "approved"
       })
@@ -441,16 +445,16 @@ router.post(
         return sendError(res, "Missing required fields", 400, "VALIDATION_ERROR");
       }
 
-      const employee = await Employee.findOne(employeeLookupQuery(req, employeeId)).lean();
+      const employee = await findScopedEmployee(req, employeeId);
       if (!employee) {
         return sendError(res, "Employee not found", 404, "NOT_FOUND");
       }
 
-      const slipOrgId = employee.orgId || req.user.orgId;
+      const slipOrgId = employee.orgId || userOrgIdFromReq(req) || req.user.orgId;
 
       // Get approved salary structure
       const salaryStructure = await SalaryStructure.findOne({
-        employeeId,
+        employeeId: employee._id,
         orgId: slipOrgId,
         status: "approved"
       }).sort({ effectiveFrom: -1 });
@@ -519,9 +523,11 @@ router.post(
 
       const { grossEarnings, totalDeductions, netSalary } = aggregateStructureMoney(earnings, deductions);
 
+      const resolvedEmployeeId = employee._id;
+
       // Create or update salary slip
       let salarySlip = await SalarySlip.findOne({
-        employeeId,
+        employeeId: resolvedEmployeeId,
         month,
         year,
         orgId: slipOrgId
@@ -545,10 +551,13 @@ router.post(
       } else {
         // Create new slip
         salarySlip = await SalarySlip.create({
-          employeeId,
+          employeeId: resolvedEmployeeId,
           userId: employee.userId,
           salaryStructureId: salaryStructure._id,
           orgId: slipOrgId,
+          month,
+          year,
+          earnings,
           deductions,
           grossEarnings,
           totalDeductions,

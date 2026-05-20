@@ -33,6 +33,7 @@ import {
   calendarWeekKey,
 } from '../utils/attendanceQueryHelpers.js';
 import { emitOrgRealtime } from '../utils/orgSocketEmit.js';
+import { userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
 import { syncAttendanceHistoryFromRecord } from '../utils/attendanceHistorySync.js';
 import {
   ATTENDANCE_ACTIVITY_ACTIONS,
@@ -1888,10 +1889,17 @@ router.post('/bulk-import', authorize('super_admin', 'admin', 'hr'), asyncHandle
 router.get('/bulk-export', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   try {
     const { startDate, endDate, employeeId, status } = req.query;
-    const userOrgId = req.user.orgId;
+    const userOrgId = userOrgIdFromReq(req) || req.validatedOrgId || req.user.orgId;
+    if (!userOrgId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Organization context required',
+        code: 'ORG_REQUIRED',
+      });
+    }
 
     // Build query
-    const query = { orgId: userOrgId };
+    const query = { orgId: String(userOrgId) };
 
     if (startDate || endDate) {
       query.date = {};
@@ -1917,7 +1925,11 @@ router.get('/bulk-export', authenticate, authorize('super_admin', 'admin', 'hr')
 
     // Fetch records
     const records = await Attendance.find(query)
-      .populate('employeeId', 'employeeCode firstName lastName email')
+      .populate({
+        path: 'employeeId',
+        select: 'employeeCode firstName lastName userId',
+        populate: { path: 'userId', select: 'email' },
+      })
       .sort({ date: -1 })
       .lean();
 
@@ -1952,7 +1964,7 @@ router.get('/bulk-export', authenticate, authorize('super_admin', 'admin', 'hr')
       return [
         record.employeeId?.employeeCode || '',
         record.employeeName || '',
-        record.employeeId?.email || '',
+        record.employeeId?.userId?.email || record.employeeEmail || '',
         new Date(record.date).toISOString().split('T')[0],
         record.checkIn ? new Date(record.checkIn).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '',
         record.checkOut ? new Date(record.checkOut).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '',

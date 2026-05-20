@@ -13,6 +13,7 @@ import TwoFactorAuth from "../utils/twoFactor.js";
 import PasswordSecurity from "../utils/passwordSecurity.js";
 import logger from "../utils/logger.js";
 import SessionManager from "../utils/sessionManager.js";
+import redis from "../utils/redis.js";
 import JWTCache from "../utils/jwtCache.js";
 import {
   getBearerOrCookieAccessToken,
@@ -360,12 +361,14 @@ router.post("/refresh",
       }
 
       const sessionId = decodedRefresh.sessionId;
-      if (sessionId) {
+      // Only enforce Redis session when Redis is up; otherwise rely on AuthToken DB record
+      if (sessionId && redis.isRedisConnected()) {
         const liveSession = await SessionManager.getSession(sessionId);
         if (!liveSession) {
           return res.status(401).json({
             success: false,
-            message: "Session expired or invalidated"
+            message: "Session expired or invalidated",
+            code: "SESSION_EXPIRED"
           });
         }
       }

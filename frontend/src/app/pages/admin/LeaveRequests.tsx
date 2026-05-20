@@ -5,6 +5,7 @@ import { Calendar, Loader2, CheckCircle, XCircle } from 'lucide-react';
 import { LeaveRequestService, extractApiList } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
+import realTimeSocket from '../../utils/realTimeSocket';
 import {
   Dialog,
   DialogContent,
@@ -46,6 +47,10 @@ export default function LeaveRequests() {
 
   useEffect(() => {
     fetchLeaveRequests();
+    const unsub = realTimeSocket.onLeaveUpdate(() => {
+      void fetchLeaveRequests();
+    });
+    return () => unsub();
   }, []);
 
   const fetchLeaveRequests = async () => {
@@ -94,16 +99,19 @@ export default function LeaveRequests() {
 
     try {
       setActionLoading(true);
-      await LeaveRequestService.approveLeaveRequest(selectedRequest._id, {
+      const res = await LeaveRequestService.approveLeaveRequest(selectedRequest._id, {
         approvedBy: approverId
       });
+      if (res && (res as { success?: boolean }).success === false) {
+        throw new Error((res as { message?: string }).message || 'Approval failed');
+      }
       toast.success('Leave request approved successfully');
       setShowApproveDialog(false);
       setSelectedRequest(null);
       fetchLeaveRequests();
     } catch (error) {
       console.error('Failed to approve leave request:', error);
-      toast.error('Failed to approve leave request');
+      toast.error(error instanceof Error ? error.message : 'Failed to approve leave request');
     } finally {
       setActionLoading(false);
     }

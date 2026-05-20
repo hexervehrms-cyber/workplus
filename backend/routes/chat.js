@@ -15,7 +15,7 @@ import ChatMessage from '../models/ChatMessage.js';
 import ChatGroup from '../models/ChatGroup.js';
 import User from '../models/User.js';
 import logger from '../utils/logger.js';
-import { assertScopedOrgId } from '../utils/orgScopeHelpers.js';
+import { assertScopedOrgId, userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
 import {
   assertRecipientInOrg,
   assertConversationAccess,
@@ -84,7 +84,14 @@ const chatFileUpload = multer({
 router.post('/messages', authenticate, asyncHandler(async (req, res) => {
   const { recipientId, content, messageType = 'text', channelInfo, metadata, teamsIntegration } = req.body;
   const senderId = req.user.userId;
-  const orgId = req.user.orgId;
+  const orgId = userOrgIdFromReq(req) || req.validatedOrgId;
+  if (!orgId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'ORG_REQUIRED',
+    });
+  }
 
   // Validate input
   if (!recipientId && !channelInfo?.channelId) {
@@ -709,7 +716,14 @@ router.delete('/messages/:messageId', authenticate, asyncHandler(async (req, res
  */
 router.get('/conversations', authenticate, asyncHandler(async (req, res) => {
   const userId = req.user.userId;
-  const orgId = req.user.orgId;
+  const orgId = userOrgIdFromReq(req) || req.validatedOrgId;
+  if (!orgId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'ORG_REQUIRED',
+    });
+  }
 
   try {
     // Get unique conversations

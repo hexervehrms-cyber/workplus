@@ -33,8 +33,10 @@ import {
   resolveQueryOrgId,
   denyIfCrossOrg,
   bulkOrgFilter,
+  scopedOrgId,
   LEAVE_APPROVER_ROLES,
 } from '../utils/leaveAccessHelpers.js';
+import { userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
 
 const router = express.Router();
 const leaveApprovers = authorize(...LEAVE_APPROVER_ROLES);
@@ -51,16 +53,16 @@ router.get('/', asyncHandler(async (req, res) => {
   const { page, limit, skip } = req.pagination;
   const { userId, status, type, startDate, endDate, orgId } = req.query;
 
-  // Build query with CRITICAL orgId validation
-  const query = {};
-  
-  // CRITICAL: Enforce orgId - users can only access their organization's data
-  // Super admin can override with orgId parameter, others use their own orgId
-  if (req.user.role === 'super_admin' && orgId) {
-    query.orgId = orgId;
-  } else {
-    query.orgId = req.user.orgId;
+  const tenantOrg = scopedOrgId(req);
+  if (!tenantOrg) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
+    });
   }
+
+  const query = { orgId: String(tenantOrg) };
   
   if (userId) {
     query.userId = userId;
@@ -114,9 +116,10 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   // CRITICAL: Enforce orgId validation - users can only delete their organization's data
+  const tenantOrg = scopedOrgId(req);
   const leaveRequest = await LeaveRequest.findOne({
     _id: id,
-    orgId: req.user.orgId
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
   });
 
   if (!leaveRequest) {
@@ -175,9 +178,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   } = req.body;
 
   // CRITICAL: Enforce orgId validation - users can only update their organization's data
+  const tenantOrg = scopedOrgId(req);
   const leaveRequest = await LeaveRequest.findOne({
     _id: id,
-    orgId: req.user.orgId
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
   });
 
   if (!leaveRequest) {
@@ -353,11 +357,6 @@ router.patch('/:id/approve', leaveApprovers, idempotencyMiddleware, asyncHandler
         error: policyError.message,
         leaveRequestId: id
       });
-      
-      return res.status(400).json({
-        success: false,
-        message: policyError.message
-      });
     }
   }
 
@@ -371,13 +370,7 @@ router.patch('/:id/approve', leaveApprovers, idempotencyMiddleware, asyncHandler
     });
   }
 
-  // Verify orgId - prevent cross-tenant access
-  if (leaveRequest.orgId && leaveRequest.orgId !== req.user.orgId && req.user.role !== 'super_admin') {
-    return res.status(403).json({
-      success: false,
-      message: 'Unauthorized access'
-    });
-  }
+  if (denyIfCrossOrg(req, res, leaveRequest.orgId)) return;
 
   if (leaveRequest.status !== 'pending') {
     return res.status(400).json({
@@ -777,14 +770,26 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
   const { status } = req.query;
 
   // Enforce tenant/user isolation for leave data
-  if (req.user.role === 'employee' && req.user.userId.toString() !== userId.toString()) {
+  const tenantOrg = scopedOrgId(req);
+  if (!tenantOrg) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
+    });
+  }
+
+  if (
+    req.user.role === 'employee' &&
+    String(req.user.userId) !== String(userId)
+  ) {
     return res.status(403).json({
       success: false,
       message: 'Unauthorized access'
     });
   }
 
-  const query = { userId, orgId: req.user.orgId };
+  const query = { userId, orgId: String(tenantOrg) };
   
   if (status) {
     query.status = status;
@@ -930,10 +935,14 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     });
   }
 
+  const tenantOrg = scopedOrgId(req) || orgId;
   const isPrivilegedCreator = ['admin', 'hr', 'manager', 'super_admin'].includes(req.user.role);
   if (!isPrivilegedCreator) {
-    const emp = await Employee.findOne({ userId: req.user.userId, orgId: req.user.orgId })
-      .select('_id')
+    const emp = await Employee.findOne({
+      userId: req.user.userId,
+      orgId: String(tenantOrg),
+    })
+      .select('_id orgId')
       .lean();
     if (!emp) {
       return res.status(403).json({
@@ -944,14 +953,18 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     if (
       String(userId) !== String(req.user.userId) ||
       String(employeeId) !== String(emp._id) ||
-      String(orgId) !== String(req.user.orgId)
+      String(orgId) !== String(tenantOrg)
     ) {
       return res.status(403).json({
         success: false,
         message: 'Cannot submit leave on behalf of another user or organization',
       });
     }
-  } else if (req.user.role !== 'super_admin' && String(orgId) !== String(req.user.orgId)) {
+  } else if (
+    req.user.role !== 'super_admin' &&
+    tenantOrg &&
+    String(orgId) !== String(tenantOrg)
+  ) {
     return res.status(403).json({
       success: false,
       message: 'Cannot create leave for another organization',
@@ -1061,11 +1074,6 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
         error: policyError.message,
         employeeId
       });
-      
-      return res.status(400).json({
-        success: false,
-        message: policyError.message
-      });
     }
   }
 
@@ -1148,25 +1156,28 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
 
   // CRITICAL: Check leave balance before creating request
   const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
-  const allocation = await findCurrentLeaveAllocation(LeaveAllocation, employeeId, orgId);
+  const resolvedOrgId = String(tenantOrg || orgId);
+  const allocation = await findCurrentLeaveAllocation(LeaveAllocation, employeeId, resolvedOrgId);
 
-  if (!allocation || !getLeaveFieldName(leaveType)) {
-    return res.status(400).json({
-      success: false,
-      message: `No leave allocation found for ${leaveType} for the current month. Ask HR to allocate leave.`
-    });
-  }
-
-  const availableBalance = computeLeaveRemaining(allocation, leaveType);
-  if (availableBalance < days) {
-    return res.status(400).json({
-      success: false,
-      message: `Insufficient leave balance. Available: ${availableBalance} days, Requested: ${days} days`,
-      data: {
-        availableBalance,
-        requestedDays: days,
-        leaveType
-      }
+  const leaveField = getLeaveFieldName(leaveType);
+  if (allocation && leaveField) {
+    const availableBalance = computeLeaveRemaining(allocation, leaveType);
+    if (availableBalance < days) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient leave balance. Available: ${availableBalance} days, Requested: ${days} days`,
+        data: {
+          availableBalance,
+          requestedDays: days,
+          leaveType
+        }
+      });
+    }
+  } else {
+    logger.warn('Leave submitted without monthly allocation — pending for HR', {
+      employeeId,
+      leaveType,
+      orgId: tenantOrg || orgId,
     });
   }
 
@@ -1180,7 +1191,7 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     endDate: end,
     reason,
     status: 'pending',
-    orgId,
+    orgId: resolvedOrgId,
     isHalfDay: resolvedHalfDay,
     halfDaySession: resolvedHalfSession,
     isHourlyLeave: resolvedHourly,

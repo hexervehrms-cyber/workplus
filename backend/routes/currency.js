@@ -7,6 +7,7 @@ import express from 'express';
 import { authenticate, authorize } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import CurrencyPreference from '../models/CurrencyPreference.js';
+import Organization from '../models/Organization.js';
 import logger from '../utils/logger.js';
 
 const router = express.Router();
@@ -126,9 +127,14 @@ router.get('/list', asyncHandler(async (req, res) => {
 router.get('/org-default', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   const orgId = req.user.orgId;
 
-  // For now, return INR as default for all orgs
-  // In future, this can be customized per organization
-  const defaultCurrency = 'INR';
+  let defaultCurrency = 'INR';
+  if (orgId) {
+    const org = await Organization.findById(orgId).select('settings.currency').lean();
+    const orgCode = org?.settings?.currency;
+    if (orgCode && CURRENCY_CONFIG[orgCode]) {
+      defaultCurrency = orgCode;
+    }
+  }
   const config = CURRENCY_CONFIG[defaultCurrency];
 
   res.json({

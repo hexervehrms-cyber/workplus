@@ -9,7 +9,11 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
+  DialogFooter,
 } from '../../components/ui/dialog';
+import { ScrollArea } from '../../components/ui/scroll-area';
+import { Separator } from '../../components/ui/separator';
 import { toast } from '../../utils/portalToast';
 import { apiGet, buildApiUrl } from '../../utils/apiHelper';
 import { TokenManager } from '../../utils/api';
@@ -73,16 +77,9 @@ export default function Payroll() {
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [viewingSlipId, setViewingSlipId] = useState<string | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [viewingSlip, setViewingSlip] = useState<SalarySlip | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
-
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
 
   useEffect(() => {
     fetchEmployeeAndSlips();
@@ -151,16 +148,25 @@ export default function Payroll() {
   const handleViewSalarySlip = async (slipId: string) => {
     try {
       setPreviewLoading(true);
-      setViewingSlipId(slipId);
-      const blob = await fetchSalarySlipBlob(slipId);
-      setPreviewUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return URL.createObjectURL(blob);
-      });
+      const res = await apiGet<{ success?: boolean; data?: SalarySlip }>(
+        `/salary/slip/by-id/${slipId}?_t=${Date.now()}`,
+        false
+      );
+      const slip = (res as { data?: SalarySlip })?.data ?? (res as SalarySlip);
+      if (!slip?._id) {
+        const fromList = salarySlips.find((s) => s._id === slipId);
+        if (fromList) {
+          setViewingSlip(fromList);
+          setPreviewOpen(true);
+          return;
+        }
+        throw new Error('Could not load payslip details');
+      }
+      setViewingSlip(slip);
       setPreviewOpen(true);
     } catch (error) {
       console.error('Error loading payslip preview:', error);
-      setViewingSlipId(null);
+      toast.error('Failed to load payslip preview');
     } finally {
       setPreviewLoading(false);
     }
@@ -168,11 +174,7 @@ export default function Payroll() {
 
   const closePreview = () => {
     setPreviewOpen(false);
-    setViewingSlipId(null);
-    setPreviewUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return null;
-    });
+    setViewingSlip(null);
   };
 
   const currentSlip = salarySlips.find(
@@ -190,21 +192,118 @@ export default function Payroll() {
   return (
     <div className="p-6 space-y-6">
       <Dialog open={previewOpen} onOpenChange={(open) => !open && closePreview()}>
-        <DialogContent className="max-w-4xl h-[85vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle>Salary payslip preview</DialogTitle>
+        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
+            <DialogTitle>Salary payslip</DialogTitle>
+            {viewingSlip && (
+              <DialogDescription>
+                {new Date(viewingSlip.year, viewingSlip.month - 1).toLocaleDateString('en-US', {
+                  month: 'long',
+                  year: 'numeric',
+                })}{' '}
+                · {viewingSlip.status}
+              </DialogDescription>
+            )}
           </DialogHeader>
-          {previewUrl && (
-            <iframe title="Payslip preview" src={previewUrl} className="w-full flex-1 min-h-[60vh] rounded-md border" />
-          )}
-          {viewingSlipId && (
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => handleDownloadSalarySlip(viewingSlipId)}>
-                <Download className="w-4 h-4 mr-2" />
-                Download
-              </Button>
+          {previewLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader className="w-8 h-8 animate-spin text-primary" />
             </div>
-          )}
+          ) : viewingSlip ? (
+            <ScrollArea className="flex-1 px-6 max-h-[calc(90vh-10rem)]">
+              <div className="space-y-4 pb-4">
+                <div className="grid grid-cols-3 gap-3">
+                  <Card className="p-4 bg-muted/40">
+                    <p className="text-xs text-muted-foreground">Gross</p>
+                    <p className="text-lg font-bold text-foreground">₹{viewingSlip.grossEarnings.toLocaleString()}</p>
+                  </Card>
+                  <Card className="p-4 bg-muted/40">
+                    <p className="text-xs text-muted-foreground">Deductions</p>
+                    <p className="text-lg font-bold text-destructive">₹{viewingSlip.totalDeductions.toLocaleString()}</p>
+                  </Card>
+                  <Card className="p-4 bg-primary/10 border-primary/20">
+                    <p className="text-xs text-muted-foreground">Net pay</p>
+                    <p className="text-lg font-bold text-primary">₹{viewingSlip.netSalary.toLocaleString()}</p>
+                  </Card>
+                </div>
+                {viewingSlip.attendanceData && (
+                  <>
+                    <h4 className="font-semibold text-foreground">Attendance</h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                        <p className="text-muted-foreground">Working days</p>
+                        <p className="font-semibold">{viewingSlip.attendanceData.totalWorkingDays}</p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                        <p className="text-muted-foreground">Present</p>
+                        <p className="font-semibold text-secondary">{viewingSlip.attendanceData.presentDays}</p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                        <p className="text-muted-foreground">Absent</p>
+                        <p className="font-semibold text-destructive">{viewingSlip.attendanceData.absentDays}</p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                        <p className="text-muted-foreground">Leaves</p>
+                        <p className="font-semibold">{viewingSlip.attendanceData.leavesTaken}</p>
+                      </div>
+                    </div>
+                  </>
+                )}
+                <Separator />
+                <h4 className="font-semibold text-foreground">Earnings</h4>
+                <div className="rounded-lg border border-border overflow-hidden text-sm">
+                  {[
+                    ['Basic', viewingSlip.earnings?.basic],
+                    ['HRA', viewingSlip.earnings?.hra],
+                    ['Medical', viewingSlip.earnings?.medicalExpenses],
+                    ['Travel', viewingSlip.earnings?.travel],
+                    ['Incentives', viewingSlip.earnings?.incentives],
+                    ['Bonus', viewingSlip.earnings?.bonus],
+                  ]
+                    .filter(([, v]) => (v ?? 0) > 0)
+                    .map(([label, amount]) => (
+                      <div key={String(label)} className="flex justify-between px-4 py-2 border-b border-border">
+                        <span className="text-muted-foreground">{label}</span>
+                        <span className="font-medium">₹{Number(amount).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  <div className="flex justify-between px-4 py-3 bg-secondary/10 font-semibold">
+                    <span>Total earnings</span>
+                    <span>₹{viewingSlip.grossEarnings.toLocaleString()}</span>
+                  </div>
+                </div>
+                <h4 className="font-semibold text-foreground">Deductions</h4>
+                <div className="rounded-lg border border-border overflow-hidden text-sm">
+                  {[
+                    ['PF', viewingSlip.deductions?.providentFund],
+                    ['ESI', viewingSlip.deductions?.employeeStateInsurance],
+                    ['Professional tax', viewingSlip.deductions?.professionalTax],
+                    ['Income tax', viewingSlip.deductions?.incomeTax],
+                  ]
+                    .filter(([, v]) => (v ?? 0) > 0)
+                    .map(([label, amount]) => (
+                      <div key={String(label)} className="flex justify-between px-4 py-2 border-b border-border">
+                        <span className="text-muted-foreground">{label}</span>
+                        <span className="font-medium">₹{Number(amount).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  <div className="flex justify-between px-4 py-3 bg-destructive/10 font-semibold">
+                    <span>Total deductions</span>
+                    <span>₹{viewingSlip.totalDeductions.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            </ScrollArea>
+          ) : null}
+          <DialogFooter className="px-6 py-4 border-t border-border shrink-0">
+            <Button variant="outline" onClick={closePreview}>Close</Button>
+            {viewingSlip && (
+              <Button onClick={() => void handleDownloadSalarySlip(viewingSlip._id)}>
+                <Download className="w-4 h-4 mr-2" />
+                Download PDF
+              </Button>
+            )}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -385,7 +484,7 @@ export default function Payroll() {
                     <span className="font-medium">₹{earning.amount.toLocaleString()}</span>
                   </div>
                 ))}
-              <div className="flex justify-between py-2 font-bold text-lg bg-green-50 px-2 rounded">
+              <div className="flex justify-between py-2 font-bold text-lg bg-green-50 dark:bg-green-950/30 px-2 rounded text-foreground">
                 <span>Total Earnings</span>
                 <span>₹{currentSlip.grossEarnings.toLocaleString()}</span>
               </div>
@@ -432,7 +531,7 @@ export default function Payroll() {
                     <span className="font-medium">₹{deduction.amount.toLocaleString()}</span>
                   </div>
                 ))}
-              <div className="flex justify-between py-2 font-bold text-lg bg-red-50 px-2 rounded">
+              <div className="flex justify-between py-2 font-bold text-lg bg-red-50 dark:bg-red-950/30 px-2 rounded text-foreground">
                 <span>Total Deductions</span>
                 <span>₹{currentSlip.totalDeductions.toLocaleString()}</span>
               </div>

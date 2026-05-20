@@ -14,6 +14,10 @@ import {
   countOrgEmployees,
   getFinancialTotals,
 } from './dashboardKpiHelpers.js';
+import {
+  buildOrgIdFlexible,
+  countEmployeesCurrentlyOnBreak,
+} from './attendanceQueryHelpers.js';
 
 /**
  * Calculate and emit real-time KPI updates
@@ -36,6 +40,7 @@ export const emitKPIUpdate = async (io, orgId, triggerType, triggerData = {}) =>
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const orgFilter = buildOrgIdFilter(orgId);
+    const orgMatch = buildOrgIdFlexible(orgId);
 
     // Calculate KPIs in parallel for better performance
     const [
@@ -94,17 +99,8 @@ export const emitKPIUpdate = async (io, orgId, triggerType, triggerData = {}) =>
         }
       ]),
       
-      // Employees on break today
-      Attendance.countDocuments({
-        ...orgFilter,
-        date: { $gte: startOfDay, $lt: endOfDay },
-        breaks: {
-          $elemMatch: {
-            startTime: { $exists: true, $ne: null },
-            $or: [{ endTime: { $exists: false } }, { endTime: null }]
-          }
-        }
-      }),
+      // Employees currently on break (latest break open)
+      countEmployeesCurrentlyOnBreak(Attendance, orgMatch, startOfDay, endOfDay),
       
       // Average productivity
       Attendance.aggregate([

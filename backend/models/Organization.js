@@ -73,7 +73,16 @@ const organizationSchema = new mongoose.Schema(
         default: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
       },
       timezone: { type: String, default: "UTC" },
-      currency: { type: String, default: "USD" },
+      currency: { type: String, default: "INR" },
+      expenseLimits: {
+        enabled: { type: Boolean, default: true },
+        defaultDailyLimit: { type: Number, default: 5000 },
+        defaultMonthlyLimit: { type: Number, default: 50000 },
+        maxSingleClaim: { type: Number, default: 25000 },
+        maxClaimAgeDays: { type: Number, default: 90 },
+        requireReceiptAbove: { type: Number, default: 500 },
+        categoryLimits: { type: mongoose.Schema.Types.Mixed, default: {} }
+      },
       dateFormat: { type: String, default: "DD/MM/YYYY" },
       allowRemoteWork: { type: Boolean, default: false },
       requireCheckInLocation: { type: Boolean, default: false },

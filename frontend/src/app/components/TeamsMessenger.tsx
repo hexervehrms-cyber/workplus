@@ -3,7 +3,7 @@
  * Enables chat between admin and users with Teams synchronization
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Send,
   Search,
@@ -21,7 +21,9 @@ import {
   UserPlus,
   UserMinus,
   Camera,
+  UsersRound,
 } from 'lucide-react';
+import { Checkbox } from './ui/checkbox';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -53,8 +55,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from './ui/popover';
-import { apiClient, TokenManager } from '../utils/api';
-import { buildApiUrl, buildFileUrl } from '../utils/apiHelper';
+import { apiClient } from '../utils/api';
+import { buildFileUrl } from '../utils/apiHelper';
 import { socketService as appSocket } from '../utils/socket';
 import { toast } from '../utils/portalToast';
 import { useAuth } from '../context/AuthContext';
@@ -69,6 +71,10 @@ interface User {
   unreadCount: number;
   lastMessage?: string;
   lastMessageTime?: string;
+  /** When set, this row is a group thread (id === conversationId). */
+  chatKind?: 'direct' | 'group';
+  conversationId?: string;
+  memberIds?: string[];
 }
 
 interface Message {
@@ -98,6 +104,14 @@ interface Conversation {
   };
   unreadCount: number;
   messageCount: number;
+}
+
+function getActiveConversationId(selected: User | null, myId: string): string {
+  if (!selected) return '';
+  if (selected.chatKind === 'group' && selected.conversationId) {
+    return selected.conversationId;
+  }
+  return [myId, selected.id].sort().join('_');
 }
 
 export default function TeamsMessenger() {
@@ -135,6 +149,11 @@ export default function TeamsMessenger() {
   const [hiddenContactIds, setHiddenContactIds] = useState<Set<string>>(() => new Set());
   const [showAddContactDialog, setShowAddContactDialog] = useState(false);
   const [addContactSearch, setAddContactSearch] = useState('');
+  const [groupChats, setGroupChats] = useState<User[]>([]);
+  const [showCreateGroupDialog, setShowCreateGroupDialog] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [createGroupMemberIds, setCreateGroupMemberIds] = useState<Set<string>>(() => new Set());
+  const [creatingGroup, setCreatingGroup] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const profileAvatarInputRef = useRef<HTMLInputElement>(null);
 
@@ -196,11 +215,116 @@ export default function TeamsMessenger() {
     setEmojiOpen(false);
   };
 
+  const fetchSidebarRef = useRef<() => Promise<void>>(async () => {});
+
+  const fetchSidebar = useCallback(async () => {
+    if (!user?.id) {
+      setLoading(false);
+      return;
+    }
+    try {
+      setLoading(true);
+      const myId = String(user.id);
+      const [usersRes, convRes, groupsRes] = await Promise.all([
+        apiClient.get<any[]>('/chat/users'),
+        apiClient.get<any[]>('/chat/conversations').catch(() => ({ success: false, data: [] })),
+        apiClient.get<any[]>('/chat/groups').catch(() => ({ success: false, data: [] })),
+      ]);
+
+      const rawUsers = Array.isArray(usersRes.data) ? usersRes.data : [];
+      const hideSuperAdmin = user.role !== 'super_admin';
+      const formattedUsers: User[] = rawUsers
+        .filter((u: any) => String(u._id || u.id) !== myId)
+        .filter((u: any) => !hideSuperAdmin || u.role !== 'super_admin')
+        .map(mapApiUser);
+
+      const convList = Array.isArray(convRes.data) ? convRes.data : [];
+      const previewByPeer = new Map<string, { text: string; time: string }>();
+      const previewByGroupId = new Map<string, { text: string; time: string }>();
+
+      for (const conv of convList) {
+        const last = conv.lastMessage;
+        if (!last) continue;
+        const convKey = String(conv._id || last.conversationId || '');
+        if (convKey.startsWith('grp_')) {
+          previewByGroupId.set(convKey, {
+            text: last.content?.text || '',
+            time: last.createdAt
+              ? new Date(last.createdAt).toLocaleTimeString('en-US', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              : '',
+          });
+          continue;
+        }
+        const parts = convKey.split('_').filter(Boolean);
+        const peerId = parts.find((p: string) => p !== myId);
+        if (!peerId) continue;
+        previewByPeer.set(peerId, {
+          text: last.content?.text || '',
+          time: last.createdAt
+            ? new Date(last.createdAt).toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : '',
+        });
+      }
+
+      const rawGroups = Array.isArray(groupsRes.data) ? groupsRes.data : [];
+      const groupRows: User[] = rawGroups.map((g: any) => {
+        const cid = String(g.conversationId || '');
+        const preview = previewByGroupId.get(cid);
+        return {
+          id: cid,
+          name: g.name || 'Group',
+          email: `${(g.members || []).length} members`,
+          role: 'employee',
+          avatar: undefined,
+          isOnline: true,
+          unreadCount: 0,
+          chatKind: 'group' as const,
+          conversationId: cid,
+          memberIds: (g.members || []).map(String),
+          lastMessage: preview?.text || '',
+          lastMessageTime: preview?.time || '',
+        };
+      });
+
+      setGroupChats(groupRows);
+      setUsers(
+        formattedUsers.map((u) => {
+          const preview = previewByPeer.get(u.id);
+          return preview
+            ? { ...u, lastMessage: preview.text, lastMessageTime: preview.time }
+            : u;
+        })
+      );
+      setConversations(convList);
+    } catch (error) {
+      console.error('Error fetching users:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [user?.id, user?.role]);
+
+  fetchSidebarRef.current = fetchSidebar;
+
+  useEffect(() => {
+    fetchSidebar();
+  }, [fetchSidebar]);
+
   // Initialize Socket.IO connection (AuthContext + token mirror; avoids cleared localStorage)
   useEffect(() => {
     if (!user?.id) return;
 
     let cancelled = false;
+
+    const onGroupCreated = () => {
+      if (cancelled) return;
+      void fetchSidebarRef.current();
+    };
 
     const initSocket = async () => {
       try {
@@ -214,12 +338,21 @@ export default function TeamsMessenger() {
 
         const myId = String(user.id);
 
+        appSocket.on('chat:group_created', onGroupCreated);
+
         appSocket.on('chat:new_message', (data) => {
           if (cancelled) return;
           const incomingId = String(data.messageId);
           const senderId = String(data.senderId);
+          const convId = String(data.conversationId || '');
 
           setMessages((prev) => {
+            const sel = selectedUserRef.current;
+            const activeConv = getActiveConversationId(sel, myId);
+            if (!activeConv || convId !== activeConv) {
+              return prev;
+            }
+
             if (prev.some((m) => String(m.messageId) === incomingId)) {
               return prev;
             }
@@ -238,6 +371,7 @@ export default function TeamsMessenger() {
                     messageId: incomingId,
                     status: 'delivered' as const,
                     timestamp: new Date(data.timestamp),
+                    messageType: data.messageType || msg.messageType,
                   };
                 }
                 return msg;
@@ -256,6 +390,7 @@ export default function TeamsMessenger() {
                 timestamp: new Date(data.timestamp),
                 isOwn: false,
                 status: 'delivered' as const,
+                messageType: data.messageType || 'text',
               },
             ];
           });
@@ -265,23 +400,40 @@ export default function TeamsMessenger() {
           if (cancelled) return;
           setMessages((prev) =>
             prev.map((msg) =>
-              msg.messageId === data.messageId ? { ...msg, status: 'read' } : msg
+              String(msg.messageId) === String(data.messageId) ? { ...msg, status: 'read' } : msg
             )
           );
         });
 
         appSocket.on('chat:user_typing', (data) => {
           if (cancelled) return;
-          if (data.userId === selectedUserRef.current?.id) {
-            setIsTyping(data.isTyping);
+          const sel = selectedUserRef.current;
+          if (!sel) return;
+          if (sel.chatKind === 'group') {
+            if (String(data.conversationId || '') !== String(sel.conversationId)) return;
+            if (String(data.userId) === myId) return;
+            setIsTyping(!!data.isTyping);
+            return;
+          }
+          if (String(data.userId) === sel.id) {
+            setIsTyping(!!data.isTyping);
           }
         });
 
-        appSocket.on('chat:message_edited', (data) => {
+        appSocket.on('chat:message_edited', (data: { messageId?: string; newContent?: string; conversationId?: string }) => {
           if (cancelled) return;
+          const sel = selectedUserRef.current;
+          if (
+            data.conversationId &&
+            getActiveConversationId(sel, myId) !== String(data.conversationId)
+          ) {
+            return;
+          }
           setMessages((prev) =>
             prev.map((msg) =>
-              msg.messageId === data.messageId ? { ...msg, content: data.newContent } : msg
+              String(msg.messageId) === String(data.messageId)
+                ? { ...msg, content: data.newContent ?? msg.content }
+                : msg
             )
           );
         });
@@ -297,9 +449,16 @@ export default function TeamsMessenger() {
           );
         });
 
-        appSocket.on('chat:message_deleted', (data) => {
+        appSocket.on('chat:message_deleted', (data: { messageId?: string; conversationId?: string }) => {
           if (cancelled) return;
-          setMessages((prev) => prev.filter((msg) => msg.messageId !== data.messageId));
+          const sel = selectedUserRef.current;
+          if (
+            data.conversationId &&
+            getActiveConversationId(sel, myId) !== String(data.conversationId)
+          ) {
+            return;
+          }
+          setMessages((prev) => prev.filter((msg) => String(msg.messageId) !== String(data.messageId)));
         });
 
         appSocket.emit('chat:get_conversations', {});
@@ -349,79 +508,17 @@ export default function TeamsMessenger() {
       appSocket.off('chat:avatar_updated');
       appSocket.off('chat:message_deleted');
       appSocket.off('chat:conversations');
+      appSocket.off('chat:group_created', onGroupCreated);
       appSocket.off('call:incoming');
     };
-  }, [user?.id, user?.role, user?.orgId, user?.tenantId]);
-
-  // Fetch org users + conversation previews for chat sidebar
-  useEffect(() => {
-    const fetchUsers = async () => {
-      if (!user?.id) {
-        setLoading(false);
-        return;
-      }
-      try {
-        setLoading(true);
-        const myId = String(user.id);
-        const [usersRes, convRes] = await Promise.all([
-          apiClient.get<any[]>('/chat/users'),
-          apiClient.get<any[]>('/chat/conversations').catch(() => ({ success: false, data: [] })),
-        ]);
-
-        const rawUsers = Array.isArray(usersRes.data) ? usersRes.data : [];
-        const hideSuperAdmin = user.role !== 'super_admin';
-        const formattedUsers: User[] = rawUsers
-          .filter((u: any) => String(u._id || u.id) !== myId)
-          .filter((u: any) => !hideSuperAdmin || u.role !== 'super_admin')
-          .map(mapApiUser);
-
-        const convList = Array.isArray(convRes.data) ? convRes.data : [];
-        const previewByPeer = new Map<string, { text: string; time: string }>();
-
-        for (const conv of convList) {
-          const last = conv.lastMessage;
-          if (!last) continue;
-          const parts = String(conv._id || last.conversationId || '')
-            .split('_')
-            .filter(Boolean);
-          const peerId = parts.find((p: string) => p !== myId);
-          if (!peerId) continue;
-          previewByPeer.set(peerId, {
-            text: last.content?.text || '',
-            time: last.createdAt
-              ? new Date(last.createdAt).toLocaleTimeString('en-US', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
-              : '',
-          });
-        }
-
-        setUsers(
-          formattedUsers.map((u) => {
-            const preview = previewByPeer.get(u.id);
-            return preview
-              ? { ...u, lastMessage: preview.text, lastMessageTime: preview.time }
-              : u;
-          })
-        );
-        setConversations(convList);
-      } catch (error) {
-        console.error('Error fetching users:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchUsers();
-  }, [user?.id]);
+  }, [user?.id, user?.role, user?.orgId, user?.tenantId, fetchSidebar]);
 
   // Load messages when user is selected
   useEffect(() => {
     if (!selectedUser || !appSocket || !user?.id) return;
 
     const myId = String(user.id);
-    const conversationId = [myId, selectedUser.id].sort().join('_');
+    const conversationId = getActiveConversationId(selectedUser, myId);
       
       // Remove old listener before adding new one
       appSocket.off('chat:history');
@@ -435,6 +532,7 @@ export default function TeamsMessenger() {
 
       // Set up listener for history response
       const handleHistory = (data: any) => {
+        if (String(data.conversationId) !== conversationId) return;
         const seen = new Set<string>();
         const formattedMessages: Message[] = [];
 
@@ -446,11 +544,12 @@ export default function TeamsMessenger() {
             messageId: id,
             senderId: String(msg.senderId),
             senderName: msg.sender?.name || 'Unknown',
-            senderAvatar: msg.sender?.avatar,
+            senderAvatar: resolveAvatarUrl(msg.sender?.avatar),
             content: msg.content?.text || '',
             timestamp: new Date(msg.createdAt),
             isOwn: String(msg.senderId) === myId,
             status: msg.status,
+            messageType: msg.messageType,
             teamsIntegration: msg.metadata?.teamsIntegration,
           });
         }
@@ -471,11 +570,11 @@ export default function TeamsMessenger() {
     if (el) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, isTyping, selectedUser?.id]);
+  }, [messages, isTyping, selectedUser?.id, selectedUser?.conversationId]);
 
   // Link Microsoft Teams chat when a conversation is opened
   useEffect(() => {
-    if (!selectedUser || teamsChatIds[selectedUser.id]) return;
+    if (!selectedUser || selectedUser.chatKind === 'group' || teamsChatIds[selectedUser.id]) return;
 
     const linkTeamsChat = async () => {
       try {
@@ -502,12 +601,14 @@ export default function TeamsMessenger() {
     try {
       setSending(true);
 
+      const isGroup = selectedUser.chatKind === 'group' && selectedUser.conversationId;
+
       // Create the message object
       const newMessage: Message = {
         messageId: `temp-${Date.now()}`, // Temporary ID until server confirms
         senderId: user.id,
         senderName: user.name || 'You',
-        recipientId: selectedUser.id,
+        recipientId: isGroup ? undefined : selectedUser.id,
         content: messageInput,
         timestamp: new Date(),
         isOwn: true,
@@ -522,17 +623,25 @@ export default function TeamsMessenger() {
       const messageToSend = messageInput;
       setMessageInput('');
 
-      const teamsChatId = teamsChatIds[selectedUser.id];
+      if (isGroup) {
+        appSocket.emit('chat:send_message', {
+          conversationId: selectedUser.conversationId,
+          content: messageToSend,
+          messageType: 'text',
+        });
+      } else {
+        const teamsChatId = teamsChatIds[selectedUser.id];
 
-      // Socket persists and delivers (single source — avoids duplicate DB rows)
-      appSocket.emit('chat:send_message', {
-        recipientId: selectedUser.id,
-        content: messageToSend,
-        messageType: 'text',
-        teamsIntegration: teamsChatId
-          ? { enabled: true, chatId: teamsChatId }
-          : undefined,
-      });
+        // Socket persists and delivers (single source — avoids duplicate DB rows)
+        appSocket.emit('chat:send_message', {
+          recipientId: selectedUser.id,
+          content: messageToSend,
+          messageType: 'text',
+          teamsIntegration: teamsChatId
+            ? { enabled: true, chatId: teamsChatId }
+            : undefined,
+        });
+      }
     } catch (error) {
       console.error('Error sending message:', error);
       toast.error('Failed to send message');
@@ -547,20 +656,36 @@ export default function TeamsMessenger() {
   const handleTyping = () => {
     if (!selectedUser || !appSocket) return;
 
-    appSocket.emit('chat:typing', {
-      recipientId: selectedUser.id,
-      isTyping: true
-    });
+    if (selectedUser.chatKind === 'group' && selectedUser.conversationId) {
+      appSocket.emit('chat:typing', {
+        conversationId: selectedUser.conversationId,
+        isTyping: true
+      });
+    } else {
+      appSocket.emit('chat:typing', {
+        recipientId: selectedUser.id,
+        isTyping: true
+      });
+    }
 
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
 
     typingTimeoutRef.current = setTimeout(() => {
-      appSocket?.emit('chat:typing', {
-        recipientId: selectedUser.id,
-        isTyping: false
-      });
+      if (!selectedUserRef.current || !appSocket) return;
+      const sel = selectedUserRef.current;
+      if (sel.chatKind === 'group' && sel.conversationId) {
+        appSocket.emit('chat:typing', {
+          conversationId: sel.conversationId,
+          isTyping: false
+        });
+      } else {
+        appSocket?.emit('chat:typing', {
+          recipientId: sel.id,
+          isTyping: false
+        });
+      }
     }, 3000);
   };
 
@@ -590,7 +715,7 @@ export default function TeamsMessenger() {
   };
 
   const startTeamsCall = async (withVideo: boolean) => {
-    if (!selectedUser) return;
+    if (!selectedUser || selectedUser.chatKind === 'group') return;
     try {
       setCallWithVideo(withVideo);
       setCallLoading(true);
@@ -639,7 +764,11 @@ export default function TeamsMessenger() {
       setSending(true);
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('recipientId', selectedUser.id);
+      if (selectedUser.chatKind === 'group' && selectedUser.conversationId) {
+        formData.append('conversationId', selectedUser.conversationId);
+      } else {
+        formData.append('recipientId', selectedUser.id);
+      }
 
       const response = await apiClient.upload<{
         fileUrl?: string;
@@ -654,7 +783,7 @@ export default function TeamsMessenger() {
           messageId: payload?.messageId || `temp-${Date.now()}`,
           senderId: String(user.id),
           senderName: user.name || 'You',
-          recipientId: selectedUser.id,
+          recipientId: selectedUser.chatKind === 'group' ? undefined : selectedUser.id,
           content: fileUrl,
           timestamp: new Date(),
           isOwn: true,
@@ -696,7 +825,7 @@ export default function TeamsMessenger() {
   };
 
   const handleRemoveContact = () => {
-    if (!selectedUser) return;
+    if (!selectedUser || selectedUser.chatKind === 'group') return;
     const next = new Set(hiddenContactIds);
     next.add(selectedUser.id);
     persistHiddenContacts(next);
@@ -719,6 +848,10 @@ export default function TeamsMessenger() {
 
   const handleAvatarUpload = async (file: File) => {
     if (!selectedUser || !user?.id) return;
+    if (selectedUser.chatKind === 'group') {
+      toast.error('Profile photos are only available in direct chats');
+      return;
+    }
     const canEditOther =
       user.role === 'admin' || user.role === 'super_admin';
     const isSelf = selectedUser.id === String(user.id);
@@ -759,13 +892,19 @@ export default function TeamsMessenger() {
   const visibleUsers = users
     .filter((u) => !hiddenContactIds.has(u.id))
     .filter((u) => user?.role === 'super_admin' || u.role !== 'super_admin');
-  const hiddenUsers = users.filter((u) => hiddenContactIds.has(u.id));
-
   const filteredUsers = visibleUsers.filter(
     (u) =>
       u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       u.email.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const filteredGroups = groupChats.filter(
+    (g) =>
+      g.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      g.email.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const createGroupCandidates = visibleUsers.filter((u) => !u.chatKind);
 
   const addContactCandidates = users
     .filter((u) => u.id !== String(user?.id))
@@ -782,6 +921,51 @@ export default function TeamsMessenger() {
     setAddContactSearch('');
   };
 
+  const handleCreateGroupSubmit = async () => {
+    const name = newGroupName.trim();
+    if (!name) {
+      toast.error('Enter a group name');
+      return;
+    }
+    if (createGroupMemberIds.size === 0) {
+      toast.error('Select at least one employee');
+      return;
+    }
+    setCreatingGroup(true);
+    try {
+      const res = await apiClient.post<{
+        conversationId: string;
+        name: string;
+        memberIds: string[];
+      }>('/chat/groups', { name, memberIds: [...createGroupMemberIds] });
+      if (!res.success || !res.data) {
+        throw new Error(res.message || 'Could not create group');
+      }
+      const d = res.data;
+      toast.success('Group created');
+      setShowCreateGroupDialog(false);
+      setNewGroupName('');
+      setCreateGroupMemberIds(new Set());
+      await fetchSidebar();
+      setSelectedUser({
+        id: d.conversationId,
+        name: d.name,
+        email: `${d.memberIds.length} members`,
+        role: 'employee',
+        isOnline: true,
+        unreadCount: 0,
+        chatKind: 'group',
+        conversationId: d.conversationId,
+        memberIds: d.memberIds.map(String),
+      });
+    } catch (e: unknown) {
+      console.error(e);
+      toast.error(e instanceof Error ? e.message : 'Failed to create group');
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
+
   return (
     <>
     <div className="h-full min-h-0 flex flex-1 bg-background overflow-hidden">
@@ -789,23 +973,39 @@ export default function TeamsMessenger() {
       <div className="w-80 shrink-0 border-r border-border bg-card flex flex-col min-h-0">
         {/* Header */}
         <div className="p-4 border-b border-border">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 gap-2">
             <h2 className="text-lg font-semibold">Messages</h2>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1"
-              onClick={() => setShowAddContactDialog(true)}
-            >
-              <UserPlus className="w-4 h-4" />
-              Add
-            </Button>
+            <div className="flex items-center gap-1 shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1"
+                onClick={() => setShowAddContactDialog(true)}
+              >
+                <UserPlus className="w-4 h-4" />
+                Add
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1"
+                onClick={() => {
+                  setNewGroupName('');
+                  setCreateGroupMemberIds(new Set());
+                  setShowCreateGroupDialog(true);
+                }}
+              >
+                <UsersRound className="w-4 h-4" />
+                Group
+              </Button>
+            </div>
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Search users..."
+              placeholder="Search people and groups..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10 rounded-xl bg-background/50"
@@ -820,13 +1020,73 @@ export default function TeamsMessenger() {
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
               </div>
-            ) : filteredUsers.length > 0 ? (
-              filteredUsers.map((user) => (
+            ) : filteredGroups.length === 0 && filteredUsers.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                No chats match your search
+              </div>
+            ) : (
+              <>
+                {filteredGroups.length > 0 ? (
+                  <>
+                    <p className="px-2 text-xs font-semibold text-muted-foreground mb-1">Groups</p>
+                    {filteredGroups.map((g) => (
+                      <button
+                        key={g.id}
+                        type="button"
+                        onClick={() => setSelectedUser(g)}
+                        className={`w-full p-3 rounded-lg mb-2 text-left transition-colors ${
+                          selectedUser?.id === g.id
+                            ? 'bg-accent border border-primary/40 shadow-sm'
+                            : 'border border-transparent hover:bg-accent'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Avatar className="h-10 w-10">
+                            <AvatarFallback>
+                              <UsersRound className="h-5 w-5 text-muted-foreground" />
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="font-medium truncate text-foreground">{g.name}</p>
+                              <Badge
+                                variant="outline"
+                                className="text-xs shrink-0 bg-muted text-foreground border-border"
+                              >
+                                Group
+                              </Badge>
+                            </div>
+                            <p className="text-xs text-muted-foreground truncate">{g.email}</p>
+                            {g.lastMessage ? (
+                              <p className="text-xs text-muted-foreground/80 truncate mt-0.5">
+                                {g.lastMessage}
+                                {g.lastMessageTime ? ` · ${g.lastMessageTime}` : ''}
+                              </p>
+                            ) : null}
+                          </div>
+                          {g.unreadCount > 0 && (
+                            <Badge variant="default" className="ml-2">
+                              {g.unreadCount}
+                            </Badge>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </>
+                ) : null}
+                {filteredUsers.length > 0 ? (
+                  <>
+                    {filteredGroups.length > 0 ? (
+                      <p className="px-2 text-xs font-semibold text-muted-foreground mt-2 mb-1">
+                        People
+                      </p>
+                    ) : null}
+                    {filteredUsers.map((contact) => (
                 <button
-                  key={user.id}
-                  onClick={() => setSelectedUser(user)}
+                  key={contact.id}
+                  onClick={() => setSelectedUser(contact)}
                   className={`w-full p-3 rounded-lg mb-2 text-left transition-colors ${
-                    selectedUser?.id === user.id
+                    selectedUser?.id === contact.id
                       ? 'bg-accent border border-primary/40 shadow-sm'
                       : 'border border-transparent hover:bg-accent'
                   }`}
@@ -834,41 +1094,40 @@ export default function TeamsMessenger() {
                   <div className="flex items-center gap-3">
                     <div className="relative">
                       <Avatar className="h-10 w-10">
-                        <AvatarImage src={user.avatar} />
-                        <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
+                        <AvatarImage src={contact.avatar} />
+                        <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
                       </Avatar>
-                      {user.isOnline && (
+                      {contact.isOnline && (
                         <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-background" />
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="font-medium truncate text-foreground">{user.name}</p>
+                        <p className="font-medium truncate text-foreground">{contact.name}</p>
                         <Badge
                           variant="outline"
-                          className={`text-xs shrink-0 ${roleBadgeClass(user.role, selectedUser?.id === user.id)}`}
+                          className={`text-xs shrink-0 ${roleBadgeClass(contact.role, selectedUser?.id === contact.id)}`}
                         >
-                          {formatRoleLabel(user.role)}
+                          {formatRoleLabel(contact.role)}
                         </Badge>
                       </div>
-                      <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-                      {user.lastMessage ? (
+                      <p className="text-xs text-muted-foreground truncate">{contact.email}</p>
+                      {contact.lastMessage ? (
                         <p className="text-xs text-muted-foreground/80 truncate mt-0.5">
-                          {user.lastMessage}
-                          {user.lastMessageTime ? ` · ${user.lastMessageTime}` : ''}
+                          {contact.lastMessage}
+                          {contact.lastMessageTime ? ` · ${contact.lastMessageTime}` : ''}
                         </p>
                       ) : null}
                     </div>
-                    {user.unreadCount > 0 && (
-                      <Badge variant="default" className="ml-2">{user.unreadCount}</Badge>
+                    {contact.unreadCount > 0 && (
+                      <Badge variant="default" className="ml-2">{contact.unreadCount}</Badge>
                     )}
                   </div>
                 </button>
-              ))
-            ) : (
-              <div className="text-center py-8 text-muted-foreground">
-                No users found
-              </div>
+                    ))}
+                  </>
+                ) : null}
+              </>
             )}
           </div>
         </div>
@@ -880,58 +1139,84 @@ export default function TeamsMessenger() {
           <>
             {/* Chat Header */}
             <div className="border-b border-border bg-card p-4 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-3">
-                <Avatar className="h-10 w-10">
+              <div className="flex items-center gap-3 min-w-0">
+                <Avatar className="h-10 w-10 shrink-0">
                   <AvatarImage src={selectedUser.avatar} />
-                  <AvatarFallback>{selectedUser.name.charAt(0)}</AvatarFallback>
+                  <AvatarFallback>
+                    {selectedUser.chatKind === 'group' ? (
+                      <UsersRound className="h-5 w-5 text-muted-foreground" />
+                    ) : (
+                      selectedUser.name.charAt(0)
+                    )}
+                  </AvatarFallback>
                 </Avatar>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <p className="font-semibold">{selectedUser.name}</p>
-                    <Badge 
-                      variant="outline" 
-                      className={`text-xs ${
-                        selectedUser.role === 'admin' ? 'bg-red-50 text-red-700 border-red-200' :
-                        selectedUser.role === 'super_admin' ? 'bg-purple-50 text-purple-700 border-purple-200' :
-                        'bg-blue-50 text-blue-700 border-blue-200'
-                      }`}
-                    >
-                      {selectedUser.role === 'super_admin' ? 'Super Admin' : selectedUser.role.charAt(0).toUpperCase() + selectedUser.role.slice(1)}
-                    </Badge>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-semibold truncate">{selectedUser.name}</p>
+                    {selectedUser.chatKind === 'group' ? (
+                      <Badge variant="outline" className="text-xs shrink-0 bg-muted text-foreground border-border">
+                        Group
+                      </Badge>
+                    ) : (
+                      <Badge
+                        variant="outline"
+                        className={`text-xs shrink-0 ${
+                          selectedUser.role === 'admin'
+                            ? 'bg-red-50 text-red-700 border-red-200'
+                            : selectedUser.role === 'super_admin'
+                              ? 'bg-purple-50 text-purple-700 border-purple-200'
+                              : 'bg-blue-50 text-blue-700 border-blue-200'
+                        }`}
+                      >
+                        {selectedUser.role === 'super_admin'
+                          ? 'Super Admin'
+                          : selectedUser.role.charAt(0).toUpperCase() + selectedUser.role.slice(1)}
+                      </Badge>
+                    )}
                   </div>
-                  <p className="text-xs text-muted-foreground break-all">{selectedUser.email}</p>
+                  <p className="text-xs text-muted-foreground break-all truncate">
+                    {selectedUser.chatKind === 'group'
+                      ? selectedUser.memberIds?.length
+                        ? `${selectedUser.memberIds.length} members`
+                        : 'Group chat'
+                      : selectedUser.email}
+                  </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  title="Microsoft Teams voice call (in app)"
-                  disabled={callLoading}
-                  onClick={() => startTeamsCall(false)}
-                >
-                  {callLoading && !callWithVideo ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Phone className="w-4 h-4" />
-                  )}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  title="Microsoft Teams video call (in app)"
-                  disabled={callLoading}
-                  onClick={() => startTeamsCall(true)}
-                >
-                  {callLoading && callWithVideo ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Video className="w-4 h-4" />
-                  )}
-                </Button>
+              <div className="flex items-center gap-2 shrink-0">
+                {selectedUser.chatKind !== 'group' ? (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      title="Microsoft Teams voice call (in app)"
+                      disabled={callLoading}
+                      onClick={() => startTeamsCall(false)}
+                    >
+                      {callLoading && !callWithVideo ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Phone className="w-4 h-4" />
+                      )}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      title="Microsoft Teams video call (in app)"
+                      disabled={callLoading}
+                      onClick={() => startTeamsCall(true)}
+                    >
+                      {callLoading && callWithVideo ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Video className="w-4 h-4" />
+                      )}
+                    </Button>
+                  </>
+                ) : null}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="sm" type="button" aria-label="More chat options">
@@ -941,29 +1226,35 @@ export default function TeamsMessenger() {
                   <DropdownMenuContent align="end" className="w-56">
                     <DropdownMenuItem onClick={() => setShowProfileDialog(true)}>
                       <User className="w-4 h-4 mr-2" />
-                      View profile
+                      {selectedUser.chatKind === 'group' ? 'Group details' : 'View profile'}
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => profileAvatarInputRef.current?.click()}>
-                      <Camera className="w-4 h-4 mr-2" />
-                      Change photo
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      className="text-destructive focus:text-destructive"
-                      onClick={handleRemoveContact}
-                    >
-                      <UserMinus className="w-4 h-4 mr-2" />
-                      Remove contact
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() =>
-                        toast.info(
-                          'Calls use Microsoft Teams meetings inside WorkPlus. Your org must have Teams Graph permissions configured.'
-                        )
-                      }
-                    >
-                      About Teams calls
-                    </DropdownMenuItem>
+                    {selectedUser.chatKind !== 'group' ? (
+                      <DropdownMenuItem onClick={() => profileAvatarInputRef.current?.click()}>
+                        <Camera className="w-4 h-4 mr-2" />
+                        Change photo
+                      </DropdownMenuItem>
+                    ) : null}
+                    {selectedUser.chatKind !== 'group' ? <DropdownMenuSeparator /> : null}
+                    {selectedUser.chatKind !== 'group' ? (
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={handleRemoveContact}
+                      >
+                        <UserMinus className="w-4 h-4 mr-2" />
+                        Remove contact
+                      </DropdownMenuItem>
+                    ) : null}
+                    {selectedUser.chatKind !== 'group' ? (
+                      <DropdownMenuItem
+                        onClick={() =>
+                          toast.info(
+                            'Calls use Microsoft Teams meetings inside WorkPlus. Your org must have Teams Graph permissions configured.'
+                          )
+                        }
+                      >
+                        About Teams calls
+                      </DropdownMenuItem>
+                    ) : null}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -1002,7 +1293,16 @@ export default function TeamsMessenger() {
                             View attachment
                           </a>
                         ) : (
-                          <p className="text-sm break-words">{message.content}</p>
+                          <>
+                            {!message.isOwn &&
+                              selectedUser.chatKind === 'group' &&
+                              message.messageType !== 'system' && (
+                                <p className="text-xs font-semibold opacity-95 mb-1">
+                                  {message.senderName}
+                                </p>
+                              )}
+                            <p className="text-sm break-words">{message.content}</p>
+                          </>
                         )}
                         <div className="flex items-center gap-1 mt-1 text-xs opacity-90">
                           <span>
@@ -1045,7 +1345,11 @@ export default function TeamsMessenger() {
                       <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
                       <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
                     </div>
-                    <span className="text-xs">{selectedUser.name} is typing...</span>
+                    <span className="text-xs">
+                      {selectedUser.chatKind === 'group'
+                        ? 'Someone is typing…'
+                        : `${selectedUser.name} is typing…`}
+                    </span>
                   </div>
                 )}
                 <div ref={messagesEndRef} />
@@ -1126,7 +1430,7 @@ export default function TeamsMessenger() {
           <div className="flex-1 flex items-center justify-center text-muted-foreground">
             <div className="text-center">
               <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>Select a user to start messaging</p>
+              <p>Select a person or group to start messaging</p>
             </div>
           </div>
         )}
@@ -1174,9 +1478,26 @@ export default function TeamsMessenger() {
       <DialogContent className="max-w-sm rounded-2xl">
         <DialogHeader>
           <DialogTitle>{selectedUser?.name || 'Contact'}</DialogTitle>
-          <DialogDescription>Profile information</DialogDescription>
+          <DialogDescription>
+            {selectedUser?.chatKind === 'group' ? 'Members in this group' : 'Profile information'}
+          </DialogDescription>
         </DialogHeader>
-        {selectedUser && (
+        {selectedUser && selectedUser.chatKind === 'group' ? (
+          <div className="space-y-3 text-sm">
+            <p className="text-muted-foreground">
+              {(selectedUser.memberIds || []).length} members
+            </p>
+            <ul className="list-disc pl-5 space-y-1 max-h-52 overflow-y-auto">
+              {(selectedUser.memberIds || []).map((mid) => (
+                <li key={mid}>
+                  {mid === String(user?.id)
+                    ? `${user?.name || 'You'} (you)`
+                    : users.find((u) => u.id === mid)?.name || `User`}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : selectedUser ? (
           <div className="space-y-4">
             <div className="flex items-center gap-3">
               <Avatar className="h-14 w-14">
@@ -1215,7 +1536,74 @@ export default function TeamsMessenger() {
               {avatarUploading ? 'Uploading…' : 'Change profile photo'}
             </Button>
           </div>
-        )}
+        ) : null}
+      </DialogContent>
+    </Dialog>
+
+    <Dialog open={showCreateGroupDialog} onOpenChange={setShowCreateGroupDialog}>
+      <DialogContent className="max-w-md rounded-2xl max-h-[90vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Create group</DialogTitle>
+          <DialogDescription>
+            Name the group and choose employees from your organization. You will be added automatically.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-1 shrink-0">
+          <Input
+            placeholder="Group name"
+            value={newGroupName}
+            onChange={(e) => setNewGroupName(e.target.value)}
+          />
+        </div>
+        <p className="text-xs font-medium text-muted-foreground">Members</p>
+        <div className="min-h-0 flex-1 overflow-y-auto border rounded-lg p-2 space-y-1 max-h-64">
+          {createGroupCandidates.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">No employees available to add.</p>
+          ) : (
+            createGroupCandidates.map((c) => (
+              <label
+                key={c.id}
+                className="flex items-center gap-3 p-2 rounded-md hover:bg-accent cursor-pointer"
+              >
+                <Checkbox
+                  checked={createGroupMemberIds.has(c.id)}
+                  onCheckedChange={(checked) => {
+                    setCreateGroupMemberIds((prev) => {
+                      const next = new Set(prev);
+                      if (checked === true) next.add(c.id);
+                      else next.delete(c.id);
+                      return next;
+                    });
+                  }}
+                />
+                <Avatar className="h-8 w-8 shrink-0">
+                  <AvatarImage src={c.avatar} />
+                  <AvatarFallback>{c.name.charAt(0)}</AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{c.name}</p>
+                  <p className="text-xs text-muted-foreground truncate">{c.email}</p>
+                </div>
+              </label>
+            ))
+          )}
+        </div>
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setShowCreateGroupDialog(false);
+              setNewGroupName('');
+              setCreateGroupMemberIds(new Set());
+            }}
+          >
+            Cancel
+          </Button>
+          <Button type="button" disabled={creatingGroup} onClick={() => void handleCreateGroupSubmit()}>
+            {creatingGroup ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Create group'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
 

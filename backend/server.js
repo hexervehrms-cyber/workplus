@@ -58,11 +58,10 @@ import Session from "./models/Session.js";
 
 // Import middleware
 import { errorHandler, requestIdMiddleware, asyncHandler } from "./middleware/errorHandler.js";
+import { createAuthenticatedUploadsHandler } from "./middleware/authenticatedUploads.js";
 import { tenantMiddleware, subscriptionMiddleware } from "./middleware/tenant.js";
 import fileValidator from "./middleware/fileValidator.js";
-// Rate limiter disabled for now on server-level stubs; auth router uses real limiters from rateLimiter.js
-const registerLimiter = (req, res, next) => next();
-// import { loginLimiter, registerLimiter } from "./middleware/rateLimiter.js";
+import { registerLimiter } from "./middleware/rateLimiter.js";
 
 // Import logger
 import logger from "./utils/logger.js";
@@ -95,6 +94,7 @@ import leaveRoutes from "./routes/leave.js";
 import leaveAllocationRoutes from "./routes/leave-allocation.js";
 import leaveTypeSettingsRoutes from "./routes/leave-type-settings.js";
 import usersRoutes from "./routes/users.js";
+import departmentsRoutes from "./routes/departments.js";
 import holidaysRoutes from "./routes/holidays.js";
 import profileRoutes from "./routes/profile.js";
 import rolesRoutes from "./routes/roles.js";
@@ -116,6 +116,7 @@ import callsRoutes from "./routes/sales/calls.js";
 import leadsRoutes from "./routes/sales/leads.js";
 import dealsRoutes from "./routes/sales/deals.js";
 import performanceRoutes from "./routes/sales/performance.js";
+import performanceEmployeeRoutes from "./routes/performance-employee.js";
 import revenueRoutes from "./routes/sales/revenue.js";
 
 // Setup __dirname for ES modules (must be before dotenv.config)
@@ -413,8 +414,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// Static files
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Uploaded files — require auth; access controlled by path (receipts, documents, avatars, chat)
+app.use(
+  "/uploads",
+  authenticate,
+  asyncHandler(createAuthenticatedUploadsHandler(path.join(__dirname, "uploads")))
+);
 
 // ============================================================================
 // MULTER CONFIGURATION
@@ -585,7 +590,7 @@ app.use("/health", healthRoutes);
 // ============================================================================
 
 // Import auth middleware
-import { authenticate } from "./middleware/auth.js";
+import { authenticate, authorize } from "./middleware/auth.js";
 
 // Registration keeps legacy 24h access-token flow (self-service signup); login uses routes/auth.js (15m + refresh + Redis session)
 app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) => {
@@ -722,10 +727,22 @@ app.use("/api/dashboard", authenticate, dashboardEmployeeRoutes);
 // PUBLIC CLEANUP ENDPOINTS (for testing/development)
 // ============================================================================
 
-// Cleanup endpoint to delete all leave requests - PROTECTED with authentication
-app.delete("/api/leave-requests/cleanup/all", authenticate, asyncHandler(async (req, res) => {
+// Cleanup endpoint — super_admin only; disabled in production unless explicitly enabled
+app.delete("/api/leave-requests/cleanup/all", authenticate, authorize("super_admin"), asyncHandler(async (req, res) => {
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_LEAVE_CLEANUP !== "true") {
+    return res.status(403).json({
+      success: false,
+      message: "Leave cleanup is disabled in production",
+    });
+  }
   try {
-    const result = await LeaveRequest.deleteMany({});
+    const orgFilter =
+      req.user.role === "super_admin" && req.query.orgId
+        ? { orgId: String(req.query.orgId) }
+        : req.user.orgId
+          ? { orgId: String(req.user.orgId) }
+          : {};
+    const result = await LeaveRequest.deleteMany(orgFilter);
     logger.info('All leave requests deleted', { deletedCount: result.deletedCount });
     res.json({
       success: true,
@@ -763,16 +780,24 @@ app.patch("/api/documents/:id/status", authenticate, asyncHandler(async (req, re
     return res.status(400).json({ message: "Invalid document ID" });
   }
 
-  const document = await Document.findByIdAndUpdate(
-    id,
-    { status },
-    { new: true }
-  );
-
-  if (!document) {
+  const existing = await Document.findById(id);
+  if (!existing) {
     return res.status(404).json({ message: "Document not found" });
   }
 
+  const privileged = ["admin", "hr", "super_admin"].includes(req.user.role);
+  const isOwner = String(existing.userId) === String(req.user.userId);
+  if (!isOwner && !privileged) {
+    return res.status(403).json({ message: "Unauthorized access" });
+  }
+  if (
+    req.user.role !== "super_admin" &&
+    String(existing.orgId) !== String(req.user.orgId)
+  ) {
+    return res.status(403).json({ message: "Unauthorized access" });
+  }
+
+  const document = await Document.findByIdAndUpdate(id, { status }, { new: true });
   res.json(document);
 }));
 
@@ -814,6 +839,7 @@ app.use("/api/holidays", authenticate, holidaysRoutes);
 
 // Users routes (with authentication)
 app.use("/api/users", authenticate, usersRoutes);
+app.use("/api/departments", authenticate, departmentsRoutes);
 
 // Roles routes (with authentication)
 app.use("/api/roles", authenticate, rolesRoutes);
@@ -827,6 +853,7 @@ app.use("/api/sales/calls", authenticate, callsRoutes);
 app.use("/api/sales/leads", authenticate, leadsRoutes);
 app.use("/api/sales/deals", authenticate, dealsRoutes);
 app.use("/api/sales/performance", authenticate, performanceRoutes);
+app.use("/api/performance", authenticate, performanceEmployeeRoutes);
 app.use("/api/sales/revenue", authenticate, revenueRoutes);
 
 // Chat routes (with authentication)
@@ -853,6 +880,19 @@ app.get("/api/experience-documents/:userId", authenticate, asyncHandler(async (r
     return res.status(400).json({ message: "Invalid user ID" });
   }
 
+  const privileged = ["admin", "hr", "super_admin", "manager"].includes(req.user.role);
+  const isSelf = String(userId) === String(req.user.userId);
+  if (!isSelf && !privileged) {
+    return res.status(403).json({ message: "Unauthorized access" });
+  }
+
+  if (privileged && req.user.role !== "super_admin" && !isSelf) {
+    const targetUser = await User.findById(userId).select("orgId").lean();
+    if (targetUser?.orgId && String(targetUser.orgId) !== String(req.user.orgId)) {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+  }
+
   const experienceTypes = [
     "experience_letter",
     "offer_letter",
@@ -862,10 +902,12 @@ app.get("/api/experience-documents/:userId", authenticate, asyncHandler(async (r
     "bank_statement"
   ];
 
-  const documents = await Document.find({
-    userId,
-    type: { $in: experienceTypes }
-  }).sort({ uploadedAt: -1 });
+  const docQuery = { userId, type: { $in: experienceTypes } };
+  if (req.user.role !== "super_admin") {
+    docQuery.orgId = String(req.user.orgId);
+  }
+
+  const documents = await Document.find(docQuery).sort({ uploadedAt: -1 });
 
   res.json(documents);
 }));
@@ -906,34 +948,30 @@ io.on('connection', (socket) => {
     socket.tenantId = decoded.tenantId || 'system';
     socket.email = decoded.email;
 
-    // Handle user authentication with JWT
+    // Session setup — identity comes only from verified JWT (connection), not client payload
     socket.on('authenticate', async (data) => {
       let sessionError = null;
       try {
-        const { userId, role, tenantId } = data;
-        
-        console.log('🔐 Authenticate event received:', { userId, role, tenantId });
-        
+        const userId = socket.userId;
+        const role = socket.role;
+        const tenantId = socket.tenantId || 'system';
+
         if (!userId || !role) {
-          logger.warn(`Invalid authentication data from ${socket.id}`);
-          socket.emit('auth_error', { message: 'Invalid authentication data', code: 'INVALID_AUTH_DATA' });
+          logger.warn(`Socket authenticate without JWT identity: ${socket.id}`);
+          socket.emit('auth_error', { message: 'Invalid session', code: 'INVALID_AUTH_DATA' });
           socket.disconnect(true);
           return;
         }
 
-        // One live socket per user — drop stale tabs/reloads to reduce memory and event storms
-        for (const [sid, existing] of io.sockets.sockets) {
-          if (sid !== socket.id && String(existing.userId) === String(userId)) {
-            existing.disconnect(true);
-          }
+        if (data?.userId && String(data.userId) !== String(userId)) {
+          logger.warn(`Socket identity spoof attempt: ${socket.id}`);
+          socket.emit('auth_error', { message: 'Identity mismatch', code: 'IDENTITY_MISMATCH' });
+          socket.disconnect(true);
+          return;
         }
 
-        // Store user info on socket
-        socket.userId = userId;
-        socket.role = role;
-        socket.tenantId = tenantId || 'system';
+        // Allow multiple tabs/devices per user (sibling sockets are not disconnected)
 
-        // Create or update session record with proper error handling
         try {
           console.log('📝 Updating session for user:', userId);
           
@@ -1275,9 +1313,26 @@ io.on('connection', (socket) => {
       }
     });
 
-    // Join/Leave room handlers
+    // Join/Leave room handlers — whitelist rooms per JWT identity
+    const canJoinRoom = (room) => {
+      if (!room || typeof room !== 'string' || room.length > 128) return false;
+      const uid = String(socket.userId || '');
+      const tenant = String(socket.tenantId || '');
+      if (room === `user_${uid}`) return true;
+      if (tenant && room === `tenant_${tenant}`) return true;
+      if (['admin', 'hr', 'manager', 'super_admin'].includes(socket.role)) {
+        if (room === 'management') return true;
+        if (tenant && room.startsWith(`tenant_${tenant}`)) return true;
+      }
+      return false;
+    };
+
     socket.on('join', (room) => {
       try {
+        if (!canJoinRoom(room)) {
+          logger.warn(`Socket join denied for ${socket.userId}: ${room}`);
+          return;
+        }
         socket.join(room);
         logger.debug(`User ${socket.userId} joined room: ${room}`);
       } catch (error) {

@@ -292,30 +292,19 @@ export default function Leave() {
     }
 
     try {
-      let employeeId = user.employeeId;
-      
-      // If employeeId is not set, try to fetch it
+      const { resolveEmployeeMongoId } = await import('../../utils/resolveEmployeeId');
+      const employeeId = await resolveEmployeeMongoId(user);
+
       if (!employeeId) {
-        console.log('employeeId not found in user context, fetching from backend...');
-        try {
-          const employeeResponse = await EmployeeService.getEmployeeByUserId(user.id);
-          if (employeeResponse && employeeResponse._id) {
-            employeeId = employeeResponse._id;
-            console.log('Employee ID fetched:', employeeId);
-          }
-        } catch (error) {
-          console.error('Error fetching employee:', error);
-          toast.error('Could not find employee record');
-          return;
-        }
-      }
-      
-      if (!employeeId) {
-        toast.error('Employee ID not found');
+        toast.error('Employee profile not found. Please contact HR.');
         return;
       }
-      
-      const orgId = user.orgId || 'system';
+
+      const orgId = user.orgId || user.tenantId;
+      if (!orgId) {
+        toast.error('Organization not set on your account.');
+        return;
+      }
 
       const startDate = new Date(formData.startDate);
       const endDate =
@@ -375,8 +364,9 @@ export default function Leave() {
 
       // For new requests, check if there's enough balance
       // For editing, skip the balance check since leaves are already deducted
-      if (!editingLeaveId && (!balance || balance.available < days)) {
-        toast.error(`Insufficient ${formData.type} balance. Available: ${balance?.available || 0} days, Requested: ${days.toFixed(2)} days`);
+      const remaining = balance?.remaining ?? balance?.available ?? 0;
+      if (!editingLeaveId && (!balance || remaining < days)) {
+        toast.error(`Insufficient ${formData.type} balance. Available: ${remaining} days, Requested: ${days.toFixed(2)} days`);
         return;
       }
 
@@ -415,12 +405,7 @@ export default function Leave() {
       } else {
         // Create new leave request
         response = await LeaveRequestService.createLeaveRequest(leaveData);
-        
-        if (response.success) {
-          // Deduct leaves from allocation only for new requests
-          await LeaveAllocationService.deductLeaves(employeeId, formData.type, days, response.data?.leaveRequest?._id);
-        }
-        
+
         if (isHourly) {
           toast.success(`Hourly leave submitted successfully (${hours.toFixed(1)} hours)`);
         } else {

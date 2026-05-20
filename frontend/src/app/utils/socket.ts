@@ -184,12 +184,13 @@ export class SocketService {
     });
   }
 
-  // Re-register all listeners after reconnection
+  // Re-register all listeners after reconnection (avoid duplicate handlers)
   private reregisterListeners() {
     if (!this.socket) return;
 
     this.listeners.forEach((callbacks, event) => {
-      callbacks.forEach(callback => {
+      callbacks.forEach((callback) => {
+        this.socket?.off(event, callback);
         this.socket?.on(event, callback);
       });
     });

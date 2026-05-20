@@ -7,8 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Card } from './ui/card';
 import { Copy, Check, Loader, Mail, Link as LinkIcon } from 'lucide-react';
 import { toast } from '../utils/portalToast';
-import { TokenManager } from '../utils/api';
-import { buildApiUrl } from '../utils/apiHelper';
+import { apiClient } from '../utils/api';
 
 interface OnboardingLinkGeneratorProps {
   isOpen: boolean;
@@ -60,35 +59,14 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
 
 try {
       setLoading(true);
-      const token = TokenManager.get();
 
-      const response = await fetch(buildApiUrl('/onboarding/generate-link'), {
-        method: 'POST',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData)
-      });
+      const data = await apiClient.post('/onboarding/generate-link', formData);
 
-      let data;
-      try {
-        data = await response.json();
-      } catch (parseError) {
-        console.error('Parse error:', parseError);
-        throw new Error(`Server returned invalid response (${response.status})`);
+      if (!data?.success) {
+        throw new Error(data?.message || 'Failed to generate onboarding link');
       }
 
-      if (!response.ok) {
-        throw new Error(data.message || `Failed to generate onboarding link (${response.status})`);
-      }
-
-      console.log('Generate link response:', data);
-      console.log('Generated link data:', data.data);
-      
-      if (!data.data || !data.data.token) {
-        console.error('Missing token in response:', data.data);
+      if (!data.data?.token) {
         throw new Error('Invalid response: missing token or onboarding URL');
       }
 

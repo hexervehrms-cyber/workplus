@@ -31,6 +31,7 @@ import {
   getCalendarWeekRange,
   calendarWeekKey,
 } from '../utils/attendanceQueryHelpers.js';
+import { emitOrgRealtime } from '../utils/orgSocketEmit.js';
 import { syncAttendanceHistoryFromRecord } from '../utils/attendanceHistorySync.js';
 import {
   ATTENDANCE_ACTIVITY_ACTIONS,
@@ -555,6 +556,26 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
       isReEntry,
     });
   } catch (createError) {
+    const dupCode = createError?.code === 11000 || createError?.cause?.code === 11000;
+    if (dupCode) {
+      const recovered = await Attendance.findOne(withOpenSessionFilter(todayQuery)).sort({ _id: -1 });
+      if (recovered?.checkIn) {
+        const hoursThisWeek = await sumHoursThisWeekForUser(
+          effectiveUserId,
+          effectiveOrgId,
+          authOrgId
+        );
+        return res.status(200).json({
+          success: true,
+          message: 'Already checked in for this session.',
+          data: {
+            attendance: recovered,
+            hoursThisWeek,
+            weekKey: calendarWeekKey(),
+          },
+        });
+      }
+    }
     logger.error('Failed to create attendance record', {
       userId: effectiveUserId,
       employeeId: effectiveEmployeeId,
@@ -1108,10 +1129,12 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
     }
 
     if (global.io) {
-      global.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
+      emitOrgRealtime(global.io, [effectiveOrgId, authOrgId], 'break:started', {
         employeeId: effectiveEmployeeId,
         userId: currentUserId,
+        employeeName: effectiveEmployeeName,
         breakType,
+        breakStartTime: openBreak?.startTime || newBreak.startTime,
         timestamp: new Date().toISOString(),
         attendance: updatedAttendance,
         liveStatus,
@@ -1317,10 +1340,13 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     }
 
     if (global.io) {
-      global.io.to(`tenant_${effectiveOrgId}`).emit('break:ended', {
+      emitOrgRealtime(global.io, [effectiveOrgId, authOrgId], 'break:ended', {
         employeeId: effectiveEmployeeId,
         userId: currentUserId,
+        employeeName: effectiveEmployeeName,
         breakType: activeBreak?.breakType || 'regular',
+        breakStartTime: activeBreak?.startTime,
+        breakEndTime: activeBreak?.endTime || endTime,
         timestamp: new Date().toISOString(),
         breakDuration,
         attendance: updatedAttendance,
@@ -1505,6 +1531,7 @@ router.get('/on-break', authorize('super_admin', 'admin', 'hr', 'manager'), asyn
   res.set('Expires', '0');
   
   const userOrgId = req.user.orgId;
+  const orgMatch = buildOrgIdFlexible(userOrgId);
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -1513,7 +1540,7 @@ router.get('/on-break', authorize('super_admin', 'admin', 'hr', 'manager'), asyn
 
   // Fetch only records that are likely on active break
   const attendanceRecords = await Attendance.find({
-    orgId: userOrgId,
+    ...orgMatch,
     date: { $gte: today, $lt: tomorrow },
     checkIn: { $exists: true, $ne: null },
     $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
@@ -1553,6 +1580,7 @@ router.get('/on-break', authorize('super_admin', 'admin', 'hr', 'manager'), asyn
         department: record.employeeId?.department || 'N/A',
         designation: record.employeeId?.designation || 'N/A',
         breakStartTime: lastBreak.startTime,
+        breakEndTime: lastBreak.endTime || null,
         breakDuration: breakDuration,
         breakType: lastBreak.breakType || 'Regular Break',
         avatar: record.userId?.avatar,
@@ -1564,6 +1592,73 @@ router.get('/on-break', authorize('super_admin', 'admin', 'hr', 'manager'), asyn
     success: true,
     data: employeesOnBreak,
     count: employeesOnBreak.length
+  });
+}));
+
+/**
+ * GET /api/attendance/today-breaks
+ * All break start/end events for today (admin dashboard table)
+ */
+router.get('/today-breaks', authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+
+  const orgMatch = buildOrgIdFlexible(req.user.orgId);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  const attendanceRecords = await Attendance.find({
+    ...orgMatch,
+    date: { $gte: today, $lt: tomorrow },
+    'breaks.0': { $exists: true },
+  })
+    .populate('userId', 'name email avatar')
+    .populate('employeeId', 'employeeCode department designation')
+    .select('userId employeeId breaks')
+    .lean();
+
+  const rows = [];
+  for (const record of attendanceRecords) {
+    const employeeName = record.userId?.name || 'Unknown';
+    const department = record.employeeId?.department || 'N/A';
+    const designation = record.employeeId?.designation || 'N/A';
+
+    (record.breaks || []).forEach((b, breakIndex) => {
+      if (!b?.startTime) return;
+      const start = new Date(b.startTime);
+      const end = b.endTime ? new Date(b.endTime) : null;
+      const duration =
+        typeof b.duration === 'number'
+          ? b.duration
+          : end
+            ? Math.round((end.getTime() - start.getTime()) / (1000 * 60))
+            : null;
+
+      rows.push({
+        attendanceId: record._id,
+        employeeId: record.employeeId?._id,
+        employeeName,
+        department,
+        designation,
+        breakIndex,
+        breakType: b.breakType || 'regular',
+        startTime: b.startTime,
+        endTime: b.endTime || null,
+        duration,
+        status: end ? 'ended' : 'active',
+      });
+    });
+  }
+
+  rows.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+
+  res.json({
+    success: true,
+    data: rows,
+    count: rows.length,
   });
 }));
 

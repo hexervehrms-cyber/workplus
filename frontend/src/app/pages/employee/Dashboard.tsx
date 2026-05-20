@@ -584,9 +584,9 @@ export default function EmployeeDashboard() {
           (cached.isCheckedIn || cached.checkedIn) &&
           !cached.checkOutTime;
 
-        if (hasFreshCheckedIn) {
+        if (hasFreshCheckedIn && !attendanceApiOk) {
           debug.warn(
-            'Server returned no attendance row but durable cache shows checked in — keeping local state'
+            'Attendance API failed — using short-lived local cache'
           );
           updateAttendance({
             isCheckedIn: true,
@@ -1070,7 +1070,7 @@ export default function EmployeeDashboard() {
 
       const resolvedEmployeeId = await ensureEmployeeId();
       const day = localDayKey();
-      const idempotencyKey = `break-start-${resolvedEmployeeId || user?.id || 'me'}-${day}`;
+      const idempotencyKey = `break-start-${resolvedEmployeeId || user?.id || 'me'}-${day}-${Date.now()}`;
       
       const payload: { breakType: string; notes: string; idempotencyKey: string; employeeId?: string | null } = {
         breakType,
@@ -1093,6 +1093,7 @@ export default function EmployeeDashboard() {
 
         if (!result.ok) {
           if (result.status === 409) {
+            toast.info('Break action is processing. Syncing…');
             disableRefreshRef.current = true;
             clearApiCache('/attendance/today');
             await new Promise((r) => setTimeout(r, 2000));
@@ -1171,12 +1172,6 @@ export default function EmployeeDashboard() {
       return;
     }
     
-    // Prevent ending break if not on break
-    if (!todayAttendance.isOnBreak) {
-      console.log('⏸️ [BREAK END] Not on break, skipping');
-      return;
-    }
-    
     let wasOnBreak = todayAttendance.isOnBreak;
     let prevBreakType = todayAttendance.breakType;
     let prevBreakDuration = todayAttendance.currentBreakDuration;
@@ -1187,7 +1182,7 @@ export default function EmployeeDashboard() {
       lastActionTimeRef.current = Date.now();
       
       const resolvedEmployeeId = await ensureEmployeeId();
-      const idempotencyKey = `break-end-${resolvedEmployeeId || user?.id || 'me'}-${localDayKey()}`;
+      const idempotencyKey = `break-end-${resolvedEmployeeId || user?.id || 'me'}-${localDayKey()}-${Date.now()}`;
       
       const payload: { notes: string; idempotencyKey: string; employeeId?: string | null } = {
         notes: 'Break ended',
@@ -1209,6 +1204,7 @@ export default function EmployeeDashboard() {
 
         if (!result.ok) {
           if (result.status === 409) {
+            toast.info('Break action is processing. Syncing…');
             disableRefreshRef.current = true;
             clearApiCache('/attendance/today');
             await new Promise((r) => setTimeout(r, 2000));

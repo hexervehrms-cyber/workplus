@@ -25,14 +25,19 @@ const departmentSchema = new mongoose.Schema(
       index: true
     },
     orgId: { 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: "Organization",
+      type: String,
       required: true,
       index: true
     },
+    /** Display name of department head (optional) */
+    headName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     budget: {
       annual: { type: Number, default: 0 },
-      currency: { type: String, default: "USD" }
+      currency: { type: String, default: "INR" }
     },
     location: {
       building: String,

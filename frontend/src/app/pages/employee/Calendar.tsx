@@ -127,6 +127,8 @@ export default function Calendar() {
 
   // Listen for real-time holiday updates via Socket.IO
   useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+
     const refreshHolidays = async () => {
       try {
         const token = getBearerToken();
@@ -142,9 +144,7 @@ export default function Calendar() {
         if (holidayResponse.ok) {
           const holidayData = await holidayResponse.json();
           if (holidayData.success && Array.isArray(holidayData.data)) {
-            console.log('✅ Real-time holiday update:', holidayData.data.length, 'holidays');
             setHolidays(holidayData.data);
-            // Cache holidays for offline access
             localStorage.setItem('cached_holidays', JSON.stringify(holidayData.data));
           }
         }
@@ -153,17 +153,13 @@ export default function Calendar() {
       }
     };
 
-    // Import socket dynamically to avoid circular dependencies
     import('../../utils/realTimeSocket').then((module) => {
-      const socket = module.default;
-      if (socket) {
-        socket.on('holiday:update', refreshHolidays);
-        
-        return () => {
-          socket.off('holiday:update', refreshHolidays);
-        };
-      }
+      unsubscribe = module.default.on('holiday:update', refreshHolidays);
     });
+
+    return () => {
+      unsubscribe?.();
+    };
   }, []);
 
   // Get days in month
@@ -278,8 +274,17 @@ export default function Calendar() {
     }
 
     try {
-      const employeeId = user.employeeId || user.id;
-      const orgId = user.orgId || 'system';
+      const { resolveEmployeeMongoId } = await import('../../utils/resolveEmployeeId');
+      const employeeId = await resolveEmployeeMongoId(user);
+      if (!employeeId) {
+        toast.error('Employee profile not found. Please contact HR.');
+        return;
+      }
+      const orgId = user.orgId || user.tenantId;
+      if (!orgId) {
+        toast.error('Organization not set on your account.');
+        return;
+      }
 
       const startDate = new Date(formData.startDate);
       const endDate = new Date(formData.endDate);
@@ -303,7 +308,8 @@ export default function Calendar() {
         
         const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
         if (updatedLeaves.success && updatedLeaves.data) {
-          setLeaveHistory(updatedLeaves.data);
+          const raw = updatedLeaves.data as { data?: unknown[] } | unknown[];
+          setLeaveHistory(Array.isArray(raw) ? raw : raw.data || []);
         }
       } else {
         toast.error(response.message || 'Failed to submit leave request');

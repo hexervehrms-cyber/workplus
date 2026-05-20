@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { useCurrency } from '../../context/CurrencyContext';
 import { useAuth } from '../../context/AuthContext';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -41,14 +41,58 @@ import {
   TableRow,
 } from '../../components/ui/table';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { useIsMounted } from '../../hooks/useIsMounted';
 import { apiClient } from '../../utils/api';
 import { TokenManager } from '../../utils/api';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { socketService } from '../../utils/socket';
 
+const DASHBOARD_SOCKET_DEBOUNCE_MS = 2500;
+
+type BreakRow = {
+  attendanceId?: string;
+  employeeId?: string;
+  employeeName: string;
+  department?: string;
+  breakIndex?: number;
+  breakType?: string;
+  startTime: string;
+  endTime?: string | null;
+  duration?: number | null;
+  status: 'active' | 'ended';
+};
+
+function formatTime(value?: string | null) {
+  if (!value) return '—';
+  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function breakMinutesSince(startTime: string) {
+  return Math.max(0, Math.round((Date.now() - new Date(startTime).getTime()) / (1000 * 60)));
+}
+
+function summarizeAttendanceBreaks(
+  breaks?: Array<{ startTime?: string; endTime?: string | null; breakType?: string }>
+) {
+  if (!breaks?.length) {
+    return { label: 'No breaks', start: null as string | null, end: null as string | null, onBreak: false };
+  }
+  const last = breaks[breaks.length - 1];
+  const onBreak = Boolean(last.startTime && !last.endTime);
+  const lastEnded = [...breaks].reverse().find((b) => b.endTime);
+  return {
+    label: onBreak ? 'On break' : breaks.some((b) => b.endTime) ? 'Break logged' : 'No breaks',
+    start: (onBreak ? last.startTime : lastEnded?.startTime ?? last.startTime) ?? null,
+    end: onBreak ? null : (last.endTime ?? lastEnded?.endTime ?? null),
+    onBreak,
+    breakType: (onBreak ? last : lastEnded || last).breakType || 'regular',
+  };
+}
+
 export default function AdminDashboard() {
   const { formatCurrency, convertAmount, selectedCurrency } = useCurrency();
   const { user } = useAuth();
+  const mounted = useIsMounted();
   const [selectedTab, setSelectedTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [filterType, setFilterType] = useState('month');
@@ -80,6 +124,7 @@ export default function AdminDashboard() {
   const [leaveRequests, setLeaveRequests] = useState([]);
   const [todaysAttendance, setTodaysAttendance] = useState([]);
   const [employeesOnBreak, setEmployeesOnBreak] = useState([]);
+  const [todayBreakLog, setTodayBreakLog] = useState<BreakRow[]>([]);
   const [lastUpdate, setLastUpdate] = useState(Date.now()); // Force re-render timestamp
   
   // Edit leave modal state
@@ -97,17 +142,20 @@ export default function AdminDashboard() {
     console.log('⚡ [ADMIN-DASHBOARD] Fetching all data in parallel...');
     
     // Fetch all data in parallel using Promise.allSettled for resilience
-    const [statsResponse, quickStatsResponse, expenseTrendsResponse, leaveResponse, attendanceResponse, onBreakResponse] =
+    const [statsResponse, quickStatsResponse, expenseTrendsResponse, leaveResponse, attendanceResponse, onBreakResponse, todayBreaksResponse] =
       await Promise.allSettled([
         apiClient.get(`/dashboard/stats?${params.toString()}`),
         apiClient.get(`/dashboard/quick-stats?${params.toString()}&_t=${Date.now()}`),
         apiClient.get('/dashboard/expense-trends'),
         apiClient.get('/dashboard/recent-leave-requests'),
         apiClient.get('/dashboard/todays-attendance'),
-        apiClient.get('/attendance/on-break')
+        apiClient.get(`/attendance/on-break?_t=${Date.now()}`),
+        apiClient.get(`/attendance/today-breaks?_t=${Date.now()}`)
       ]);
 
     console.log('✅ [ADMIN-DASHBOARD] All requests completed');
+
+    if (!mounted.current) return;
 
     // Process results with fallbacks
     if (statsResponse.status === 'fulfilled' && statsResponse.value.success) {
@@ -129,7 +177,56 @@ export default function AdminDashboard() {
     if (onBreakResponse.status === 'fulfilled' && onBreakResponse.value.success) {
       setEmployeesOnBreak(onBreakResponse.value.data || []);
     }
-  }, [filterType, customStartDate, customEndDate]);
+    if (todayBreaksResponse.status === 'fulfilled' && todayBreaksResponse.value.success) {
+      setTodayBreakLog(todayBreaksResponse.value.data || []);
+    }
+  }, [filterType, customStartDate, customEndDate, mounted]);
+
+  const dashboardSocketDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleDashboardRefresh = useCallback(() => {
+    if (!mounted.current) return;
+    if (dashboardSocketDebounceRef.current) {
+      clearTimeout(dashboardSocketDebounceRef.current);
+    }
+    dashboardSocketDebounceRef.current = setTimeout(() => {
+      dashboardSocketDebounceRef.current = null;
+      void refreshDashboardData().catch((error) => {
+        console.error('Error refreshing dashboard data:', error);
+      });
+    }, DASHBOARD_SOCKET_DEBOUNCE_MS);
+  }, [refreshDashboardData, mounted]);
+
+  useEffect(() => {
+    return () => {
+      if (dashboardSocketDebounceRef.current) {
+        clearTimeout(dashboardSocketDebounceRef.current);
+      }
+    };
+  }, []);
+
+  const refreshBreakSections = useCallback(async () => {
+    try {
+      const [onBreakResponse, todayBreaksResponse, attendanceResponse] = await Promise.all([
+        apiClient.get(`/attendance/on-break?_t=${Date.now()}`),
+        apiClient.get(`/attendance/today-breaks?_t=${Date.now()}`),
+        apiClient.get('/dashboard/todays-attendance'),
+      ]);
+      if (!mounted.current) return;
+      if (onBreakResponse.success) {
+        setEmployeesOnBreak(onBreakResponse.data || []);
+      }
+      if (todayBreaksResponse.success) {
+        setTodayBreakLog(todayBreaksResponse.data || []);
+      }
+      if (attendanceResponse.success && attendanceResponse.data) {
+        setTodaysAttendance(attendanceResponse.data || []);
+      }
+      setLastUpdate(Date.now());
+    } catch (error) {
+      console.error('Error refreshing break sections:', error);
+    }
+  }, [mounted]);
 
   // Refresh employees on break data
   const applyKpiPayload = useCallback((kpis: Record<string, unknown>) => {
@@ -191,7 +288,7 @@ export default function AdminDashboard() {
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
       } finally {
-        setLoading(false);
+        if (mounted.current) setLoading(false);
       }
     };
 
@@ -208,7 +305,7 @@ export default function AdminDashboard() {
     return () => {
       // clearInterval(pollInterval);
     };
-  }, [filterType, customStartDate, customEndDate, refreshDashboardData]);
+  }, [filterType, customStartDate, customEndDate, refreshDashboardData, mounted]);
 
   useEffect(() => {
     if (user?.id) {
@@ -224,9 +321,7 @@ export default function AdminDashboard() {
   // Socket.IO real-time updates
   useEffect(() => {
     const handleEmployeeCreated = () => {
-      refreshDashboardData().catch((error) => {
-        console.error('Error refreshing dashboard after employee created:', error);
-      });
+      scheduleDashboardRefresh();
     };
 
     const handleDashboardUpdate = (data: any) => {
@@ -242,9 +337,12 @@ export default function AdminDashboard() {
           totalEmployees: data.data?.totalEmployees || prev.totalEmployees
         }));
       } else if (data.type === 'dashboard_refresh') {
-        refreshDashboardData().catch((error) => {
-          console.error('Error refreshing dashboard data:', error);
-        });
+        const reason = data.reason || data.data?.reason;
+        if (reason === 'break_started' || reason === 'break_ended') {
+          refreshBreakSections();
+        } else {
+          scheduleDashboardRefresh();
+        }
       } else if (data.type === 'kpi_update') {
         const kpis = data.data?.kpis || data.kpis;
         if (kpis) {
@@ -255,24 +353,18 @@ export default function AdminDashboard() {
 
     const handleExpenseUpdate = (type: string, expense: any) => {
       if (type === 'created' || type === 'updated' || type === 'deleted') {
-        refreshDashboardData().catch((error) => {
-          console.error('Error fetching updated dashboard data:', error);
-        });
+        scheduleDashboardRefresh();
       }
     };
 
     const handleLeaveUpdate = (type: string, leave: any) => {
       if (type === 'created' || type === 'updated' || type === 'approved' || type === 'rejected') {
-        refreshDashboardData().catch((error) => {
-          console.error('Error fetching updated dashboard data:', error);
-        });
+        scheduleDashboardRefresh();
       }
     };
 
     const handleAttendanceUpdate = (attendance: any) => {
-      refreshDashboardData().catch((error) => {
-        console.error('Error fetching updated dashboard data:', error);
-      });
+      scheduleDashboardRefresh();
     };
 
     // Subscribe to real-time events using the correct methods
@@ -289,14 +381,14 @@ export default function AdminDashboard() {
 
     const onBreakStarted = (data: any) => {
       console.log('☕ break:started event received:', data);
-      handleAttendanceUpdate({ type: 'break_started', ...data });
-      refreshEmployeesOnBreak();
+      refreshBreakSections();
+      scheduleDashboardRefresh();
     };
 
     const onBreakEnded = (data: any) => {
       console.log('☕ break:ended event received:', data);
-      handleAttendanceUpdate({ type: 'break_ended', ...data });
-      refreshEmployeesOnBreak();
+      refreshBreakSections();
+      scheduleDashboardRefresh();
     };
 
     const onKpiUpdate = (data: any) => {
@@ -322,7 +414,14 @@ export default function AdminDashboard() {
       unsubscribeBreakEnd();
       unsubscribeKpi();
     };
-  }, [refreshDashboardData, refreshEmployeesOnBreak, applyKpiPayload]);
+  }, [scheduleDashboardRefresh, refreshBreakSections, applyKpiPayload]);
+
+  // Tick break durations while someone is on break
+  useEffect(() => {
+    if (employeesOnBreak.length === 0) return;
+    const timer = setInterval(() => setLastUpdate(Date.now()), 60000);
+    return () => clearInterval(timer);
+  }, [employeesOnBreak.length]);
 
   const handleApproveLeave = async (requestId) => {
     try {
@@ -849,52 +948,111 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
       <Card className="rounded-2xl overflow-hidden">
         <div className="p-6 border-b border-border">
           <h3 className="font-semibold text-lg">Today's Attendance</h3>
-          <p className="text-sm text-muted-foreground">Employee check-in status</p>
+          <p className="text-sm text-muted-foreground">Check-in status and break start / end times</p>
         </div>
-        <div className="p-6">
-          <div className="space-y-4">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Employee</TableHead>
+              <TableHead>Department</TableHead>
+              <TableHead>Check-in</TableHead>
+              <TableHead>Break start</TableHead>
+              <TableHead>Break end</TableHead>
+              <TableHead>Break status</TableHead>
+              <TableHead>Hours</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {todaysAttendance.length === 0 ? (
-              <div className="text-center text-muted-foreground py-8">
-                No attendance records for today
-              </div>
+              <TableRow>
+                <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                  No attendance records for today
+                </TableCell>
+              </TableRow>
             ) : (
-              todaysAttendance.map((attendance, index) => (
-                <div key={index} className="flex items-center justify-between p-4 rounded-xl bg-accent/50">
-                  <div className="flex items-center gap-4 flex-1">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-                      <Users className="w-5 h-5 text-primary" />
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium">{attendance.employeeName}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {attendance.employeeId?.department || 'N/A'}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-6">
-                    <div className="text-right">
-                      <p className="text-sm font-medium">
-                        {attendance.checkIn ? new Date(attendance.checkIn).toLocaleTimeString() : 'Not checked in'}
-                      </p>
-                      <Badge variant={attendance.status === 'present' ? 'default' : 'secondary'} className="mt-1">
-                        {attendance.status}
+              todaysAttendance.map((attendance: any) => {
+                const breakInfo = summarizeAttendanceBreaks(attendance.breaks);
+                const rowKey = attendance._id || `${attendance.employeeName}-${attendance.checkIn}`;
+                return (
+                  <TableRow key={rowKey}>
+                    <TableCell className="font-medium">{attendance.employeeName}</TableCell>
+                    <TableCell>{attendance.department || attendance.employeeId?.department || 'N/A'}</TableCell>
+                    <TableCell>{formatTime(attendance.checkIn)}</TableCell>
+                    <TableCell>{formatTime(breakInfo.start)}</TableCell>
+                    <TableCell>{formatTime(breakInfo.end)}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={breakInfo.onBreak ? 'secondary' : 'outline'}
+                        className={breakInfo.onBreak ? 'bg-accent/20 text-accent' : ''}
+                      >
+                        {breakInfo.label}
+                        {breakInfo.breakType ? ` (${breakInfo.breakType})` : ''}
                       </Badge>
-                    </div>
-                    {attendance.status === 'present' && attendance.hoursWorked > 0 && (
-                      <div className="w-24">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-muted-foreground">Hours</span>
-                          <span className="text-xs font-medium">{attendance.hoursWorked}h</span>
-                        </div>
-                        <Progress value={(attendance.hoursWorked / 8) * 100} className="h-2" />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))
+                    </TableCell>
+                    <TableCell>
+                      {attendance.hoursWorked > 0 ? `${attendance.hoursWorked}h` : '—'}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
+          </TableBody>
+        </Table>
+      </Card>
+
+      <Card className="rounded-2xl overflow-hidden">
+        <div className="p-6 border-b border-border flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-lg">Today's Breaks</h3>
+            <p className="text-sm text-muted-foreground">Stored break start and end times for all employees</p>
           </div>
+          <Badge variant="secondary">{todayBreakLog.length} entries</Badge>
         </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Employee</TableHead>
+              <TableHead>Department</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Start</TableHead>
+              <TableHead>End</TableHead>
+              <TableHead>Duration</TableHead>
+              <TableHead>Status</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {todayBreakLog.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                  No break records for today yet
+                </TableCell>
+              </TableRow>
+            ) : (
+              todayBreakLog.map((row) => {
+                const rowKey = `${row.attendanceId}-${row.breakIndex}-${row.startTime}`;
+                const duration =
+                  row.status === 'active' && row.startTime
+                    ? breakMinutesSince(row.startTime)
+                    : row.duration;
+                return (
+                  <TableRow key={rowKey}>
+                    <TableCell className="font-medium">{row.employeeName}</TableCell>
+                    <TableCell>{row.department || 'N/A'}</TableCell>
+                    <TableCell>{row.breakType || 'regular'}</TableCell>
+                    <TableCell>{formatTime(row.startTime)}</TableCell>
+                    <TableCell>{formatTime(row.endTime)}</TableCell>
+                    <TableCell>{duration != null ? `${duration} min` : '—'}</TableCell>
+                    <TableCell>
+                      <Badge variant={row.status === 'active' ? 'secondary' : 'outline'}>
+                        {row.status === 'active' ? 'On break' : 'Ended'}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
       </Card>
 
       {/* Employees On Break */}
@@ -914,8 +1072,13 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
                 <p>No employees on break</p>
               </div>
             ) : (
-              employeesOnBreak.map((employee, index) => (
-                <div key={index} className="flex items-center justify-between p-4 rounded-xl bg-accent/10 border border-accent/20">
+              employeesOnBreak.map((employee: any) => {
+                const rowKey = String(employee.employeeId || employee.employeeName);
+                const liveMinutes = employee.breakStartTime
+                  ? breakMinutesSince(employee.breakStartTime)
+                  : employee.breakDuration;
+                return (
+                <div key={rowKey} className="flex items-center justify-between p-4 rounded-xl bg-accent/10 border border-accent/20">
                   <div className="flex items-center gap-4 flex-1">
                     <div className="w-10 h-10 rounded-full bg-accent/30 flex items-center justify-center">
                       <Coffee className="w-5 h-5 text-accent" />
@@ -927,19 +1090,21 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-6">
-                    <div className="text-right">
+                  <div className="flex items-center gap-6 text-right">
+                    <div>
                       <p className="text-sm font-medium">{employee.breakType}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {employee.breakDuration} min on break
+                      <p className="text-xs text-muted-foreground">{liveMinutes} min on break</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Start {formatTime(employee.breakStartTime)} · End —
                       </p>
                     </div>
                     <Badge variant="outline" className="bg-accent/20 text-accent border-accent/30">
-                      {new Date(employee.breakStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      On break
                     </Badge>
                   </div>
                 </div>
-              ))
+              );
+              })
             )}
           </div>
         </div>

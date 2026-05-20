@@ -1,6 +1,7 @@
 import express from "express";
 import mongoose from "mongoose";
 import { asyncHandler } from "../middleware/errorHandler.js";
+import { authorize } from "../middleware/auth.js";
 import User from "../models/User.js";
 import Employee from "../models/Employee.js";
 import Organization from "../models/Organization.js";
@@ -13,6 +14,8 @@ import { calculateAllKPIChanges } from "../utils/kpiCalculations.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
+
+router.use(authorize("super_admin"));
 
 /**
  * GET /api/dashboard/superadmin

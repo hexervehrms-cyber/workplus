@@ -4,6 +4,7 @@
  */
 
 import ChatMessage from '../models/ChatMessage.js';
+import ChatGroup from '../models/ChatGroup.js';
 import User from '../models/User.js';
 import logger from './logger.js';
 import { sendTeamsMessage } from '../config/teamsConfig.js';
@@ -29,7 +30,73 @@ export const initializeChatHandlers = (io) => {
      */
     socket.on('chat:send_message', async (data) => {
       try {
-        const { recipientId, content, messageType = 'text', teamsIntegration } = data;
+        const {
+          recipientId,
+          content,
+          messageType = 'text',
+          teamsIntegration,
+          conversationId: groupConversationId,
+        } = data || {};
+
+        // Group chat (conversation id prefix grp_)
+        if (groupConversationId && String(groupConversationId).startsWith('grp_')) {
+          if (!content) {
+            socket.emit('chat:error', { message: 'Invalid message data' });
+            return;
+          }
+
+          const conversationId = String(groupConversationId);
+          const group = await ChatGroup.findOne({
+            conversationId,
+            orgId: tenantId,
+          }).lean();
+
+          if (!group || !group.members.some((m) => m.toString() === userId)) {
+            socket.emit('chat:error', { message: 'Not a member of this group' });
+            return;
+          }
+
+          const message = new ChatMessage({
+            senderId: userId,
+            recipientId: null,
+            conversationId,
+            messageType,
+            content: { text: content },
+            channelInfo: {
+              channelType: 'group',
+              channelId: conversationId,
+              participants: group.members,
+            },
+            metadata: {
+              teamsIntegration: teamsIntegration || {},
+            },
+            orgId: tenantId,
+            status: 'sent',
+          });
+
+          await message.save();
+          await message.populate('sender', 'name email avatar');
+
+          const basePayload = {
+            messageId: message._id,
+            senderId: message.senderId,
+            senderName: message.sender.name,
+            senderAvatar: message.sender.avatar,
+            content: message.content.text,
+            timestamp: message.createdAt,
+            conversationId: message.conversationId,
+          };
+
+          for (const mid of group.members) {
+            io.to(`user_${mid}`).emit('chat:new_message', {
+              ...basePayload,
+              status: mid.toString() === userId ? 'sent' : 'delivered',
+            });
+          }
+
+          logger.info(`Group message in ${conversationId} from ${userId}`);
+          return;
+        }
 
         if (!recipientId || !content) {
           socket.emit('chat:error', { message: 'Invalid message data' });
@@ -155,9 +222,32 @@ export const initializeChatHandlers = (io) => {
      * Emitted by: Client
      * Data: { recipientId, isTyping }
      */
-    socket.on('chat:typing', (data) => {
-      const { recipientId, isTyping } = data;
+    socket.on('chat:typing', async (data) => {
+      const { recipientId, conversationId: typingConvId, isTyping } = data || {};
 
+      if (typingConvId && String(typingConvId).startsWith('grp_')) {
+        try {
+          const group = await ChatGroup.findOne({
+            conversationId: String(typingConvId),
+            orgId: tenantId,
+          }).lean();
+          if (!group || !group.members.some((m) => m.toString() === userId)) return;
+          for (const mid of group.members) {
+            if (mid.toString() === userId) continue;
+            io.to(`user_${mid}`).emit('chat:user_typing', {
+              userId,
+              isTyping,
+              conversationId: typingConvId,
+              timestamp: new Date(),
+            });
+          }
+        } catch (e) {
+          logger.warn('chat:typing group relay failed', e);
+        }
+        return;
+      }
+
+      if (!recipientId) return;
       io.to(`user_${recipientId}`).emit('chat:user_typing', {
         userId,
         isTyping,
@@ -294,18 +384,20 @@ export const initializeChatHandlers = (io) => {
 
         await message.editMessage(newContent);
 
-        // Notify all participants
-        io.to(`user_${message.recipientId}`).emit('chat:message_edited', {
-          messageId,
-          newContent,
-          editedAt: message.metadata.edited.editedAt
-        });
-
-        socket.emit('chat:message_edited', {
-          messageId,
-          newContent,
-          editedAt: message.metadata.edited.editedAt
-        });
+        const targets = new Set();
+        targets.add(String(message.senderId));
+        if (message.recipientId) targets.add(String(message.recipientId));
+        for (const p of message.channelInfo?.participants || []) {
+          targets.add(String(p));
+        }
+        for (const uid of targets) {
+          io.to(`user_${uid}`).emit('chat:message_edited', {
+            messageId,
+            newContent,
+            editedAt: message.metadata.edited.editedAt,
+            conversationId: message.conversationId,
+          });
+        }
 
         logger.info(`Message ${messageId} edited by ${userId}`);
       } catch (error) {
@@ -339,16 +431,19 @@ export const initializeChatHandlers = (io) => {
         message.deletedBy = userId;
         await message.save();
 
-        // Notify all participants
-        io.to(`user_${message.recipientId}`).emit('chat:message_deleted', {
-          messageId,
-          deletedAt: message.deletedAt
-        });
-
-        socket.emit('chat:message_deleted', {
-          messageId,
-          deletedAt: message.deletedAt
-        });
+        const targets = new Set();
+        targets.add(String(message.senderId));
+        if (message.recipientId) targets.add(String(message.recipientId));
+        for (const p of message.channelInfo?.participants || []) {
+          targets.add(String(p));
+        }
+        for (const uid of targets) {
+          io.to(`user_${uid}`).emit('chat:message_deleted', {
+            messageId,
+            deletedAt: message.deletedAt,
+            conversationId: message.conversationId,
+          });
+        }
 
         logger.info(`Message ${messageId} deleted by ${userId}`);
       } catch (error) {

@@ -26,6 +26,7 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { toast } from '../../utils/portalToast';
+import { ExpenseLimitSettingsDialog } from '../../components/ExpenseLimitSettingsDialog';
 
 interface Expense {
   _id: string;
@@ -161,33 +162,42 @@ export default function Expenses() {
     }
   };
 
-  // Real-time expense updates
+  // Real-time expense updates (registers even before socket connects; replays on reconnect)
   useEffect(() => {
-    if (!socketService.isConnected()) return;
+    const stableUserId = user?.userId || user?.id;
+    if (!stableUserId) return;
 
-    const handleExpenseUpdated = (data: any) => {
-      if (data.expense && data.expense.userId === user?.id) {
-        setExpenses(prev => prev.map(exp => 
-          exp._id === data.expense._id ? { ...exp, ...data.expense } : exp
-        ));
-        if (data.expense.status === 'approved') {
-          toast.success('Expense approved!');
-        } else if (data.expense.status === 'rejected') {
-          toast.error('Expense rejected');
-        }
+    const matchesCurrentUser = (payload: { expense?: { userId?: string }; userId?: string }) => {
+      const uid = payload?.expense?.userId ?? payload?.userId;
+      return uid != null && String(uid) === String(stableUserId);
+    };
+
+    const handleExpenseUpdated = (data: { expense?: Expense; userId?: string }) => {
+      const expense = data?.expense;
+      if (!expense || !matchesCurrentUser(data)) return;
+
+      setExpenses((prev) =>
+        prev.map((exp) => (exp._id === expense._id ? { ...exp, ...expense } : exp))
+      );
+      if (expense.status === 'approved') {
+        toast.success('Expense approved!');
+      } else if (expense.status === 'rejected') {
+        toast.error('Expense rejected');
       }
     };
 
     socketService.on('expense_updated', handleExpenseUpdated);
     socketService.on('expense_approved', handleExpenseUpdated);
     socketService.on('expense_rejected', handleExpenseUpdated);
+    socketService.on('expense:updated', handleExpenseUpdated);
 
     return () => {
       socketService.off('expense_updated', handleExpenseUpdated);
       socketService.off('expense_approved', handleExpenseUpdated);
       socketService.off('expense_rejected', handleExpenseUpdated);
+      socketService.off('expense:updated', handleExpenseUpdated);
     };
-  }, [user?.id]);
+  }, [user?.userId, user?.id]);
 
   // Calculate expense summary from real data
   const expenseSummary = expenseCategories.map(cat => {
@@ -763,7 +773,8 @@ export default function Expenses() {
           <h1 className="text-3xl font-bold text-foreground mb-2">Expenses</h1>
           <p className="text-muted-foreground">Track and submit your expense claims</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
+          <ExpenseLimitSettingsDialog readOnly />
           {/* Export Button */}
           <div className="relative group">
             <Button 
@@ -774,16 +785,16 @@ export default function Expenses() {
               <FileDown className="w-4 h-4 mr-2" />
               Export
             </Button>
-            <div className="absolute right-0 mt-2 w-32 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+            <div className="absolute right-0 mt-2 w-36 bg-card border border-border rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 text-foreground">
               <button
                 onClick={() => handleExportExpenses('csv')}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm rounded-t-lg"
+                className="w-full text-left px-4 py-2 hover:bg-muted text-sm rounded-t-lg text-foreground"
               >
                 Export as CSV
               </button>
               <button
                 onClick={() => handleExportExpenses('excel')}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm rounded-b-lg border-t border-gray-200"
+                className="w-full text-left px-4 py-2 hover:bg-muted text-sm rounded-b-lg border-t border-border text-foreground"
               >
                 Export as Excel
               </button>

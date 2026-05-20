@@ -7,6 +7,7 @@ import express from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import mongoose from "mongoose";
 import { fileURLToPath } from "url";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, authorize } from "../middleware/auth.js";
@@ -633,28 +634,74 @@ router.post(
         return sendError(res, "Title and content are required", 400, "VALIDATION_ERROR");
       }
 
-      if (!organizationId) {
+      if (!organizationId && !req.user?.orgId) {
         return sendError(res, "Organization ID is required", 400, "VALIDATION_ERROR");
+      }
+
+      const orgId = String(
+        req.user?.role === "super_admin" && organizationId
+          ? organizationId
+          : req.user?.orgId || organizationId
+      );
+
+      let resolvedTargetUsers = [];
+      if (assignTo === "specific" && Array.isArray(targetUsers) && targetUsers.length) {
+        const ids = targetUsers.map(String);
+        const employees = await Employee.find({
+          orgId,
+          $or: [
+            { userId: { $in: ids.filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id)) } },
+            { _id: { $in: ids.filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id)) } },
+          ],
+        })
+          .select("userId")
+          .lean();
+        resolvedTargetUsers = [
+          ...new Set(
+            employees.map((e) => String(e.userId)).filter(Boolean)
+          ),
+        ];
+        if (!resolvedTargetUsers.length) {
+          return sendError(res, "No valid employees selected", 400, "VALIDATION_ERROR");
+        }
       }
 
       // Create new generated document
       const documentData = {
         id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         documentType: category || "General",
-        organizationId: String(organizationId),
+        organizationId: orgId,
         content,
         status: "generated",
         title,
         description,
         category,
-        assignTo: assignTo || "all",
-        targetUsers: assignTo === "specific" ? targetUsers || [] : [],
+        assignTo: assignTo === "specific" ? "specific" : "all",
+        targetUsers: assignTo === "specific" ? resolvedTargetUsers : [],
         requiresAcknowledgment: requiresAcknowledgment !== false,
         createdBy: req.user?.userId,
       };
 
       const generatedDocument = new GeneratedDocument(documentData);
       await generatedDocument.save();
+
+      if (global.io && documentData.assignTo === "all") {
+        global.io.to(`tenant_${orgId}`).emit("notification", {
+          type: "document",
+          title: "New company document",
+          message: title,
+          documentId: generatedDocument._id,
+        });
+      } else if (global.io && resolvedTargetUsers.length) {
+        for (const uid of resolvedTargetUsers) {
+          global.io.to(`user_${uid}`).emit("notification", {
+            type: "document",
+            title: "New document assigned",
+            message: title,
+            documentId: generatedDocument._id,
+          });
+        }
+      }
 
       logger.info("Digital document generated", {
         documentId: generatedDocument._id,

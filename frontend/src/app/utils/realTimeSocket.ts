@@ -11,6 +11,9 @@ class RealTimeSocket {
   private connectionAttempted = false;
   private usesSharedSocket = false;
   private dashboardListenersReady = false;
+  private sharedAttachTimer: ReturnType<typeof setInterval> | null = null;
+  /** Handlers registered on the shared socket — removed individually on teardown */
+  private dashboardSocketHandlers = new Map<string, (...args: unknown[]) => void>();
 
   constructor() {
     // Don't connect immediately - wait for user to be available
@@ -26,29 +29,47 @@ class RealTimeSocket {
     if (!user?.id) return;
     this.authUser = user;
 
-    const shared = socketService.getSocket();
-    if (socketService.isConnected() && shared) {
-      this.attachSharedSocket(shared, user);
-      return;
-    }
+    const tryAttachShared = (): boolean => {
+      const shared = socketService.getSocket();
+      if (socketService.isConnected() && shared) {
+        this.attachSharedSocket(shared, user);
+        return true;
+      }
+      return false;
+    };
 
-    this.connectionAttempted = false;
-    if (this.socket?.connected && !this.usesSharedSocket) {
-      return;
+    if (tryAttachShared()) return;
+
+    if (this.sharedAttachTimer) {
+      clearInterval(this.sharedAttachTimer);
     }
-    const token = TokenManager.get() || '';
-    this.connect(
-      {
-        id: user.id,
-        role: user.role,
-        orgId: user.orgId || user.tenantId,
-        tenantId: user.tenantId || user.orgId,
-      },
-      token
-    );
+    let attempts = 0;
+    this.sharedAttachTimer = setInterval(() => {
+      attempts += 1;
+      if (tryAttachShared() || attempts >= 75) {
+        if (this.sharedAttachTimer) {
+          clearInterval(this.sharedAttachTimer);
+          this.sharedAttachTimer = null;
+        }
+      }
+    }, 200);
+  }
+
+  private disconnectPrivateSocket() {
+    if (this.socket && !this.usesSharedSocket) {
+      this.teardownDashboardListeners();
+      this.socket.removeAllListeners();
+      this.socket.disconnect();
+      this.socket = null;
+    }
   }
 
   private attachSharedSocket(socket: Socket, user: { id: string; role: string; orgId?: string; tenantId?: string }) {
+    if (this.sharedAttachTimer) {
+      clearInterval(this.sharedAttachTimer);
+      this.sharedAttachTimer = null;
+    }
+    this.disconnectPrivateSocket();
     this.usesSharedSocket = true;
     this.socket = socket;
     this.isConnecting = false;
@@ -56,7 +77,6 @@ class RealTimeSocket {
     this.authUser = user;
     if (!this.dashboardListenersReady) {
       this.setupDashboardListeners();
-      this.dashboardListenersReady = true;
     }
   }
 
@@ -64,7 +84,7 @@ class RealTimeSocket {
    * Lazy connect - only connect when user data is available
    */
   private ensureConnected() {
-    if (this.socket?.connected || this.isConnecting) {
+    if (this.socket?.connected) {
       return;
     }
 
@@ -79,13 +99,9 @@ class RealTimeSocket {
       return;
     }
 
-    const token = TokenManager.get() || '';
-    if (this.connectionAttempted && !this.socket) {
-      return;
+    if (!this.authUser) {
+      this.connectFromAuth(user as { id: string; role: string; orgId?: string; tenantId?: string });
     }
-
-    this.connectionAttempted = true;
-    this.connect(user, token);
   }
 
   private connect(user: any, token: string) {
@@ -211,149 +227,164 @@ class RealTimeSocket {
     }
   }
 
-  private setupDashboardListeners() {
+  private teardownDashboardListeners() {
     if (!this.socket) return;
+    this.dashboardSocketHandlers.forEach((handler, event) => {
+      this.socket?.off(event, handler);
+    });
+    this.dashboardSocketHandlers.clear();
+    this.dashboardListenersReady = false;
+  }
+
+  private bindDashboardEvent(event: string, handler: (...args: unknown[]) => void) {
+    if (!this.socket) return;
+    const existing = this.dashboardSocketHandlers.get(event);
+    if (existing) {
+      this.socket.off(event, existing);
+    }
+    this.dashboardSocketHandlers.set(event, handler);
+    this.socket.on(event, handler);
+  }
+
+  private setupDashboardListeners() {
+    if (!this.socket || this.dashboardListenersReady) return;
 
     // Dashboard data updates
-    this.socket.on('dashboard_update', (data) => {
+    this.bindDashboardEvent('dashboard_update', (data) => {
       console.log('📊 Dashboard update received:', data);
       this.notifyDashboardUpdate(data);
     });
 
     // Activity feed updates
-    this.socket.on('activity_update', (activity) => {
+    this.bindDashboardEvent('activity_update', (activity) => {
       console.log('📝 Activity update received:', activity);
       this.notifyActivityUpdate(activity);
     });
 
-    this.socket.on('activity:update', (payload) => {
-      const activity = payload?.activity ?? payload;
+    this.bindDashboardEvent('activity:update', (payload) => {
+      const activity = (payload as { activity?: unknown })?.activity ?? payload;
       this.notifyActivityUpdate(activity);
     });
 
     // Employee updates
-    this.socket.on('employee_created', (employee) => {
+    this.bindDashboardEvent('employee_created', (employee) => {
       console.log('👤 Employee created:', employee);
       this.notifyEmployeeUpdate('created', employee);
     });
 
-    this.socket.on('employee_updated', (employee) => {
+    this.bindDashboardEvent('employee_updated', (employee) => {
       console.log('👤 Employee updated:', employee);
       this.notifyEmployeeUpdate('updated', employee);
     });
 
     // Leave request updates
-    this.socket.on('leave_created', (leave) => {
+    this.bindDashboardEvent('leave_created', (leave) => {
       console.log('📅 Leave request created:', leave);
       this.notifyLeaveUpdate('created', leave);
     });
 
-    this.socket.on('leave_updated', (leave) => {
+    this.bindDashboardEvent('leave_updated', (leave) => {
       console.log('📅 Leave request updated:', leave);
       this.notifyLeaveUpdate('updated', leave);
     });
 
-    this.socket.on('leave:update', (data) => {
+    this.bindDashboardEvent('leave:update', (data) => {
       console.log('📅 Leave update event:', data);
-      this.notifyLeaveUpdate(data.action, data.leaveRequest);
+      const d = data as { action?: string; leaveRequest?: unknown };
+      this.notifyLeaveUpdate(d.action || 'updated', d.leaveRequest);
     });
 
-    this.socket.on('leave_allocation_created', (data) => {
+    this.bindDashboardEvent('leave_allocation_created', (data) => {
       console.log('📅 Leave allocation created:', data);
-      this.notifyLeaveUpdate('allocation_created', data?.leave || data);
+      const d = data as { leave?: unknown };
+      this.notifyLeaveUpdate('allocation_created', d?.leave || data);
     });
 
     // Expense updates
-    this.socket.on('expense:created', (expense) => {
+    this.bindDashboardEvent('expense:created', (expense) => {
       console.log('💰 Expense created:', expense);
       this.notifyExpenseUpdate('created', expense);
     });
 
-    this.socket.on('expense:updated', (expense) => {
+    this.bindDashboardEvent('expense:updated', (expense) => {
       console.log('💰 Expense updated:', expense);
       this.notifyExpenseUpdate('updated', expense);
     });
 
-    this.socket.on('expense:deleted', (expense) => {
+    this.bindDashboardEvent('expense:deleted', (expense) => {
       console.log('💰 Expense deleted:', expense);
       this.notifyExpenseUpdate('deleted', expense);
     });
 
     // Attendance updates
-    this.socket.on('attendance:update', (data) => {
+    this.bindDashboardEvent('attendance:update', (data) => {
       console.log('⏰ Attendance update received:', data);
-      this.notifyAttendanceUpdate(data.attendance || data);
+      const d = data as { attendance?: unknown };
+      this.notifyAttendanceUpdate(d.attendance || data);
     });
 
     // Check-in updates
-    this.socket.on('attendance:checked_in', (data) => {
+    this.bindDashboardEvent('attendance:checked_in', (data) => {
       console.log('🔓 [SOCKET] Employee checked in:', data);
-      this.notifyAttendanceUpdate({ type: 'checked_in', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'checked_in', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'checked_in', data });
     });
 
     // System notifications
-    this.socket.on('notification', (notification) => {
+    this.bindDashboardEvent('notification', (notification) => {
       console.log('🔔 Notification received:', notification);
       this.notifySystemNotification(notification);
     });
 
     // Break updates
-    this.socket.on('break:started', (data) => {
+    this.bindDashboardEvent('break:started', (data) => {
       console.log('☕ [SOCKET] Break started:', data);
       this.notifyBreakStarted(data);
-      this.notifyAttendanceUpdate({ type: 'break_started', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'break_started', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'break_started', data });
     });
 
-    this.socket.on('break:ended', (data) => {
+    this.bindDashboardEvent('break:ended', (data) => {
       console.log('☕ [SOCKET] Break ended:', data);
       this.notifyBreakEnded(data);
-      this.notifyAttendanceUpdate({ type: 'break_ended', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'break_ended', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'break_ended', data });
     });
 
     // Meeting updates
-    this.socket.on('meeting:started', (data) => {
+    this.bindDashboardEvent('meeting:started', (data) => {
       console.log('📞 [SOCKET] Meeting started:', data);
       this.notifyMeetingStarted(data);
-      this.notifyAttendanceUpdate({ type: 'meeting_started', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'meeting_started', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'meeting_started', data });
     });
 
-    this.socket.on('meeting:ended', (data) => {
+    this.bindDashboardEvent('meeting:ended', (data) => {
       console.log('📞 [SOCKET] Meeting ended:', data);
       this.notifyMeetingEnded(data);
-      this.notifyAttendanceUpdate({ type: 'meeting_ended', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'meeting_ended', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'meeting_ended', data });
     });
 
     // Check-out updates
-    this.socket.on('attendance:checked_out', (data) => {
+    this.bindDashboardEvent('attendance:checked_out', (data) => {
       console.log('🚪 [SOCKET] Employee checked out:', data);
-      this.notifyAttendanceUpdate({ type: 'checked_out', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'checked_out', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'checked_out', data });
     });
 
     // KPI updates
-    this.socket.on('kpi:update', (data) => {
+    this.bindDashboardEvent('kpi:update', (data) => {
       console.log('📊 [SOCKET] KPI update event received from server:', data);
-      console.log('📊 [SOCKET] Full data structure:', JSON.stringify(data, null, 2));
-      console.log('📊 [SOCKET] KPI onBreak value:', data?.kpis?.onBreak);
-      console.log('📊 [SOCKET] KPI activeUsers value:', data?.kpis?.activeUsers);
-      
-      // Notify dashboard with the KPI data
       this.notifyKPIUpdate(data);
       this.notifyDashboardUpdate({ type: 'kpi_update', data });
-      
-      console.log('📊 [SOCKET] Dashboard update callbacks count:', this.dashboardUpdateCallbacks.length);
     });
+
+    this.bindDashboardEvent('holiday:update', () => {
+      this.notifyDashboardUpdate({ type: 'holiday_refresh' });
+    });
+
+    this.dashboardListenersReady = true;
   }
 
   // Dashboard update callbacks
@@ -582,17 +613,21 @@ class RealTimeSocket {
 
   // Disconnect
   disconnect() {
+    if (this.sharedAttachTimer) {
+      clearInterval(this.sharedAttachTimer);
+      this.sharedAttachTimer = null;
+    }
     if (this.usesSharedSocket) {
+      this.teardownDashboardListeners();
       this.usesSharedSocket = false;
       this.socket = null;
-      this.dashboardListenersReady = false;
       return;
     }
     if (this.socket) {
+      this.teardownDashboardListeners();
       this.socket.disconnect();
       this.socket = null;
     }
-    this.dashboardListenersReady = false;
   }
 
   // Get socket instance for custom events

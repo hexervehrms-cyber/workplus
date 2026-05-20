@@ -17,7 +17,7 @@ const skipPaths = (req) => {
 /** Per-IP cap for anonymous/heavy SPA traffic (behind NAT: still per IP). */
 export const apiTrafficLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: parseInt(process.env.API_RATE_LIMIT_MAX || '800', 10),
+  max: parseInt(process.env.API_RATE_LIMIT_MAX || '2000', 10),
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => getClientIP(req),

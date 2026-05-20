@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
+import { useAuth } from '../../context/AuthContext';
+import { ensureAccessToken } from '../../utils/sessionAuth';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Clock, Search, Filter, Calendar, CheckCircle, AlertCircle, Activity, Coffee, Users, LogIn, LogOut, Upload, Download, FileSpreadsheet, Eye, Loader2 } from 'lucide-react';
@@ -59,6 +61,7 @@ interface ActivityLog {
 
 export default function AttendanceAdmin() {
   const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [activityLogTotal, setActivityLogTotal] = useState(0);
@@ -91,6 +94,15 @@ export default function AttendanceAdmin() {
   const [viewTitle, setViewTitle] = useState('Attendance details');
 
   useEffect(() => {
+    if (authLoading || !user?.id) return;
+
+    realTimeSocket.connectFromAuth({
+      id: String(user.id),
+      role: user.role,
+      orgId: user.orgId || user.tenantId,
+      tenantId: user.tenantId || user.orgId,
+    });
+
     fetchAttendance();
     fetchActivityLogs(activityStartDate || undefined, activityEndDate || undefined);
 
@@ -126,48 +138,39 @@ export default function AttendanceAdmin() {
       unsubKpi();
       unsubActivity();
     };
-  }, []);
+  }, [authLoading, user?.id, user?.role, user?.orgId, user?.tenantId]);
 
   // Separate function declarations for reuse
-  const fetchAttendance = async () => {
+  const fetchAttendance = useCallback(async () => {
     try {
       setLoading(true);
-      
-      // Debug authentication
-      const token = getBearerToken();
-      console.log('Current token:', token ? token.substring(0, 50) + '...' : 'No token');
-      console.log('User data:', localStorage.getItem('user'));
-      
-      // Fetch today's attendance
-      console.log('Fetching attendance records...');
+      await ensureAccessToken();
       const response = await apiClient.get(`/dashboard/todays-attendance?t=${Date.now()}`);
-      console.log('Attendance response:', response);
       if (response?.success) {
         const records = response.data || [];
-        console.log('Setting attendance records:', records);
         setAttendance(records);
-        
-        // Calculate stats
         const present = records.filter((r: AttendanceRecord) => r.status === 'present').length;
         const late = records.filter((r: AttendanceRecord) => r.status === 'late').length;
         const absent = records.filter((r: AttendanceRecord) => r.status === 'absent').length;
         const total = records.length || 1;
-        
         setStats({
           present,
           late,
           absent,
-          rate: Math.round((present / total) * 100)
+          rate: Math.round((present / total) * 100),
         });
+      } else {
+        toast.error(response?.message || 'Could not load today\'s attendance');
       }
     } catch (error) {
       console.error('Error fetching attendance:', error);
+      toast.error('Failed to load today\'s attendance. Try refreshing.');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchActivityLogs = async (
+  const fetchActivityLogs = useCallback(async (
     startDate?: string,
     endDate?: string,
     skip = 0,
@@ -175,17 +178,18 @@ export default function AttendanceAdmin() {
   ) => {
     try {
       setLogsLoading(true);
+      await ensureAccessToken();
       const params: Record<string, string> = {
-        limit: '2000',
+        limit: '500',
         skip: String(skip),
         t: String(Date.now()),
       };
       if (startDate) params.startDate = startDate;
       if (endDate) params.endDate = endDate;
-      if (startDate || endDate) {
-        // explicit range only
-      } else if (!startDate && !endDate) {
-        // no dates → backend returns full merged history
+      if (!startDate && !endDate) {
+        const today = new Date().toISOString().slice(0, 10);
+        params.startDate = today;
+        params.endDate = today;
       }
       const qs = new URLSearchParams(params).toString();
       const response = await apiClient.get(`/attendance/activity-logs?${qs}`);
@@ -196,20 +200,17 @@ export default function AttendanceAdmin() {
         setActivityLogsHasMore(Boolean(response.hasMore));
         setActivityLogsSkip(skip);
       } else if (!append) {
-        setActivityLogs([]);
-        setActivityLogTotal(0);
-        setActivityLogsHasMore(false);
+        toast.error(response?.message || 'Could not load activity log');
       }
     } catch (error) {
       console.error('Error fetching activity logs:', error);
       if (!append) {
-        setActivityLogs([]);
-        setActivityLogTotal(0);
+        toast.error('Failed to load activity log. Try refreshing.');
       }
     } finally {
       setLogsLoading(false);
     }
-  };
+  }, []);
 
   // Export attendance data
   const handleExport = async () => {

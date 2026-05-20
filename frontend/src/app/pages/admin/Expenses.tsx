@@ -1,16 +1,24 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { Receipt, Search, Filter, Download, Eye, CheckCircle, AlertCircle, Tag, Car, Utensils, Home, Briefcase, Plane, Heart, Book, ShoppingCart, Coffee, IndianRupee, Edit, Trash2, XCircle, Loader, Train, Fuel, Hotel, Phone, Wifi, Laptop, Printer, FileText, Users, Lightbulb, Wrench, GraduationCap, Stethoscope, Building2, Truck, Package, FileDown, FileUp } from 'lucide-react';
 import { useCurrency } from '../../context/CurrencyContext';
-import { apiGet, apiPut, apiDelete, apiPost, getBearerToken } from '../../utils/apiHelper';
+import {
+  apiGet,
+  apiPut,
+  apiDelete,
+  apiPost,
+  buildFileUrl,
+  fetchReceiptObjectUrl,
+} from '../../utils/apiHelper';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { toast } from '../../utils/portalToast';
+import { ExpenseLimitSettingsDialog } from '../../components/ExpenseLimitSettingsDialog';
 
 interface Expense {
   _id: string;
@@ -25,6 +33,7 @@ interface Expense {
     _id: string;
     name: string;
   };
+  receipt?: string;
 }
 
 const expenseCategories = [
@@ -96,6 +105,9 @@ export default function ExpensesAdmin() {
   const [isNewExpenseDialogOpen, setIsNewExpenseDialogOpen] = useState(false);
   const [isViewReceiptDialogOpen, setIsViewReceiptDialogOpen] = useState(false);
   const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
+  const [viewingReceiptPath, setViewingReceiptPath] = useState<string | null>(null);
+  const [receiptPreviewLoading, setReceiptPreviewLoading] = useState(false);
+  const receiptBlobUrlRef = useRef<string | null>(null);
   const [actionType, setActionType] = useState<'edit' | 'approve' | 'reject' | 'delete'>('edit');
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -137,6 +149,13 @@ export default function ExpensesAdmin() {
   }, [fetchExpenses]);
 
   const normalizedSearch = searchTerm.trim().toLowerCase();
+
+  const receiptPreviewKind = useMemo(() => {
+    const path = viewingReceiptPath || '';
+    if (/\.(jpg|jpeg|png|gif|webp)$/i.test(path)) return 'image';
+    if (/\.pdf$/i.test(path)) return 'pdf';
+    return 'other';
+  }, [viewingReceiptPath]);
 
   const filteredExpenses = useMemo(() => {
     return expenses.filter((expense) => {
@@ -183,27 +202,32 @@ export default function ExpensesAdmin() {
     return category ? category.color : 'bg-gray-100 text-gray-800';
   };
 
+  const revokeReceiptBlob = () => {
+    if (receiptBlobUrlRef.current) {
+      URL.revokeObjectURL(receiptBlobUrlRef.current);
+      receiptBlobUrlRef.current = null;
+    }
+  };
+
   // Handle document download
-  const handleDownloadReceipt = (receiptPath: string, expenseTitle: string) => {
+  const handleDownloadReceipt = async (receiptPath: string, expenseTitle: string) => {
     if (!receiptPath) {
       toast.error('No receipt available');
       return;
     }
 
     try {
-      // Create a link element
+      const objectUrl = await fetchReceiptObjectUrl(receiptPath);
+      const ext = receiptPath.includes('.') ? receiptPath.substring(receiptPath.lastIndexOf('.')) : '';
       const link = document.createElement('a');
-      const apiUrl = (import.meta as any).env.VITE_API_URL === '/api' ? '' : ((import.meta as any).env.VITE_API_URL || '');
-      link.href = `${apiUrl}${receiptPath}`;
-      link.download = `${expenseTitle}-receipt${receiptPath.substring(receiptPath.lastIndexOf('.'))}`;
+      link.href = objectUrl;
+      link.download = `${expenseTitle}-receipt${ext}`;
       link.target = '_blank';
-      
-      // Trigger download
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      
-      toast.success('Receipt downloaded');
+      URL.revokeObjectURL(objectUrl);
+      toast.success('Receipt download started');
     } catch (error) {
       console.error('Error downloading receipt:', error);
       toast.error('Failed to download receipt');
@@ -246,29 +270,39 @@ export default function ExpensesAdmin() {
     setIsActionDialogOpen(true);
   };
 
-  const handleViewReceipt = (receiptUrl: string) => {
-    if (!receiptUrl) {
+  const handleViewReceipt = async (receiptPath: string) => {
+    if (!receiptPath) {
       toast.error('No receipt available');
       return;
     }
-    
-    // Construct the full backend URL for the receipt
-    const apiUrl = (import.meta as any).env.VITE_API_URL || '';
-    
-    // Remove /api from the end if present to get the base backend URL
-    let baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
-    if (baseUrl.endsWith('/api')) {
-      baseUrl = baseUrl.slice(0, -4); // Remove '/api'
-    }
-    
-    // If receiptUrl is a relative path, prepend the backend URL
-    let fullUrl = receiptUrl;
-    if (receiptUrl.startsWith('/')) {
-      fullUrl = `${baseUrl}${receiptUrl}`;
-    }
-    
-    setViewingReceipt(fullUrl);
+
+    revokeReceiptBlob();
+    setViewingReceiptPath(receiptPath);
+    setViewingReceipt(null);
     setIsViewReceiptDialogOpen(true);
+    setReceiptPreviewLoading(true);
+
+    try {
+      const objectUrl = await fetchReceiptObjectUrl(receiptPath);
+      receiptBlobUrlRef.current = objectUrl;
+      setViewingReceipt(objectUrl);
+    } catch (error) {
+      console.error('Error loading receipt preview:', error);
+      setViewingReceipt(buildFileUrl(receiptPath));
+      toast.error('Could not load receipt preview');
+    } finally {
+      setReceiptPreviewLoading(false);
+    }
+  };
+
+  const closeReceiptDialog = (open: boolean) => {
+    setIsViewReceiptDialogOpen(open);
+    if (!open) {
+      revokeReceiptBlob();
+      setViewingReceipt(null);
+      setViewingReceiptPath(null);
+      setReceiptPreviewLoading(false);
+    }
   };
 
   // Handle checkbox toggle
@@ -789,7 +823,8 @@ export default function ExpensesAdmin() {
           <h1 className="text-3xl font-bold">Expenses</h1>
           <p className="text-muted-foreground">Manage employee expense claims</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
+          <ExpenseLimitSettingsDialog />
           {/* Export Button */}
           <div className="relative group">
             <Button 
@@ -800,16 +835,16 @@ export default function ExpensesAdmin() {
               <FileDown className="w-4 h-4 mr-2" />
               Export
             </Button>
-            <div className="absolute right-0 mt-2 w-32 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+            <div className="absolute right-0 mt-2 w-36 bg-card border border-border rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 text-foreground">
               <button
                 onClick={() => handleExportExpenses('csv')}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm rounded-t-lg"
+                className="w-full text-left px-4 py-2 hover:bg-muted text-sm rounded-t-lg text-foreground"
               >
                 Export as CSV
               </button>
               <button
                 onClick={() => handleExportExpenses('excel')}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm rounded-b-lg border-t border-gray-200"
+                className="w-full text-left px-4 py-2 hover:bg-muted text-sm rounded-b-lg border-t border-border text-foreground"
               >
                 Export as Excel
               </button>
@@ -1096,28 +1131,26 @@ export default function ExpensesAdmin() {
                       </td>
                       <td className="p-4">
                         <div className="flex gap-2">
-                          {expense.receipt && (
-                            <>
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                onClick={() => handleViewReceipt(expense.receipt || '')}
-                                disabled={actionLoading}
-                                title="View receipt"
-                              >
-                                <Eye className="w-4 h-4" />
-                              </Button>
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                onClick={() => handleDownloadReceipt(expense.receipt || '', expense.title || 'receipt')}
-                                disabled={actionLoading}
-                                title="Download receipt"
-                              >
-                                <Download className="w-4 h-4" />
-                              </Button>
-                            </>
-                          )}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="rounded-lg"
+                            onClick={() => void handleViewReceipt(expense.receipt || '')}
+                            disabled={actionLoading || !expense.receipt}
+                            title={expense.receipt ? 'View receipt' : 'No receipt uploaded'}
+                          >
+                            <Eye className="w-4 h-4 mr-1" />
+                            View
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void handleDownloadReceipt(expense.receipt || '', expense.title || 'receipt')}
+                            disabled={actionLoading || !expense.receipt}
+                            title={expense.receipt ? 'Download receipt' : 'No receipt uploaded'}
+                          >
+                            <Download className="w-4 h-4" />
+                          </Button>
                           <Button variant="ghost" size="sm" onClick={() => handleEdit(expense)} disabled={actionLoading}>
                             <Edit className="w-4 h-4" />
                           </Button>
@@ -1348,7 +1381,7 @@ export default function ExpensesAdmin() {
       </Dialog>
 
       {/* View Receipt Dialog */}
-      <Dialog open={isViewReceiptDialogOpen} onOpenChange={setIsViewReceiptDialogOpen}>
+      <Dialog open={isViewReceiptDialogOpen} onOpenChange={closeReceiptDialog}>
         <DialogContent className="max-w-4xl max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>View Receipt</DialogTitle>
@@ -1357,9 +1390,14 @@ export default function ExpensesAdmin() {
             </DialogDescription>
           </DialogHeader>
           <div className="overflow-auto max-h-[70vh]">
-            {viewingReceipt && viewingReceipt.trim() ? (
+            {receiptPreviewLoading ? (
+              <div className="flex items-center justify-center py-16 text-muted-foreground">
+                <Loader className="w-6 h-6 animate-spin mr-2" />
+                Loading receipt…
+              </div>
+            ) : viewingReceipt && viewingReceipt.trim() ? (
               <div className="flex items-center justify-center bg-gray-50 rounded-lg p-4">
-                {viewingReceipt.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
+                {receiptPreviewKind === 'image' ? (
                   <div className="w-full">
                     <img 
                       src={viewingReceipt} 
@@ -1382,7 +1420,7 @@ export default function ExpensesAdmin() {
                       }}
                     />
                   </div>
-                ) : viewingReceipt.match(/\.pdf$/i) ? (
+                ) : receiptPreviewKind === 'pdf' ? (
                   <div className="w-full">
                     <iframe 
                       src={viewingReceipt} 
@@ -1438,14 +1476,14 @@ export default function ExpensesAdmin() {
             <Button 
               variant="outline" 
               className="flex-1 rounded-xl" 
-              onClick={() => setIsViewReceiptDialogOpen(false)}
+              onClick={() => closeReceiptDialog(false)}
             >
               Close
             </Button>
-            {viewingReceipt && viewingReceipt.trim() && (
+            {viewingReceiptPath && (
               <Button 
                 className="flex-1 rounded-xl" 
-                onClick={() => handleDownloadReceipt(viewingReceipt, 'receipt')}
+                onClick={() => void handleDownloadReceipt(viewingReceiptPath, 'receipt')}
               >
                 <Download className="w-4 h-4 mr-2" />
                 Download

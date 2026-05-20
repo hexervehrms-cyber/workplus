@@ -25,11 +25,12 @@ router.get("/",
     const {
       role,
       department,
-      isActive = true,
       search,
       page = 1,
       limit = 50
     } = req.query;
+
+    const isActiveParam = req.query.isActive;
     
     let filter = { orgId, deletedAt: null };
     
@@ -39,7 +40,12 @@ router.get("/",
       filter.role = { $ne: 'super_admin' };
     }
     
-    if (isActive !== undefined) filter.isActive = isActive === 'true';
+    // Default: active users only. Pass isActive=false to list inactive.
+    if (isActiveParam === undefined || isActiveParam === '') {
+      filter.isActive = true;
+    } else {
+      filter.isActive = isActiveParam === 'true' || isActiveParam === true;
+    }
     if (role) filter.role = role;
     if (department) filter.departmentId = department;
     
@@ -200,7 +206,8 @@ router.post("/",
       managerId,
       profile = {},
       contact = {},
-      isActive = true
+      isActive = true,
+      adminRole,
     } = req.body;
     
     // Validate required fields
@@ -244,10 +251,10 @@ router.post("/",
         orgId 
       });
       
-      if (targetRole && currentUserRole && targetRole.level >= currentUserRole.level) {
+      if (targetRole && currentUserRole && targetRole.level > currentUserRole.level) {
         return res.status(403).json({
           success: false,
-          message: "Cannot create user with role equal to or higher than your own"
+          message: "Cannot create user with role higher than your own"
         });
       }
     }
@@ -300,11 +307,12 @@ router.post("/",
       roleId: validatedRoleId,
       departmentId: departmentId || null,
       managerId: managerId || null,
+      adminRole: adminRole ? String(adminRole).trim().toLowerCase() : null,
       profile: {
         ...profile,
         firstName: profile.firstName?.trim(),
         lastName: profile.lastName?.trim(),
-        title: profile.title?.trim()
+        title: profile.title?.trim() || (adminRole ? String(adminRole).trim() : undefined),
       },
       contact,
       isActive,
@@ -382,7 +390,8 @@ router.put("/:id",
       profile,
       contact,
       isActive,
-      preferences
+      preferences,
+      adminRole,
     } = req.body;
     
     // Update basic fields
@@ -446,10 +455,10 @@ router.put("/:id",
           orgId 
         });
         
-        if (targetRole && currentUserRole && targetRole.level >= currentUserRole.level) {
+        if (targetRole && currentUserRole && targetRole.level > currentUserRole.level) {
           return res.status(403).json({
             success: false,
-            message: "Cannot assign role equal to or higher than your own"
+            message: "Cannot assign role higher than your own"
           });
         }
       }
@@ -475,6 +484,11 @@ router.put("/:id",
     if (departmentId !== undefined) user.departmentId = departmentId;
     if (managerId !== undefined) user.managerId = managerId;
     if (isActive !== undefined) user.isActive = isActive;
+    if (adminRole !== undefined) {
+      user.adminRole = adminRole ? String(adminRole).trim().toLowerCase() : null;
+      if (!user.profile) user.profile = {};
+      user.profile.title = adminRole ? String(adminRole).trim() : user.profile.title;
+    }
     
     // Update nested objects
     if (profile) {

@@ -18,7 +18,10 @@ import {
   countOrgEmployees,
   getFinancialTotals,
 } from "../utils/dashboardKpiHelpers.js";
-import { buildOrgIdFlexible } from "../utils/attendanceQueryHelpers.js";
+import {
+  buildOrgIdFlexible,
+  countEmployeesCurrentlyOnBreak,
+} from "../utils/attendanceQueryHelpers.js";
 
 // Import specialized dashboard routes
 import superAdminRoutes from "./dashboard-superadmin.js";
@@ -524,11 +527,13 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
       
       const now = new Date();
       const { start: startOfDay, end: endOfDay } = getDayBounds(now);
+      const orgMatch = buildOrgIdFlexible(orgId);
       
       // OPTIMIZATION: Use faceted aggregation to get multiple stats in one query
       const [
         totalEmployees,
         attendanceStats,
+        onBreakToday,
         leaveExpenseStats,
         salesStats
       ] = await Promise.all([
@@ -540,7 +545,7 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
               presentToday: [
                 {
                   $match: {
-                    orgId,
+                    ...orgMatch,
                     date: { $gte: startOfDay, $lt: endOfDay },
                     status: 'present'
                   }
@@ -550,7 +555,7 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
               activeUsers: [
                 {
                   $match: {
-                    orgId,
+                    ...orgMatch,
                     date: { $gte: startOfDay, $lt: endOfDay },
                     checkIn: { $exists: true, $ne: null },
                     $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
@@ -558,24 +563,10 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
                 },
                 { $count: 'count' }
               ],
-              onBreakToday: [
-                {
-                  $match: {
-                    orgId,
-                    date: { $gte: startOfDay, $lt: endOfDay },
-                    breaks: {
-                      $elemMatch: {
-                        startTime: { $exists: true, $ne: null },
-                        $or: [{ endTime: { $exists: false } }, { endTime: null }]
-                      }
-                    }
-                  }
-                },
-                { $count: 'count' }
-              ]
             }
           }
         ]),
+        countEmployeesCurrentlyOnBreak(Attendance, orgMatch, startOfDay, endOfDay),
         // Leave and expense stats in one aggregation
         LeaveRequest.aggregate([
           {
@@ -622,7 +613,6 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
       // Extract values from aggregation results
       const presentToday = attendanceStats[0]?.presentToday[0]?.count || 0;
       const activeUsers = attendanceStats[0]?.activeUsers[0]?.count || 0;
-      const onBreakToday = attendanceStats[0]?.onBreakToday[0]?.count || 0;
       const pendingLeaves = leaveExpenseStats[0]?.pendingLeaves[0]?.count || 0;
       const onLeaveToday = leaveExpenseStats[0]?.onLeaveToday[0]?.count || 0;
       const totalBonus = salesStats[0]?.bonus[0]?.total || 0;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Lock, AlertCircle, CheckCircle, Loader, Upload, Check, Download, Trash2, Camera } from 'lucide-react';
 import { Card } from '../../components/ui/card';
@@ -53,6 +53,14 @@ interface EducationDocuments {
   [key: string]: { certificate?: Document; marksheet?: Document };
 }
 
+interface PreviousEmployment {
+  companyName: string;
+  role: string;
+  startDate: string;
+  endDate: string;
+  location: string;
+}
+
 interface OnboardingData {
   employeeEmail: string;
   employeeName: string;
@@ -104,6 +112,11 @@ const OnboardingPage: React.FC = () => {
   // Employment Documents State
   const [documents, setDocuments] = useState<Document[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('Letter of Intent');
+  const educationFilesRef = useRef<Record<string, File>>({});
+  const employmentFilesRef = useRef<Record<string, File>>({});
+  const [previousEmployment, setPreviousEmployment] = useState<PreviousEmployment[]>([
+    { companyName: '', role: '', startDate: '', endDate: '', location: '' },
+  ]);
 
   // Load documents from localStorage on mount
   useEffect(() => {
@@ -323,6 +336,9 @@ const OnboardingPage: React.FC = () => {
         filePath: ''
       };
 
+      const fileKey = `${educationLevel}_${docType}`;
+      educationFilesRef.current[fileKey] = file;
+
       setEducationalDocuments((prev) => ({
         ...prev,
         [educationLevel]: {
@@ -331,7 +347,7 @@ const OnboardingPage: React.FC = () => {
         }
       }));
 
-      toast.success(`${educationLevel} ${docType} selected successfully`);
+      toast.success(`${educationLevel} ${docType} selected — will upload on submit`);
       
       if (e.target) {
         e.target.value = '';
@@ -353,8 +369,11 @@ const OnboardingPage: React.FC = () => {
 
     try {
       // Store file reference locally (will be uploaded after profile creation)
+      const docId = `temp_${Date.now()}_${Math.random()}`;
+      employmentFilesRef.current[docId] = file;
+
       const newDoc: Document = {
-        _id: `temp_${Date.now()}_${Math.random()}`,
+        _id: docId,
         name: file.name,
         size: `${(file.size / 1024).toFixed(1)} KB`,
         uploadedAt: new Date().toLocaleDateString(),
@@ -380,11 +399,12 @@ const OnboardingPage: React.FC = () => {
   };
 
   const calculateEducationProgress = () => {
-    const educationLevels = Object.keys(educationalDocuments);
+    const educationLevels = ['10th', '12th'];
     let totalSlots = educationLevels.length * 2;
     let filledSlots = 0;
 
-    Object.values(educationalDocuments).forEach((docs) => {
+    educationLevels.forEach((level) => {
+      const docs = educationalDocuments[level] || {};
       if (docs.certificate) filledSlots++;
       if (docs.marksheet) filledSlots++;
     });
@@ -394,6 +414,7 @@ const OnboardingPage: React.FC = () => {
 
   // Delete educational document
   const deleteEducationDocument = (educationLevel: string, docType: 'certificate' | 'marksheet') => {
+    delete educationFilesRef.current[`${educationLevel}_${docType}`];
     setEducationalDocuments((prev) => ({
       ...prev,
       [educationLevel]: {
@@ -402,6 +423,23 @@ const OnboardingPage: React.FC = () => {
       }
     }));
     toast.success(`${educationLevel} ${docType} removed`);
+  };
+
+  const addPreviousJob = () => {
+    setPreviousEmployment((prev) => [
+      ...prev,
+      { companyName: '', role: '', startDate: '', endDate: '', location: '' },
+    ]);
+  };
+
+  const updatePreviousJob = (index: number, field: keyof PreviousEmployment, value: string) => {
+    setPreviousEmployment((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, [field]: value } : row))
+    );
+  };
+
+  const removePreviousJob = (index: number) => {
+    setPreviousEmployment((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
   };
 
   // Delete employment document
@@ -495,40 +533,50 @@ const OnboardingPage: React.FC = () => {
       }));
 
       const apiUrl = buildApiUrl('/onboarding/submit');
-      console.log('📤 [ONBOARDING] Submitting form:', { token: token.substring(0, 10) + '...', apiUrl });
+      const body = new FormData();
+      body.append('token', token);
+      body.append('password', formData.password);
+      body.append('firstName', formData.firstName);
+      body.append('lastName', formData.lastName);
+      body.append('phone', formData.phone);
+      body.append('dateOfBirth', formData.dateOfBirth);
+      body.append('gender', formData.gender);
+      body.append('address', formData.address);
+      body.append('aadharNumber', formData.aadharNumber);
+      body.append('panNumber', formData.panNumber);
+      body.append('bankAccount', formData.bankAccount);
+      body.append('ifscCode', formData.ifscCode);
+      body.append('emergencyName', formData.emergencyName);
+      body.append('emergencyRelation', formData.emergencyRelation);
+      body.append('emergencyPhone', formData.emergencyPhone);
+      body.append('educationalDocuments', JSON.stringify(educationData));
+      body.append('employmentDocuments', JSON.stringify(docsData));
+      body.append(
+        'previousEmployment',
+        JSON.stringify(previousEmployment.filter((j) => j.companyName.trim()))
+      );
+
+      if (photoPreview) {
+        const photoBlob = await (await fetch(photoPreview)).blob();
+        body.append('avatar', photoBlob, 'profile-photo.jpg');
+      }
+
+      Object.entries(educationFilesRef.current).forEach(([key, file]) => {
+        body.append(`edu_${key}`, file);
+      });
+
+      documents.forEach((doc) => {
+        const file = employmentFilesRef.current[doc._id];
+        if (file) {
+          body.append(`document_${doc._id}`, file);
+          body.append(`document_${doc._id}_type`, selectedCategory);
+        }
+      });
 
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
         credentials: 'include',
-        body: JSON.stringify({
-          token,
-          profilePhoto: photoPreview, // Send the base64 photo
-          personalInfo: {
-            firstName: formData.firstName,
-            lastName: formData.lastName,
-            phone: formData.phone,
-            dateOfBirth: formData.dateOfBirth,
-            gender: formData.gender,
-            address: formData.address
-          },
-          sensitiveInfo: {
-            aadharNumber: formData.aadharNumber,
-            panNumber: formData.panNumber,
-            bankAccount: formData.bankAccount,
-            ifscCode: formData.ifscCode
-          },
-          emergencyContact: {
-            name: formData.emergencyName,
-            relation: formData.emergencyRelation,
-            phone: formData.emergencyPhone
-          },
-          educationalDocuments: educationData,
-          employmentDocuments: docsData,
-          password: formData.password // Include password
-        })
+        body,
       });
 
       const data = await response.json();
@@ -906,7 +954,9 @@ const OnboardingPage: React.FC = () => {
 
               {/* Education Levels Grid */}
               <div className="space-y-4">
-                {Object.entries(educationalDocuments).map(([level, docs]) => (
+                {(['10th', '12th'] as const).map((level) => {
+                  const docs = educationalDocuments[level] || {};
+                  return (
                   <div key={level} className="border border-border rounded-xl p-4">
                     <div className="flex items-center justify-between mb-4">
                       <h4 className="font-semibold text-sm">{level}</h4>
@@ -1004,7 +1054,8 @@ const OnboardingPage: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1013,8 +1064,43 @@ const OnboardingPage: React.FC = () => {
           {currentSection === 5 && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-2xl font-bold mb-2">Upload your experience document</h2>
-                <p className="text-sm text-muted-foreground mb-6">Upload employment documents from your earlier organization (Optional)</p>
+                <h2 className="text-2xl font-bold mb-2">Previous employment (optional)</h2>
+                <p className="text-sm text-muted-foreground mb-4">Add prior companies — all fields optional</p>
+              </div>
+              {previousEmployment.map((job, index) => (
+                <Card key={index} className="p-4 space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <Label>Company name</Label>
+                      <Input value={job.companyName} onChange={(e) => updatePreviousJob(index, 'companyName', e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>Role</Label>
+                      <Input value={job.role} onChange={(e) => updatePreviousJob(index, 'role', e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>Start</Label>
+                      <Input type="date" value={job.startDate} onChange={(e) => updatePreviousJob(index, 'startDate', e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>End</Label>
+                      <Input type="date" value={job.endDate} onChange={(e) => updatePreviousJob(index, 'endDate', e.target.value)} />
+                    </div>
+                    <div className="md:col-span-2">
+                      <Label>Location</Label>
+                      <Input value={job.location} onChange={(e) => updatePreviousJob(index, 'location', e.target.value)} />
+                    </div>
+                  </div>
+                  {previousEmployment.length > 1 && (
+                    <Button type="button" variant="outline" size="sm" onClick={() => removePreviousJob(index)}>Remove</Button>
+                  )}
+                </Card>
+              ))}
+              <Button type="button" variant="secondary" onClick={addPreviousJob}>Add another company</Button>
+
+              <div>
+                <h2 className="text-2xl font-bold mb-2">Experience documents (optional)</h2>
+                <p className="text-sm text-muted-foreground mb-6">Offer letters, relieving letters, etc.</p>
               </div>
 
               {/* Document Categories Grid */}
@@ -1336,7 +1422,9 @@ const OnboardingPage: React.FC = () => {
                     Educational Documents
                   </h3>
                   <div className="space-y-2 text-sm">
-                    {Object.entries(educationalDocuments).map(([level, docs]) => (
+                    {(['10th', '12th'] as const).map((level) => {
+                  const docs = educationalDocuments[level] || {};
+                  return (
                       (docs.certificate || docs.marksheet) && (
                         <div key={level} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                           <span className="font-medium">{level}</span>
@@ -1346,7 +1434,8 @@ const OnboardingPage: React.FC = () => {
                           </div>
                         </div>
                       )
-                    ))}
+                    );
+                    })}
                     {Object.values(educationalDocuments).every(docs => !docs.certificate && !docs.marksheet) && (
                       <p className="text-muted-foreground italic">No educational documents uploaded</p>
                     )}

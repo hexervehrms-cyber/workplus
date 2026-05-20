@@ -88,7 +88,7 @@ export function buildTodayAttendanceQuery(
   };
 
   if (authRole === 'employee') {
-    return { ...base, userId: currentUserId };
+    return { ...base, ...buildUserIdClause(currentUserId) };
   }
   return { ...base, employeeId: effectiveEmployeeId };
 }
@@ -195,4 +195,23 @@ export function sumHoursFromAttendanceRows(rows, now = new Date()) {
     sum += recordWorkedHoursForRow(r, now);
   }
   return Math.round(sum * 100) / 100;
+}
+
+/** Count employees whose latest break today is still open (matches on-break API). */
+export async function countEmployeesCurrentlyOnBreak(Attendance, orgMatch, startOfDay, endOfDay) {
+  const records = await Attendance.find({
+    ...orgMatch,
+    date: { $gte: startOfDay, $lt: endOfDay },
+    checkIn: { $exists: true, $ne: null },
+    $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
+    'breaks.0': { $exists: true },
+  })
+    .select('breaks')
+    .lean();
+
+  return records.filter((record) => {
+    if (!record.breaks?.length) return false;
+    const lastBreak = record.breaks[record.breaks.length - 1];
+    return isOpenBreak(lastBreak);
+  }).length;
 }

@@ -7,10 +7,12 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import mongoose from 'mongoose';
 import { fileURLToPath } from 'url';
 import { authenticate } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import ChatMessage from '../models/ChatMessage.js';
+import ChatGroup from '../models/ChatGroup.js';
 import User from '../models/User.js';
 import logger from '../utils/logger.js';
 import {
@@ -158,6 +160,132 @@ router.post('/messages', authenticate, asyncHandler(async (req, res) => {
 }));
 
 /**
+ * GET /api/chat/groups
+ * List group chats the current user belongs to (same org).
+ */
+router.get('/groups', authenticate, asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const orgId = req.user.orgId || 'system';
+
+  const groups = await ChatGroup.find({ orgId, members: userId })
+    .select('conversationId name members createdAt')
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  res.json({
+    success: true,
+    data: groups.map((g) => ({
+      conversationId: g.conversationId,
+      name: g.name,
+      members: (g.members || []).map((m) => String(m)),
+    })),
+  });
+}));
+
+/**
+ * POST /api/chat/groups
+ * Create a group and seed a system message so the thread appears for all members.
+ * Body: { name: string, memberIds: string[] } — creator is added automatically; at least one other member required.
+ */
+router.post('/groups', authenticate, asyncHandler(async (req, res) => {
+  const creatorId = req.user.userId;
+  const orgId = req.user.orgId || 'system';
+  const groupName = String(req.body?.name || '').trim();
+  const rawMembers = Array.isArray(req.body?.memberIds) ? req.body.memberIds : [];
+
+  if (!groupName) {
+    return res.status(400).json({ success: false, message: 'Group name is required' });
+  }
+
+  const otherIds = [
+    ...new Set(
+      rawMembers
+        .map((id) => String(id))
+        .filter(Boolean)
+        .filter((id) => id !== String(creatorId))
+    ),
+  ];
+
+  if (otherIds.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Add at least one employee to the group',
+    });
+  }
+
+  if (otherIds.length > 99) {
+    return res.status(400).json({ success: false, message: 'Too many members (max 99 besides you)' });
+  }
+
+  const allIdStrings = [String(creatorId), ...otherIds];
+  const usersFound = await User.find({
+    _id: { $in: allIdStrings },
+    orgId,
+    isActive: true,
+    deletedAt: null,
+  })
+    .select('_id')
+    .lean();
+
+  if (usersFound.length !== allIdStrings.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'Some users are not in your organization or are inactive',
+    });
+  }
+
+  const conversationId = `grp_${new mongoose.Types.ObjectId().toString()}`;
+  const memberObjectIds = allIdStrings.map((id) => new mongoose.Types.ObjectId(id));
+
+  await ChatGroup.create({
+    conversationId,
+    name: groupName,
+    orgId,
+    createdBy: creatorId,
+    members: memberObjectIds,
+  });
+
+  const seed = new ChatMessage({
+    senderId: creatorId,
+    recipientId: null,
+    conversationId,
+    messageType: 'system',
+    content: {
+      text: `Group "${groupName}" was created.`,
+      system: { action: 'group_created', data: { name: groupName } },
+    },
+    channelInfo: {
+      channelType: 'group',
+      channelId: conversationId,
+      participants: memberObjectIds,
+    },
+    orgId,
+    status: 'delivered',
+  });
+  await seed.save();
+
+  if (global.io) {
+    for (const mid of memberObjectIds) {
+      global.io.to(`user_${mid}`).emit('chat:group_created', {
+        conversationId,
+        name: groupName,
+        memberIds: allIdStrings,
+      });
+    }
+  }
+
+  res.status(201).json({
+    success: true,
+    data: {
+      conversationId,
+      name: groupName,
+      memberIds: allIdStrings,
+    },
+    message: 'Group created',
+  });
+}));
+
+/**
  * POST /api/chat/upload
  * Upload a file attachment for a direct message (persists message + file on disk)
  */
@@ -167,28 +295,102 @@ router.post(
   chatFileUpload.single('file'),
   asyncHandler(async (req, res) => {
     const senderId = req.user.userId;
-    const orgId = req.user.orgId;
-    const { recipientId } = req.body;
+    const orgId = req.user.orgId || 'system';
+    const { recipientId, conversationId: groupConversationId } = req.body;
 
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No file uploaded' });
     }
+
+    const relPath = `/uploads/chat/${req.file.filename}`;
+
+    if (groupConversationId && String(groupConversationId).startsWith('grp_')) {
+      const group = await ChatGroup.findOne({
+        conversationId: String(groupConversationId),
+        orgId,
+        members: senderId,
+      })
+        .select('members conversationId')
+        .lean();
+
+      if (!group) {
+        return res.status(403).json({ success: false, message: 'Not a member of this group' });
+      }
+
+      const message = await ChatMessage.create({
+        senderId,
+        recipientId: null,
+        conversationId: group.conversationId,
+        messageType: 'file',
+        content: {
+          text: relPath,
+          file: {
+            fileName: req.file.originalname,
+            filePath: relPath,
+            fileSize: req.file.size,
+            mimeType: req.file.mimetype,
+          },
+        },
+        channelInfo: {
+          channelType: 'group',
+          channelId: group.conversationId,
+          participants: group.members,
+        },
+        orgId,
+        status: 'delivered',
+      });
+
+      if (global.io) {
+        const senderDoc = await User.findById(senderId).select('name avatar').lean();
+        const payload = {
+          messageId: message._id,
+          senderId: message.senderId,
+          conversationId: message.conversationId,
+          content: relPath,
+          messageType: 'file',
+          timestamp: message.createdAt,
+        };
+        for (const mid of group.members) {
+          global.io.to(`user_${mid}`).emit('chat:new_message', {
+            ...payload,
+            senderName: senderDoc?.name || 'User',
+            senderAvatar: senderDoc?.avatar,
+            status: String(mid) === String(senderId) ? 'sent' : 'delivered',
+          });
+        }
+      }
+
+      return res.status(201).json({
+        success: true,
+        data: {
+          fileUrl: relPath,
+          messageId: message.messageId || message._id.toString(),
+          fileName: req.file.originalname,
+        },
+        message: 'File uploaded',
+      });
+    }
+
     if (!recipientId) {
-      return res.status(400).json({ success: false, message: 'recipientId is required' });
+      return res.status(400).json({
+        success: false,
+        message: 'recipientId or group conversationId is required',
+      });
     }
 
     const recipient = await User.findOne({
       _id: recipientId,
       orgId,
       isActive: true,
-      deletedAt: null
-    }).select('_id').lean();
+      deletedAt: null,
+    })
+      .select('_id')
+      .lean();
 
     if (!recipient) {
       return res.status(404).json({ success: false, message: 'Recipient not found' });
     }
 
-    const relPath = `/uploads/chat/${req.file.filename}`;
     const conversationId = [String(senderId), String(recipientId)].sort().join('_');
 
     const message = await ChatMessage.create({
@@ -202,15 +404,15 @@ router.post(
           fileName: req.file.originalname,
           filePath: relPath,
           fileSize: req.file.size,
-          mimeType: req.file.mimetype
-        }
+          mimeType: req.file.mimetype,
+        },
       },
       channelInfo: {
         channelType: 'direct',
-        participants: [senderId, recipientId]
+        participants: [senderId, recipientId],
       },
       orgId,
-      status: 'delivered'
+      status: 'delivered',
     });
 
     res.status(201).json({
@@ -218,9 +420,9 @@ router.post(
       data: {
         fileUrl: relPath,
         messageId: message.messageId || message._id.toString(),
-        fileName: req.file.originalname
+        fileName: req.file.originalname,
       },
-      message: 'File uploaded'
+      message: 'File uploaded',
     });
   })
 );
@@ -233,20 +435,28 @@ router.get('/conversations/:conversationId', authenticate, asyncHandler(async (r
   const { conversationId } = req.params;
   const { page = 1, limit = 50 } = req.query;
   const userId = req.user.userId;
-  const orgId = req.user.orgId;
+  const orgId = req.user.orgId || 'system';
 
   try {
     // Verify user has access to this conversation
     const messages = await ChatMessage.findConversation(conversationId, page, limit);
     
     // Check if user is part of this conversation
-    const isParticipant = messages.some(msg => 
+    let isParticipant = messages.some(msg => 
       msg.senderId.toString() === userId || 
       msg.recipientId?.toString() === userId ||
       msg.channelInfo?.participants?.some(p => p.toString() === userId)
     );
 
-    if (!isParticipant && messages.length > 0) {
+    if (!isParticipant && String(conversationId).startsWith('grp_')) {
+      const grp = await ChatGroup.findOne({
+        conversationId: String(conversationId),
+        orgId,
+      }).lean();
+      isParticipant = !!(grp && grp.members.some((m) => m.toString() === String(userId)));
+    }
+
+    if (!isParticipant) {
       return res.status(403).json({
         success: false,
         message: 'Access denied to this conversation'
@@ -412,9 +622,14 @@ router.delete('/messages/:messageId', authenticate, asyncHandler(async (req, res
         messageId: message._id.toString(),
         conversationId: message.conversationId,
       };
-      global.io.to(`user_${message.senderId}`).emit('chat:message_deleted', payload);
-      if (message.recipientId) {
-        global.io.to(`user_${message.recipientId}`).emit('chat:message_deleted', payload);
+      const targets = new Set();
+      targets.add(String(message.senderId));
+      if (message.recipientId) targets.add(String(message.recipientId));
+      for (const p of message.channelInfo?.participants || []) {
+        targets.add(String(p));
+      }
+      for (const uid of targets) {
+        global.io.to(`user_${uid}`).emit('chat:message_deleted', payload);
       }
     }
 

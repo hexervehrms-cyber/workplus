@@ -472,17 +472,40 @@ router.post('/submit',
       profilePhoto = req.files?.avatar?.[0] || null;
       employmentDocuments = [];
       
+      educationalDocuments = {};
+      try {
+        if (req.body.educationalDocuments) {
+          educationalDocuments = JSON.parse(req.body.educationalDocuments);
+        }
+      } catch {
+        educationalDocuments = {};
+      }
+
       // Collect uploaded documents
       if (req.files) {
-        Object.keys(req.files).forEach(key => {
+        Object.keys(req.files).forEach((key) => {
           if (key.startsWith('document_')) {
             const file = req.files[key][0];
             employmentDocuments.push({
               name: file.originalname,
-              type: req.body[key.replace('document_', 'document_') + '_type'] || 'document',
+              category: req.body[`${key}_type`] || 'document',
               url: file.path || file.filename,
-              size: file.size
+              size: file.size,
             });
+          }
+          if (key.startsWith('edu_')) {
+            const rest = key.slice(4);
+            const lastUnderscore = rest.lastIndexOf('_');
+            const level = rest.slice(0, lastUnderscore);
+            const docType = rest.slice(lastUnderscore + 1);
+            if (!level || !docType) return;
+            const file = req.files[key][0];
+            if (!educationalDocuments[level]) educationalDocuments[level] = {};
+            educationalDocuments[level][docType] = {
+              name: file.originalname,
+              url: file.path || file.filename,
+              size: file.size,
+            };
           }
         });
       }
@@ -582,6 +605,13 @@ router.post('/submit',
           phone: emergencyContact?.phone
         },
         educationalDocuments: educationalDocuments || {},
+        previousEmployment: (() => {
+          try {
+            return JSON.parse(req.body.previousEmployment || '[]');
+          } catch {
+            return [];
+          }
+        })(),
         employmentDocuments: employmentDocuments || [],
         documents: employmentDocuments || [],
         status: 'pending'

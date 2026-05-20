@@ -327,3 +327,47 @@ export const buildFileUrl = (filePath: string): string => {
   const backendUrl = getBackendUrl();
   return `${backendUrl}${filePath}`;
 };
+
+/** Extract filename from stored receipt path (/uploads/receipts/...) */
+export function getReceiptFilename(receiptPath: string): string | null {
+  if (!receiptPath?.trim()) return null;
+  const clean = receiptPath.split('?')[0];
+  const name = clean.split('/').pop();
+  return name && !name.includes('..') ? name : null;
+}
+
+/**
+ * Load receipt via authenticated API (fallback: public /uploads static URL).
+ * Returns a blob: URL suitable for img/iframe preview.
+ */
+export async function fetchReceiptObjectUrl(receiptPath: string): Promise<string> {
+  const filename = getReceiptFilename(receiptPath);
+  const token = getBearerToken();
+
+  if (filename && token) {
+    const response = await fetchWithTimeout(
+      buildApiUrl(`expenses/receipt/${encodeURIComponent(filename)}?inline=1`),
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
+      },
+      REQUEST_TIMEOUT_MS
+    );
+    if (response.ok) {
+      const blob = await response.blob();
+      return URL.createObjectURL(blob);
+    }
+  }
+
+  const staticUrl = buildFileUrl(receiptPath);
+  const staticResponse = await fetchWithTimeout(
+    staticUrl,
+    { credentials: 'include' },
+    REQUEST_TIMEOUT_MS
+  );
+  if (!staticResponse.ok) {
+    throw new Error('Receipt not found');
+  }
+  const blob = await staticResponse.blob();
+  return URL.createObjectURL(blob);
+}

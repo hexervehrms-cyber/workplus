@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Plus, Search, Filter, Edit, Trash2, X, Eye, AlertCircle, Loader2 } from 'lucide-react';
-import { apiClient } from '../../utils/api';
+import { apiClient, ApiError } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
 import { PasswordInput } from '../../components/PasswordInput';
 
@@ -41,28 +41,33 @@ export default function AdminManagement() {
     loadAdmins();
   }, []);
 
+  const mapAdminUser = (user: any): AdminUser => ({
+    _id: user._id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    adminRole: user.adminRole || user.profile?.title || 'manager',
+    organization: user.organization || 'WorkPlus Inc.',
+    status: user.isActive ? 'Active' : 'Inactive',
+    avatar: (user.name || 'A').split(' ').map((n: string) => n[0]).join('').toUpperCase(),
+    isActive: user.isActive,
+  });
+
   const loadAdmins = async () => {
     try {
       setPageLoading(true);
-      const response = await apiClient.get('/api/users?role=admin');
-      if (response.data) {
+      const response = await apiClient.get('/users?role=admin&isActive=true');
+      if (response.success && response.data) {
         const userList = Array.isArray(response.data) ? response.data : response.data.users || [];
-        const formattedUsers = userList
-          .filter((user: any) => user.role === 'admin')
-          .map((user: any) => ({
-            _id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            organization: user.organization || 'WorkPlus Inc.',
-            status: user.isActive ? 'Active' : 'Inactive',
-            avatar: user.name.split(' ').map((n: string) => n[0]).join('').toUpperCase(),
-            isActive: user.isActive
-          }));
-        setAdmins(formattedUsers);
+        setAdmins(
+          userList
+            .filter((user: any) => user.role === 'admin')
+            .map(mapAdminUser)
+        );
       }
     } catch (err) {
       console.error('Error loading admins:', err);
+      toast.error('Failed to load admin users');
     } finally {
       setPageLoading(false);
     }
@@ -95,7 +100,7 @@ export default function AdminManagement() {
     setError(null);
 
     try {
-      const response = await apiClient.post('/api/users', {
+      const response = await apiClient.post('/users', {
         name: formData.name,
         email: formData.email,
         password: formData.password,
@@ -104,21 +109,7 @@ export default function AdminManagement() {
         isActive: true
       });
 
-      if (response.data) {
-        const userData = response.data;
-        const newAdmin: AdminUser = {
-          _id: userData._id,
-          name: userData.name,
-          email: userData.email,
-          role: userData.role,
-          adminRole: formData.adminRole,
-          organization: userData.organization || 'WorkPlus Inc.',
-          status: 'Active',
-          avatar: formData.name.split(' ').map((n: string) => n[0]).join('').toUpperCase(),
-          isActive: true
-        };
-        
-        setAdmins([...admins, newAdmin]);
+      if (response.success) {
         setShowAddForm(false);
         setFormData({
           name: '',
@@ -128,10 +119,18 @@ export default function AdminManagement() {
           adminRole: 'manager'
         });
         toast.success('Admin user created successfully!');
+        await loadAdmins();
+      } else {
+        throw new Error(response.message || 'Failed to create admin user');
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error creating admin:', err);
-      const errorMsg = err.response?.data?.message || err.message || 'Failed to create admin user';
+      const errorMsg =
+        err instanceof ApiError
+          ? err.getUserMessage()
+          : err instanceof Error
+            ? err.message
+            : 'Failed to create admin user';
       setError(errorMsg);
       toast.error(errorMsg);
     } finally {
@@ -161,15 +160,18 @@ export default function AdminManagement() {
 
     setLoading(true);
     try {
-      const response = await apiClient.delete(`/api/users/${deletingUserId}`);
+      const response = await apiClient.delete(`/users/${deletingUserId}`);
       if (response.success) {
-        setAdmins(admins.filter(admin => admin._id !== deletingUserId));
         setShowDeleteConfirm(false);
         setDeletingUserId(null);
         toast.success('Admin user deleted successfully');
+        await loadAdmins();
       }
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.message || 'Failed to delete admin user';
+    } catch (err: unknown) {
+      const errorMsg =
+        err instanceof ApiError
+          ? err.getUserMessage()
+          : 'Failed to delete admin user';
       setError(errorMsg);
       toast.error(errorMsg);
       console.error('Error deleting admin:', err);
@@ -201,22 +203,9 @@ export default function AdminManagement() {
         updateData.password = formData.password;
       }
 
-      const response = await apiClient.put(`/api/users/${editingUser._id}`, updateData);
+      const response = await apiClient.put(`/users/${editingUser._id}`, updateData);
 
-      if (response.data) {
-        const updatedData = response.data;
-        setAdmins(admins.map(admin => 
-          admin._id === editingUser._id 
-            ? {
-                ...admin,
-                name: updatedData.name,
-                email: updatedData.email,
-                role: updatedData.role,
-                adminRole: formData.adminRole,
-                avatar: updatedData.name.split(' ').map((n: string) => n[0]).join('').toUpperCase()
-              }
-            : admin
-        ));
+      if (response.success) {
         setShowEditForm(false);
         setEditingUser(null);
         setFormData({
@@ -227,9 +216,15 @@ export default function AdminManagement() {
           adminRole: 'manager'
         });
         toast.success('Admin user updated successfully');
+        await loadAdmins();
       }
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.message || err.message || 'Failed to update admin user';
+    } catch (err: unknown) {
+      const errorMsg =
+        err instanceof ApiError
+          ? err.getUserMessage()
+          : err instanceof Error
+            ? err.message
+            : 'Failed to update admin user';
       setError(errorMsg);
       toast.error(errorMsg);
       console.error('Error updating admin:', err);

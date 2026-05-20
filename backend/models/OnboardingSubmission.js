@@ -46,6 +46,13 @@ const onboardingSubmissionSchema = new mongoose.Schema(
       },
       default: {}
     },
+    previousEmployment: [{
+      companyName: { type: String },
+      role: { type: String },
+      startDate: { type: String },
+      endDate: { type: String },
+      location: { type: String },
+    }],
     employmentDocuments: [{
       id: { type: String },
       name: { type: String },

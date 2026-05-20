@@ -76,9 +76,17 @@ attendanceSchema.index({ employeeId: 1, date: -1 });
 attendanceSchema.index({ orgId: 1, status: 1, date: -1 });
 attendanceSchema.index({ date: -1, status: 1 });
 
-// Unique constraint: one attendance record per user per day (but allow re-entry records)
-// Re-entry records have isReEntry: true, so we handle uniqueness at the application level
-// No database-level unique constraint to allow multiple check-ins per day
-attendanceSchema.index({ userId: 1, date: 1 }); // Non-unique index for performance
+/** At most one open shift (checked in, not checked out) per user per calendar day — prevents double check-in races. */
+attendanceSchema.index(
+  { userId: 1, date: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      checkIn: { $exists: true, $ne: null },
+      $or: [{ checkOut: { $exists: false } }, { checkOut: null }],
+    },
+    name: "uniq_open_session_user_date",
+  }
+);
 
 export default mongoose.model("Attendance", attendanceSchema);

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
+import { useIsMounted } from '../../hooks/useIsMounted';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -47,6 +48,7 @@ const PREDEFINED_ROLES = [
 ];
 
 export default function Employees() {
+  const mounted = useIsMounted();
   const navigate = useNavigate();
   const { formatCurrency, selectedCurrency } = useCurrency();
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -139,10 +141,14 @@ export default function Employees() {
     try {
       setLoading(true);
       const data = await EmployeeService.getAllEmployees();
-      setEmployees(data);
-    } catch (err: any) {
+      if (mounted.current) setEmployees(data);
+    } catch (err: unknown) {
+      if (mounted.current) {
+        toast.error('Failed to load employees');
+      }
+      console.error('Error loading employees:', err);
     } finally {
-      setLoading(false);
+      if (mounted.current) setLoading(false);
     }
   };
 

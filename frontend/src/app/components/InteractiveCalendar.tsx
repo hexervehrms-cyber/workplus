@@ -238,8 +238,17 @@ export default function InteractiveCalendar() {
     }
 
     try {
-      const employeeId = user.employeeId || user.id;
-      const orgId = user.orgId || 'system';
+      const { resolveEmployeeMongoId } = await import('../utils/resolveEmployeeId');
+      const employeeId = await resolveEmployeeMongoId(user);
+      if (!employeeId) {
+        toast.error('Employee profile not found. Please contact HR.');
+        return;
+      }
+      const orgId = user.orgId || user.tenantId;
+      if (!orgId) {
+        toast.error('Organization not set on your account.');
+        return;
+      }
 
       const startDate = new Date(formData.startDate);
       const endDate = new Date(formData.endDate);
@@ -266,7 +275,8 @@ export default function InteractiveCalendar() {
         
         const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
         if (updatedLeaves.success && updatedLeaves.data) {
-          setLeaveHistory(updatedLeaves.data);
+          const raw = updatedLeaves.data as { data?: unknown[] } | unknown[];
+          setLeaveHistory(Array.isArray(raw) ? raw : raw.data || []);
         }
       } else {
         toast.error(response.message || 'Failed to submit leave request');

@@ -763,7 +763,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
       {/* Generate Tab */}
       {activeTab === 'generate' && (isAdmin || isSuperAdmin) && (
         <DigitalDocumentGenerator
-          organizationId={organizationId || 'ORG-001'}
+          organizationId={organizationId || user?.orgId || user?.tenantId || ''}
           createdBy={isSuperAdmin ? 'super_admin' : 'admin'}
           onDocumentGenerated={handleDocumentGenerated}
         />

@@ -115,6 +115,12 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null
     },
+    /** Org admin designation (manager, hr, accountant, etc.) */
+    adminRole: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     // Organization context
     organization: { 
       type: String,

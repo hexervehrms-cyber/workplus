@@ -17,6 +17,7 @@ import EmailNotificationService from "../utils/emailNotificationService.js";
 import logger from "../utils/logger.js";
 import { aggregateStructureMoney } from "../utils/payrollMoney.js";
 import { emitKPIUpdate } from "../utils/kpiUpdater.js";
+import { employeeLookupQuery, structureLookupQuery, isSuperAdmin } from "../utils/orgScopeHelpers.js";
 
 const router = express.Router();
 
@@ -43,10 +44,14 @@ router.post(
         return sendError(res, "Missing required fields", 400, "VALIDATION_ERROR");
       }
 
-      // Find employee
-      const employee = await Employee.findById(employeeId);
+      const employee = await Employee.findOne(employeeLookupQuery(req, employeeId)).lean();
       if (!employee) {
         return sendError(res, "Employee not found", 404, "NOT_FOUND");
+      }
+
+      const structureOrgId = employee.orgId || req.user.orgId;
+      if (!isSuperAdmin(req) && String(structureOrgId) !== String(req.user.orgId)) {
+        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
       const { grossEarnings, totalDeductions, netSalary } = aggregateStructureMoney(earnings, deductions);
@@ -56,7 +61,7 @@ router.post(
         employeeId,
         userId: employee.userId,
         employeeType,
-        orgId: req.user.orgId,
+        orgId: structureOrgId,
         location: "Noida",
         effectiveFrom: new Date(effectiveFrom),
         earnings: earnings || {},
@@ -106,8 +111,7 @@ router.put(
         notes
       } = req.body;
 
-      // Find existing structure
-      const structure = await SalaryStructure.findById(structureId);
+      const structure = await SalaryStructure.findOne(structureLookupQuery(req, structureId));
       if (!structure) {
         return sendError(res, "Salary structure not found", 404, "NOT_FOUND");
       }
@@ -115,9 +119,8 @@ router.put(
       const { grossEarnings, totalDeductions, netSalary } = aggregateStructureMoney(earnings, deductions);
       const costToCompany = grossEarnings + (deductions?.providentFund || 0) * 0.12;
 
-      // Update structure
-      const updatedStructure = await SalaryStructure.findByIdAndUpdate(
-        structureId,
+      const updatedStructure = await SalaryStructure.findOneAndUpdate(
+        structureLookupQuery(req, structureId),
         {
           employeeType,
           effectiveFrom: new Date(effectiveFrom),
@@ -161,10 +164,7 @@ router.get(
   asyncHandler(async (req, res) => {
     try {
       const { structureId } = req.params;
-      const structure = await SalaryStructure.findOne({
-        _id: structureId,
-        orgId: req.user.orgId
-      })
+      const structure = await SalaryStructure.findOne(structureLookupQuery(req, structureId))
         .populate("employeeId", "firstName lastName employeeCode")
         .lean();
 
@@ -268,8 +268,8 @@ router.put(
     try {
       const { structureId } = req.params;
 
-      const structure = await SalaryStructure.findByIdAndUpdate(
-        structureId,
+      const structure = await SalaryStructure.findOneAndUpdate(
+        structureLookupQuery(req, structureId),
         {
           status: "approved",
           approvedBy: req.user.userId,
@@ -311,8 +311,8 @@ router.put(
       const { structureId } = req.params;
       const { rejectionReason } = req.body;
 
-      const structure = await SalaryStructure.findByIdAndUpdate(
-        structureId,
+      const structure = await SalaryStructure.findOneAndUpdate(
+        structureLookupQuery(req, structureId),
         {
           status: "rejected",
           rejectionReason,
@@ -566,13 +566,25 @@ router.get(
     try {
       const { slipId } = req.params;
 
-      const slip = await SalarySlip.findOne({ _id: slipId, orgId: req.user.orgId })
-        .populate("employeeId", "firstName lastName employeeCode email department designation")
+      const slip = await SalarySlip.findById(slipId)
+        .populate("employeeId", "firstName lastName employeeCode email department designation userId")
         .populate("approvedBy", "name email")
         .lean();
 
       if (!slip) {
         return sendError(res, "Salary slip not found", 404, "NOT_FOUND");
+      }
+
+      const requestUserId = req.user.userId?.toString?.() || String(req.user.userId);
+      const employeeUserId = slip.employeeId?.userId
+        ? String(slip.employeeId.userId._id || slip.employeeId.userId)
+        : null;
+      const isOwner =
+        (slip.userId && String(slip.userId) === requestUserId) ||
+        (employeeUserId && employeeUserId === requestUserId);
+      const isPrivileged = ["admin", "hr", "super_admin"].includes(req.user.role);
+      if (!isOwner && !isPrivileged) {
+        return sendError(res, "Unauthorized", 403, "FORBIDDEN");
       }
 
       const employeeDoc = slip.employeeId;
@@ -1145,7 +1157,7 @@ router.delete(
         userId: req.user.userId
       });
 
-      const structure = await SalaryStructure.findByIdAndDelete(structureId);
+      const structure = await SalaryStructure.findOneAndDelete(structureLookupQuery(req, structureId));
 
       if (!structure) {
         logger.warn("Salary structure not found for deletion", {

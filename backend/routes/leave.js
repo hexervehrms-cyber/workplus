@@ -23,8 +23,21 @@ import {
   resolveOrganizationSmtp,
   getHrInboxEmail
 } from '../utils/workflowNotifications.js';
+import {
+  computeLeaveRemaining,
+  findCurrentLeaveAllocation,
+  getLeaveFieldName,
+} from '../utils/leaveBalanceHelpers.js';
+import { authorize } from '../middleware/auth.js';
+import {
+  resolveQueryOrgId,
+  denyIfCrossOrg,
+  bulkOrgFilter,
+  LEAVE_APPROVER_ROLES,
+} from '../utils/leaveAccessHelpers.js';
 
 const router = express.Router();
+const leaveApprovers = authorize(...LEAVE_APPROVER_ROLES);
 
 // Apply pagination middleware
 router.use(paginationMiddleware);
@@ -249,16 +262,16 @@ router.patch('/:id', asyncHandler(async (req, res) => {
  * PATCH /api/leave-requests/:id/approve
  * Approve leave request (must come before GET /:id)
  */
-router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.patch('/:id/approve', leaveApprovers, idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { approvedBy, comments = '' } = req.body;
+  const { comments = '' } = req.body;
+  const approvedBy = req.user.userId;
 
-  if (!approvedBy) {
-    return res.status(400).json({
-      success: false,
-      message: 'approvedBy is required'
-    });
+  const leaveForAuth = await LeaveRequest.findById(id).select('orgId').lean();
+  if (!leaveForAuth) {
+    return res.status(404).json({ success: false, message: 'Leave request not found' });
   }
+  if (denyIfCrossOrg(req, res, leaveForAuth.orgId)) return;
 
   // Use Leave Policy Engine if available
   if (global.leavePolicyEngine) {
@@ -353,13 +366,13 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
 
   // CRITICAL: Validate leave balance before approval
   const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
-  const allocation = await LeaveAllocation.findOne({
-    employeeId: leaveRequest.employeeId,
-    leaveType: leaveRequest.type,
-    orgId: leaveRequest.orgId
-  }).lean();
+  const allocation = await findCurrentLeaveAllocation(
+    LeaveAllocation,
+    leaveRequest.employeeId,
+    leaveRequest.orgId
+  );
 
-  if (!allocation) {
+  if (!allocation || !getLeaveFieldName(leaveRequest.type)) {
     return res.status(400).json({
       success: false,
       message: `No leave allocation found for ${leaveRequest.type} leave type`
@@ -370,7 +383,7 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
   const start = new Date(leaveRequest.startDate);
   const end = new Date(leaveRequest.endDate);
   const days = leaveRequest.isHalfDay ? 0.5 : Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
-  const availableBalance = allocation.balance || 0;
+  const availableBalance = computeLeaveRemaining(allocation, leaveRequest.type);
 
   if (availableBalance < days) {
     return res.status(400).json({
@@ -509,14 +522,21 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
  * PATCH /api/leave-requests/:id/reject
  * Reject leave request (must come before GET /:id)
  */
-router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.patch('/:id/reject', leaveApprovers, idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { rejectedBy, rejectionReason } = req.body;
+  const { rejectionReason } = req.body;
+  const rejectedBy = req.user.userId;
 
-  if (!rejectedBy || !rejectionReason) {
+  const leaveForAuth = await LeaveRequest.findById(id).select('orgId').lean();
+  if (!leaveForAuth) {
+    return res.status(404).json({ success: false, message: 'Leave request not found' });
+  }
+  if (denyIfCrossOrg(req, res, leaveForAuth.orgId)) return;
+
+  if (!rejectionReason) {
     return res.status(400).json({
       success: false,
-      message: 'rejectedBy and rejectionReason are required'
+      message: 'rejectionReason is required'
     });
   }
 
@@ -769,11 +789,7 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
 router.get('/stats/summary', asyncHandler(async (req, res) => {
   const { orgId, startDate, endDate } = req.query;
 
-  const query = {};
-  
-  if (orgId) {
-    query.orgId = orgId;
-  }
+  const query = { orgId: resolveQueryOrgId(req, orgId) };
   
   if (startDate && endDate) {
     query.startDate = {
@@ -828,6 +844,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
       message: 'Leave request not found'
     });
   }
+
+  if (denyIfCrossOrg(req, res, leaveRequest.orgId)) return;
 
   res.json({
     success: true,
@@ -887,6 +905,34 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     return res.status(400).json({
       success: false,
       message: 'All fields are required'
+    });
+  }
+
+  const isPrivilegedCreator = ['admin', 'hr', 'manager', 'super_admin'].includes(req.user.role);
+  if (!isPrivilegedCreator) {
+    const emp = await Employee.findOne({ userId: req.user.userId, orgId: req.user.orgId })
+      .select('_id')
+      .lean();
+    if (!emp) {
+      return res.status(403).json({
+        success: false,
+        message: 'Employee profile not found for your account',
+      });
+    }
+    if (
+      String(userId) !== String(req.user.userId) ||
+      String(employeeId) !== String(emp._id) ||
+      String(orgId) !== String(req.user.orgId)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot submit leave on behalf of another user or organization',
+      });
+    }
+  } else if (req.user.role !== 'super_admin' && String(orgId) !== String(req.user.orgId)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot create leave for another organization',
     });
   }
 
@@ -1080,20 +1126,16 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
 
   // CRITICAL: Check leave balance before creating request
   const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
-  const allocation = await LeaveAllocation.findOne({
-    employeeId,
-    leaveType: leaveType,
-    orgId
-  }).lean();
+  const allocation = await findCurrentLeaveAllocation(LeaveAllocation, employeeId, orgId);
 
-  if (!allocation) {
+  if (!allocation || !getLeaveFieldName(leaveType)) {
     return res.status(400).json({
       success: false,
-      message: `No leave allocation found for ${leaveType} leave type`
+      message: `No leave allocation found for ${leaveType} for the current month. Ask HR to allocate leave.`
     });
   }
 
-  const availableBalance = allocation.balance || 0;
+  const availableBalance = computeLeaveRemaining(allocation, leaveType);
   if (availableBalance < days) {
     return res.status(400).json({
       success: false,
@@ -1214,8 +1256,9 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
  * POST /api/leave-requests/bulk-approve
  * Bulk approve leave requests with idempotency
  */
-router.post('/bulk-approve', idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const { requestIds, approvedBy } = req.body;
+router.post('/bulk-approve', leaveApprovers, idempotencyMiddleware, asyncHandler(async (req, res) => {
+  const { requestIds } = req.body;
+  const approvedBy = req.user.userId;
 
   if (!requestIds || !Array.isArray(requestIds) || requestIds.length === 0) {
     return res.status(400).json({
@@ -1224,18 +1267,12 @@ router.post('/bulk-approve', idempotencyMiddleware, asyncHandler(async (req, res
     });
   }
 
-  if (!approvedBy) {
-    return res.status(400).json({
-      success: false,
-      message: 'approvedBy is required'
-    });
-  }
-
   // Update all pending requests
   const result = await LeaveRequest.updateMany(
     {
       _id: { $in: requestIds },
-      status: 'pending'
+      status: 'pending',
+      ...bulkOrgFilter(req),
     },
     {
       $set: {
@@ -1262,8 +1299,9 @@ router.post('/bulk-approve', idempotencyMiddleware, asyncHandler(async (req, res
  * POST /api/leave-requests/bulk-reject
  * Bulk reject leave requests with idempotency
  */
-router.post('/bulk-reject', idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const { requestIds, rejectedBy, rejectionReason } = req.body;
+router.post('/bulk-reject', leaveApprovers, idempotencyMiddleware, asyncHandler(async (req, res) => {
+  const { requestIds, rejectionReason } = req.body;
+  const rejectedBy = req.user.userId;
 
   if (!requestIds || !Array.isArray(requestIds) || requestIds.length === 0) {
     return res.status(400).json({
@@ -1272,10 +1310,10 @@ router.post('/bulk-reject', idempotencyMiddleware, asyncHandler(async (req, res)
     });
   }
 
-  if (!rejectedBy || !rejectionReason) {
+  if (!rejectionReason) {
     return res.status(400).json({
       success: false,
-      message: 'rejectedBy and rejectionReason are required'
+      message: 'rejectionReason is required'
     });
   }
 
@@ -1283,7 +1321,8 @@ router.post('/bulk-reject', idempotencyMiddleware, asyncHandler(async (req, res)
   const result = await LeaveRequest.updateMany(
     {
       _id: { $in: requestIds },
-      status: 'pending'
+      status: 'pending',
+      ...bulkOrgFilter(req),
     },
     {
       $set: {
@@ -1311,13 +1350,22 @@ router.post('/bulk-reject', idempotencyMiddleware, asyncHandler(async (req, res)
  * POST /api/leave-requests/policy
  * Set leave policy for organization
  */
-router.post('/policy', asyncHandler(async (req, res) => {
-  const { orgId, policy } = req.body;
+router.post('/policy', leaveApprovers, asyncHandler(async (req, res) => {
+  const { policy } = req.body;
+  const orgId =
+    req.user.role === 'super_admin' && req.body.orgId ? req.body.orgId : req.user.orgId;
 
   if (!orgId || !policy) {
     return res.status(400).json({
       success: false,
       message: 'orgId and policy are required'
+    });
+  }
+
+  if (req.user.role !== 'super_admin' && String(req.body.orgId || orgId) !== String(req.user.orgId)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot update policy for another organization',
     });
   }
 
@@ -1345,6 +1393,16 @@ router.post('/policy', asyncHandler(async (req, res) => {
  */
 router.get('/policy/:orgId', asyncHandler(async (req, res) => {
   const { orgId } = req.params;
+
+  if (
+    req.user.role !== 'super_admin' &&
+    String(orgId) !== String(req.user.orgId)
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: 'Unauthorized access',
+    });
+  }
 
   if (!global.leavePolicyEngine) {
     return res.status(503).json({

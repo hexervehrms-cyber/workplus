@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Calendar, Loader } from 'lucide-react';
 import { buildApiUrl } from '../../utils/apiHelper';
+import { apiClient } from '../../utils/api';
 import { safeLocaleTime, hasCheckOutValue } from '../../utils/safeUi';
 import { TokenManager } from '../../utils/api';
 import {
@@ -27,6 +28,23 @@ interface AttendanceRecord {
 }
 
 const HISTORY_PAGE_SIZE = 10;
+
+function formatActivityAction(action: string): string {
+  const labels: Record<string, string> = {
+    attendance_checkin: 'Checked in',
+    attendance_checkout: 'Checked out',
+    attendance_break_start: 'Break started',
+    attendance_break_end: 'Break ended',
+  };
+  return labels[action] || action.replace(/_/g, ' ');
+}
+
+function statusFromActivityAction(action: string): string {
+  if (action.includes('break_start')) return 'break';
+  if (action.includes('break_end')) return 'working';
+  if (action.includes('checkout')) return 'working';
+  return 'working';
+}
 
 function buildActivityLogsFromAttendance(att: any) {
   if (!att) return [];
@@ -55,7 +73,10 @@ function buildActivityLogsFromAttendance(att: any) {
   }
   if (att.checkOut) pushRow(`out-${att._id}`, 'Checked out', att.checkOut, 'working');
   rows.sort((a, b) => b.sortKey - a.sortKey);
-  return rows.map(({ sortKey: _s, ...rest }) => rest);
+  return rows.map(({ sortKey, ...rest }) => ({
+    ...rest,
+    date: new Date(sortKey).toLocaleDateString('en-GB'),
+  }));
 }
 
 function isLikelyMongoObjectId(id: string | null | undefined): boolean {
@@ -75,6 +96,7 @@ export default function Attendance() {
       id: string;
       action: string;
       time: string;
+      date: string;
       status: string;
     }>
   >([]);
@@ -85,7 +107,35 @@ export default function Attendance() {
   const [historyTotalPages, setHistoryTotalPages] = useState(1);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
 
-  useEffect(() => {
+  const fetchEmployeeActivityLogs = useCallback(async () => {
+    try {
+      const response = await apiClient.get(
+        `/attendance/activity-logs/me?limit=2000&t=${Date.now()}`
+      );
+      if (response?.success && Array.isArray(response.data) && response.data.length > 0) {
+        const mapped = response.data
+          .map((log: { _id: string; action: string; timestamp: string; details?: { breakType?: string } }) => {
+            const ts = new Date(log.timestamp);
+            const breakLabel =
+              log.action.includes('break') && log.details?.breakType
+                ? ` (${log.details.breakType})`
+                : '';
+            return {
+              id: String(log._id),
+              action: `${formatActivityAction(log.action)}${breakLabel}`,
+              time: ts.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+              date: ts.toLocaleDateString('en-GB'),
+              status: statusFromActivityAction(log.action),
+              sortKey: ts.getTime(),
+            };
+          })
+          .sort((a, b) => b.sortKey - a.sortKey);
+        setActivityLogs(mapped.map(({ sortKey: _s, ...rest }) => rest));
+        return;
+      }
+    } catch (error) {
+      console.warn('Activity logs API unavailable, using today record', error);
+    }
     const att = todayData?.attendance;
     setActivityLogs(buildActivityLogsFromAttendance(att));
   }, [todayData]);
@@ -360,9 +410,14 @@ export default function Attendance() {
   useEffect(() => {
     const unsub = realTimeSocket.onAttendanceUpdate(() => {
       void fetchTodayAttendance();
+      void fetchEmployeeActivityLogs();
     });
     return () => unsub();
-  }, [fetchTodayAttendance]);
+  }, [fetchTodayAttendance, fetchEmployeeActivityLogs]);
+
+  useEffect(() => {
+    void fetchEmployeeActivityLogs();
+  }, [todayData, fetchEmployeeActivityLogs]);
 
   // Refresh today's attendance periodically while checked in
   useEffect(() => {
@@ -392,6 +447,7 @@ export default function Attendance() {
       if (empId) {
         await fetchTodayAttendance();
         await fetchAttendanceHistory();
+        await fetchEmployeeActivityLogs();
       }
     })();
   }, [user?.id, fetchTodayAttendance]);
@@ -413,12 +469,15 @@ export default function Attendance() {
           <Card className="rounded-2xl overflow-hidden">
             <div className="p-6 border-b border-border">
               <h3 className="font-semibold text-lg">Live Activity Logs</h3>
-              <p className="text-sm text-muted-foreground">Today's attendance activities</p>
+              <p className="text-sm text-muted-foreground">
+                All your check-ins, breaks, and check-outs (full history)
+              </p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-muted/50">
                   <tr>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Date</th>
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Time</th>
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Action</th>
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Status</th>
@@ -427,13 +486,14 @@ export default function Attendance() {
                 <tbody className="divide-y divide-border">
                   {activityLogs.length === 0 ? (
                     <tr>
-                      <td colSpan={3} className="px-6 py-4 text-center text-muted-foreground">
+                      <td colSpan={4} className="px-6 py-4 text-center text-muted-foreground">
                         No activities yet
                       </td>
                     </tr>
                   ) : (
                     activityLogs.map((log) => (
                       <tr key={log.id} className="hover:bg-accent/50 transition-colors">
+                        <td className="px-6 py-4 text-sm text-muted-foreground">{log.date || '—'}</td>
                         <td className="px-6 py-4 text-sm font-medium">{log.time}</td>
                         <td className="px-6 py-4 text-sm">{log.action}</td>
                         <td className="px-6 py-4">

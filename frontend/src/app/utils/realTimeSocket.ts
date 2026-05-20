@@ -226,6 +226,11 @@ class RealTimeSocket {
       this.notifyActivityUpdate(activity);
     });
 
+    this.socket.on('activity:update', (payload) => {
+      const activity = payload?.activity ?? payload;
+      this.notifyActivityUpdate(activity);
+    });
+
     // Employee updates
     this.socket.on('employee_created', (employee) => {
       console.log('👤 Employee created:', employee);

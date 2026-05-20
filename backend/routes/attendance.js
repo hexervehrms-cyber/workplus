@@ -20,6 +20,7 @@ import { getUserTimezone } from '../utils/timezoneHelper.js';
 import { findEmployeeForSelfService } from '../utils/employeeSelfService.js';
 import {
   buildOrgIdClause,
+  buildOrgIdFlexible,
   buildUserIdClause,
   isOpenBreak,
   buildTodayAttendanceQuery,
@@ -30,6 +31,12 @@ import {
   getCalendarWeekRange,
   calendarWeekKey,
 } from '../utils/attendanceQueryHelpers.js';
+import { syncAttendanceHistoryFromRecord } from '../utils/attendanceHistorySync.js';
+import {
+  ATTENDANCE_ACTIVITY_ACTIONS,
+  eventsFromAttendanceRow,
+  mergeActivityLogs,
+} from '../utils/attendanceActivityMerge.js';
 
 const router = express.Router();
 
@@ -236,64 +243,129 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
 }));
 
 /**
- * GET /api/attendance/activity-logs
- * Get today's attendance activity logs for admin live view
+ * Build complete attendance activity feed (DB logs + reconstructed Attendance events).
  */
-router.get('/activity-logs', authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
-  const orgId = req.user.orgId;
-  const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+async function getMergedAttendanceActivityLogs(req, options = {}) {
+  const authOrgId = req.user?.orgId;
+  const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
+  const skip = Math.max(parseInt(req.query.skip, 10) || 0, 0);
+  const userIdFilter = options.userId || null;
 
-  // Support optional startDate / endDate query params; default to today
-  let rangeStart, rangeEnd;
-  if (req.query.startDate) {
-    rangeStart = new Date(req.query.startDate);
-    rangeStart.setHours(0, 0, 0, 0);
-  } else {
-    rangeStart = new Date();
-    rangeStart.setHours(0, 0, 0, 0);
+  const hasDateFilter = Boolean(req.query.startDate || req.query.endDate);
+  const todayOnly = req.query.today === 'true';
+
+  let rangeStart = null;
+  let rangeEnd = null;
+  if (hasDateFilter || todayOnly) {
+    if (req.query.startDate) {
+      rangeStart = new Date(req.query.startDate);
+      rangeStart.setHours(0, 0, 0, 0);
+    } else {
+      rangeStart = new Date();
+      rangeStart.setHours(0, 0, 0, 0);
+    }
+    if (req.query.endDate) {
+      rangeEnd = new Date(req.query.endDate);
+      rangeEnd.setHours(23, 59, 59, 999);
+    } else {
+      rangeEnd = new Date(rangeStart);
+      rangeEnd.setHours(23, 59, 59, 999);
+    }
   }
-  if (req.query.endDate) {
-    rangeEnd = new Date(req.query.endDate);
-    rangeEnd.setHours(23, 59, 59, 999);
-  } else {
-    rangeEnd = new Date(rangeStart);
-    rangeEnd.setHours(23, 59, 59, 999);
+
+  const orgMatch = buildOrgIdFlexible(authOrgId);
+  const logQuery = {
+    ...orgMatch,
+    action: { $in: ATTENDANCE_ACTIVITY_ACTIONS },
+  };
+  if (userIdFilter) {
+    Object.assign(logQuery, buildUserIdClause(userIdFilter));
+  }
+  if (rangeStart && rangeEnd) {
+    logQuery.createdAt = { $gte: rangeStart, $lte: rangeEnd };
   }
 
-  const attendanceActions = [
-    'attendance_checkin',
-    'attendance_checkout',
-    'attendance_break_start',
-    'attendance_break_end',
-    'attendance_meeting_start',
-    'attendance_meeting_end'
-  ];
-
-  const logs = await ActivityLog.find({
-    orgId,
-    action: { $in: attendanceActions },
-    createdAt: { $gte: rangeStart, $lte: rangeEnd }
-  })
-    .select('userId action details ipAddress deviceInfo createdAt')
+  const dbLogs = await ActivityLog.find(logQuery)
+    .select('userId action details ipAddress deviceInfo createdAt entity')
     .populate('userId', 'name email')
     .sort({ createdAt: -1 })
-    .limit(limit)
+    .limit(10000)
     .lean();
 
-  const mapped = logs.map((log) => ({
+  const attendanceQuery = {
+    ...orgMatch,
+  };
+  if (userIdFilter) {
+    Object.assign(attendanceQuery, buildUserIdClause(userIdFilter));
+  }
+  if (rangeStart && rangeEnd) {
+    attendanceQuery.date = { $gte: rangeStart, $lte: rangeEnd };
+  }
+
+  const attendanceRows = await Attendance.find(attendanceQuery)
+    .select('userId employeeId employeeName date checkIn checkOut hoursWorked breaks checkInLocation')
+    .populate('userId', 'name email')
+    .sort({ date: -1, checkIn: -1 })
+    .limit(5000)
+    .lean();
+
+  const synthetic = attendanceRows.flatMap((row) => {
+    const name =
+      row.employeeName ||
+      (row.userId?.name ? String(row.userId.name) : 'Employee');
+    return eventsFromAttendanceRow(row, name);
+  });
+
+  const merged = mergeActivityLogs(dbLogs, synthetic);
+  const page = merged.slice(skip, skip + limit);
+
+  return {
+    data: page,
+    total: merged.length,
+    skip,
+    limit,
+    hasMore: skip + limit < merged.length,
+  };
+}
+
+function emitAttendanceActivityLog(req, log, orgId) {
+  if (!log || !req?.emitActivityUpdate) return;
+  const payload = {
     _id: log._id,
-    userId: log.userId?._id || log.userId || null,
-    employeeName: log.details?.employeeName || log.userId?.name || 'Employee',
+    userId: log.userId,
+    employeeName: log.details?.employeeName || 'Employee',
     action: log.action,
-    timestamp: log.createdAt,
+    timestamp: log.createdAt || new Date(),
     details: log.details || {},
     ipAddress: log.ipAddress,
-    deviceInfo: log.deviceInfo
-  }));
+    deviceInfo: log.deviceInfo,
+  };
+  req.emitActivityUpdate(payload, orgId);
+}
 
+/**
+ * GET /api/attendance/activity-logs
+ * Full attendance activity for admin (all history unless date range provided)
+ */
+router.get('/activity-logs', authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+  const result = await getMergedAttendanceActivityLogs(req);
   res.json({
     success: true,
-    data: mapped
+    ...result,
+  });
+}));
+
+/**
+ * GET /api/attendance/activity-logs/me
+ * Full attendance activity for the authenticated employee
+ */
+router.get('/activity-logs/me', authorize('employee'), asyncHandler(async (req, res) => {
+  const result = await getMergedAttendanceActivityLogs(req, {
+    userId: req.user.userId,
+  });
+  res.json({
+    success: true,
+    ...result,
   });
 }));
 
@@ -497,27 +569,38 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     });
   }
 
-  // Log activity
+  await syncAttendanceHistoryFromRecord(attendance, {
+    userId: effectiveUserId,
+    orgId: effectiveOrgId,
+    employeeId: effectiveEmployeeId,
+    updatedBy: effectiveUserId,
+    isInsert: true,
+  });
+
+  const checkInSourceKey = `${attendance._id}-checkin-${new Date(attendance.checkIn).getTime()}`;
   try {
-    await ActivityLog.logActivity({
+    const log = await ActivityLog.logActivity({
       userId: effectiveUserId,
       orgId: effectiveOrgId,
       action: 'attendance_checkin',
       entity: {
         entityType: 'attendance',
         entityId: attendance._id,
-        entityName: `${effectiveEmployeeName} - Check In`
+        entityName: `${effectiveEmployeeName} - Check In`,
       },
       details: {
         location: location || 'Office',
         notes,
-        employeeName: effectiveEmployeeName
+        employeeName: effectiveEmployeeName,
+        attendanceId: String(attendance._id),
+        sourceKey: checkInSourceKey,
       },
       ipAddress: req.ip,
       userAgent: req.get('User-Agent'),
       severity: 'low',
-      category: 'user'
+      category: 'user',
     });
+    emitAttendanceActivityLog(req, log, effectiveOrgId);
   } catch (logError) {
     logger.warn('Failed to log check-in activity', { error: logError.message });
   }
@@ -698,85 +781,37 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   ).populate('userId', 'name email avatar')
    .populate('employeeId', 'employeeCode department');
 
-  // Sync to AttendanceHistory for admin reporting
-  try {
-    const totalBreakDuration = attendance.breaks?.reduce((total, breakItem) => {
-      if (breakItem.startTime && breakItem.endTime) {
-        return total + ((new Date(breakItem.endTime) - new Date(breakItem.startTime)) / (1000 * 60));
-      }
-      return total;
-    }, 0) || 0;
+  await syncAttendanceHistoryFromRecord(updatedAttendance, {
+    userId: effectiveUserId,
+    orgId: effectiveOrgId,
+    employeeId: effectiveEmployeeId,
+    updatedBy: effectiveUserId,
+  });
 
-    await AttendanceHistory.findOneAndUpdate(
-      {
-        employeeId: effectiveEmployeeId,
-        date: attendance.date
-      },
-      {
-        userId: effectiveUserId,
-        orgId: effectiveOrgId,
-        date: attendance.date,
-        checkInTime: attendance.checkIn,
-        checkOutTime: checkOutTime,
-        hoursWorked: Math.round(hoursWorked * 100) / 100,
-        status: 'present',
-        breaks: attendance.breaks?.map(breakItem => ({
-          breakType: breakItem.breakType || 'regular',
-          startTime: breakItem.startTime,
-          endTime: breakItem.endTime,
-          duration: breakItem.duration || 0,
-          reason: breakItem.notes || ''
-        })) || [],
-        totalBreakDuration: Math.round(totalBreakDuration),
-        breakCount: attendance.breaks?.length || 0,
-        isLate: attendance.isLate || false,
-        lateMinutes: attendance.lateMinutes || 0,
-        notes: notes || attendance.notes || '',
-        isApproved: true,
-        createdBy: effectiveUserId,
-        updatedBy: effectiveUserId
-      },
-      { 
-        upsert: true, 
-        new: true,
-        setDefaultsOnInsert: true
-      }
-    );
-
-    logger.info('Synced attendance to history', {
-      employeeId: effectiveEmployeeId,
-      date: attendance.date,
-      hoursWorked: Math.round(hoursWorked * 100) / 100
-    });
-  } catch (historyError) {
-    logger.error('Failed to sync attendance to history', {
-      employeeId: effectiveEmployeeId,
-      error: historyError.message
-    });
-    // Don't fail the check-out if history sync fails
-  }
-
-  // Log activity
-  await ActivityLog.logActivity({
+  const checkoutSourceKey = `${attendance._id}-checkout-${checkOutTime.getTime()}`;
+  const checkoutLog = await ActivityLog.logActivity({
     userId: effectiveUserId,
     orgId: effectiveOrgId,
     action: 'attendance_checkout',
     entity: {
       entityType: 'attendance',
       entityId: attendance._id,
-      entityName: `${effectiveEmployeeName} - Check Out`
+      entityName: `${effectiveEmployeeName} - Check Out`,
     },
     details: {
       location: location || 'Office',
       hoursWorked: Math.round(hoursWorked * 100) / 100,
       notes,
-      employeeName: effectiveEmployeeName
+      employeeName: effectiveEmployeeName,
+      attendanceId: String(attendance._id),
+      sourceKey: checkoutSourceKey,
     },
     ipAddress: req.ip,
     userAgent: req.get('User-Agent'),
     severity: 'low',
-    category: 'user'
+    category: 'user',
   });
+  emitAttendanceActivityLog(req, checkoutLog, effectiveOrgId);
 
   // Emit real-time update (this also emits KPI update internally)
   if (req.emitAttendanceUpdate) {
@@ -1028,7 +1063,66 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
       effectiveEmployeeId
     );
 
-    // Send response immediately with updated data
+    await syncAttendanceHistoryFromRecord(updatedAttendance, {
+      userId: currentUserId,
+      orgId: effectiveOrgId,
+      employeeId: effectiveEmployeeId,
+      updatedBy: currentUserId,
+    });
+
+    const openBreak = updatedAttendance.breaks?.find((b) => isOpenBreak(b));
+    const breakStartTs = openBreak?.startTime ? new Date(openBreak.startTime).getTime() : Date.now();
+    const breakIdx = updatedAttendance.breaks?.length ? updatedAttendance.breaks.length - 1 : 0;
+    const breakSourceKey = `${updatedAttendance._id}-break-start-${breakIdx}-${breakStartTs}`;
+
+    try {
+      const breakLog = await ActivityLog.logActivity({
+        userId: currentUserId,
+        orgId: effectiveOrgId,
+        action: 'attendance_break_start',
+        entity: {
+          entityType: 'attendance',
+          entityId: updatedAttendance._id,
+          entityName: `Break Started - ${breakType}`,
+        },
+        details: {
+          breakType,
+          notes,
+          idempotencyKey,
+          employeeName: effectiveEmployeeName,
+          attendanceId: String(updatedAttendance._id),
+          sourceKey: breakSourceKey,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        severity: 'low',
+        category: 'user',
+      });
+      emitAttendanceActivityLog(req, breakLog, effectiveOrgId);
+    } catch (logErr) {
+      logger.error('Failed to log break start activity', { error: logErr.message });
+    }
+
+    if (req.emitAttendanceUpdate) {
+      req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
+    }
+
+    if (global.io) {
+      global.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
+        employeeId: effectiveEmployeeId,
+        userId: currentUserId,
+        breakType,
+        timestamp: new Date().toISOString(),
+        attendance: updatedAttendance,
+        liveStatus,
+      });
+      emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
+        action: 'break_start',
+        employeeId: effectiveEmployeeId,
+        status: 'on_break',
+      }).catch((err) => logger.error('Failed to emit KPI update', { error: err.message }));
+    }
+
     res.status(201).json({
       success: true,
       message: 'Break started successfully',
@@ -1037,64 +1131,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
         liveStatus,
         hoursThisWeek,
         weekKey: calendarWeekKey(),
-      }
-    });
-
-    // Log activity asynchronously
-    setImmediate(async () => {
-      try {
-        await ActivityLog.logActivity({
-          userId: currentUserId,
-          orgId: effectiveOrgId,
-          action: 'attendance_break_start',
-          entity: {
-            entityType: 'attendance',
-            entityId: updatedAttendance._id,
-            entityName: `Break Started - ${breakType}`
-          },
-          details: {
-            breakType,
-            notes,
-            idempotencyKey
-          },
-          ipAddress: req.ip,
-          userAgent: req.get('User-Agent'),
-          severity: 'low',
-          category: 'user'
-        }).catch(err => logger.error('Failed to log break start activity', { error: err.message }));
-
-        // Emit real-time event to notify all connected clients
-        if (global.io) {
-          try {
-            global.io.to(`tenant_${effectiveOrgId}`).emit('break:started', {
-              employeeId: effectiveEmployeeId,
-              userId: currentUserId,
-              breakType,
-              timestamp: new Date().toISOString(),
-              attendance: updatedAttendance,
-              liveStatus
-            });
-            logger.info('Break started event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
-          } catch (err) {
-            logger.error('Failed to emit break:started event', { error: err.message });
-          }
-        }
-
-        // Emit KPI update to admin dashboard
-        if (global.io) {
-          try {
-            emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
-              action: 'break_start',
-              employeeId: effectiveEmployeeId,
-              status: 'on_break'
-            });
-          } catch (err) {
-            logger.error('Failed to emit KPI update', { error: err.message });
-          }
-        }
-      } catch (err) {
-        logger.error('Error in async break start operations', { error: err.message, employeeId: effectiveEmployeeId });
-      }
+      },
     });
 
   } catch (err) {
@@ -1234,70 +1271,67 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
     const liveStatus = buildLiveStatus(updatedAttendance);
 
-    // Log activity asynchronously
-    setImmediate(async () => {
-      try {
-        await ActivityLog.logActivity({
-          userId: currentUserId,
-          orgId: effectiveOrgId,
-          action: 'attendance_break_end',
-          entity: {
-            entityType: 'attendance',
-            entityId: updatedAttendance._id,
-            entityName: `Break Ended - ${breakDuration} minutes`
-          },
-          details: {
-            duration: breakDuration,
-            notes,
-            idempotencyKey
-          },
-          ipAddress: req.ip,
-          userAgent: req.get('User-Agent'),
-          severity: 'low',
-          category: 'user'
-        }).catch(err => logger.error('Failed to log break end activity', { error: err.message }));
-
-        // Emit real-time event to notify admin dashboard
-        if (req.emitAttendanceUpdate) {
-          req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId).catch(err => 
-            logger.error('Failed to emit attendance update', { error: err.message })
-          );
-        }
-
-        // Emit specific break:ended event for page synchronization
-        if (global.io) {
-          try {
-            global.io.to(`tenant_${effectiveOrgId}`).emit('break:ended', {
-              employeeId: effectiveEmployeeId,
-              userId: currentUserId,
-              breakType: activeBreak?.breakType || 'regular',
-              timestamp: new Date().toISOString(),
-              breakDuration,
-              attendance: updatedAttendance,
-              liveStatus
-            });
-            logger.info('Break ended event emitted', { employeeId: effectiveEmployeeId, orgId: effectiveOrgId });
-          } catch (err) {
-            logger.error('Failed to emit break:ended event', { error: err.message });
-          }
-        }
-
-        // Emit KPI update to admin dashboard
-        if (global.io) {
-          try {
-            emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
-              action: 'break_end',
-              employeeId: effectiveEmployeeId,
-              status: 'checked_in'
-            });
-          } catch (err) {
-            logger.error('Failed to emit KPI update', { error: err.message });
-          }
-        }
-      } catch (err) {
-        logger.error('Error in async break end operations', { error: err.message, employeeId: effectiveEmployeeId });
-      }
+    await syncAttendanceHistoryFromRecord(updatedAttendance, {
+      userId: currentUserId,
+      orgId: effectiveOrgId,
+      employeeId: effectiveEmployeeId,
+      updatedBy: currentUserId,
     });
+
+    const breakEndTs = activeBreak?.endTime
+      ? new Date(activeBreak.endTime).getTime()
+      : endTime.getTime();
+    const breakEndIdx = latestBreakEntry?.index ?? 0;
+    const breakEndSourceKey = `${updatedAttendance._id}-break-end-${breakEndIdx}-${breakEndTs}`;
+
+    try {
+      const breakEndLog = await ActivityLog.logActivity({
+        userId: currentUserId,
+        orgId: effectiveOrgId,
+        action: 'attendance_break_end',
+        entity: {
+          entityType: 'attendance',
+          entityId: updatedAttendance._id,
+          entityName: `Break Ended - ${breakDuration} minutes`,
+        },
+        details: {
+          duration: breakDuration,
+          notes,
+          idempotencyKey,
+          employeeName: effectiveEmployeeName,
+          attendanceId: String(updatedAttendance._id),
+          sourceKey: breakEndSourceKey,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        severity: 'low',
+        category: 'user',
+      });
+      emitAttendanceActivityLog(req, breakEndLog, effectiveOrgId);
+    } catch (logErr) {
+      logger.error('Failed to log break end activity', { error: logErr.message });
+    }
+
+    if (req.emitAttendanceUpdate) {
+      req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
+    }
+
+    if (global.io) {
+      global.io.to(`tenant_${effectiveOrgId}`).emit('break:ended', {
+        employeeId: effectiveEmployeeId,
+        userId: currentUserId,
+        breakType: activeBreak?.breakType || 'regular',
+        timestamp: new Date().toISOString(),
+        breakDuration,
+        attendance: updatedAttendance,
+        liveStatus,
+      });
+      emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
+        action: 'break_end',
+        employeeId: effectiveEmployeeId,
+        status: 'checked_in',
+      }).catch((err) => logger.error('Failed to emit KPI update', { error: err.message }));
+    }
 
     const hoursThisWeekAfterBreak = await sumHoursThisWeekForUser(
       currentUserId,

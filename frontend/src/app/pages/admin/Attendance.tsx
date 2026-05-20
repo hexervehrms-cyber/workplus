@@ -61,6 +61,9 @@ export default function AttendanceAdmin() {
   const navigate = useNavigate();
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [activityLogTotal, setActivityLogTotal] = useState(0);
+  const [activityLogsHasMore, setActivityLogsHasMore] = useState(false);
+  const [activityLogsSkip, setActivityLogsSkip] = useState(0);
   const [loading, setLoading] = useState(true);
   const [logsLoading, setLogsLoading] = useState(true);
   const [activeTab] = useState<'activity'>('activity');
@@ -102,11 +105,15 @@ export default function AttendanceAdmin() {
     const unsubMeetingStart = realTimeSocket.onMeetingStarted(handleAttendanceUpdate);
     const unsubMeetingEnd = realTimeSocket.onMeetingEnded(handleAttendanceUpdate);
     const unsubKpi = realTimeSocket.onKPIUpdate(handleAttendanceUpdate);
+    const unsubActivity = realTimeSocket.onActivityUpdate(() => {
+      fetchAttendance();
+      fetchActivityLogs(activityStartDate || undefined, activityEndDate || undefined, 0, false);
+    });
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       fetchAttendance();
-      fetchActivityLogs();
+      fetchActivityLogs(activityStartDate || undefined, activityEndDate || undefined, 0, false);
     }, 60000);
 
     return () => {
@@ -117,6 +124,7 @@ export default function AttendanceAdmin() {
       unsubMeetingStart();
       unsubMeetingEnd();
       unsubKpi();
+      unsubActivity();
     };
   }, []);
 
@@ -159,22 +167,45 @@ export default function AttendanceAdmin() {
     }
   };
 
-  const fetchActivityLogs = async (startDate?: string, endDate?: string) => {
+  const fetchActivityLogs = async (
+    startDate?: string,
+    endDate?: string,
+    skip = 0,
+    append = false
+  ) => {
     try {
       setLogsLoading(true);
-      const params: Record<string, string> = { limit: '500', t: String(Date.now()) };
+      const params: Record<string, string> = {
+        limit: '2000',
+        skip: String(skip),
+        t: String(Date.now()),
+      };
       if (startDate) params.startDate = startDate;
       if (endDate) params.endDate = endDate;
+      if (startDate || endDate) {
+        // explicit range only
+      } else if (!startDate && !endDate) {
+        // no dates → backend returns full merged history
+      }
       const qs = new URLSearchParams(params).toString();
       const response = await apiClient.get(`/attendance/activity-logs?${qs}`);
       if (response?.success) {
-        setActivityLogs(response.data || []);
-      } else {
+        const rows = (response.data || []) as ActivityLog[];
+        setActivityLogs((prev) => (append ? [...prev, ...rows] : rows));
+        setActivityLogTotal(Number(response.total) || rows.length);
+        setActivityLogsHasMore(Boolean(response.hasMore));
+        setActivityLogsSkip(skip);
+      } else if (!append) {
         setActivityLogs([]);
+        setActivityLogTotal(0);
+        setActivityLogsHasMore(false);
       }
     } catch (error) {
       console.error('Error fetching activity logs:', error);
-      setActivityLogs([]);
+      if (!append) {
+        setActivityLogs([]);
+        setActivityLogTotal(0);
+      }
     } finally {
       setLogsLoading(false);
     }
@@ -806,9 +837,12 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
           <div className="p-4 border-b">
             <h3 className="font-semibold flex items-center gap-2">
               <Activity className="w-4 h-4" />
-              Live Attendance Activity ({filteredActivityLogs.length} logs)
+              Live Attendance Activity ({filteredActivityLogs.length}
+              {activityLogTotal > filteredActivityLogs.length ? ` of ${activityLogTotal}` : ''} logs)
             </h3>
-            <p className="text-sm text-muted-foreground">Real-time employee check-ins, breaks, and check-outs</p>
+            <p className="text-sm text-muted-foreground">
+              Complete employee attendance log — check-ins, breaks, and check-outs (all history unless filtered)
+            </p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -901,13 +935,34 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
                 ) : (
                   <tr>
                     <td colSpan={6} className="p-8 text-center text-muted-foreground">
-                      {logsLoading ? 'Loading activity logs…' : activitySearch || activityStartDate || activityEndDate ? 'No logs match your filter.' : 'No activity logged today.'}
+                      {logsLoading ? 'Loading activity logs…' : activitySearch || activityStartDate || activityEndDate ? 'No logs match your filter.' : 'No attendance activity recorded yet.'}
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
+          {activityLogsHasMore && (
+            <div className="p-4 border-t flex justify-center">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-xl"
+                disabled={logsLoading}
+                onClick={() =>
+                  fetchActivityLogs(
+                    activityStartDate || undefined,
+                    activityEndDate || undefined,
+                    activityLogsSkip + 2000,
+                    true
+                  )
+                }
+              >
+                {logsLoading ? 'Loading…' : 'Load more activity'}
+              </Button>
+            </div>
+          )}
       </Card>
 
       <Dialog open={viewOpen} onOpenChange={setViewOpen}>

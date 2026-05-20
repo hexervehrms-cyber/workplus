@@ -18,6 +18,7 @@ import {
   countOrgEmployees,
   getFinancialTotals,
 } from "../utils/dashboardKpiHelpers.js";
+import { buildOrgIdFlexible } from "../utils/attendanceQueryHelpers.js";
 
 // Import specialized dashboard routes
 import superAdminRoutes from "./dashboard-superadmin.js";
@@ -324,10 +325,12 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
   
   const { start: today, end: tomorrow } = getDayBounds();
 
+  const orgMatch = buildOrgIdFlexible(userOrgId);
+
   const todaysAttendance = await Attendance.aggregate([
     {
       $match: {
-        orgId: userOrgId,
+        ...orgMatch,
         date: { $gte: today, $lt: tomorrow }
       }
     },

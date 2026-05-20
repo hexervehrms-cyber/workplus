@@ -11,6 +11,17 @@ export function buildOrgIdClause(effectiveOrgId, authOrgId) {
   return orgIds.length > 1 ? { orgId: { $in: orgIds } } : { orgId: orgIds[0] };
 }
 
+/** Match orgId stored as string or ObjectId (dashboard / activity logs). */
+export function buildOrgIdFlexible(orgId) {
+  const s = String(orgId || '');
+  if (!s) return { orgId: s };
+  const variants = [s];
+  if (mongoose.Types.ObjectId.isValid(s)) {
+    variants.push(new mongoose.Types.ObjectId(s));
+  }
+  return variants.length > 1 ? { orgId: { $in: variants } } : { orgId: s };
+}
+
 export function isOpenBreak(b) {
   return Boolean(
     b?.startTime &&

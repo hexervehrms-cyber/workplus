@@ -25,7 +25,12 @@ function ParticleField({ scroll }: { scroll: number }) {
   return (
     <points ref={ref}>
       <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute
+          attach="attributes-position"
+          count={positions.length / 3}
+          array={positions}
+          itemSize={3}
+        />
       </bufferGeometry>
       <pointsMaterial size={0.035} color="#67e8f9" transparent opacity={0.75} sizeAttenuation />
     </points>

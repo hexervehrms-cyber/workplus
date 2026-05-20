@@ -1,10 +1,13 @@
 /**
  * Access-token helpers (IndexedDB mirror + refresh) without importing api.ts (avoids circular deps).
  */
+import { getApiBaseUrl } from './apiBaseUrl';
 import {
   loadAccessTokenFromIndexedDB,
   getAccessTokenMirror,
+  getRefreshTokenMirror,
   setAccessTokenMirror,
+  setRefreshTokenMirror,
   clearAccessTokenMirror,
 } from './sessionAccessMirror';
 
@@ -30,35 +33,41 @@ export function setAccessToken(token: string | null): void {
   else clearAccessTokenMirror();
 }
 
-/** Refresh via cookie POST /auth/refresh — no import from api.ts */
+export function setRefreshToken(token: string | null): void {
+  setRefreshTokenMirror(token);
+}
+
+/** Refresh via POST /auth/refresh — sends body refresh token for cross-origin (hexerve → Render). */
 export async function refreshAccessToken(): Promise<string | null> {
-  const apiUrl = import.meta.env.VITE_API_URL;
-  let base =
-    apiUrl && typeof apiUrl === 'string'
-      ? apiUrl.replace(/\/$/, '')
-      : typeof window !== 'undefined' &&
-          (window.location.hostname.includes('hexerve.online') ||
-            window.location.hostname.includes('vercel.app'))
-        ? 'https://workplus-backend-sg3a.onrender.com/api'
-        : '/api';
-  if (base !== '/api' && !base.endsWith('/api')) base = `${base}/api`;
+  const base = getApiBaseUrl();
+  const refreshToken = getRefreshTokenMirror();
 
   try {
     const response = await fetch(`${base}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({}),
+      body: JSON.stringify(refreshToken ? { refreshToken } : {}),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data?.data?.accessToken) {
-      clearAccessTokenMirror();
+
+    const accessToken =
+      data?.data?.accessToken || data?.data?.token || data?.accessToken || data?.token;
+
+    if (!response.ok || !accessToken) {
+      // Do not wipe session on 404/network — caller may still have a valid short-lived token
+      if (response.status === 401 || response.status === 403) {
+        clearAccessTokenMirror();
+      }
       return null;
     }
-    setAccessTokenMirror(data.data.accessToken);
-    return data.data.accessToken as string;
+
+    setAccessTokenMirror(accessToken);
+    if (data?.data?.refreshToken) {
+      setRefreshTokenMirror(data.data.refreshToken);
+    }
+    return accessToken as string;
   } catch {
-    clearAccessTokenMirror();
     return null;
   }
 }
@@ -67,9 +76,9 @@ export async function ensureAccessToken(): Promise<string | null> {
   await hydrateAccessToken();
   let token = getAccessToken();
   if (!token) {
-    token = await refreshAccessToken();
-    return token;
+    return refreshAccessToken();
   }
   if (!isTokenExpired(token)) return token;
-  return refreshAccessToken();
+  const refreshed = await refreshAccessToken();
+  return refreshed || token;
 }

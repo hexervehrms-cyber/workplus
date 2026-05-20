@@ -307,7 +307,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (Date.now() >= exp) {
             const refreshed = await tryRefreshAccessToken();
             if (!refreshed) {
-              await performLogout();
+              const recovered = await ensureAccessToken();
+              if (!recovered) {
+                console.warn('[AUTH] Session expired; sign in again when API calls fail.');
+              }
             }
           }
         } catch (error) {

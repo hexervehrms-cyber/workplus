@@ -5,6 +5,7 @@
 
 import { TokenManager } from './api';
 import { ensureAccessToken, refreshAccessToken } from './sessionAuth';
+import { getApiBaseUrl } from './apiBaseUrl';
 
 // Simple request cache for GET requests
 const requestCache = new Map<string, { data: any; timestamp: number }>();
@@ -69,24 +70,7 @@ async function fetchWithTimeout(
  * In production: uses VITE_API_URL environment variable
  * In development: uses /api (Vite proxy)
  */
-export const getApiBaseUrl = (): string => {
-  const apiUrl = import.meta.env.VITE_API_URL;
-  
-  if (!apiUrl) {
-    if (typeof window !== 'undefined' && (window.location.hostname.includes('hexerve.online') || window.location.hostname.includes('vercel.app'))) {
-      return 'https://workplus-backend-sg3a.onrender.com/api';
-    }
-    return '/api';
-  }
-  
-  const baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
-  
-  if (baseUrl === '/api' || baseUrl.endsWith('/api')) {
-    return baseUrl;
-  }
-  
-  return `${baseUrl}/api`;
-};
+export { getApiBaseUrl };
 
 /**
  * Build full API URL

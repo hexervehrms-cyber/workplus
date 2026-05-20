@@ -6,6 +6,7 @@
 import {
   loadAccessTokenFromIndexedDB,
   getAccessTokenMirror,
+  getRefreshTokenMirror,
   setAccessTokenMirror,
   clearAccessTokenMirror
 } from './sessionAccessMirror';
@@ -13,33 +14,9 @@ import {
   ensureAccessToken,
   refreshAccessToken,
   hydrateAccessToken,
+  setRefreshToken,
 } from './sessionAuth';
-
-// API Configuration - Production Ready
-// In production, VITE_API_URL should be the full backend URL (e.g., https://workplus-backend-sg3a.onrender.com)
-// In development, it falls back to /api which uses Vite proxy
-const getApiBaseUrl = () => {
-  const apiUrl = import.meta.env.VITE_API_URL;
-  
-  // If no API URL is set, use the production backend URL as fallback if on a production domain
-  if (!apiUrl) {
-    if (typeof window !== 'undefined' && (window.location.hostname.includes('hexerve.online') || window.location.hostname.includes('vercel.app'))) {
-      return 'https://workplus-backend-sg3a.onrender.com/api';
-    }
-    return '/api';
-  }
-  
-  // Remove trailing slash if present
-  const baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
-  
-  // If it's already /api or ends with /api, return as is
-  if (baseUrl === '/api' || baseUrl.endsWith('/api')) {
-    return baseUrl;
-  }
-  
-  // Otherwise add /api prefix
-  return `${baseUrl}/api`;
-};
+import { getApiBaseUrl } from './apiBaseUrl';
 
 const API_BASE_URL = getApiBaseUrl();
 const API_TIMEOUT = 30000; // 30 seconds
@@ -116,8 +93,7 @@ export const TokenManager = {
   },
   
   getRefreshToken(): string | null {
-    // Refresh token is in httpOnly cookie
-    return null;
+    return getRefreshTokenMirror();
   },
   
   setRefreshToken(refreshToken: string): void {
@@ -141,6 +117,10 @@ export const TokenManager = {
   
   clear(): void {
     clearAccessTokenMirror();
+  },
+
+  setRefresh(token: string): void {
+    setRefreshToken(token);
   },
 
   /** Remove only access tokens (keep user + refresh) — use when session uses httpOnly access cookie. */
@@ -222,15 +202,11 @@ export class ApiClient {
           if (refreshResult.success && refreshResult.data?.token) {
             authToken = refreshResult.data.token;
             TokenManager.set(authToken);
-          } else {
-            TokenManager.clear();
-            throw new ApiError('Session expired', 401, 'TOKEN_EXPIRED');
           }
+          // Keep going with credentials + optional stale bearer; do not force logout here
         }
       } catch (err) {
         if (err instanceof ApiError) throw err;
-        TokenManager.clear();
-        throw new ApiError('Session expired', 401, 'TOKEN_EXPIRED');
       }
     }
 
@@ -386,10 +362,17 @@ export class AuthService {
       console.log('Login response:', response);
 
       // Backend may return token and user in response.data or at top level
-      const loginPayload = response.data ?? (response as ApiResponse<LoginPayload> & LoginPayload);
-      const token = loginPayload.token;
-      const user = loginPayload.user;
-      const refreshToken = loginPayload.refreshToken;
+      const root = response as ApiResponse<LoginPayload> & LoginPayload;
+      const loginPayload = response.data ?? root;
+      const token =
+        loginPayload.token ||
+        (loginPayload as LoginPayload & { data?: LoginPayload }).data?.token ||
+        root.token;
+      const user = loginPayload.user || root.user;
+      const refreshToken =
+        loginPayload.refreshToken ||
+        (loginPayload as LoginPayload & { data?: LoginPayload }).data?.refreshToken ||
+        root.data?.refreshToken;
 
       if (response.success && user) {
         // Extract role from JWT token
@@ -425,6 +408,9 @@ export class AuthService {
 
         if (token) {
           TokenManager.set(token);
+        }
+        if (refreshToken) {
+          TokenManager.setRefresh(refreshToken);
         }
 
         return {

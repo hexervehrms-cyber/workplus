@@ -57,6 +57,7 @@ import {
   PopoverTrigger,
 } from './ui/popover';
 import { apiClient } from '../utils/api';
+import { ensureArray } from '../utils/safeUi';
 import { buildFileUrl } from '../utils/apiHelper';
 import { socketService as appSocket } from '../utils/socket';
 import { toast } from '../utils/portalToast';
@@ -164,6 +165,7 @@ export default function TeamsMessenger() {
   const [createGroupMemberIds, setCreateGroupMemberIds] = useState<Set<string>>(() => new Set());
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
+  const [sidebarError, setSidebarError] = useState<string | null>(null);
   const profileAvatarInputRef = useRef<HTMLInputElement>(null);
 
   const hiddenStorageKey = myAuthId ? `workplus-chat-hidden-${myAuthId}` : null;
@@ -233,19 +235,27 @@ export default function TeamsMessenger() {
     }
     try {
       setLoading(true);
+      setSidebarError(null);
       const myId = myAuthId;
       const [usersRes, convRes, groupsRes] = await Promise.all([
-        apiClient.get<any[]>('/chat/users'),
-        apiClient.get<any[]>('/chat/conversations').catch(() => ({ success: false, data: [] })),
-        apiClient.get<any[]>('/chat/groups').catch(() => ({ success: false, data: [] })),
+        apiClient.get<unknown>('/chat/users'),
+        apiClient.get<unknown>('/chat/conversations').catch(() => ({ success: false, data: [] })),
+        apiClient.get<unknown>('/chat/groups').catch(() => ({ success: false, data: [] })),
       ]);
 
-      const rawUsers = Array.isArray(usersRes.data) ? usersRes.data : [];
+      if (!usersRes.success) {
+        setSidebarError(usersRes.message || 'Could not load contacts. Try signing in again.');
+        setUsers([]);
+        setGroupChats([]);
+        return;
+      }
+
+      const rawUsers = ensureArray<Record<string, unknown>>(usersRes.data);
       const hideSuperAdmin = user?.role !== 'super_admin';
       const formattedUsers: ChatUser[] = rawUsers
-        .filter((u: any) => String(u._id || u.id) !== myId)
-        .filter((u: any) => !hideSuperAdmin || u.role !== 'super_admin')
-        .map(mapApiUser);
+        .filter((u) => String(u._id || u.id) !== myId)
+        .filter((u) => !hideSuperAdmin || u.role !== 'super_admin')
+        .map((u) => mapApiUser(u));
 
       const convList = Array.isArray(convRes.data) ? convRes.data : [];
       const previewByPeer = new Map<string, { text: string; time: string }>();
@@ -313,6 +323,9 @@ export default function TeamsMessenger() {
       setConversations(convList);
     } catch (error) {
       console.error('Error fetching users:', error);
+      const msg = error instanceof Error ? error.message : 'Failed to load contacts';
+      setSidebarError(msg.includes('denied') || msg.includes('token') ? `${msg} — sign out and sign in again.` : msg);
+      setUsers([]);
     } finally {
       setLoading(false);
     }
@@ -1061,9 +1074,13 @@ export default function TeamsMessenger() {
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
               </div>
+            ) : sidebarError ? (
+              <div className="text-center py-8 px-3 text-sm text-destructive">{sidebarError}</div>
             ) : filteredGroups.length === 0 && filteredUsers.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                No chats match your search
+              <div className="text-center py-8 text-muted-foreground px-3">
+                {visibleUsers.length === 0 && groupChats.length === 0
+                  ? 'No employees in your organization yet, or your session expired.'
+                  : 'No chats match your search'}
               </div>
             ) : (
               <>

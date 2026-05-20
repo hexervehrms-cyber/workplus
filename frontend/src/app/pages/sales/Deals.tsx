@@ -4,6 +4,11 @@ import axios from 'axios';
 import { Plus, Edit2, Trash2, Search, TrendingUp } from 'lucide-react';
 import { getBearerToken } from '../../utils/apiHelper';
 
+function salesRequestHeaders() {
+  const t = getBearerToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
 const Deals = () => {
   const [deals, setDeals] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -24,9 +29,6 @@ const Deals = () => {
     notes: ''
   });
 
-  const token = getBearerToken();
-  const headers = { Authorization: `Bearer ${token}` };
-
   useEffect(() => {
     fetchDeals();
     fetchEmployees();
@@ -39,7 +41,7 @@ const Deals = () => {
       const url = filterStage
         ? `/api/sales/deals/stage/${filterStage}`
         : '/api/sales/deals';
-      const res = await axios.get(url, { headers });
+      const res = await axios.get(url, { headers: salesRequestHeaders() });
       setDeals(res.data.data || []);
     } catch (error) {
       console.error('Error fetching deals:', error);
@@ -50,7 +52,7 @@ const Deals = () => {
 
   const fetchEmployees = async () => {
     try {
-      const res = await axios.get('/api/employees', { headers });
+      const res = await axios.get('/api/employees', { headers: salesRequestHeaders() });
       setEmployees(res.data.data || []);
     } catch (error) {
       console.error('Error fetching employees:', error);
@@ -59,7 +61,7 @@ const Deals = () => {
 
   const fetchLeads = async () => {
     try {
-      const res = await axios.get('/api/sales/leads', { headers });
+      const res = await axios.get('/api/sales/leads', { headers: salesRequestHeaders() });
       setLeads(res.data.data || []);
     } catch (error) {
       console.error('Error fetching leads:', error);
@@ -70,9 +72,9 @@ const Deals = () => {
     e.preventDefault();
     try {
       if (editingDeal) {
-        await axios.patch(`/api/sales/deals/${editingDeal._id}`, formData, { headers });
+        await axios.patch(`/api/sales/deals/${editingDeal._id}`, formData, { headers: salesRequestHeaders() });
       } else {
-        await axios.post('/api/sales/deals', formData, { headers });
+        await axios.post('/api/sales/deals', formData, { headers: salesRequestHeaders() });
       }
       fetchDeals();
       setShowModal(false);
@@ -104,7 +106,7 @@ const Deals = () => {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this deal?')) {
       try {
-        await axios.delete(`/api/sales/deals/${id}`, { headers });
+        await axios.delete(`/api/sales/deals/${id}`, { headers: salesRequestHeaders() });
         fetchDeals();
       } catch (error) {
         console.error('Error deleting deal:', error);
@@ -114,7 +116,7 @@ const Deals = () => {
 
   const handleCloseDeal = async (id, stage) => {
     try {
-      await axios.patch(`/api/sales/deals/${id}/close`, { stage }, { headers });
+      await axios.patch(`/api/sales/deals/${id}/close`, { stage }, { headers: salesRequestHeaders() });
       fetchDeals();
     } catch (error) {
       console.error('Error closing deal:', error);

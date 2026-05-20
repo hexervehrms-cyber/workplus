@@ -13,6 +13,8 @@ import Expense from "../models/Expense.js";
 import Payslip from "../models/Payroll.js";
 import { sendSuccess, sendError } from "../utils/apiResponse.js";
 import logger from "../utils/logger.js";
+import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
+import { findEmployeeForSelfService } from "../utils/employeeSelfService.js";
 
 const router = express.Router();
 
@@ -27,10 +29,16 @@ router.get(
   asyncHandler(async (req, res) => {
     try {
       const userId = req.user.userId;
-      const orgId = req.user.orgId || "system";
+      const orgId = assertScopedOrgId(req, res);
+      if (!orgId) return;
 
-      // Get employee record
-      const employee = await Employee.findOne({ userId, orgId }).lean();
+      let employee = await Employee.findOne({ userId, orgId }).lean();
+      if (!employee) {
+        employee = await findEmployeeForSelfService(userId, orgId, {
+          allowCrossOrgFallback: true,
+          createIfMissing: false
+        });
+      }
 
       if (!employee) {
         return sendError(res, "Employee record not found", 404, "EMPLOYEE_NOT_FOUND");

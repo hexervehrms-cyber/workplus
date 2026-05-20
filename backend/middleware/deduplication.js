@@ -1,115 +1,108 @@
 /**
  * Request Deduplication Middleware
- * Prevents duplicate requests from being processed multiple times
- * Useful for preventing double-submissions and race conditions
+ * Prevents duplicate POST/PUT/DELETE within a short window.
+ * Uses shared Redis when connected; in-memory fallback for single-instance dev.
  */
 
 import crypto from 'crypto';
+import redis from '../utils/redis.js';
 import logger from '../utils/logger.js';
 
-// In-memory cache for request deduplication
-// In production, use Redis for distributed systems
 const requestCache = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_TTL_SEC = Math.ceil(CACHE_TTL_MS / 1000);
 
-// Cache TTL: 5 minutes
-const CACHE_TTL = 5 * 60 * 1000;
+const redisKey = (fingerprint) => `dedupe:${fingerprint}`;
 
-/**
- * Generate request fingerprint
- */
 const generateFingerprint = (req) => {
   const data = {
     userId: req.user?.userId,
     method: req.method,
     path: req.path,
     body: JSON.stringify(req.body),
-    timestamp: Math.floor(Date.now() / 1000) // Group by second
+    timestamp: Math.floor(Date.now() / 1000)
   };
 
-  return crypto
-    .createHash('sha256')
-    .update(JSON.stringify(data))
-    .digest('hex');
+  return crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex');
 };
 
-/**
- * Deduplication middleware
- * Prevents duplicate requests within a short time window
- */
-export const deduplicationMiddleware = (req, res, next) => {
-  // Only apply to POST, PUT, DELETE requests
+const readCached = async (fingerprint) => {
+  if (redis.isRedisConnected()) {
+    try {
+      return await redis.get(redisKey(fingerprint));
+    } catch (err) {
+      logger.warn('[dedupe] Redis read failed', { error: err.message });
+    }
+  }
+  const entry = requestCache.get(fingerprint);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    requestCache.delete(fingerprint);
+    return null;
+  }
+  return entry;
+};
+
+const writeCached = async (fingerprint, statusCode, response) => {
+  const entry = { statusCode, response, timestamp: Date.now() };
+  if (redis.isRedisConnected()) {
+    try {
+      await redis.setex(redisKey(fingerprint), CACHE_TTL_SEC, entry);
+      return;
+    } catch (err) {
+      logger.warn('[dedupe] Redis write failed', { error: err.message });
+    }
+  }
+  requestCache.set(fingerprint, entry);
+};
+
+export const deduplicationMiddleware = async (req, res, next) => {
   if (!['POST', 'PUT', 'DELETE'].includes(req.method)) {
     return next();
   }
 
-  // Skip if no user (public endpoints)
   if (!req.user?.userId) {
     return next();
   }
 
   const fingerprint = generateFingerprint(req);
+  const cached = await readCached(fingerprint);
 
-  // Check if request was recently processed
-  if (requestCache.has(fingerprint)) {
-    const cached = requestCache.get(fingerprint);
-
+  if (cached) {
     logger.warn('Duplicate request detected', {
       userId: req.user.userId,
       method: req.method,
-      path: req.path,
-      fingerprint
+      path: req.path
     });
-
-    // Return cached response
     return res.status(cached.statusCode).json(cached.response);
   }
 
-  // Store original res.json to intercept response
-  const originalJson = res.json;
+  const originalJson = res.json.bind(res);
 
-  res.json = function(data) {
-    // Cache successful responses (2xx status codes)
+  res.json = function (data) {
     if (res.statusCode >= 200 && res.statusCode < 300) {
-      requestCache.set(fingerprint, {
-        statusCode: res.statusCode,
-        response: data,
-        timestamp: Date.now()
-      });
-
-      // Clean up cache after TTL
-      setTimeout(() => {
-        requestCache.delete(fingerprint);
-      }, CACHE_TTL);
-
-      logger.debug('Request cached for deduplication', {
-        fingerprint,
-        ttl: CACHE_TTL
-      });
+      void writeCached(fingerprint, res.statusCode, data);
     }
-
-    return originalJson.call(this, data);
+    return originalJson(data);
   };
 
   next();
 };
 
-/**
- * Clean up old cache entries periodically
- */
 export const startCacheCleanup = (interval = 60000) => {
   setInterval(() => {
     const now = Date.now();
     let cleaned = 0;
 
     for (const [key, value] of requestCache.entries()) {
-      if (now - value.timestamp > CACHE_TTL) {
+      if (now - value.timestamp > CACHE_TTL_MS) {
         requestCache.delete(key);
         cleaned++;
       }
     }
 
     if (cleaned > 0) {
-      logger.debug(`Cleaned ${cleaned} expired cache entries`);
+      logger.debug(`Cleaned ${cleaned} expired dedupe cache entries`);
     }
   }, interval);
 };

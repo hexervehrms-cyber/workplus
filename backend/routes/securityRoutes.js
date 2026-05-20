@@ -17,6 +17,7 @@ import {
 import User from '../models/User.js';
 import Session from '../models/Session.js';
 import logger from '../utils/logger.js';
+import { normalizeAuthOrgId } from '../utils/orgScopeHelpers.js';
 import bcrypt from 'bcrypt';
 
 const router = express.Router();
@@ -165,7 +166,14 @@ router.post('/auth/login', loginLimiter, async (req, res) => {
     const tokens = await generateTokenPair(user, ipAddress, userAgent);
 
     // Create session record for tracking logged-in users
-    const orgId = user.orgId || 'system';
+    const orgId = normalizeAuthOrgId(user);
+    if (!orgId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Account has no organization assigned',
+        code: 'MISSING_ORG_CONTEXT'
+      });
+    }
     try {
       const session = await Session.create({
         userId: user._id,

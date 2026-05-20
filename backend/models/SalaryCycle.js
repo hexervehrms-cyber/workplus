@@ -193,6 +193,14 @@ const salaryCycleSchema = new mongoose.Schema(
 // Compound indexes
 salaryCycleSchema.index({ orgId: 1, isActive: 1 });
 salaryCycleSchema.index({ orgId: 1, createdAt: -1 });
+// At most one active salary cycle per organization (race-safe with duplicate-key handling)
+salaryCycleSchema.index(
+  { orgId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { isActive: true }
+  }
+);
 
 // Static method to get active cycle for organization
 salaryCycleSchema.statics.getActiveCycle = function (orgId) {

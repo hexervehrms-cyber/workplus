@@ -6,6 +6,7 @@
 import jwt from 'jsonwebtoken';
 import RefreshToken from '../models/RefreshToken.js';
 import logger from '../utils/logger.js';
+import { normalizeAuthOrgId } from '../utils/orgScopeHelpers.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 const ACCESS_TOKEN_EXPIRY = '24h'; // 24 hours
@@ -15,12 +16,13 @@ const REFRESH_TOKEN_EXPIRY = 7 * 24 * 60 * 60; // 7 days in seconds
  * Generate access token
  */
 const generateAccessToken = (user) => {
+  const authOrg = normalizeAuthOrgId(user);
   return jwt.sign(
     {
       userId: user._id,
       email: user.email,
       role: user.role,
-      tenantId: user.orgId || 'system'
+      ...(authOrg ? { tenantId: authOrg, orgId: authOrg } : {})
     },
     JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_EXPIRY }

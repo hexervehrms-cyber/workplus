@@ -27,7 +27,7 @@ export class SocketService {
   private listeners: Map<string, Set<EventCallback>> = new Map();
   private connectionState: ConnectionState = 'disconnected';
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
+  private maxReconnectAttempts = 12;
   private reconnectDelay = 1000;
   private connectionTimeout: NodeJS.Timeout | null = null;
   private userId: string | null = null;
@@ -111,11 +111,10 @@ export class SocketService {
           this.setState('connected');
           this.reconnectAttempts = 0;
 
-          // Authenticate with server
-          this.socket?.emit('authenticate', { 
-            userId, 
-            role, 
-            tenantId 
+          // Server derives identity from JWT; client payload is validated, not trusted for role
+          this.socket?.emit('authenticate', {
+            userId,
+            tenantId
           });
 
           // Re-register all listeners

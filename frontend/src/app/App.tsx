@@ -4,13 +4,13 @@ import { ThemeProvider } from './context/ThemeContext';
 import { AuthProvider } from './context/AuthContext';
 import { CurrencyProvider } from './context/CurrencyContext';
 import { AttendanceProvider } from '../context/AttendanceContext';
-import { ErrorBoundary } from './components/ErrorBoundary';
+import GlobalErrorBoundary from './components/GlobalErrorBoundary';
 import './styles/animations.css';
 
 // WorkPlus Pro - Version 1.0.1 (UI Refresh)
 export default function App() {
   return (
-    <ErrorBoundary>
+    <GlobalErrorBoundary>
       <ThemeProvider>
         <AuthProvider>
           <CurrencyProvider>
@@ -20,6 +20,6 @@ export default function App() {
           </CurrencyProvider>
         </AuthProvider>
       </ThemeProvider>
-    </ErrorBoundary>
+    </GlobalErrorBoundary>
   );
 }

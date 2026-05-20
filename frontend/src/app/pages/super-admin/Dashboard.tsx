@@ -40,6 +40,8 @@ interface SuperAdminKpiChanges {
   userChange: number;
   sessionChange: number;
   expenseChange: number;
+  pipelineChange: number;
+  churnChange: number;
 }
 
 interface SuperAdminStatsPayload {
@@ -122,7 +124,9 @@ export default function SuperAdminDashboard() {
       organizationChange: 0,
       userChange: 0,
       sessionChange: 0,
-      expenseChange: 0
+      expenseChange: 0,
+      pipelineChange: 0,
+      churnChange: 0,
     }
   });
   const [revenueData, setRevenueData] = useState<GrowthTrendPoint[]>([]);
@@ -182,13 +186,16 @@ export default function SuperAdminDashboard() {
           pipelineValue: stats.pipelineValue || 0, // Use real pipeline data from API
           commissionPaid: stats.commissionPaid || 0, // Use real commission data from API
           churnRate: stats.churnRate || 0,
-          kpiChanges: stats.kpiChanges || {
+          kpiChanges: {
             revenueChange: 0,
             organizationChange: 0,
             userChange: 0,
             sessionChange: 0,
-            expenseChange: 0
-          }
+            expenseChange: 0,
+            pipelineChange: 0,
+            churnChange: 0,
+            ...(stats.kpiChanges || {}),
+          },
         });
       }
 
@@ -237,7 +244,9 @@ export default function SuperAdminDashboard() {
           organizationChange: 0,
           userChange: 0,
           sessionChange: 0,
-          expenseChange: 0
+          expenseChange: 0,
+          pipelineChange: 0,
+          churnChange: 0,
         }
       });
       
@@ -369,7 +378,7 @@ export default function SuperAdminDashboard() {
         <KPICard
           title="Pipeline Value"
           value={formatCurrency(dashboardStats.pipelineValue)}
-          change={0} // TODO: Calculate pipeline change
+          change={dashboardStats.kpiChanges.pipelineChange}
           icon={Target}
           color="accent"
         />
@@ -383,7 +392,7 @@ export default function SuperAdminDashboard() {
         <KPICard
           title="Churn Rate"
           value={`${dashboardStats.churnRate}%`}
-          change={-0.5} // TODO: Calculate churn change
+          change={dashboardStats.kpiChanges.churnChange}
           icon={XCircle}
           color="destructive"
         />

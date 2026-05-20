@@ -102,6 +102,8 @@ import chatRoutes from "./routes/chat.js";
 import currencyRoutes from "./routes/currency.js";
 import onboardingRoutes from "./routes/onboarding.js";
 import salaryRoutes from "./routes/salary.js";
+import salaryCycleRoutes from "./routes/salary-cycle.js";
+import fnfRoutes from "./routes/fnf.js";
 import payrollRoutes from "./routes/payroll.js";
 import organizationNotificationSettingsRoutes from "./routes/organizationNotificationSettings.js";
 import adminBulkOperationsRoutes from "./routes/admin-bulk-operations.js";
@@ -109,6 +111,7 @@ import announcementsRoutes from "./routes/announcements.js";
 import notificationsRoutes from "./routes/notifications.js";
 import tasksRoutes from "./routes/tasks.js";
 import organizationsRoutes from "./routes/organizations.js";
+import assetsRoutes from "./routes/assets.js";
 import authRoutes from "./routes/auth.js";
 
 // Import sales routes
@@ -591,10 +594,18 @@ app.use("/health", healthRoutes);
 
 // Import auth middleware
 import { authenticate, authorize } from "./middleware/auth.js";
+import { validateOrgId } from "./middleware/orgIdValidation.js";
+import {
+  normalizeAuthOrgId,
+  socketTenantIdFromDecoded
+} from "./utils/orgScopeHelpers.js";
+
+/** Authenticated API routes that require a real tenant org (non–super_admin). */
+const authedTenant = [authenticate, validateOrgId];
 
 // Registration keeps legacy 24h access-token flow (self-service signup); login uses routes/auth.js (15m + refresh + Redis session)
 app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) => {
-  const { name, email, password, role, organization } = req.body;
+  const { name, email, password, role, organization, orgId: bodyOrgId } = req.body;
 
   if (!name || !email || !password) {
     return res.status(400).json({
@@ -618,16 +629,27 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
     email: emailNorm,
     password: hashedPassword,
     role: role || 'employee',
-    organization: organization || 'WorkPlus Inc.'
+    organization: organization || 'WorkPlus Inc.',
+    ...(bodyOrgId ? { orgId: String(bodyOrgId) } : {})
   });
+
+  const authOrg = normalizeAuthOrgId(user);
+  if (!authOrg) {
+    await User.deleteOne({ _id: user._id });
+    return res.status(400).json({
+      success: false,
+      message: 'orgId is required to register',
+      code: 'MISSING_ORG_CONTEXT'
+    });
+  }
 
   const token = jwt.sign(
     {
       userId: user._id.toString(),
       email: user.email,
       role: user.role,
-      tenantId: user.orgId || 'system',
-      orgId: user.orgId || 'system'
+      tenantId: authOrg,
+      orgId: authOrg
     },
     process.env.JWT_SECRET,
     { expiresIn: '24h' }
@@ -696,13 +718,22 @@ app.post("/api/auth/create-admin", asyncHandler(async (req, res) => {
   }
 
   const hashedPassword = await bcrypt.hash(password, 10);
+  const adminOrgId = orgId || decoded.tenantId || decoded.orgId;
+  if (!adminOrgId || String(adminOrgId) === 'system') {
+    return res.status(400).json({
+      success: false,
+      message: 'Valid orgId is required when creating an admin',
+      code: 'MISSING_ORG_CONTEXT'
+    });
+  }
+
   const user = await User.create({
     name,
     email: emailNorm,
     password: hashedPassword,
     role: 'admin',
     organization: organization || 'WorkPlus Inc.',
-    orgId: orgId || decoded.tenantId || 'system'
+    orgId: String(adminOrgId)
   });
 
   res.status(201).json({
@@ -719,16 +750,16 @@ app.post("/api/auth/create-admin", asyncHandler(async (req, res) => {
 }));
 
 // Dashboard routes (with authentication)
-app.use("/api/dashboard", authenticate, dashboardRoutes);
-app.use("/api/dashboard", authenticate, dashboardSuperAdminRoutes);
-app.use("/api/dashboard", authenticate, dashboardEmployeeRoutes);
+app.use("/api/dashboard", ...authedTenant, dashboardRoutes);
+app.use("/api/dashboard", ...authedTenant, dashboardSuperAdminRoutes);
+app.use("/api/dashboard", ...authedTenant, dashboardEmployeeRoutes);
 
 // ============================================================================
 // PUBLIC CLEANUP ENDPOINTS (for testing/development)
 // ============================================================================
 
 // Cleanup endpoint — super_admin only; disabled in production unless explicitly enabled
-app.delete("/api/leave-requests/cleanup/all", authenticate, authorize("super_admin"), asyncHandler(async (req, res) => {
+app.delete("/api/leave-requests/cleanup/all", ...authedTenant, authorize("super_admin"), asyncHandler(async (req, res) => {
   if (process.env.NODE_ENV === "production" && process.env.ALLOW_LEAVE_CLEANUP !== "true") {
     return res.status(403).json({
       success: false,
@@ -766,13 +797,13 @@ app.delete("/api/leave-requests/cleanup/all", authenticate, authorize("super_adm
 // ============================================================================
 
 // Profile routes (with authentication)
-app.use("/api/profile", authenticate, profileRoutes);
+app.use("/api/profile", ...authedTenant, profileRoutes);
 
 // Employees routes (with authentication)
-app.use("/api/employees", authenticate, employeesRoutes);
+app.use("/api/employees", ...authedTenant, employeesRoutes);
 
 // Document status (legacy path; registered before /api/documents router so it is reachable)
-app.patch("/api/documents/:id/status", authenticate, asyncHandler(async (req, res) => {
+app.patch("/api/documents/:id/status", ...authedTenant, asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
@@ -802,78 +833,90 @@ app.patch("/api/documents/:id/status", authenticate, asyncHandler(async (req, re
 }));
 
 // Documents routes (with authentication)
-app.use("/api/documents", authenticate, documentsRoutes);
+app.use("/api/documents", ...authedTenant, documentsRoutes);
 
 // Announcements routes (with authentication)
-app.use("/api/announcements", authenticate, announcementsRoutes);
+app.use("/api/announcements", ...authedTenant, announcementsRoutes);
 
 // In-app notifications (navbar, etc.)
-app.use("/api/notifications", authenticate, notificationsRoutes);
+app.use("/api/notifications", ...authedTenant, notificationsRoutes);
 
 // Tasks routes (with authentication)
-app.use("/api/tasks", authenticate, tasksRoutes);
+app.use("/api/tasks", ...authedTenant, tasksRoutes);
 
 // Organizations routes (with authentication)
-app.use("/api/organizations", authenticate, organizationsRoutes);
+app.use("/api/organizations", ...authedTenant, organizationsRoutes);
+
+// Asset management (assignments, photos, import/export)
+app.use("/api/assets", ...authedTenant, assetsRoutes);
 
 // Expenses routes (with authentication)
-app.use("/api/expenses", authenticate, expensesRoutes);
+app.use("/api/expenses", ...authedTenant, expensesRoutes);
 
 // Attendance routes (with authentication)
-app.use("/api/attendance", authenticate, attendanceRoutes);
+app.use("/api/attendance", ...authedTenant, attendanceRoutes);
 
 // Attendance History routes (with authentication)
-app.use("/api/attendance-history", authenticate, attendanceHistoryRoutes);
+app.use("/api/attendance-history", ...authedTenant, attendanceHistoryRoutes);
 
 // Leave routes (with authentication)
-app.use("/api/leave-requests", authenticate, leaveRoutes);
+app.use("/api/leave-requests", ...authedTenant, leaveRoutes);
 
 // Leave allocation routes (with authentication)
-app.use("/api/leave-allocation", authenticate, leaveAllocationRoutes);
+app.use("/api/leave-allocation", ...authedTenant, leaveAllocationRoutes);
 
 // Leave type settings routes (with authentication)
-app.use("/api/leave-type-settings", authenticate, leaveTypeSettingsRoutes);
+app.use("/api/leave-type-settings", ...authedTenant, leaveTypeSettingsRoutes);
 
 // Holidays routes (with authentication)
-app.use("/api/holidays", authenticate, holidaysRoutes);
+app.use("/api/holidays", ...authedTenant, holidaysRoutes);
 
 // Users routes (with authentication)
-app.use("/api/users", authenticate, usersRoutes);
-app.use("/api/departments", authenticate, departmentsRoutes);
+app.use("/api/users", ...authedTenant, usersRoutes);
+app.use("/api/departments", ...authedTenant, departmentsRoutes);
 
 // Roles routes (with authentication)
-app.use("/api/roles", authenticate, rolesRoutes);
+app.use("/api/roles", ...authedTenant, rolesRoutes);
 
 // Onboarding routes (mixed authentication - some public, some protected)
 // Use multer for file uploads on onboarding routes
 app.use("/api/onboarding", upload.any(), onboardingRoutes);
 
 // Sales routes (with authentication)
-app.use("/api/sales/calls", authenticate, callsRoutes);
-app.use("/api/sales/leads", authenticate, leadsRoutes);
-app.use("/api/sales/deals", authenticate, dealsRoutes);
-app.use("/api/sales/performance", authenticate, performanceRoutes);
-app.use("/api/performance", authenticate, performanceEmployeeRoutes);
-app.use("/api/sales/revenue", authenticate, revenueRoutes);
+app.use("/api/sales/calls", ...authedTenant, callsRoutes);
+app.use("/api/sales/leads", ...authedTenant, leadsRoutes);
+app.use("/api/sales/deals", ...authedTenant, dealsRoutes);
+app.use("/api/sales/performance", ...authedTenant, performanceRoutes);
+app.use("/api/performance", ...authedTenant, performanceEmployeeRoutes);
+app.use("/api/sales/revenue", ...authedTenant, revenueRoutes);
 
 // Chat routes (with authentication)
-app.use("/api/chat", authenticate, chatRoutes);
+app.use("/api/chat", ...authedTenant, chatRoutes);
 
 // Currency routes (with authentication)
-app.use("/api/currency", authenticate, currencyRoutes);
+app.use("/api/currency", ...authedTenant, currencyRoutes);
 
 // Salary routes (with authentication)
-app.use("/api/salary", authenticate, salaryRoutes);
+app.use("/api/salary", ...authedTenant, salaryRoutes);
+
+// Salary cycle & FNF (HR / admin)
+app.use(
+  "/api/salary-cycle",
+  ...authedTenant,
+  authorize("super_admin", "admin", "hr"),
+  salaryCycleRoutes
+);
+app.use("/api/fnf", ...authedTenant, authorize("super_admin", "admin", "hr"), fnfRoutes);
 
 // Payroll routes (with authentication)
-app.use("/api/payroll", authenticate, payrollRoutes);
+app.use("/api/payroll", ...authedTenant, payrollRoutes);
 
 // Admin: org notification integrations (SMTP + Teams) and routing
 app.use("/api/admin", organizationNotificationSettingsRoutes);
 app.use("/api/admin/bulk", adminBulkOperationsRoutes);
 
 // Experience / HR document bundle for a user (authenticated)
-app.get("/api/experience-documents/:userId", authenticate, asyncHandler(async (req, res) => {
+app.get("/api/experience-documents/:userId", ...authedTenant, asyncHandler(async (req, res) => {
   const { userId } = req.params;
 
   if (!mongoose.Types.ObjectId.isValid(userId)) {
@@ -945,7 +988,7 @@ io.on('connection', (socket) => {
     // Store decoded token info on socket
     socket.userId = decoded.userId;
     socket.role = decoded.role;
-    socket.tenantId = decoded.tenantId || 'system';
+    socket.tenantId = socketTenantIdFromDecoded(decoded);
     socket.email = decoded.email;
 
     // Session setup — identity comes only from verified JWT (connection), not client payload
@@ -954,7 +997,7 @@ io.on('connection', (socket) => {
       try {
         const userId = socket.userId;
         const role = socket.role;
-        const tenantId = socket.tenantId || 'system';
+        const tenantId = socket.tenantId;
 
         if (!userId || !role) {
           logger.warn(`Socket authenticate without JWT identity: ${socket.id}`);
@@ -978,7 +1021,7 @@ io.on('connection', (socket) => {
           // Try to find existing session from login
           let session = await Session.findOne({
             userId,
-            orgId: tenantId || 'system',
+            ...(tenantId ? { orgId: tenantId } : {}),
             isActive: true,
             socketId: null // Session created during login without socketId
           }).catch(err => {
@@ -998,7 +1041,7 @@ io.on('connection', (socket) => {
             // Create new session if not found (fallback)
             session = await Session.create({
               userId,
-              orgId: tenantId || 'system',
+              ...(tenantId ? { orgId: tenantId } : {}),
               socketId: socket.id,
               role,
               isActive: true,
@@ -1022,21 +1065,20 @@ io.on('connection', (socket) => {
         // Join role-based rooms
         socket.join(`role_${role}`);
         
-        // Join tenant room - ALWAYS join with 'system' as fallback
-        const finalTenantId = tenantId || 'system';
-        socket.join(`tenant_${finalTenantId}`);
-        console.log(`📍 Socket joined room: tenant_${finalTenantId}`);
+        if (tenantId) {
+          socket.join(`tenant_${tenantId}`);
+          console.log(`📍 Socket joined room: tenant_${tenantId}`);
+        }
 
-        // Join user-specific room
         socket.join(`user_${userId}`);
 
-        // Join management room for admins and super admins
         if (role === 'admin' || role === 'super_admin') {
           socket.join('management');
           socket.join(`admin_${userId}`);
           socket.join('role_admin');
-          socket.join(`role_admin_${finalTenantId}`);
-          console.log(`📍 Admin joined rooms: management, admin_${userId}, role_admin, role_admin_${finalTenantId}`);
+          if (tenantId) {
+            socket.join(`role_admin_${tenantId}`);
+          }
         }
 
         // Join employee room
@@ -1061,12 +1103,15 @@ io.on('connection', (socket) => {
 
         // Emit dashboard update to all admins in the tenant
         try {
+          if (!tenantId) {
+            return;
+          }
           const activeCount = await Session.countDocuments({
-            orgId: tenantId || 'system',
+            orgId: tenantId,
             isActive: true
           });
-          
-          io.to(`tenant_${tenantId || 'system'}`).emit('dashboard_update', {
+
+          io.to(`tenant_${tenantId}`).emit('dashboard_update', {
             type: 'active_users_updated',
             data: {
               activeUsers: activeCount,
@@ -1372,12 +1417,15 @@ io.on('connection', (socket) => {
 
         // Emit dashboard update to all admins in the tenant
         try {
-          const tenantId = socket.tenantId || 'system';
+          const tenantId = socket.tenantId;
+          if (!tenantId) {
+            return;
+          }
           const activeCount = await Session.countDocuments({
             orgId: tenantId,
             isActive: true
           });
-          
+
           io.to(`tenant_${tenantId}`).emit('dashboard_update', {
             type: 'active_users_updated',
             data: {

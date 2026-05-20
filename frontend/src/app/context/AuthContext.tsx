@@ -7,7 +7,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { AuthService, TokenManager, ApiError, TokenRefreshService } from '../utils/api';
 import { socketService, ConnectionState } from '../utils/socket';
 import realTimeSocket from '../utils/realTimeSocket';
-import { clearApiCache } from '../utils/apiHelper';
+import { clearApiCache, clearAllHolidayCaches } from '../utils/apiHelper';
 import { clearPersistedAttendance } from '../utils/attendancePersistence';
 import { isPublicBootstrapPath, hasStoredSessionHint } from '../utils/publicPaths';
 
@@ -84,6 +84,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem('token');
       localStorage.removeItem('refreshToken');
       localStorage.removeItem('cached_holidays');
+      clearAllHolidayCaches();
+
+      clearApiCache();
 
       setLoading(false);
 
@@ -175,10 +178,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     const fetchCurrentUser = async () => {
-      const timeoutMs = 8000;
+      const timeoutMs = 15000;
       return Promise.race([
         AuthService.getCurrentUser(),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs))
       ]);
     };
 
@@ -198,7 +201,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         try {
-          const currentUser = await fetchCurrentUser();
+          let currentUser = await fetchCurrentUser();
+          if (!currentUser && TokenManager.get()) {
+            currentUser = await AuthService.getCurrentUser();
+          }
           if (currentUser) {
             console.log('✅ User restored from Redis session:', {
               id: currentUser.id,
@@ -362,6 +368,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(normalizedUser);
         setLoading(false);
         setIsInitialized(true);
+        clearApiCache();
         connectSocketsInBackground(normalizedUser);
 
         return { success: true };
@@ -385,31 +392,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [connectSocketsInBackground]);
 
-  // Switch role (for demo/testing)
+  // UI-only role preview (JWT / API always use server-assigned role; disabled in production builds)
   const switchRole = useCallback((role: UserRole) => {
-    if (user) {
-      const updatedUser = { ...user, role };
-      setUser(updatedUser);
-      TokenManager.setUser(updatedUser);
-
-      // Reconnect socket with new role
-      socketService.disconnect();
-      realTimeSocket.disconnect();
-      socketService.connect(user.id, role, user.tenantId)
-        .then(() => {
-          realTimeSocket.connectFromAuth({
-            id: user.id,
-            role,
-            orgId: user.orgId,
-            tenantId: user.tenantId || user.orgId
-          });
-          setSocketConnected(true);
-        })
-        .catch((error) => {
-          console.error('Failed to reconnect socket:', error);
-          setSocketConnected(false);
-        });
+    if (!import.meta.env.DEV) {
+      return;
     }
+    if (!user) return;
+
+    const token = TokenManager.get();
+    let jwtRole: UserRole = user.role;
+    if (token) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1])) as { role?: UserRole };
+        if (payload.role) jwtRole = payload.role;
+      } catch {
+        /* use stored role */
+      }
+    }
+
+    const updatedUser = { ...user, role };
+    setUser(updatedUser);
+    TokenManager.setUser(updatedUser);
+    clearApiCache();
+
+    socketService.disconnect();
+    realTimeSocket.disconnect();
+    const tenant = user.tenantId || user.orgId;
+    socketService
+      .connect(user.id, jwtRole, tenant)
+      .then(() => {
+        realTimeSocket.connectFromAuth({
+          id: user.id,
+          role: jwtRole,
+          orgId: user.orgId,
+          tenantId: tenant
+        });
+        setSocketConnected(true);
+      })
+      .catch((error) => {
+        console.error('Failed to reconnect socket:', error);
+        setSocketConnected(false);
+      });
   }, [user]);
 
   const value: AuthContextType = {

@@ -22,6 +22,7 @@ import {
   buildOrgIdFlexible,
   countEmployeesCurrentlyOnBreak,
 } from "../utils/attendanceQueryHelpers.js";
+import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
 
 // Import specialized dashboard routes
 import superAdminRoutes from "./dashboard-superadmin.js";
@@ -97,13 +98,14 @@ router.get("/stats", asyncHandler(async (req, res) => {
   res.set('Expires', '0');
   
   const startTime = Date.now();
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const { filterType = 'month', startDate, endDate } = req.query;
   
   try {
     // Check cache first (30 second TTL for stats)
     const cacheKey = { filterType, startDate, endDate };
-    const cachedStats = dashboardCache.get('/dashboard/stats', orgId, cacheKey);
+    const cachedStats = await dashboardCache.getAsync('/dashboard/stats', orgId, cacheKey);
     if (cachedStats) {
       const responseTime = Date.now() - startTime;
       dashboardMonitor.recordMetric('/dashboard/stats', orgId, responseTime, true, true);
@@ -198,7 +200,8 @@ router.get("/stats", asyncHandler(async (req, res) => {
  * Get expense trends for charts
  */
 router.get("/expense-trends", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   
   // Get last 6 months of expense data
   const sixMonthsAgo = new Date();
@@ -252,7 +255,8 @@ router.get("/expense-trends", asyncHandler(async (req, res) => {
  * OPTIMIZED: Use lean() and single aggregation pipeline
  */
 router.get("/recent-leave-requests", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const limit = parseInt(req.query.limit) || 10;
   
   const leaveRequests = await LeaveRequest.aggregate([
@@ -324,7 +328,8 @@ router.get("/recent-leave-requests", asyncHandler(async (req, res) => {
  * OPTIMIZED: Use aggregation pipeline instead of find + populate
  */
 router.get("/todays-attendance", asyncHandler(async (req, res) => {
-  const userOrgId = req.user?.orgId || 'system';
+  const userOrgId = assertScopedOrgId(req, res);
+  if (!userOrgId) return;
   
   const { start: today, end: tomorrow } = getDayBounds();
 
@@ -396,7 +401,8 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
  * Get department-wise statistics
  */
 router.get("/department-stats", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   
   const departmentStats = await Employee.aggregate([
     {
@@ -432,7 +438,8 @@ router.get("/department-stats", asyncHandler(async (req, res) => {
  * Get recent system activities
  */
 router.get("/recent-activities", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const limit = parseInt(req.query.limit) || 20;
   
   // This would typically come from an ActivityLog model
@@ -503,13 +510,14 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
   res.set('Expires', '0');
   
   const startTime = Date.now();
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const { filterType = 'month', startDate, endDate } = req.query;
   
   try {
     // Check cache first (20 second TTL for quick-stats - more frequent updates)
     const cacheKey = { filterType, startDate, endDate };
-    const cachedStats = dashboardCache.get('/dashboard/quick-stats', orgId, cacheKey);
+    const cachedStats = await dashboardCache.getAsync('/dashboard/quick-stats', orgId, cacheKey);
     if (cachedStats) {
       const responseTime = Date.now() - startTime;
       dashboardMonitor.recordMetric('/dashboard/quick-stats', orgId, responseTime, true, true);
@@ -704,7 +712,8 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
  * Test endpoint to manually trigger KPI update emission (for debugging)
  */
 router.post("/test-kpi-emit", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   
   // Import emitKPIUpdate
   const { emitKPIUpdate } = await import('../utils/kpiUpdater.js');
@@ -727,7 +736,8 @@ router.post("/test-kpi-emit", asyncHandler(async (req, res) => {
  * Get weekly productivity data for admin dashboard
  */
 router.get("/weekly-productivity", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   
   // Get current week date range
   const today = new Date();
@@ -820,7 +830,8 @@ router.get("/health", asyncHandler(async (req, res) => {
  * Clear dashboard cache (admin only)
  */
 router.post("/cache/clear", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   
   dashboardCache.invalidateOrg(orgId);
   

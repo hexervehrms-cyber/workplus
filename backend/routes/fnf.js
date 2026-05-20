@@ -1,4 +1,5 @@
 import express from "express";
+import mongoose from "mongoose";
 import FNFSettlement from "../models/FNFSettlement.js";
 import Employee from "../models/Employee.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
@@ -10,21 +11,49 @@ const router = express.Router();
 
 router.use(paginationMiddleware);
 
+function userOrgId(user) {
+  if (!user) return "";
+  const o = user.orgId || user.tenantId;
+  return o && o !== "system" ? String(o) : "";
+}
+
+function resolveListOrgId(req) {
+  if (req.user?.role === "super_admin") {
+    const q = req.query?.orgId;
+    if (!q) {
+      return { error: "orgId query parameter is required for super admin" };
+    }
+    return { orgId: String(q) };
+  }
+  const oid = userOrgId(req.user);
+  if (!oid) {
+    return { error: "No organization assigned to this account" };
+  }
+  return { orgId: oid };
+}
+
+function canAccessOrg(req, orgId) {
+  if (!orgId) return false;
+  if (req.user?.role === "super_admin") return true;
+  return userOrgId(req.user) === String(orgId);
+}
+
 /**
  * GET /api/fnf
- * List all FNF settlements with pagination
+ * List FNF settlements (organization-scoped)
  */
 router.get(
   "/",
   asyncHandler(async (req, res) => {
-    const { page, limit, skip } = req.pagination;
-    const { orgId, status, employeeId } = req.query;
-
-    const query = {};
-
-    if (orgId) {
-      query.orgId = orgId;
+    const scope = resolveListOrgId(req);
+    if (scope.error) {
+      return res.status(400).json({ success: false, message: scope.error });
     }
+
+    const { page, limit, skip } = req.pagination;
+    const { status, employeeId } = req.query;
+
+    const query = { orgId: scope.orgId };
 
     if (status) {
       query.status = status;
@@ -46,54 +75,36 @@ router.get(
       .limit(limit)
       .lean();
 
-    logger.info("FNF settlements listed", { total, page, limit });
+    logger.info("FNF settlements listed", { total, page, limit, orgId: scope.orgId });
 
     res.paginate(settlements, total);
   })
 );
 
 /**
- * GET /api/fnf/:id
- * Get single FNF settlement
- */
-router.get(
-  "/:id",
-  asyncHandler(async (req, res) => {
-    const settlement = await FNFSettlement.findById(req.params.id)
-      .populate("employeeId", "employeeCode department designation phone address")
-      .populate("userId", "name email avatar")
-      .populate("approvedBy", "name email")
-      .populate("paidBy", "name email");
-
-    if (!settlement) {
-      return res.status(404).json({
-        success: false,
-        message: "FNF settlement not found"
-      });
-    }
-
-    res.json({
-      success: true,
-      data: settlement
-    });
-  })
-);
-
-/**
  * GET /api/fnf/employee/:employeeId
- * Get FNF settlement for specific employee
  */
 router.get(
   "/employee/:employeeId",
   asyncHandler(async (req, res) => {
     const { employeeId } = req.params;
-    const { orgId } = req.query;
+    const orgId =
+      req.user?.role === "super_admin"
+        ? req.query.orgId && String(req.query.orgId)
+        : userOrgId(req.user);
 
     if (!orgId) {
       return res.status(400).json({
         success: false,
-        message: "orgId is required"
+        message:
+          req.user?.role === "super_admin"
+            ? "orgId query parameter is required"
+            : "No organization assigned to this account"
       });
+    }
+
+    if (!canAccessOrg(req, orgId)) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
     const settlement = await FNFSettlement.findOne({
@@ -121,12 +132,14 @@ router.get(
 
 /**
  * POST /api/fnf/calculate
- * Calculate FNF for an employee
  */
 router.post(
   "/calculate",
   asyncHandler(async (req, res) => {
-    const { employeeId, terminationDate, terminationReason, orgId } = req.body;
+    const { employeeId, terminationDate, terminationReason, orgId: bodyOrgId } = req.body;
+
+    const orgId =
+      req.user?.role === "super_admin" ? bodyOrgId : userOrgId(req.user);
 
     if (!employeeId || !terminationDate || !terminationReason || !orgId) {
       return res.status(400).json({
@@ -136,7 +149,10 @@ router.post(
       });
     }
 
-    // Check if employee exists
+    if (!canAccessOrg(req, orgId)) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
     const employee = await Employee.findById(employeeId).lean();
 
     if (!employee) {
@@ -146,7 +162,13 @@ router.post(
       });
     }
 
-    // Check if FNF already exists
+    if (String(employee.orgId || "") !== String(orgId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Employee does not belong to the specified organization"
+      });
+    }
+
     const existingFNF = await FNFSettlement.findOne({
       employeeId,
       orgId
@@ -160,7 +182,6 @@ router.post(
       });
     }
 
-    // Calculate FNF
     const fnfData = await fnfCalculationEngine.calculateFNF(
       employeeId,
       new Date(terminationDate),
@@ -168,18 +189,15 @@ router.post(
       orgId
     );
 
-    // Save FNF settlement
     let settlement;
 
     if (existingFNF && existingFNF.status === "draft") {
-      // Update existing draft
       settlement = await FNFSettlement.findByIdAndUpdate(
         existingFNF._id,
         fnfData,
         { new: true }
       );
     } else {
-      // Create new
       settlement = await fnfCalculationEngine.saveFNFSettlement(fnfData);
     }
 
@@ -202,16 +220,70 @@ router.post(
 );
 
 /**
+ * GET /api/fnf/stats/summary
+ */
+router.get(
+  "/stats/summary",
+  asyncHandler(async (req, res) => {
+    const scope = resolveListOrgId(req);
+    if (scope.error) {
+      return res.status(400).json({ success: false, message: scope.error });
+    }
+
+    const query = { orgId: scope.orgId };
+
+    const [total, draft, calculated, approved, paid, rejected, totalPayout] =
+      await Promise.all([
+        FNFSettlement.countDocuments(query),
+        FNFSettlement.countDocuments({ ...query, status: "draft" }),
+        FNFSettlement.countDocuments({ ...query, status: "calculated" }),
+        FNFSettlement.countDocuments({ ...query, status: "approved" }),
+        FNFSettlement.countDocuments({ ...query, status: "paid" }),
+        FNFSettlement.countDocuments({ ...query, status: "rejected" }),
+        FNFSettlement.aggregate([
+          { $match: { ...query, status: "paid" } },
+          { $group: { _id: null, total: { $sum: "$netSettlement" } } }
+        ])
+      ]);
+
+    res.json({
+      success: true,
+      data: {
+        total,
+        draft,
+        calculated,
+        approved,
+        paid,
+        rejected,
+        totalPayout: totalPayout[0]?.total || 0
+      }
+    });
+  })
+);
+
+/**
  * PUT /api/fnf/:id
- * Update FNF settlement (only draft status)
  */
 router.put(
   "/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const updateData = req.body;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({
+        success: false,
+        message: "FNF settlement not found"
+      });
+    }
 
-    // Remove fields that shouldn't be updated
+    const existing = await FNFSettlement.findById(id).lean();
+    if (!existing || !canAccessOrg(req, existing.orgId)) {
+      return res.status(404).json({
+        success: false,
+        message: "FNF settlement not found or cannot be updated"
+      });
+    }
+
+    const updateData = { ...req.body };
     delete updateData._id;
     delete updateData.employeeId;
     delete updateData.userId;
@@ -251,14 +323,19 @@ router.put(
 
 /**
  * PATCH /api/fnf/:id/approve
- * Approve FNF settlement
  */
 router.patch(
   "/:id/approve",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { approvedBy } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({
+        success: false,
+        message: "FNF settlement not found"
+      });
+    }
 
+    const approvedBy = req.body.approvedBy || req.user?.userId;
     if (!approvedBy) {
       return res.status(400).json({
         success: false,
@@ -269,9 +346,9 @@ router.patch(
     const settlement = await FNFSettlement.findOne({
       _id: id,
       status: "calculated"
-    });
+    }).lean();
 
-    if (!settlement) {
+    if (!settlement || !canAccessOrg(req, settlement.orgId)) {
       return res.status(404).json({
         success: false,
         message: "FNF settlement not found or cannot be approved"
@@ -303,14 +380,19 @@ router.patch(
 
 /**
  * PATCH /api/fnf/:id/mark-paid
- * Mark FNF as paid
  */
 router.patch(
   "/:id/mark-paid",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { paidBy } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({
+        success: false,
+        message: "FNF settlement not found"
+      });
+    }
 
+    const paidBy = req.body.paidBy || req.user?.userId;
     if (!paidBy) {
       return res.status(400).json({
         success: false,
@@ -321,9 +403,9 @@ router.patch(
     const settlement = await FNFSettlement.findOne({
       _id: id,
       status: "approved"
-    });
+    }).lean();
 
-    if (!settlement) {
+    if (!settlement || !canAccessOrg(req, settlement.orgId)) {
       return res.status(404).json({
         success: false,
         message: "FNF settlement not found or cannot be marked as paid"
@@ -352,7 +434,6 @@ router.patch(
 
 /**
  * PATCH /api/fnf/:id/reject
- * Reject FNF settlement
  */
 router.patch(
   "/:id/reject",
@@ -367,12 +448,19 @@ router.patch(
       });
     }
 
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({
+        success: false,
+        message: "FNF settlement not found"
+      });
+    }
+
     const settlement = await FNFSettlement.findOne({
       _id: id,
       status: { $in: ["calculated", "approved"] }
-    });
+    }).lean();
 
-    if (!settlement) {
+    if (!settlement || !canAccessOrg(req, settlement.orgId)) {
       return res.status(404).json({
         success: false,
         message: "FNF settlement not found or cannot be rejected"
@@ -405,13 +493,28 @@ router.patch(
 
 /**
  * DELETE /api/fnf/:id
- * Delete FNF settlement (only draft status)
  */
 router.delete(
   "/:id",
   asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({
+        success: false,
+        message: "FNF settlement not found"
+      });
+    }
+
+    const existing = await FNFSettlement.findById(id).lean();
+    if (!existing || !canAccessOrg(req, existing.orgId)) {
+      return res.status(404).json({
+        success: false,
+        message: "FNF settlement not found or cannot be deleted"
+      });
+    }
+
     const settlement = await FNFSettlement.findOneAndDelete({
-      _id: req.params.id,
+      _id: id,
       status: "draft"
     });
 
@@ -423,7 +526,7 @@ router.delete(
     }
 
     logger.info("FNF settlement deleted", {
-      fnfSettlementId: req.params.id
+      fnfSettlementId: id
     });
 
     res.json({
@@ -434,45 +537,35 @@ router.delete(
 );
 
 /**
- * GET /api/fnf/stats/summary
- * Get FNF statistics
+ * GET /api/fnf/:id
+ * Must be registered after static path segments
  */
 router.get(
-  "/stats/summary",
+  "/:id",
   asyncHandler(async (req, res) => {
-    const { orgId } = req.query;
-
-    const query = {};
-
-    if (orgId) {
-      query.orgId = orgId;
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({
+        success: false,
+        message: "FNF settlement not found"
+      });
     }
 
-    const [total, draft, calculated, approved, paid, rejected, totalPayout] =
-      await Promise.all([
-        FNFSettlement.countDocuments(query),
-        FNFSettlement.countDocuments({ ...query, status: "draft" }),
-        FNFSettlement.countDocuments({ ...query, status: "calculated" }),
-        FNFSettlement.countDocuments({ ...query, status: "approved" }),
-        FNFSettlement.countDocuments({ ...query, status: "paid" }),
-        FNFSettlement.countDocuments({ ...query, status: "rejected" }),
-        FNFSettlement.aggregate([
-          { $match: { ...query, status: "paid" } },
-          { $group: { _id: null, total: { $sum: "$netSettlement" } } }
-        ])
-      ]);
+    const settlement = await FNFSettlement.findById(req.params.id)
+      .populate("employeeId", "employeeCode department designation phone address")
+      .populate("userId", "name email avatar")
+      .populate("approvedBy", "name email")
+      .populate("paidBy", "name email");
+
+    if (!settlement || !canAccessOrg(req, settlement.orgId)) {
+      return res.status(404).json({
+        success: false,
+        message: "FNF settlement not found"
+      });
+    }
 
     res.json({
       success: true,
-      data: {
-        total,
-        draft,
-        calculated,
-        approved,
-        paid,
-        rejected,
-        totalPayout: totalPayout[0]?.total || 0
-      }
+      data: settlement
     });
   })
 );

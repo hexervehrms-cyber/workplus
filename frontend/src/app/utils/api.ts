@@ -428,8 +428,8 @@ export class AuthService {
       if (response.success && response.data) {
         TokenManager.clearAccessTokens();
         const token = response.data.token;
-        let orgId = response.data.user?.orgId || response.data.user?.tenantId || 'system';
-        if (token) {
+        let orgId = response.data.user?.orgId || response.data.user?.tenantId;
+        if (!orgId && token) {
           try {
             const tokenPayload = JSON.parse(atob(token.split('.')[1]));
             orgId = tokenPayload.orgId || orgId;
@@ -441,8 +441,7 @@ export class AuthService {
         TokenManager.setUser({
           ...u,
           id: u.id || u._id,
-          orgId: u.orgId || orgId,
-          tenantId: u.tenantId || orgId
+          ...(orgId ? { orgId: u.orgId || orgId, tenantId: u.tenantId || orgId } : {})
         });
 
         return {
@@ -572,8 +571,15 @@ export class UserService {
 // Employee Service
 // ============================================
 export class EmployeeService {
-  static async getAllEmployees() {
-    const response = await apiClient.get<any>('/employees?simple=true');
+  static async getAllEmployees(orgContext?: { role?: string; orgId?: string; tenantId?: string }) {
+    let url = '/employees?simple=true&limit=1000';
+    if (orgContext?.role === 'super_admin') {
+      const oid = orgContext.orgId || orgContext.tenantId;
+      if (oid && oid !== 'system') {
+        url += `&orgId=${encodeURIComponent(oid)}`;
+      }
+    }
+    const response = await apiClient.get<any>(url);
     console.log('getAllEmployees full response:', response);
     
     // Handle paginated response structure

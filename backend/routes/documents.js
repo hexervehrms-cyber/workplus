@@ -18,6 +18,12 @@ import IssuedDocument from "../models/IssuedDocument.js";
 import DocumentAcknowledgment from "../models/DocumentAcknowledgment.js";
 import { sendSuccess, sendError, sendPaginated } from "../utils/apiResponse.js";
 import logger from "../utils/logger.js";
+import {
+  isSuperAdmin,
+  employeeLookupQuery,
+  resolveScopedOrgId,
+  userOrgIdFromReq
+} from "../utils/orgScopeHelpers.js";
 
 // Setup __dirname for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -27,13 +33,73 @@ const router = express.Router();
 
 const MANAGE_DOC_ROLES = ["super_admin", "admin", "hr"];
 
+function resolveWriteOrgId(req, bodyOrgId) {
+  if (isSuperAdmin(req)) {
+    const picked =
+      bodyOrgId || resolveScopedOrgId(req) || userOrgIdFromReq(req);
+    return picked ? String(picked) : "";
+  }
+  return String(userOrgIdFromReq(req) || req.validatedOrgId || "");
+}
+
+async function assertPersonalDocumentAccess(req, document) {
+  if (!document) {
+    return { ok: false, status: 404, message: "Document not found" };
+  }
+  const isOwner = String(document.userId) === String(req.user.userId);
+  if (req.user.role === "employee") {
+    return isOwner
+      ? { ok: true }
+      : { ok: false, status: 403, message: "Unauthorized access" };
+  }
+  if (
+    !isSuperAdmin(req) &&
+    document.orgId &&
+    String(document.orgId) !== String(req.user.orgId)
+  ) {
+    return { ok: false, status: 403, message: "Unauthorized access" };
+  }
+  return { ok: true };
+}
+
+async function assertCanAccessEmployeeDocuments(req, employeeIdParam) {
+  const privileged = [...MANAGE_DOC_ROLES, "manager"];
+  const emp = await Employee.findOne(employeeLookupQuery(req, employeeIdParam))
+    .select("userId orgId")
+    .lean();
+
+  if (!emp) {
+    return { ok: false, status: 404, message: "Employee not found" };
+  }
+
+  if (privileged.includes(req.user.role)) {
+    if (!isSuperAdmin(req) && String(emp.orgId) !== String(req.user.orgId)) {
+      return { ok: false, status: 403, message: "Unauthorized access" };
+    }
+    return { ok: true, userId: String(emp.userId) };
+  }
+
+  const self = await Employee.findOne({
+    userId: req.user.userId,
+    orgId: req.user.orgId
+  })
+    .select("_id userId")
+    .lean();
+
+  if (!self || String(self._id) !== String(employeeIdParam)) {
+    return { ok: false, status: 403, message: "Unauthorized access" };
+  }
+  return { ok: true, userId: String(self.userId) };
+}
+
 /** Resolve org id for reads — non–super-admins are limited to their tenant. */
 const resolveReadableOrgId = (req, requestedOrgId) => {
-  const userOrgId = String(req.user?.orgId || "system");
-  if (req.user?.role === "super_admin" && requestedOrgId) {
-    return String(requestedOrgId);
+  const userOrgId = userOrgIdFromReq(req);
+  if (isSuperAdmin(req)) {
+    if (requestedOrgId) return String(requestedOrgId);
+    return resolveScopedOrgId(req);
   }
-  if (requestedOrgId && String(requestedOrgId) !== userOrgId) {
+  if (requestedOrgId && userOrgId && String(requestedOrgId) !== String(userOrgId)) {
     return null;
   }
   return userOrgId;
@@ -141,11 +207,12 @@ const DOCUMENT_TYPES = new Set([
 ]);
 
 /** Route param may be User id or Employee Mongo id — documents are stored by userId. */
-const resolveDocumentUserId = async (idParam) => {
+const resolveDocumentUserId = async (idParam, req) => {
   const id = String(idParam);
-  const asUser = await Document.findOne({ userId: id }).select("_id").lean();
+  const orgFilter = isSuperAdmin(req) ? {} : { orgId: String(req.user.orgId) };
+  const asUser = await Document.findOne({ userId: id, ...orgFilter }).select("_id").lean();
   if (asUser) return id;
-  const emp = await Employee.findById(id).select("userId").lean();
+  const emp = await Employee.findOne(employeeLookupQuery(req, id)).select("userId").lean();
   if (emp?.userId) return String(emp.userId);
   return id;
 };
@@ -234,7 +301,10 @@ router.post(
 
       const documentPath = `/uploads/documents/${req.file.filename}`;
       const resolvedType = resolveDocumentType(type, name);
-      const orgId = String(req.user.orgId || req.user.tenantId || "system");
+      const orgId = resolveWriteOrgId(req, req.body?.orgId);
+      if (!orgId) {
+        return sendError(res, "Organization context is required", 400, "MISSING_ORG_CONTEXT");
+      }
 
       // Create document record in database
       const document = await Document.create({
@@ -297,7 +367,7 @@ router.post(
         return sendError(res, "Title and category are required", 400, "VALIDATION_ERROR");
       }
 
-      const orgId = organizationId || req.user.orgId;
+      const orgId = resolveWriteOrgId(req, organizationId);
       if (!orgId) {
         return sendError(res, "Organization ID is required", 400, "VALIDATION_ERROR");
       }
@@ -367,7 +437,10 @@ router.post(
   authorize("employee", "admin", "hr", "manager", "super_admin"),
   asyncHandler(async (req, res) => {
     const userId = req.user.userId;
-    const orgId = String(req.user.orgId || req.user.tenantId || "system");
+    const orgId = userOrgIdFromReq(req) || resolveScopedOrgId(req);
+    if (!orgId) {
+      return sendError(res, "Organization context is required", 400, "MISSING_ORG_CONTEXT");
+    }
 
     const result = await Document.updateMany(
       { userId, orgId, status: { $in: ["uploaded", "Pending"] } },
@@ -402,21 +475,23 @@ router.get(
       const { employeeId } = req.params;
       const { page = 1, limit = 50 } = req.query;
       const skip = (page - 1) * limit;
-      const userId = await resolveDocumentUserId(employeeId);
 
-      // Check authorization - employees can only see their own documents
-      if (
-        req.user.role === "employee" &&
-        String(req.user.userId) !== String(userId)
-      ) {
-        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      const access = await assertCanAccessEmployeeDocuments(req, employeeId);
+      if (!access.ok) {
+        return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
+      }
+      const userId = access.userId;
+
+      const docFilter = { userId };
+      if (!isSuperAdmin(req)) {
+        docFilter.orgId = String(req.user.orgId);
       }
 
       // Get total count
-      const total = await Document.countDocuments({ userId });
+      const total = await Document.countDocuments(docFilter);
 
       // Get documents with pagination
-      const documents = await Document.find({ userId })
+      const documents = await Document.find(docFilter)
         .sort({ uploadedAt: -1 })
         .skip(skip)
         .limit(parseInt(limit))
@@ -461,11 +536,9 @@ router.get(
         return sendError(res, "Document not found", 404, "NOT_FOUND");
       }
 
-      if (
-        req.user.role === "employee" &&
-        String(req.user.userId) !== String(document.userId)
-      ) {
-        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      const access = await assertPersonalDocumentAccess(req, document);
+      if (!access.ok) {
+        return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
       }
 
       if (!document.filePath) {
@@ -534,12 +607,9 @@ router.get(
         return sendError(res, "Document not found", 404, "NOT_FOUND");
       }
 
-      // Check authorization
-      if (
-        req.user.role === "employee" &&
-        String(req.user.userId) !== String(document.userId)
-      ) {
-        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      const access = await assertPersonalDocumentAccess(req, document);
+      if (!access.ok) {
+        return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
       }
 
       logger.info("Document fetched", { documentId: id });
@@ -572,12 +642,9 @@ router.delete(
         return sendError(res, "Document not found", 404, "NOT_FOUND");
       }
 
-      // Check authorization
-      if (
-        req.user.role === "employee" &&
-        String(req.user.userId) !== String(document.userId)
-      ) {
-        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      const access = await assertPersonalDocumentAccess(req, document);
+      if (!access.ok) {
+        return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
       }
 
       const absolutePath = resolveDocumentAbsolutePath(document.filePath);
@@ -615,6 +682,7 @@ router.delete(
 router.post(
   "/digital-generate",
   authenticate,
+  authorize(...MANAGE_DOC_ROLES),
   asyncHandler(async (req, res) => {
     try {
       const {
@@ -638,11 +706,10 @@ router.post(
         return sendError(res, "Organization ID is required", 400, "VALIDATION_ERROR");
       }
 
-      const orgId = String(
-        req.user?.role === "super_admin" && organizationId
-          ? organizationId
-          : req.user?.orgId || organizationId
-      );
+      const orgId = resolveWriteOrgId(req, organizationId);
+      if (!orgId) {
+        return sendError(res, "Organization ID is required", 400, "VALIDATION_ERROR");
+      }
 
       let resolvedTargetUsers = [];
       if (assignTo === "specific" && Array.isArray(targetUsers) && targetUsers.length) {
@@ -947,13 +1014,15 @@ router.delete(
         return sendError(res, "Unauthorized org access", 403, "FORBIDDEN");
       }
 
-      const document = await GeneratedDocument.findOneAndDelete({ id: documentId });
+      const deleted = await GeneratedDocument.findByIdAndDelete(lookup.doc._id);
 
-      if (!document) {
+      if (!deleted) {
         return sendError(res, "Document not found", 404, "NOT_FOUND");
       }
 
-      logger.info("Generated document deleted", { documentId });
+      logger.info("Generated document deleted", {
+        documentId: deleted.id || String(deleted._id),
+      });
 
       return sendSuccess(res, null, "Document deleted successfully");
     } catch (error) {
@@ -977,7 +1046,17 @@ router.get(
     try {
       const { employeeId } = req.params;
 
-      const documents = await IssuedDocument.find({ targetEmployeeId: employeeId })
+      const access = await assertCanAccessEmployeeDocuments(req, employeeId);
+      if (!access.ok) {
+        return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
+      }
+
+      const issuedFilter = { targetEmployeeId: employeeId };
+      if (!isSuperAdmin(req)) {
+        issuedFilter.organizationId = String(req.user.orgId);
+      }
+
+      const documents = await IssuedDocument.find(issuedFilter)
         .sort({ createdAt: -1 })
         .populate('issuedBy', 'name email')
         .lean();
@@ -1027,16 +1106,21 @@ router.post(
         );
       }
 
-      const employee = await Employee.findById(targetEmployeeId)
+      const employee = await Employee.findOne(employeeLookupQuery(req, targetEmployeeId))
         .select("orgId userId firstName lastName")
         .lean();
       if (!employee) {
         return sendError(res, "Employee not found", 404, "NOT_FOUND");
       }
 
-      const organizationId = String(
-        employee.orgId || req.user.orgId || req.user.tenantId || "system"
-      );
+      if (!isSuperAdmin(req) && String(employee.orgId) !== String(req.user.orgId)) {
+        return sendError(res, "Unauthorized org access", 403, "FORBIDDEN");
+      }
+
+      const organizationId = String(employee.orgId || resolveWriteOrgId(req, null));
+      if (!organizationId) {
+        return sendError(res, "Organization context is required", 400, "MISSING_ORG_CONTEXT");
+      }
 
       let fileUrl;
       let fileName;
@@ -1150,14 +1234,11 @@ router.get(
   authenticate,
   asyncHandler(async (req, res) => {
     try {
-      const userId = await resolveDocumentUserId(req.params.employeeId);
-
-      if (
-        req.user.role === "employee" &&
-        String(req.user.userId) !== String(userId)
-      ) {
-        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      const access = await assertCanAccessEmployeeDocuments(req, req.params.employeeId);
+      if (!access.ok) {
+        return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
       }
+      const userId = access.userId;
 
       const acknowledgments = await DocumentAcknowledgment.find({
         employeeId: userId,
@@ -1194,9 +1275,14 @@ router.post(
         accepted,
       } = req.body;
 
-      const resolvedEmployeeId = employeeId
-        ? await resolveDocumentUserId(employeeId)
-        : req.user.userId;
+      let resolvedEmployeeId = req.user.userId;
+      if (employeeId) {
+        const access = await assertCanAccessEmployeeDocuments(req, employeeId);
+        if (!access.ok) {
+          return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
+        }
+        resolvedEmployeeId = access.userId;
+      }
 
       if (!documentId || !resolvedEmployeeId) {
         return sendError(

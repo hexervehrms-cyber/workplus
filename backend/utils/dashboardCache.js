@@ -1,18 +1,17 @@
 /**
  * Dashboard Caching Utility
- * Provides in-memory caching for dashboard endpoints with TTL
- * Automatically invalidates cache on data changes
+ * L1 in-memory + L2 Redis when connected (safe for multi-instance).
  */
+
+import redis from './redis.js';
+import logger from './logger.js';
 
 class DashboardCache {
   constructor() {
     this.cache = new Map();
-    this.ttl = 60000; // 60 seconds default TTL
+    this.ttl = 60000;
   }
 
-  /**
-   * Generate cache key from endpoint and parameters
-   */
   generateKey(endpoint, orgId, params = {}) {
     const paramStr = Object.entries(params)
       .sort(([a], [b]) => a.localeCompare(b))
@@ -21,9 +20,10 @@ class DashboardCache {
     return `${endpoint}:${orgId}:${paramStr}`;
   }
 
-  /**
-   * Get cached value if it exists and hasn't expired
-   */
+  redisKey(key) {
+    return `dash:${key}`;
+  }
+
   get(endpoint, orgId, params = {}) {
     const key = this.generateKey(endpoint, orgId, params);
     const cached = this.cache.get(key);
@@ -32,7 +32,6 @@ class DashboardCache {
       return null;
     }
 
-    // Check if cache has expired
     if (Date.now() > cached.expiresAt) {
       this.cache.delete(key);
       return null;
@@ -41,9 +40,28 @@ class DashboardCache {
     return cached.data;
   }
 
-  /**
-   * Set cache value with TTL
-   */
+  async getAsync(endpoint, orgId, params = {}) {
+    const key = this.generateKey(endpoint, orgId, params);
+
+    if (redis.isRedisConnected()) {
+      try {
+        const remote = await redis.get(this.redisKey(key));
+        if (remote) {
+          this.cache.set(key, {
+            data: remote,
+            expiresAt: Date.now() + this.ttl,
+            createdAt: Date.now()
+          });
+          return remote;
+        }
+      } catch (err) {
+        logger.warn('Dashboard cache Redis get failed', { error: err.message });
+      }
+    }
+
+    return this.get(endpoint, orgId, params);
+  }
+
   set(endpoint, orgId, data, params = {}, ttl = this.ttl) {
     const key = this.generateKey(endpoint, orgId, params);
     this.cache.set(key, {
@@ -51,11 +69,19 @@ class DashboardCache {
       expiresAt: Date.now() + ttl,
       createdAt: Date.now()
     });
+
+    if (redis.isRedisConnected()) {
+      const seconds = Math.max(1, Math.ceil(ttl / 1000));
+      void redis.setex(this.redisKey(key), seconds, data).catch((err) => {
+        logger.warn('Dashboard cache Redis set failed', { error: err.message });
+      });
+    }
   }
 
-  /**
-   * Invalidate all cache entries for an organization
-   */
+  async setAsync(endpoint, orgId, data, params = {}, ttl = this.ttl) {
+    this.set(endpoint, orgId, data, params, ttl);
+  }
+
   invalidateOrg(orgId) {
     const keysToDelete = [];
     for (const [key] of this.cache) {
@@ -63,12 +89,15 @@ class DashboardCache {
         keysToDelete.push(key);
       }
     }
-    keysToDelete.forEach(key => this.cache.delete(key));
+    keysToDelete.forEach((key) => this.cache.delete(key));
+
+    if (redis.isRedisConnected()) {
+      void redis.deletePattern(`dash:*:${orgId}:*`).catch((err) => {
+        logger.warn('Dashboard cache Redis invalidateOrg failed', { error: err.message });
+      });
+    }
   }
 
-  /**
-   * Invalidate specific endpoint cache for an organization
-   */
   invalidateEndpoint(endpoint, orgId) {
     const keysToDelete = [];
     for (const [key] of this.cache) {
@@ -76,19 +105,22 @@ class DashboardCache {
         keysToDelete.push(key);
       }
     }
-    keysToDelete.forEach(key => this.cache.delete(key));
+    keysToDelete.forEach((key) => this.cache.delete(key));
+
+    if (redis.isRedisConnected()) {
+      void redis.deletePattern(`dash:${endpoint}:${orgId}:*`).catch((err) => {
+        logger.warn('Dashboard cache Redis invalidateEndpoint failed', { error: err.message });
+      });
+    }
   }
 
-  /**
-   * Clear all cache
-   */
   clear() {
     this.cache.clear();
+    if (redis.isRedisConnected()) {
+      void redis.deletePattern('dash:*').catch(() => {});
+    }
   }
 
-  /**
-   * Get cache statistics
-   */
   getStats() {
     let totalSize = 0;
     let expiredCount = 0;
@@ -105,12 +137,12 @@ class DashboardCache {
       totalEntries: this.cache.size,
       expiredEntries: expiredCount,
       totalSizeBytes: totalSize,
-      totalSizeMB: (totalSize / 1024 / 1024).toFixed(2)
+      totalSizeMB: (totalSize / 1024 / 1024).toFixed(2),
+      redisConnected: redis.isRedisConnected()
     };
   }
 }
 
-// Export singleton instance
 export const dashboardCache = new DashboardCache();
 
 export default dashboardCache;

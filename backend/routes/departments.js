@@ -4,6 +4,7 @@ import { asyncHandler } from "../middleware/errorHandler.js";
 import { authorize } from "../middleware/auth.js";
 import Department from "../models/Department.js";
 import Employee from "../models/Employee.js";
+import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
 
 const router = express.Router();
 
@@ -42,7 +43,8 @@ router.get(
   "/",
   authorize("super_admin", "admin", "hr", "manager"),
   asyncHandler(async (req, res) => {
-    const orgId = String(req.user?.orgId || "system");
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const { search, status } = req.query;
 
     const filter = { orgId };
@@ -77,7 +79,8 @@ router.post(
   "/",
   authorize("super_admin", "admin", "hr"),
   asyncHandler(async (req, res) => {
-    const orgId = String(req.user?.orgId || "system");
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const { name, description, headName, code, isActive = true } = req.body;
 
     if (!name || !String(name).trim()) {
@@ -112,7 +115,8 @@ router.put(
   "/:id",
   authorize("super_admin", "admin", "hr"),
   asyncHandler(async (req, res) => {
-    const orgId = String(req.user?.orgId || "system");
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const { id } = req.params;
     const { name, description, headName, code, isActive } = req.body;
 
@@ -156,7 +160,8 @@ router.delete(
   "/:id",
   authorize("super_admin", "admin", "hr"),
   asyncHandler(async (req, res) => {
-    const orgId = String(req.user?.orgId || "system");
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const { id } = req.params;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {

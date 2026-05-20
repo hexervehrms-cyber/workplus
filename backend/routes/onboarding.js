@@ -114,8 +114,21 @@ router.post('/generate-link',
         });
       }
 
-      // Priority: explicit body orgId, then authenticated admin's org
-      const finalOrgId = organizationId || req.user.orgId;
+      // Priority: explicit body orgId for super_admin only; otherwise authenticated admin's org
+      const finalOrgId =
+        req.user.role === 'super_admin'
+          ? organizationId || req.user.orgId
+          : req.user.orgId;
+      if (
+        organizationId &&
+        req.user.role !== 'super_admin' &&
+        String(organizationId) !== String(req.user.orgId)
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: 'Unauthorized org access',
+        });
+      }
       if (!finalOrgId) {
         return res.status(400).json({
           success: false,
@@ -1173,11 +1186,23 @@ router.put('/submissions/:id/reject',
  */
 router.get('/documents/employee/:employeeId',
   authenticate,
+  authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
     const { employeeId } = req.params;
 
     try {
       logger.info('Fetching onboarding documents for employee', { employeeId });
+
+      const employee = await Employee.findById(employeeId).select('orgId').lean();
+      if (!employee) {
+        return res.status(404).json({ success: false, message: 'Employee not found' });
+      }
+      if (
+        req.user.role !== 'super_admin' &&
+        String(employee.orgId) !== String(req.user.orgId)
+      ) {
+        return res.status(403).json({ success: false, message: 'Unauthorized org access' });
+      }
 
       // Find onboarding submission by employee ID (try both string and ObjectId)
       let submission = await OnboardingSubmission.findOne({

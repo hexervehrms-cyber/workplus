@@ -61,7 +61,7 @@ router.post("/request",
           description: 'Password reset requested for non-existent email',
           details: { email: email.toLowerCase().trim() },
           requestInfo: { ip: clientIP, userAgent },
-          orgId: 'system'
+          orgId: null
         });
         
         // Return success to prevent email enumeration
@@ -177,7 +177,7 @@ router.post("/request",
         description: 'Password reset failed due to system error',
         details: { error: error.message },
         requestInfo: { ip: clientIP, userAgent },
-        orgId: 'system'
+          orgId: null
       });
       
       res.status(500).json({
@@ -276,7 +276,7 @@ router.post("/reset",
           description: 'Password reset attempted with invalid token',
           details: { tokenProvided: !!token },
           requestInfo: { ip: clientIP, userAgent },
-          orgId: 'system'
+          orgId: null
         });
         
         return res.status(400).json({
@@ -385,7 +385,7 @@ router.post("/reset",
         description: 'Password reset failed due to system error',
         details: { error: error.message },
         requestInfo: { ip: clientIP, userAgent },
-        orgId: 'system'
+          orgId: null
       });
       
       res.status(500).json({

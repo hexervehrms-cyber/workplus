@@ -11,7 +11,10 @@ import SalarySlip from '../models/SalarySlip.js';
 
 /** Match orgId stored as string or ObjectId across collections. */
 export function buildOrgIdFilter(orgId) {
-  const s = String(orgId || 'system');
+  const s = String(orgId || '');
+  if (!s || s === 'system') {
+    return { orgId: '__invalid_tenant__' };
+  }
   const clauses = [{ orgId: s }];
   if (mongoose.Types.ObjectId.isValid(s)) {
     clauses.push({ orgId: new mongoose.Types.ObjectId(s) });

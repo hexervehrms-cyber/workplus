@@ -6,6 +6,7 @@
 
 import redis from './redis.js';
 import logger from './logger.js';
+import { normalizeAuthOrgId } from './orgScopeHelpers.js';
 
 const SESSION_PREFIX = 'session:';
 const USER_SESSIONS_PREFIX = 'user_sessions:';
@@ -41,7 +42,7 @@ class SessionManager {
         role: sessionData.role,
         email: sessionData.email,
         name: sessionData.name,
-        orgId: sessionData.orgId || 'system',
+        orgId: normalizeAuthOrgId({ orgId: sessionData.orgId, role: sessionData.role }) || sessionData.orgId,
         departmentId: sessionData.departmentId || null,
         permissions: sessionData.permissions || [],
         createdAt: new Date().toISOString(),

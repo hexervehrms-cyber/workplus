@@ -12,7 +12,7 @@ import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
 import { apiClient } from '../utils/api';
-import { SocketService } from '../utils/socket';
+import { socketService as chatSocket } from '../utils/socket';
 import { toast } from '../utils/portalToast';
 import { useAuth } from '../context/AuthContext';
 
@@ -55,7 +55,6 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
   const [sending, setSending] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const socketService = useRef<SocketService | null>(null);
   const selectedUserRef = useRef<ChatUser | null>(null);
   selectedUserRef.current = selectedUser;
 
@@ -64,60 +63,69 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
 
     let cancelled = false;
 
+    const onNewMessage = (data: {
+      messageId: string;
+      senderId: string;
+      senderName: string;
+      senderAvatar?: string;
+      content: string;
+      timestamp: string;
+    }) => {
+      if (cancelled) return;
+      const senderId = String(data.senderId);
+
+      if (selectedUserRef.current?.id === senderId) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            messageId: data.messageId,
+            senderId,
+            senderName: data.senderName,
+            senderAvatar: data.senderAvatar,
+            content: data.content,
+            timestamp: new Date(data.timestamp),
+            isOwn: false,
+            status: 'delivered',
+          },
+        ]);
+      } else {
+        setUsers((prev) =>
+          prev.map((u) =>
+            u.id === senderId
+              ? {
+                  ...u,
+                  unreadCount: u.unreadCount + 1,
+                  lastMessage: data.content,
+                  lastMessageTime: new Date().toLocaleTimeString(),
+                }
+              : u
+          )
+        );
+        setUnreadCount((prev) => prev + 1);
+      }
+    };
+
+    const onMessageRead = (data: { messageId: string }) => {
+      if (cancelled) return;
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.messageId === data.messageId ? { ...msg, status: 'read' } : msg
+        )
+      );
+    };
+
     const initSocket = async () => {
       try {
-        socketService.current = new SocketService();
-        await socketService.current.connect(
-          authUser.id,
-          authUser.role,
-          authUser.orgId || authUser.tenantId || undefined
-        );
-
-        const myId = String(authUser.id);
-
-        socketService.current.on('chat:new_message', (data) => {
-          if (cancelled) return;
-          const senderId = String(data.senderId);
-
-          if (selectedUserRef.current?.id === senderId) {
-            setMessages((prev) => [
-              ...prev,
-              {
-                messageId: data.messageId,
-                senderId,
-                senderName: data.senderName,
-                senderAvatar: data.senderAvatar,
-                content: data.content,
-                timestamp: new Date(data.timestamp),
-                isOwn: false,
-                status: 'delivered',
-              },
-            ]);
-          } else {
-            setUsers((prev) =>
-              prev.map((u) =>
-                u.id === senderId
-                  ? {
-                      ...u,
-                      unreadCount: u.unreadCount + 1,
-                      lastMessage: data.content,
-                      lastMessageTime: new Date().toLocaleTimeString(),
-                    }
-                  : u
-              )
-            );
-            setUnreadCount((prev) => prev + 1);
-          }
-        });
-
-        socketService.current.on('chat:message_read', (data) => {
-          if (cancelled) return;
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.messageId === data.messageId ? { ...msg, status: 'read' } : msg
-            )
+        if (!chatSocket.isConnected()) {
+          await chatSocket.connect(
+            authUser.id,
+            authUser.role,
+            authUser.orgId || authUser.tenantId || undefined
           );
-        });
+        }
+
+        chatSocket.on('chat:new_message', onNewMessage);
+        chatSocket.on('chat:message_read', onMessageRead);
       } catch (error) {
         console.error('Socket initialization failed:', error);
       }
@@ -127,10 +135,8 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
 
     return () => {
       cancelled = true;
-      if (socketService.current) {
-        socketService.current.disconnect();
-        socketService.current = null;
-      }
+      chatSocket.off('chat:new_message', onNewMessage);
+      chatSocket.off('chat:message_read', onMessageRead);
     };
   }, [authUser?.id, authUser?.role, authUser?.orgId, authUser?.tenantId]);
 
@@ -175,12 +181,10 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
   }, [authUser?.id, authUser?.role]);
 
   useEffect(() => {
-    if (!selectedUser?.id || !socketService.current || !authUser?.id) return;
+    if (!selectedUser?.id || !chatSocket.isConnected() || !authUser?.id) return;
 
     const myId = String(authUser.id);
     const conversationId = [myId, selectedUser.id].sort().join('_');
-
-    socketService.current.off('chat:history');
 
     const handleHistory = (data: { messages?: any[] }) => {
       const formattedMessages: ChatMessage[] = (data.messages || []).map((msg: any) => ({
@@ -197,8 +201,8 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
       setMessages(formattedMessages.reverse());
     };
 
-    socketService.current.on('chat:history', handleHistory);
-    socketService.current.emit('chat:get_history', {
+    chatSocket.on('chat:history', handleHistory);
+    chatSocket.emit('chat:get_history', {
       conversationId,
       page: 1,
       limit: 20,
@@ -209,7 +213,7 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
     );
 
     return () => {
-      socketService.current?.off('chat:history', handleHistory);
+      chatSocket?.off('chat:history', handleHistory);
     };
   }, [selectedUser?.id, authUser?.id]);
 
@@ -218,7 +222,7 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
   }, [messages]);
 
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !selectedUser || !socketService.current || !authUser?.id) return;
+    if (!messageInput.trim() || !selectedUser || !chatSocket.isConnected() || !authUser?.id) return;
 
     const myId = String(authUser.id);
     const text = messageInput.trim();
@@ -240,7 +244,7 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
         },
       ]);
 
-      socketService.current.emit('chat:send_message', {
+      chatSocket.emit('chat:send_message', {
         recipientId: selectedUser.id,
         content: text,
         messageType: 'text',

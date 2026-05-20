@@ -203,7 +203,10 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
   let effectiveOrgId = userOrgId;
 
   if (userRole === 'employee') {
-    const employee = await findEmployeeForSelfService(currentUserId, userOrgId);
+    const employee = await findEmployeeForSelfService(currentUserId, userOrgId, {
+      allowCrossOrgFallback: true,
+      createIfMissing: true
+    });
     if (employee) {
       effectiveEmployeeId = employee._id;
       effectiveOrgId = employee.orgId || userOrgId;
@@ -398,7 +401,10 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await findEmployeeForSelfService(authUserId, authOrgId);
+    const employee = await findEmployeeForSelfService(authUserId, authOrgId, {
+      allowCrossOrgFallback: true,
+      createIfMissing: true
+    });
     if (!employee) {
       return res.status(403).json({
         success: false,
@@ -695,7 +701,10 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await findEmployeeForSelfService(authUserId, authOrgId);
+    const employee = await findEmployeeForSelfService(authUserId, authOrgId, {
+      allowCrossOrgFallback: true,
+      createIfMissing: true
+    });
     if (!employee) {
       return res.status(403).json({
         success: false,
@@ -986,7 +995,10 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await findEmployeeForSelfService(currentUserId, authOrgId);
+    const employee = await findEmployeeForSelfService(currentUserId, authOrgId, {
+      allowCrossOrgFallback: true,
+      createIfMissing: true
+    });
     if (!employee) {
       return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
     }
@@ -1182,7 +1194,10 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   let effectiveEmployeeName = employeeName;
 
   if (authRole === 'employee') {
-    const employee = await findEmployeeForSelfService(currentUserId, authOrgId);
+    const employee = await findEmployeeForSelfService(currentUserId, authOrgId, {
+      allowCrossOrgFallback: true,
+      createIfMissing: true
+    });
     if (!employee) {
       return res.status(403).json({ success: false, message: 'Employee profile not found or inactive for authenticated user' });
     }

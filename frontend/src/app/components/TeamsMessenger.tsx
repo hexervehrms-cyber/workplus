@@ -143,6 +143,7 @@ export default function TeamsMessenger() {
   const [showProfileDialog, setShowProfileDialog] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const selectedUserRef = useRef<ChatUser | null>(null);
+  const socketListenersRef = useRef<Array<{ event: string; handler: (...args: unknown[]) => void }>>([]);
   selectedUserRef.current = selectedUser;
 
   const CHAT_EMOJIS = ['😀', '😊', '👍', '🙏', '❤️', '🎉', '✅', '🔥', '💼', '📎', '🙂', '😅'];
@@ -337,10 +338,24 @@ export default function TeamsMessenger() {
         }
 
         const myId = String(user.id);
+        const listeners: Array<{ event: string; handler: (...args: unknown[]) => void }> = [];
+        const reg = (event: string, handler: (...args: unknown[]) => void) => {
+          listeners.push({ event, handler });
+          appSocket.on(event, handler);
+        };
 
         appSocket.on('chat:group_created', onGroupCreated);
 
-        appSocket.on('chat:new_message', (data) => {
+        reg('chat:new_message', (data: {
+          messageId: string;
+          senderId: string;
+          conversationId?: string;
+          content: string;
+          senderName: string;
+          senderAvatar?: string;
+          timestamp: string;
+          messageType?: string;
+        }) => {
           if (cancelled) return;
           const incomingId = String(data.messageId);
           const senderId = String(data.senderId);
@@ -396,7 +411,7 @@ export default function TeamsMessenger() {
           });
         });
 
-        appSocket.on('chat:message_read', (data) => {
+        reg('chat:message_read', (data: { messageId: string }) => {
           if (cancelled) return;
           setMessages((prev) =>
             prev.map((msg) =>
@@ -405,7 +420,11 @@ export default function TeamsMessenger() {
           );
         });
 
-        appSocket.on('chat:user_typing', (data) => {
+        reg('chat:user_typing', (data: {
+          conversationId?: string;
+          userId: string;
+          isTyping: boolean;
+        }) => {
           if (cancelled) return;
           const sel = selectedUserRef.current;
           if (!sel) return;
@@ -420,7 +439,7 @@ export default function TeamsMessenger() {
           }
         });
 
-        appSocket.on('chat:message_edited', (data: { messageId?: string; newContent?: string; conversationId?: string }) => {
+        reg('chat:message_edited', (data: { messageId?: string; newContent?: string; conversationId?: string }) => {
           if (cancelled) return;
           const sel = selectedUserRef.current;
           if (
@@ -438,7 +457,7 @@ export default function TeamsMessenger() {
           );
         });
 
-        appSocket.on('chat:avatar_updated', (data: { userId: string; avatar: string }) => {
+        reg('chat:avatar_updated', (data: { userId: string; avatar: string }) => {
           if (cancelled) return;
           const url = resolveAvatarUrl(data.avatar);
           setUsers((prev) =>
@@ -449,7 +468,7 @@ export default function TeamsMessenger() {
           );
         });
 
-        appSocket.on('chat:message_deleted', (data: { messageId?: string; conversationId?: string }) => {
+        reg('chat:message_deleted', (data: { messageId?: string; conversationId?: string }) => {
           if (cancelled) return;
           const sel = selectedUserRef.current;
           if (
@@ -462,12 +481,12 @@ export default function TeamsMessenger() {
         });
 
         appSocket.emit('chat:get_conversations', {});
-        appSocket.on('chat:conversations', (data) => {
+        reg('chat:conversations', (data: { conversations: unknown }) => {
           if (cancelled) return;
           setConversations(data.conversations);
         });
 
-        appSocket.on(
+        reg(
           'call:incoming',
           (data: {
             callerId: string;
@@ -491,6 +510,8 @@ export default function TeamsMessenger() {
             toast.info(`Incoming call from ${offer.callerName}`);
           }
         );
+
+        socketListenersRef.current = listeners;
       } catch (error) {
         console.error('Socket initialization failed:', error);
         toast.error('Could not connect to chat server');
@@ -501,15 +522,11 @@ export default function TeamsMessenger() {
 
     return () => {
       cancelled = true;
-      appSocket.off('chat:new_message');
-      appSocket.off('chat:message_read');
-      appSocket.off('chat:user_typing');
-      appSocket.off('chat:message_edited');
-      appSocket.off('chat:avatar_updated');
-      appSocket.off('chat:message_deleted');
-      appSocket.off('chat:conversations');
+      for (const { event, handler } of socketListenersRef.current) {
+        appSocket.off(event, handler);
+      }
+      socketListenersRef.current = [];
       appSocket.off('chat:group_created', onGroupCreated);
-      appSocket.off('call:incoming');
     };
   }, [user?.id, user?.role, user?.orgId, user?.tenantId, fetchSidebar]);
 

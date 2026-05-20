@@ -4,6 +4,7 @@ import { asyncHandler } from "../middleware/errorHandler.js";
 import Announcement from "../models/Announcement.js";
 import logger from "../utils/logger.js";
 import { notifyTeamsOnAnnouncement } from "../utils/workflowNotifications.js";
+import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
 
 const router = express.Router();
 
@@ -56,7 +57,8 @@ function resolveAudience(audienceKey) {
 router.get(
   "/",
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || "system";
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
     const { type, priority, page = 1, limit = 20, search } = req.query;
@@ -132,7 +134,8 @@ router.get(
 router.get(
   "/pinned",
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || "system";
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
 
@@ -167,7 +170,8 @@ router.get(
 router.get(
   "/dashboard-stats",
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || "system";
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
 
     const [
       totalAnnouncements,
@@ -205,7 +209,8 @@ router.get(
   "/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || "system";
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
 
@@ -253,7 +258,8 @@ router.get(
 router.post(
   "/",
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || "system";
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
 
@@ -356,7 +362,8 @@ router.put(
   "/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || "system";
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
 
@@ -429,7 +436,8 @@ router.delete(
   "/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || "system";
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
 
@@ -481,7 +489,8 @@ router.post(
   "/:id/comments",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || "system";
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const { content } = req.body;
 
@@ -542,7 +551,8 @@ router.post(
   "/:id/pin",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || "system";
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userRole = req.user?.role;
 
     if (!["admin", "super_admin", "hr"].includes(userRole)) {

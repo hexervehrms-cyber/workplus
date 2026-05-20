@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../../components/ui/dialog';
+import { resolveAuthOrgId } from '../../utils/apiHelper';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
 import {
@@ -145,7 +146,7 @@ export default function LeaveAllocation() {
       setLoading(true);
       
       // Fetch employees
-      const employeesResponse = await EmployeeService.getAllEmployees();
+      const employeesResponse = await EmployeeService.getAllEmployees(user ?? undefined);
       console.log('Employees response:', employeesResponse);
       
       const employeesData = Array.isArray(employeesResponse) ? employeesResponse : [];
@@ -175,21 +176,10 @@ export default function LeaveAllocation() {
         setEmployees([]);
       }
 
-      // Fetch allocations
-      // Get orgId from user or localStorage
-      let orgId = user?.orgId || user?.tenantId;
+      const orgId = resolveAuthOrgId(user);
       if (!orgId) {
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
-          try {
-            const parsedUser = JSON.parse(storedUser);
-            orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-          } catch (e) {
-            orgId = 'system';
-          }
-        } else {
-          orgId = 'system';
-        }
+        toast.error('Organization context is required.');
+        return;
       }
       
       if (orgId) {
@@ -278,20 +268,10 @@ export default function LeaveAllocation() {
     try {
       setActionLoading(true);
       
-      // Get orgId from user or localStorage
-      let orgId = user?.orgId || user?.tenantId;
+      const orgId = resolveAuthOrgId(user);
       if (!orgId) {
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
-          try {
-            const parsedUser = JSON.parse(storedUser);
-            orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-          } catch (e) {
-            orgId = 'system';
-          }
-        } else {
-          orgId = 'system';
-        }
+        toast.error('Organization context is required.');
+        return;
       }
       
       console.log('Saving allocation:', {
@@ -314,7 +294,7 @@ export default function LeaveAllocation() {
       } else if (isMultiSelectMode && selectedEmployees.length > 0) {
         // Bulk allocate to multiple employees
         const response = await LeaveAllocationService.bulkAllocate(
-          orgId ?? 'system',
+          orgId,
           selectedYear,
           selectedMonth,
           selectedEmployees,
@@ -369,23 +349,14 @@ export default function LeaveAllocation() {
     try {
       setActionLoading(true);
       
-      let orgId = user?.orgId || user?.tenantId;
+      const orgId = resolveAuthOrgId(user);
       if (!orgId) {
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
-          try {
-            const parsedUser = JSON.parse(storedUser);
-            orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-          } catch (e) {
-            orgId = 'system';
-          }
-        } else {
-          orgId = 'system';
-        }
+        toast.error('Organization context is required.');
+        return;
       }
 
       const response = await LeaveAllocationService.yearlyAllocate(
-        orgId ?? 'system',
+        orgId,
         selectedYear,
         selectedEmployeesForYearly,
         yearlyFormData.casualLeave,

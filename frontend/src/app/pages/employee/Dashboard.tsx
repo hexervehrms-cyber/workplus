@@ -5,7 +5,7 @@ import ChatWidget from '../../components/ChatWidget';
 import { useAuth } from '../../context/AuthContext';
 import { TokenManager, LeaveAllocationService } from '../../utils/api';
 import { parseBalanceApiResponse, sumAllocatedDays, sumRemainingDays } from '../../utils/leaveBalance';
-import { apiGetSafe, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
+import { apiGetSafe, buildApiUrl, clearApiCache, holidaysStorageKey } from '../../utils/apiHelper';
 import { safeLocaleTime, safeFormatTime, runSafe } from '../../utils/safeUi';
 import { postAttendanceAction } from '../../utils/attendanceApi';
 import {
@@ -448,7 +448,8 @@ export default function EmployeeDashboard() {
         apiGetSafe('/holidays'),
       ]);
 
-      const cachedHolidays = localStorage.getItem('cached_holidays');
+      const holidayKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
+      const cachedHolidays = localStorage.getItem(holidayKey);
       if (cachedHolidays) {
         try {
           const parsed = JSON.parse(cachedHolidays) as Holiday[];
@@ -473,7 +474,7 @@ export default function EmployeeDashboard() {
         if (list.length > 0) {
           console.log('✅ Loaded', list.length, 'holidays');
           if (mountedRef.current) setHolidays(list);
-          localStorage.setItem('cached_holidays', JSON.stringify(list));
+          localStorage.setItem(holidayKey, JSON.stringify(list));
         }
       } else if (cachedHolidays) {
         try {

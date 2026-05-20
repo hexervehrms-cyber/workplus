@@ -222,8 +222,8 @@ const employeeSchema = new mongoose.Schema(
 employeeSchema.index({ orgId: 1, status: 1 });
 employeeSchema.index({ orgId: 1, department: 1 });
 employeeSchema.index({ userId: 1 }, { unique: true });
-employeeSchema.index({ employeeCode: 1 }, { 
-  unique: true, 
+employeeSchema.index({ orgId: 1, employeeCode: 1 }, {
+  unique: true,
   sparse: true,
   partialFilterExpression: { employeeCode: { $exists: true, $ne: null } }
 });

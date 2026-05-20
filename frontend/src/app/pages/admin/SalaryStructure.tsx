@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -8,6 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { useCurrency } from '../../context/CurrencyContext';
 import { EmployeeService } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
+import { useAuth } from '../../context/AuthContext';
+import { apiGet, apiPost } from '../../utils/apiHelper';
 import { Plus, Edit2, Trash2, ChevronDown, ChevronUp, Calendar, DollarSign, Loader2 } from 'lucide-react';
 
 interface Employee {
@@ -19,9 +21,11 @@ interface Employee {
   joiningDate: string;
 }
 
-interface SalaryStructure {
-  fromDate: string;
-  toDate?: string;
+interface StructureRow {
+  _id: string;
+  effectiveFrom: string;
+  effectiveTo?: string;
+  status?: string;
   baseSalary: number;
   hra: number;
   dearness: number;
@@ -39,14 +43,58 @@ interface SalaryStructure {
   dailyWage: number;
 }
 
+function mapApiStructureToRow(s: Record<string, unknown>): StructureRow {
+  const e = (s.earnings as Record<string, unknown>) || {};
+  const d = (s.deductions as Record<string, unknown>) || {};
+  const otherEarnSum = Array.isArray(e.otherEarnings)
+    ? (e.otherEarnings as { amount?: number }[]).reduce(
+        (acc, x) => acc + (Number(x?.amount) || 0),
+        0
+      )
+    : 0;
+  const otherDedSum = Array.isArray(d.otherDeductions)
+    ? (d.otherDeductions as { amount?: number }[]).reduce(
+        (acc, x) => acc + (Number(x?.amount) || 0),
+        0
+      )
+    : 0;
+  const gross = Number(s.grossEarnings) || 0;
+  const totDed = Number(s.totalDeductions) || 0;
+  const net = Number(s.netSalary) || 0;
+  return {
+    _id: String(s._id),
+    effectiveFrom: String(s.effectiveFrom),
+    effectiveTo: s.effectiveTo ? String(s.effectiveTo) : undefined,
+    status: s.status ? String(s.status) : undefined,
+    baseSalary: Number(e.basic) || 0,
+    hra: Number(e.hra) || 0,
+    dearness: Number(e.bonus) || 0,
+    conveyance: Number(e.travel) || 0,
+    medical: Number(e.medicalExpenses) || 0,
+    otherAllowances:
+      otherEarnSum + (Number(e.incentives) || 0) + (Number(e.commission) || 0),
+    providentFund: Number(d.providentFund) || 0,
+    tax: (Number(d.incomeTax) || 0) + (Number(d.professionalTax) || 0),
+    insurance: Number(d.employeeStateInsurance) || 0,
+    otherDeductions: otherDedSum,
+    grossSalary: gross,
+    totalDeductions: totDed,
+    netSalary: net,
+    payFrequency: 'monthly',
+    dailyWage: gross > 0 ? Math.round((gross / 22) * 100) / 100 : 0
+  };
+}
+
 export default function AdminSalaryStructure() {
+  const { user } = useAuth();
   const { formatCurrency } = useCurrency();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedEmployee, setSelectedEmployee] = useState<string>('');
-  const [structures, setStructures] = useState<SalaryStructure[]>([]);
+  const [structures, setStructures] = useState<StructureRow[]>([]);
+  const [structuresLoading, setStructuresLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
-  const [expandedStructure, setExpandedStructure] = useState<number | null>(null);
+  const [expandedStructureId, setExpandedStructureId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     fromDate: '',
     baseSalary: '',
@@ -69,7 +117,7 @@ export default function AdminSalaryStructure() {
   const fetchEmployees = async () => {
     try {
       setLoading(true);
-      const data = await EmployeeService.getAllEmployees();
+      const data = await EmployeeService.getAllEmployees(user ?? undefined);
       setEmployees(data);
     } catch {
       /* load errors surfaced via toast */
@@ -78,9 +126,47 @@ export default function AdminSalaryStructure() {
     }
   };
 
+  const loadStructuresForEmployee = useCallback(
+    async (employeeId: string) => {
+      if (!employeeId || !user) {
+        setStructures([]);
+        return;
+      }
+      try {
+        setStructuresLoading(true);
+        const params = new URLSearchParams({
+          page: '1',
+          limit: '50',
+          status: 'all',
+          employeeId
+        });
+        const oid = user.orgId || user.tenantId;
+        if (user.role === 'super_admin') {
+          if (!oid || oid === 'system') {
+            toast.error('Organization context is required to load salary structures.');
+            setStructures([]);
+            return;
+          }
+          params.set('orgId', oid);
+        }
+        const res = await apiGet(`salary/structures?${params.toString()}`, false);
+        const list = Array.isArray(res.data) ? res.data : [];
+        setStructures(list.map((row: Record<string, unknown>) => mapApiStructureToRow(row)));
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : 'Failed to load salary structures';
+        toast.error(msg);
+        setStructures([]);
+      } finally {
+        setStructuresLoading(false);
+      }
+    },
+    [user]
+  );
+
   const handleEmployeeSelect = (employeeId: string) => {
     setSelectedEmployee(employeeId);
-    // TODO: Fetch salary structures for selected employee
+    setExpandedStructureId(null);
+    void loadStructuresForEmployee(employeeId);
   };
 
   const handleAddStructure = async () => {
@@ -90,7 +176,30 @@ export default function AdminSalaryStructure() {
     }
 
     try {
-      // TODO: Call API to add salary structure
+      const earnings = {
+        basic: parseFloat(formData.baseSalary) || 0,
+        hra: parseFloat(formData.hra) || 0,
+        travel: parseFloat(formData.conveyance) || 0,
+        medicalExpenses: parseFloat(formData.medical) || 0,
+        bonus: parseFloat(formData.dearness) || 0,
+        incentives: 0,
+        commission: parseFloat(formData.otherAllowances) || 0
+      };
+      const otherDedAmt = parseFloat(formData.otherDeductions) || 0;
+      const deductions = {
+        providentFund: parseFloat(formData.providentFund) || 0,
+        incomeTax: parseFloat(formData.tax) || 0,
+        employeeStateInsurance: parseFloat(formData.insurance) || 0,
+        otherDeductions: otherDedAmt > 0 ? [{ name: 'Other', amount: otherDedAmt }] : []
+      };
+
+      await apiPost('salary/structure', {
+        employeeId: selectedEmployee,
+        employeeType: 'employee',
+        effectiveFrom: formData.fromDate,
+        earnings,
+        deductions
+      });
       toast.success('Salary structure added successfully');
       setFormData({
         fromDate: '',
@@ -107,6 +216,7 @@ export default function AdminSalaryStructure() {
         payFrequency: 'monthly'
       });
       setShowForm(false);
+      await loadStructuresForEmployee(selectedEmployee);
     } catch (err: any) {
       toast.error(err.message || 'Failed to add salary structure');
     }
@@ -185,6 +295,10 @@ export default function AdminSalaryStructure() {
               Add New Structure
             </Button>
           </div>
+
+          {structuresLoading && (
+            <p className="text-sm text-gray-500 mb-4">Loading structures…</p>
+          )}
 
           {/* Add Structure Form */}
           {showForm && (
@@ -351,31 +465,40 @@ export default function AdminSalaryStructure() {
             {structures.length === 0 ? (
               <p className="text-gray-500 text-center py-8">No salary structures found. Add one to get started.</p>
             ) : (
-              structures.map((structure, index) => (
-                <div key={index} className="border border-gray-200 rounded-lg">
+              structures.map((structure) => (
+                <div key={structure._id} className="border border-gray-200 rounded-lg">
                   <button
-                    onClick={() => setExpandedStructure(expandedStructure === index ? null : index)}
+                    type="button"
+                    onClick={() =>
+                      setExpandedStructureId(
+                        expandedStructureId === structure._id ? null : structure._id
+                      )
+                    }
                     className="w-full p-4 flex justify-between items-center hover:bg-gray-50"
                   >
                     <div className="flex items-center gap-4 text-left">
                       <Calendar className="w-5 h-5 text-gray-400" />
                       <div>
                         <p className="font-semibold">
-                          {new Date(structure.fromDate).toLocaleDateString()} 
-                          {structure.toDate ? ` - ${new Date(structure.toDate).toLocaleDateString()}` : ' - Ongoing'}
+                          {new Date(structure.effectiveFrom).toLocaleDateString()}
+                          {structure.effectiveTo
+                            ? ` - ${new Date(structure.effectiveTo).toLocaleDateString()}`
+                            : ' - Ongoing'}
                         </p>
                         <p className="text-sm text-gray-600">
-                          Base: {formatCurrency(structure.baseSalary)} | Gross: {formatCurrency(structure.grossSalary)}
+                          Base: {formatCurrency(structure.baseSalary)} | Gross:{' '}
+                          {formatCurrency(structure.grossSalary)}
+                          {structure.status ? ` · ${structure.status}` : ''}
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge variant="outline">{structure.payFrequency}</Badge>
-                      {expandedStructure === index ? <ChevronUp /> : <ChevronDown />}
+                      {expandedStructureId === structure._id ? <ChevronUp /> : <ChevronDown />}
                     </div>
                   </button>
 
-                  {expandedStructure === index && (
+                  {expandedStructureId === structure._id && (
                     <div className="p-4 bg-gray-50 border-t border-gray-200">
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
                         <div>

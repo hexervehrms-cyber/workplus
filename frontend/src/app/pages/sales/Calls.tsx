@@ -4,6 +4,11 @@ import axios from 'axios';
 import { Plus, Edit2, Trash2, Search, Phone, Clock } from 'lucide-react';
 import { getBearerToken } from '../../utils/apiHelper';
 
+function salesRequestHeaders() {
+  const t = getBearerToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
 const Calls = () => {
   const [calls, setCalls] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -24,9 +29,6 @@ const Calls = () => {
     notes: ''
   });
 
-  const token = getBearerToken();
-  const headers = { Authorization: `Bearer ${token}` };
-
   useEffect(() => {
     fetchCalls();
     fetchEmployees();
@@ -39,7 +41,7 @@ const Calls = () => {
       const url = filterStatus
         ? `/api/sales/calls?status=${filterStatus}`
         : '/api/sales/calls';
-      const res = await axios.get(url, { headers });
+      const res = await axios.get(url, { headers: salesRequestHeaders() });
       setCalls(res.data.data || []);
     } catch (error) {
       console.error('Error fetching calls:', error);
@@ -50,7 +52,7 @@ const Calls = () => {
 
   const fetchEmployees = async () => {
     try {
-      const res = await axios.get('/api/employees', { headers });
+      const res = await axios.get('/api/employees', { headers: salesRequestHeaders() });
       setEmployees(res.data.data || []);
     } catch (error) {
       console.error('Error fetching employees:', error);
@@ -59,7 +61,7 @@ const Calls = () => {
 
   const fetchLeads = async () => {
     try {
-      const res = await axios.get('/api/sales/leads', { headers });
+      const res = await axios.get('/api/sales/leads', { headers: salesRequestHeaders() });
       setLeads(res.data.data || []);
     } catch (error) {
       console.error('Error fetching leads:', error);
@@ -70,9 +72,9 @@ const Calls = () => {
     e.preventDefault();
     try {
       if (editingCall) {
-        await axios.patch(`/api/sales/calls/${editingCall._id}`, formData, { headers });
+        await axios.patch(`/api/sales/calls/${editingCall._id}`, formData, { headers: salesRequestHeaders() });
       } else {
-        await axios.post('/api/sales/calls', formData, { headers });
+        await axios.post('/api/sales/calls', formData, { headers: salesRequestHeaders() });
       }
       fetchCalls();
       setShowModal(false);
@@ -104,7 +106,7 @@ const Calls = () => {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this call?')) {
       try {
-        await axios.delete(`/api/sales/calls/${id}`, { headers });
+        await axios.delete(`/api/sales/calls/${id}`, { headers: salesRequestHeaders() });
         fetchCalls();
       } catch (error) {
         console.error('Error deleting call:', error);

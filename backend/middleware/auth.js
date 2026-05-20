@@ -4,6 +4,7 @@ import User from "../models/User.js";
 import logger from "../utils/logger.js";
 import { getBearerOrCookieAccessToken } from "../utils/httpAuth.js";
 import JWTCache from "../utils/jwtCache.js";
+import { normalizeAuthOrgId } from "../utils/orgScopeHelpers.js";
 
 /**
  * Authentication middleware
@@ -58,13 +59,17 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     }
 
     if (cachedData?.userData?.role) {
+      const cachedOrg = normalizeAuthOrgId({
+        orgId: cachedData.userData.orgId,
+        role: cachedData.userData.role
+      });
       req.user = {
         userId: cachedData.userData.userId,
         email: cachedData.userData.email,
         name: cachedData.userData.name,
         role: cachedData.userData.role,
-        orgId: cachedData.userData.orgId || 'system',
-        tenantId: cachedData.userData.orgId || 'system',
+        orgId: cachedOrg,
+        tenantId: cachedOrg,
         departmentId: cachedData.userData.departmentId,
         permissions: cachedData.userData.permissions || [],
         sessionId: cachedData.userData.sessionId,
@@ -124,12 +129,13 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     }
     
     // Prepare user data for caching
+    const authOrg = normalizeAuthOrgId(user);
     const userData = {
       userId: user._id,
       email: user.email,
       name: user.name,
       role: user.role,
-      orgId: user.orgId || 'system',
+      orgId: authOrg,
       departmentId: user.departmentId,
       permissions: user.permissions || [],
       sessionId: decoded.sessionId

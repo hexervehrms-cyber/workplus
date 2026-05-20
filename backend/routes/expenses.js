@@ -14,6 +14,7 @@ import { validateExpenseCreation, validateExpenseUpdate, handleValidationErrors 
 import Expense from "../models/Expense.js";
 import Employee from "../models/Employee.js";
 import { sendSuccess, sendError, sendPaginated } from "../utils/apiResponse.js";
+import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
 import logger from "../utils/logger.js";
 import EmailNotificationService from "../utils/emailNotificationService.js";
 import User from "../models/User.js";
@@ -313,16 +314,15 @@ router.get(
   authorize("admin", "super_admin", "hr"),
   asyncHandler(async (req, res) => {
     try {
-      const { page = 1, limit = 10, status, orgId } = req.query;
+      const { page = 1, limit = 10, status } = req.query;
       const skip = (page - 1) * limit;
 
-      // Build query
-      const query = {};
+      const scopedOrg = assertScopedOrgId(req, res);
+      if (!scopedOrg) return;
+
+      const query = { orgId: scopedOrg };
       if (status) {
         query.status = status;
-      }
-      if (orgId || req.user.role !== "super_admin") {
-        query.orgId = orgId || req.user.orgId;
       }
 
       // Get total count

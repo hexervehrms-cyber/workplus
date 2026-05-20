@@ -124,7 +124,7 @@ async function testProductionLoginFlow() {
         userId: user._id,
         email: user.email,
         role: user.role,
-        tenantId: user.orgId || 'system'
+        tenantId: user.orgId
       },
       process.env.JWT_SECRET,
       { 

@@ -8,6 +8,7 @@ import User from "../models/User.js";
 import Role from "../models/Role.js";
 import Employee from "../models/Employee.js";
 import Department from "../models/Department.js";
+import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
 
 const router = express.Router();
 
@@ -19,7 +20,8 @@ router.get("/",
   authorize('super_admin', 'admin', 'hr'),
   auditLog('view_users', 'users'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userRole = req.user?.role;
     
     const {
@@ -92,7 +94,8 @@ router.get("/stats",
   requirePermission('users', 'read'),
   auditLog('view_user_stats', 'users'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     
     const [
       totalUsers,
@@ -138,7 +141,8 @@ router.get("/:id",
   auditLog('view_user_details', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userRole = req.user?.role;
     
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -192,7 +196,8 @@ router.post("/",
   authorize('super_admin', 'admin', 'hr'),
   auditLog('create_user', 'user'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
     
@@ -347,7 +352,8 @@ router.put("/:id",
   auditLog('update_user', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
     
@@ -528,7 +534,8 @@ router.delete("/:id",
   auditLog('delete_user', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
     
@@ -592,7 +599,8 @@ router.post("/:id/reset-password",
   auditLog('reset_user_password', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const { newPassword, forceChange = true } = req.body;
     
     if (!newPassword || newPassword.length < 6) {
@@ -662,7 +670,8 @@ router.post("/:id/permissions",
   auditLog('grant_user_permission', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const { module, actions, scope = 'own', expiresAt } = req.body;
     
@@ -711,7 +720,8 @@ router.delete("/:id/permissions",
   auditLog('revoke_user_permission', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const { module, actions, scope } = req.body;
     
     if (!module) {

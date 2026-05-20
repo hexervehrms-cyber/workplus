@@ -1,14 +1,9 @@
-import { io, Socket } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
 import { TokenManager } from './api';
 import { socketService } from './socket';
 
 class RealTimeSocket {
   private socket: Socket | null = null;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectDelay = 1000;
-  private isConnecting = false;
-  private connectionAttempted = false;
   private usesSharedSocket = false;
   private dashboardListenersReady = false;
   private sharedAttachTimer: ReturnType<typeof setInterval> | null = null;
@@ -69,11 +64,13 @@ class RealTimeSocket {
       clearInterval(this.sharedAttachTimer);
       this.sharedAttachTimer = null;
     }
+    // New Socket.IO instance (reconnect / new session): drop old handlers so we do not leak on the dead socket
+    if (this.socket && this.socket !== socket) {
+      this.teardownDashboardListeners();
+    }
     this.disconnectPrivateSocket();
     this.usesSharedSocket = true;
     this.socket = socket;
-    this.isConnecting = false;
-    this.connectionAttempted = true;
     this.authUser = user;
     if (!this.dashboardListenersReady) {
       this.setupDashboardListeners();
@@ -101,129 +98,6 @@ class RealTimeSocket {
 
     if (!this.authUser) {
       this.connectFromAuth(user as { id: string; role: string; orgId?: string; tenantId?: string });
-    }
-  }
-
-  private connect(user: any, token: string) {
-    if (this.isConnecting || (this.socket?.connected && !this.usesSharedSocket)) {
-      return;
-    }
-
-    this.usesSharedSocket = false;
-    this.isConnecting = true;
-
-    if (!token) {
-      console.log('🔐 [SOCKET] No Bearer token in storage — relying on httpOnly session cookie (withCredentials)');
-    }
-
-    console.log('🔐 [SOCKET] User data from TokenManager:', user);
-
-    // In production, VITE_SOCKET_URL should be the full backend URL
-    // In development, use window.location.origin or env variable
-    const socketUrl = import.meta.env.VITE_SOCKET_URL || 
-                       import.meta.env.VITE_API_URL ||
-                       (import.meta.env.PROD ? 'https://workplus-backend-sg3a.onrender.com' : window.location.origin);
-
-    // Connect to the server with JWT token
-    this.socket = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      auth: {
-        token
-      },
-      withCredentials: true
-    });
-
-    // Handle connection
-    this.socket.on('connect', () => {
-      console.log('✅ Socket connected:', this.socket?.id);
-      this.isConnecting = false;
-      this.reconnectAttempts = 0;
-      
-      // Get orgId from user or localStorage
-      let orgId = user.orgId || user.tenantId || 'system';
-      
-      // If still not found, try to get from localStorage
-      if (!orgId || orgId === 'undefined') {
-        try {
-          const storedUser = localStorage.getItem('user');
-          if (storedUser) {
-            const parsedUser = JSON.parse(storedUser);
-            orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-          }
-        } catch (e) {
-          console.warn('Could not parse stored user');
-        }
-      }
-      
-      // Ensure orgId is always a valid string
-      if (!orgId || orgId === 'undefined' || orgId === 'null') {
-        orgId = 'system';
-      }
-      
-      console.log('🔐 Authenticating with:', { userId: user.id, role: user.role, orgId });
-      
-      // Authenticate with user details
-      this.socket?.emit('authenticate', {
-        userId: user.id,
-        role: user.role,
-        tenantId: orgId
-      });
-    });
-
-    // Handle authentication response
-    this.socket.on('authenticated', (data) => {
-      console.log('✅ Socket authenticated:', data);
-      
-      // Join organization room for real-time updates
-      if (data.orgId) {
-        this.socket?.emit('join_org_room', { orgId: data.orgId });
-        console.log('📍 Joined org room:', `tenant_${data.orgId}`);
-      }
-    });
-
-    this.socket.on('auth_error', (error) => {
-      console.error('❌ Socket authentication failed:', error);
-      this.isConnecting = false;
-    });
-
-    // Handle disconnection
-    this.socket.on('disconnect', (reason) => {
-      console.warn('⚠️ Socket disconnected:', reason);
-      this.isConnecting = false;
-      
-      if (reason === 'io server disconnect') {
-        // Server disconnected, try to reconnect
-        this.handleReconnect();
-      }
-    });
-
-    // Handle connection errors
-    this.socket.on('connect_error', (error) => {
-      console.error('❌ Socket connection error:', error);
-      this.isConnecting = false;
-      this.handleReconnect();
-    });
-
-    if (!this.dashboardListenersReady) {
-      this.setupDashboardListeners();
-      this.dashboardListenersReady = true;
-    }
-  }
-
-  private handleReconnect() {
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts++;
-      const delay = Math.min(
-        this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1) + Math.random() * 500,
-        30_000
-      );
-      console.log(`🔄 Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts}) in ${Math.round(delay)}ms...`);
-      
-      setTimeout(() => {
-        this.socket?.connect();
-      }, delay);
-    } else {
-      console.error('❌ Max reconnection attempts reached');
     }
   }
 
@@ -617,6 +491,18 @@ class RealTimeSocket {
       clearInterval(this.sharedAttachTimer);
       this.sharedAttachTimer = null;
     }
+    this.dashboardUpdateCallbacks = [];
+    this.activityUpdateCallbacks = [];
+    this.employeeUpdateCallbacks = [];
+    this.leaveUpdateCallbacks = [];
+    this.attendanceUpdateCallbacks = [];
+    this.expenseUpdateCallbacks = [];
+    this.notificationCallbacks = [];
+    this.breakStartedCallbacks = [];
+    this.breakEndedCallbacks = [];
+    this.meetingStartedCallbacks = [];
+    this.meetingEndedCallbacks = [];
+    this.kpiUpdateCallbacks = [];
     if (this.usesSharedSocket) {
       this.teardownDashboardListeners();
       this.usesSharedSocket = false;
@@ -639,12 +525,47 @@ class RealTimeSocket {
   // Add .on() and .off() methods for compatibility (returns unsubscribe for useEffect cleanup)
   on(event: string, callback: (...args: any[]) => void): () => void {
     this.ensureConnected();
-    if (this.socket) {
-      this.socket.on(event, callback);
+
+    let attachedSocket: Socket | null = null;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const tryRegister = () => {
+      if (attachedSocket) return;
+      const s: Socket | null =
+        (this.socket?.connected ? this.socket : null) ||
+        (socketService.isConnected() ? socketService.getSocket() : null);
+      if (s?.connected) {
+        s.on(event, callback);
+        attachedSocket = s;
+        if (intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+      }
+    };
+
+    tryRegister();
+
+    if (!attachedSocket) {
+      intervalId = setInterval(tryRegister, 200);
+      timeoutId = setTimeout(() => {
+        if (intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+      }, 15000);
     }
+
     return () => {
-      if (this.socket) {
-        this.socket.off(event, callback);
+      if (intervalId) clearInterval(intervalId);
+      if (timeoutId) clearTimeout(timeoutId);
+      if (attachedSocket) {
+        attachedSocket.off(event, callback);
       }
     };
   }

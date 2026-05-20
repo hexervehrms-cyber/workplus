@@ -258,7 +258,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       type: 'payroll_generated',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/payroll',
       actionText: 'View Payslip',
       relatedEntity: {
@@ -300,7 +300,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       type: 'leave_request',
       priority: 'medium',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/leave',
       actionText: 'View Leave',
       relatedEntity: {
@@ -367,7 +367,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       priority: 'high',
       recipientId: toRecipientUserId(employee),
       senderId: approver._id,
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/leave',
       actionText: 'View Leave',
       relatedEntity: {
@@ -431,7 +431,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       priority: 'high',
       recipientId: toRecipientUserId(employee),
       senderId: rejector._id,
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/leave',
       actionText: 'View Leave',
       relatedEntity: {
@@ -467,7 +467,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       priority: 'high',
       recipientId: toRecipientUserId(employee),
       senderId: rejector._id,
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/expenses',
       actionText: 'View Expense',
       relatedEntity: {
@@ -506,7 +506,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       type: 'expense_submitted',
       priority: 'medium',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/expenses',
       actionText: 'View Expense',
       relatedEntity: {
@@ -565,7 +565,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       priority: 'high',
       recipientId: toRecipientUserId(employee),
       senderId: approver._id,
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/expenses',
       actionText: 'View Expense',
       relatedEntity: {
@@ -638,7 +638,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       type: 'attendance_checkin',
       priority: 'low',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/attendance',
       actionText: 'View Attendance'
     });
@@ -694,7 +694,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
       type: 'attendance_checkout',
       priority: 'low',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/attendance',
       actionText: 'View Attendance'
     });
@@ -751,7 +751,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
       type: 'attendance_break',
       priority: 'low',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/attendance',
       actionText: 'View Attendance'
     });
@@ -811,7 +811,7 @@ ${meeting.description ? `<div class="info-row"><span class="label">Description:<
       type: 'meeting_scheduled',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/attendance',
       actionText: 'View Meeting'
     });
@@ -875,7 +875,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       type: 'document_uploaded',
       priority: 'medium',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/documents',
       actionText: 'View Document',
       relatedEntity: {
@@ -912,7 +912,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       type: 'document_approval_required',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/admin/documents',
       actionText: 'Review Document',
       relatedEntity: {
@@ -949,7 +949,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       priority: 'high',
       recipientId: toRecipientUserId(employee),
       senderId: approver._id,
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/documents',
       actionText: 'View Document',
       relatedEntity: {
@@ -989,7 +989,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       type: 'payslip_generated',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/payroll',
       actionText: 'Download Payslip',
       relatedEntity: {
@@ -1032,7 +1032,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       type: 'asset_allocated',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/assets',
       actionText: 'View Asset',
       relatedEntity: {
@@ -1068,7 +1068,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       type: 'asset_return_reminder',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/assets',
       actionText: 'View Assets'
     });
@@ -1101,7 +1101,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       type: 'asset_returned',
       priority: 'medium',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/assets',
       actionText: 'View Assets'
     });

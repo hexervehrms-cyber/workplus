@@ -17,9 +17,68 @@ import EmailNotificationService from "../utils/emailNotificationService.js";
 import logger from "../utils/logger.js";
 import { aggregateStructureMoney } from "../utils/payrollMoney.js";
 import { emitKPIUpdate } from "../utils/kpiUpdater.js";
-import { employeeLookupQuery, structureLookupQuery, isSuperAdmin } from "../utils/orgScopeHelpers.js";
+import {
+  employeeLookupQuery,
+  structureLookupQuery,
+  isSuperAdmin
+} from "../utils/orgScopeHelpers.js";
 
 const router = express.Router();
+
+/**
+ * Ensures the caller may read salary-slip data for the given employee (tenant isolation).
+ * Admin / HR / super_admin: employee must belong to the same org (super_admin: any org).
+ * Everyone else: only their own employee id.
+ */
+async function assertCanAccessEmployeeSalaryData(req, employeeId) {
+  const privileged = ["super_admin", "admin", "hr"];
+  if (privileged.includes(req.user.role)) {
+    const emp = await Employee.findById(employeeId).select("orgId").lean();
+    if (!emp) {
+      return { ok: false, status: 404, message: "Employee not found" };
+    }
+    if (req.user.role === "super_admin") {
+      return { ok: true };
+    }
+    if (String(emp.orgId) !== String(req.user.orgId)) {
+      return { ok: false, status: 403, message: "Forbidden" };
+    }
+    return { ok: true };
+  }
+
+  const self = await Employee.findOne({
+    userId: req.user.userId,
+    orgId: req.user.orgId
+  })
+    .select("_id")
+    .lean();
+
+  if (!self || String(self._id) !== String(employeeId)) {
+    return { ok: false, status: 403, message: "Forbidden" };
+  }
+  return { ok: true };
+}
+
+function resolveSalaryListOrgId(req) {
+  if (isSuperAdmin(req)) {
+    const q = req.query.orgId ? String(req.query.orgId).trim() : "";
+    return q || null;
+  }
+  return String(req.user.orgId);
+}
+
+async function assertSlipOrgAccess(req, slip) {
+  if (!slip) {
+    return { ok: false, status: 404, message: "Salary slip not found" };
+  }
+  if (isSuperAdmin(req)) {
+    return { ok: true };
+  }
+  if (String(slip.orgId) !== String(req.user.orgId)) {
+    return { ok: false, status: 403, message: "Forbidden" };
+  }
+  return { ok: true };
+}
 
 /**
  * POST /api/salary/structure
@@ -194,9 +253,17 @@ router.get(
     try {
       const { employeeId } = req.params;
 
+      const access = await assertCanAccessEmployeeSalaryData(req, employeeId);
+      if (!access.ok) {
+        return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
+      }
+
+      const emp = await Employee.findOne(employeeLookupQuery(req, employeeId)).select("orgId").lean();
+      const structureOrgId = emp?.orgId || req.user.orgId;
+
       const salaryStructure = await SalaryStructure.findOne({
         employeeId,
-        orgId: req.user.orgId,
+        orgId: structureOrgId,
         status: "approved"
       })
         .sort({ effectiveFrom: -1 })
@@ -228,12 +295,28 @@ router.get(
   authorize("super_admin", "admin", "hr"),
   asyncHandler(async (req, res) => {
     try {
-      const { page = 1, limit = 10, status = "all" } = req.query;
+      const { page = 1, limit = 10, status = "all", employeeId } = req.query;
       const skip = (page - 1) * limit;
 
-      const query = { orgId: req.user.orgId };
+      const query = {};
+      if (isSuperAdmin(req)) {
+        if (!req.query.orgId) {
+          return sendError(
+            res,
+            "orgId query parameter is required",
+            400,
+            "VALIDATION_ERROR"
+          );
+        }
+        query.orgId = String(req.query.orgId);
+      } else {
+        query.orgId = String(req.user.orgId);
+      }
       if (status !== "all") {
         query.status = status;
+      }
+      if (employeeId) {
+        query.employeeId = employeeId;
       }
 
       const total = await SalaryStructure.countDocuments(query);
@@ -358,21 +441,22 @@ router.post(
         return sendError(res, "Missing required fields", 400, "VALIDATION_ERROR");
       }
 
+      const employee = await Employee.findOne(employeeLookupQuery(req, employeeId)).lean();
+      if (!employee) {
+        return sendError(res, "Employee not found", 404, "NOT_FOUND");
+      }
+
+      const slipOrgId = employee.orgId || req.user.orgId;
+
       // Get approved salary structure
       const salaryStructure = await SalaryStructure.findOne({
         employeeId,
-        orgId: req.user.orgId,
+        orgId: slipOrgId,
         status: "approved"
       }).sort({ effectiveFrom: -1 });
 
       if (!salaryStructure) {
         return sendError(res, "No approved salary structure found for this employee", 400, "VALIDATION_ERROR");
-      }
-
-      // Get employee
-      const employee = await Employee.findById(employeeId);
-      if (!employee) {
-        return sendError(res, "Employee not found", 404, "NOT_FOUND");
       }
 
       // Calculate attendance data
@@ -381,7 +465,7 @@ router.post(
 
       const attendanceRecords = await Attendance.find({
         userId: employee.userId,
-        orgId: req.user.orgId,
+        orgId: slipOrgId,
         date: { $gte: startDate, $lte: endDate }
       });
 
@@ -440,7 +524,7 @@ router.post(
         employeeId,
         month,
         year,
-        orgId: req.user.orgId
+        orgId: slipOrgId
       });
 
       if (salarySlip) {
@@ -464,10 +548,7 @@ router.post(
           employeeId,
           userId: employee.userId,
           salaryStructureId: salaryStructure._id,
-          orgId: req.user.orgId,
-          month,
-          year,
-          earnings,
+          orgId: slipOrgId,
           deductions,
           grossEarnings,
           totalDeductions,
@@ -524,7 +605,12 @@ router.get(
       const { page = 1, limit = 10, status = "all" } = req.query;
       const skip = (page - 1) * limit;
 
-      const query = { orgId: req.user.orgId };
+      const listOrgId = resolveSalaryListOrgId(req);
+      if (!listOrgId) {
+        return sendError(res, "orgId query parameter is required", 400, "VALIDATION_ERROR");
+      }
+
+      const query = { orgId: listOrgId };
       if (status !== "all") {
         query.status = status;
       }
@@ -587,6 +673,11 @@ router.get(
         return sendError(res, "Unauthorized", 403, "FORBIDDEN");
       }
 
+      const orgAccess = await assertSlipOrgAccess(req, slip);
+      if (!orgAccess.ok) {
+        return sendError(res, orgAccess.message, orgAccess.status, orgAccess.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
+      }
+
       const employeeDoc = slip.employeeId;
       const employeeName = employeeDoc
         ? `${employeeDoc.firstName || ""} ${employeeDoc.lastName || ""}`.trim()
@@ -614,11 +705,22 @@ router.get(
     try {
       const { employeeId, month, year } = req.params;
 
+      const access = await assertCanAccessEmployeeSalaryData(req, employeeId);
+      if (!access.ok) {
+        return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
+      }
+
+      const emp = await Employee.findById(employeeId).select("orgId").lean();
+      const slipOrgId =
+        isSuperAdmin(req) && emp?.orgId
+          ? String(emp.orgId)
+          : String(req.user.orgId);
+
       const salarySlip = await SalarySlip.findOne({
         employeeId,
         month: parseInt(month),
         year: parseInt(year),
-        orgId: req.user.orgId
+        orgId: slipOrgId
       })
         .populate("employeeId", "firstName lastName employeeCode")
         .populate("userId", "email")
@@ -652,14 +754,25 @@ router.get(
       const { page = 1, limit = 12 } = req.query;
       const skip = (page - 1) * limit;
 
+      const access = await assertCanAccessEmployeeSalaryData(req, employeeId);
+      if (!access.ok) {
+        return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
+      }
+
+      const emp = await Employee.findById(employeeId).select("orgId").lean();
+      const slipOrgId =
+        isSuperAdmin(req) && emp?.orgId
+          ? String(emp.orgId)
+          : String(req.user.orgId);
+
       const total = await SalarySlip.countDocuments({
         employeeId,
-        orgId: req.user.orgId
+        orgId: slipOrgId
       });
 
       const slips = await SalarySlip.find({
         employeeId,
-        orgId: req.user.orgId
+        orgId: slipOrgId
       })
         .sort({ year: -1, month: -1 })
         .skip(skip)
@@ -688,6 +801,12 @@ router.put(
   asyncHandler(async (req, res) => {
     try {
       const { slipId } = req.params;
+
+      const existing = await SalarySlip.findById(slipId).lean();
+      const orgAccess = await assertSlipOrgAccess(req, existing);
+      if (!orgAccess.ok) {
+        return sendError(res, orgAccess.message, orgAccess.status, orgAccess.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
+      }
 
       const slip = await SalarySlip.findByIdAndUpdate(
         slipId,
@@ -803,6 +922,11 @@ router.get(
       const isPrivileged = ["admin", "hr", "super_admin"].includes(req.user.role);
       if (!isOwner && !isPrivileged) {
         return sendError(res, "Unauthorized", 403, "FORBIDDEN");
+      }
+
+      const orgAccess = await assertSlipOrgAccess(req, slip);
+      if (!orgAccess.ok) {
+        return sendError(res, orgAccess.message, orgAccess.status, orgAccess.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
       }
 
       // Generate PDF content as HTML with professional format
@@ -1201,10 +1325,17 @@ router.delete(
         userId: req.user.userId
       });
 
-      const slip = await SalarySlip.findOneAndDelete({
-        _id: slipId,
-        orgId: req.user.orgId
-      });
+      const existing = await SalarySlip.findById(slipId).lean();
+      const orgAccess = await assertSlipOrgAccess(req, existing);
+      if (!orgAccess.ok) {
+        return sendError(res, orgAccess.message, orgAccess.status, orgAccess.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
+      }
+
+      const deleteQuery = isSuperAdmin(req)
+        ? { _id: slipId }
+        : { _id: slipId, orgId: req.user.orgId };
+
+      const slip = await SalarySlip.findOneAndDelete(deleteQuery);
 
       if (!slip) {
         logger.warn("Salary slip not found for deletion", {

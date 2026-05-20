@@ -25,7 +25,8 @@ import {
   Save,
   FileText
 } from 'lucide-react';
-import { getBearerToken } from '../utils/apiHelper';
+import { appendOrgIdParam, getBearerToken } from '../utils/apiHelper';
+import { useAuth } from '../context/AuthContext';
 
 interface Holiday {
   id: string;
@@ -54,8 +55,9 @@ interface HolidayCalendarRecord {
 
 const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> = ({ 
   isAdmin = false, 
-  organizationId = 'ORG-001' 
+  organizationId 
 }) => {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'generate' | 'manage' | 'view'>('generate');
   const [showAddHoliday, setShowAddHoliday] = useState(false);
   const [showCalendarPreview, setShowCalendarPreview] = useState(false);
@@ -79,20 +81,29 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
   });
 
   useEffect(() => {
+    if (!organizationId) {
+      setHolidays([]);
+      return;
+    }
     loadHolidays();
     loadCalendars();
   }, [organizationId, selectedYear]);
 
   const loadHolidays = async () => {
     try {
-      // Get holidays for the selected year
+      if (!organizationId) {
+        setHolidays([]);
+        return;
+      }
       const token = getBearerToken();
       if (!token) {
         console.error('No authentication token found');
         setHolidays([]);
         return;
       }
-      const response = await fetch(`/api/holidays?year=${selectedYear}`, {
+      const response = await fetch(
+        appendOrgIdParam(`/api/holidays?year=${selectedYear}`, user),
+        {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'

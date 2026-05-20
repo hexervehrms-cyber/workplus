@@ -1,6 +1,7 @@
 /**
  * WorkPlus Backend Server - Production Stable Version
  * 
+ * DEPRECATED: Prefer server.js — org scoping aligned with main app where duplicated.
  * STABILITY FEATURES:
  * - Global error handling
  * - Graceful shutdown
@@ -468,7 +469,7 @@ app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
       userId: user._id,
       email: user.email,
       role: user.role,
-      tenantId: user.orgId || 'system'
+      tenantId: user.orgId
     },
     process.env.JWT_SECRET,
     { expiresIn: '24h' }
@@ -523,7 +524,7 @@ app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) =>
       userId: user._id,
       email: user.email,
       role: user.role,
-      tenantId: user.orgId || 'system'
+      tenantId: user.orgId
     },
     process.env.JWT_SECRET,
     { expiresIn: '24h' }
@@ -793,7 +794,7 @@ app.post("/api/auth/create-admin", asyncHandler(async (req, res) => {
     password: hashedPassword,
     role: 'admin',
     organization: organization || 'WorkPlus Inc.',
-    orgId: orgId || decoded.tenantId || 'system'
+    orgId: orgId || decoded.tenantId || decoded.orgId
   });
 
   res.status(201).json({

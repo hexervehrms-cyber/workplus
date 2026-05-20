@@ -14,17 +14,7 @@ export function bootstrapApp(): void {
   });
 
   try {
-    const user = localStorage.getItem('user');
-    if (user) {
-      try {
-        JSON.parse(user);
-      } catch {
-        localStorage.removeItem('user');
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('token');
-        localStorage.removeItem('refreshToken');
-      }
-    }
+    localStorage.removeItem('user');
   } catch (e) {
     console.error('[app] localStorage check failed:', e);
   }

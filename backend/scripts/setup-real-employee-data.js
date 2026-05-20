@@ -27,7 +27,11 @@ async function setupRealEmployeeData() {
 
       const userId = employee.userId._id;
       const employeeId = employee._id;
-      const orgId = employee.orgId || 'system';
+      const orgId = employee.orgId;
+      if (!orgId || orgId === 'system') {
+        console.log(`  SKIP ${employee.userId.email} — invalid orgId`);
+        continue;
+      }
 
       console.log(`\n📝 Setting up data for: ${employee.userId.email}`);
 

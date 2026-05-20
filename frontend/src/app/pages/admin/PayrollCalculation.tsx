@@ -10,7 +10,8 @@ import {
   DollarSign, Plus, Search, Loader2, X, Calculator, Download, Eye, Trash2, CheckCircle, Clock
 } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
-import { apiGet, apiPost, apiPut } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, appendOrgIdParam, resolveAuthOrgId } from '../../utils/apiHelper';
+import { useAuth } from '../../context/AuthContext';
 
 interface PayrollCalculationRecord {
   _id: string;
@@ -47,6 +48,7 @@ interface Employee {
 }
 
 export default function PayrollCalculation() {
+  const { user } = useAuth();
   const [payrolls, setPayrolls] = useState<PayrollCalculationRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,21 +72,37 @@ export default function PayrollCalculation() {
 
   const [fnfData, setFnfData] = useState({
     employeeId: '',
-    fnfResult: null as any
+    terminationDate: '',
+    terminationReason: 'resignation',
+    fnfResult: null as Record<string, unknown> | null
   });
 
   useEffect(() => {
-    fetchPayrolls();
-    fetchEmployees();
-  }, []);
+    void fetchPayrolls();
+    void fetchEmployees();
+  }, [user?.orgId, user?.tenantId, user?.role]);
 
   const fetchPayrolls = async () => {
     try {
       setLoading(true);
-      const data = await apiGet('/payroll');
-      setPayrolls(data.data || []);
-    } catch (error: any) {
+      const params = new URLSearchParams({ limit: '200' });
+      if (user?.role === 'super_admin') {
+        const oid = resolveAuthOrgId(user);
+        if (!oid) {
+          toast.error('Select an organization before loading payroll runs.');
+          setPayrolls([]);
+          return;
+        }
+        params.set('orgId', oid);
+      }
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const data = await apiGet(`/payroll/runs${qs}`, false);
+      setPayrolls(Array.isArray(data.data) ? data.data : []);
+    } catch (error: unknown) {
       console.error('Error fetching payrolls:', error);
+      const msg = error instanceof Error ? error.message : 'Failed to load payroll runs';
+      toast.error(msg);
+      setPayrolls([]);
     } finally {
       setLoading(false);
     }
@@ -92,18 +110,20 @@ export default function PayrollCalculation() {
 
   const fetchEmployees = async () => {
     try {
-      const data = await apiGet('/employees');
-      setEmployees(data.data?.employees || []);
-    } catch (error: any) {
+      const data = await apiGet(appendOrgIdParam('/employees?limit=500&simple=true', user), false);
+      const list = Array.isArray(data.data) ? data.data : data.data?.employees;
+      setEmployees(Array.isArray(list) ? list : []);
+    } catch (error: unknown) {
       console.error('Error fetching employees:', error);
+      setEmployees([]);
     }
   };
 
   const handleCalculatePayroll = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.employeeId || !formData.fromDate || !formData.toDate) {
-      toast.error('Please fill in all required fields');
+    if (!formData.employeeId || !formData.fromDate) {
+      toast.error('Please select an employee and a period start date');
       return;
     }
 
@@ -113,23 +133,17 @@ export default function PayrollCalculation() {
       const data = await apiPost('/payroll/calculate', {
         employeeId: formData.employeeId,
         fromDate: formData.fromDate,
-        toDate: formData.toDate,
-        baseSalary: parseFloat(formData.baseSalary),
-        components: {},
-        deductions: {
-          advance: parseFloat(formData.advance) || 0,
-          loan: parseFloat(formData.loan) || 0
-        },
-        earnings: {
-          bonus: parseFloat(formData.bonus) || 0,
-          incentive: parseFloat(formData.incentive) || 0
-        },
-        notes: formData.notes
+        toDate: formData.toDate || undefined,
+        bonus: formData.bonus ? Number(formData.bonus) : undefined,
+        incentive: formData.incentive ? Number(formData.incentive) : undefined,
+        advance: formData.advance ? Number(formData.advance) : undefined,
+        loan: formData.loan ? Number(formData.loan) : undefined,
+        notes: formData.notes || undefined
       });
 
-      if (!data.success) throw new Error('Failed to calculate payroll');
+      if (!data.success) throw new Error(data.message || 'Failed to calculate payroll');
 
-      setPayrolls([data.data, ...payrolls]);
+      await fetchPayrolls();
       setShowCalculateForm(false);
       setFormData({
         employeeId: '',
@@ -152,20 +166,37 @@ export default function PayrollCalculation() {
   };
 
   const handleCalculateFNF = async () => {
-    if (!fnfData.employeeId) {
-      toast.error('Please select an employee');
+    if (!fnfData.employeeId || !fnfData.terminationDate) {
+      toast.error('Please select an employee and termination date');
+      return;
+    }
+
+    const orgId = user?.orgId || user?.tenantId;
+    if (!orgId || orgId === 'system') {
+      toast.error('Organization context is required');
       return;
     }
 
     try {
       setSubmitting(true);
 
-      const data = await apiGet(`/payroll/fnf/calculate/${fnfData.employeeId}`);
-      setFnfData({ ...fnfData, fnfResult: data.data });
-      toast.success('FNF calculated successfully');
-    } catch (error: any) {
+      const data = await apiPost('fnf/calculate', {
+        employeeId: fnfData.employeeId,
+        terminationDate: fnfData.terminationDate,
+        terminationReason: fnfData.terminationReason,
+        orgId
+      });
+
+      if (data.success && data.data) {
+        setFnfData((prev) => ({ ...prev, fnfResult: data.data as Record<string, unknown> }));
+        toast.success(data.message || 'FNF calculated successfully');
+      } else {
+        toast.error(data.message || 'FNF calculation failed');
+      }
+    } catch (error: unknown) {
       console.error('Error calculating FNF:', error);
-      toast.error(error.message || 'Failed to calculate FNF');
+      const msg = error instanceof Error ? error.message : 'Failed to calculate FNF';
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }
@@ -173,10 +204,10 @@ export default function PayrollCalculation() {
 
   const handleApprovePayroll = async (payrollId: string) => {
     try {
-      const data = await apiPut(`/payroll/${payrollId}/approve`, {});
-      setPayrolls(payrolls.map(p => p._id === payrollId ? data.data : p));
+      await apiPut(`/payroll/${payrollId}/approve`, {});
+      await fetchPayrolls();
       toast.success('Payroll approved');
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error approving payroll:', error);
       toast.error('Failed to approve payroll');
     }
@@ -184,19 +215,21 @@ export default function PayrollCalculation() {
 
   const handleMarkPaid = async (payrollId: string) => {
     try {
-      const data = await apiPut(`/payroll/${payrollId}/mark-paid`, {});
-      setPayrolls(payrolls.map(p => p._id === payrollId ? data.data : p));
+      await apiPut(`/payroll/${payrollId}/mark-paid`, {});
+      await fetchPayrolls();
       toast.success('Payroll marked as paid');
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error marking as paid:', error);
       toast.error('Failed to mark as paid');
     }
   };
 
-  const filteredPayrolls = payrolls.filter(payroll => {
-    const matchesSearch = 
-      payroll.userId.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payroll.employeeId.employeeCode.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredPayrolls = payrolls.filter((payroll) => {
+    const matchesSearch =
+      (payroll.userId?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (payroll.employeeId?.employeeCode || '')
+        .toLowerCase()
+        .includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || payroll.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
@@ -210,8 +243,12 @@ export default function PayrollCalculation() {
       case 'approved':
         return 'bg-green-100 text-green-800';
       case 'paid':
+      case 'released':
         return 'bg-emerald-100 text-emerald-800';
+      case 'locked':
+        return 'bg-amber-100 text-amber-900';
       case 'cancelled':
+      case 'rejected':
         return 'bg-red-100 text-red-800';
       default:
         return 'bg-gray-100 text-gray-800';
@@ -302,7 +339,7 @@ export default function PayrollCalculation() {
                   <tr key={payroll._id} className="hover:bg-muted/50 transition-colors">
                     <td className="px-6 py-4 text-sm">
                       <div>
-                        <p className="font-medium">{payroll.userId.name}</p>
+                        <p className="font-medium">{payroll.userId?.name ?? '—'}</p>
                         <p className="text-xs text-muted-foreground">{payroll.employeeId.employeeCode}</p>
                       </div>
                     </td>
@@ -407,26 +444,24 @@ export default function PayrollCalculation() {
                     />
                   </div>
                   <div>
-                    <Label>To Date *</Label>
+                    <Label>To Date (optional)</Label>
                     <Input
                       type="date"
                       value={formData.toDate}
                       onChange={(e) => setFormData({...formData, toDate: e.target.value})}
                       className="mt-1 rounded-lg"
-                      required
                     />
                   </div>
                 </div>
 
                 <div>
-                  <Label>Base Salary *</Label>
+                  <Label>Base Salary (reference only)</Label>
                   <Input
                     type="number"
                     value={formData.baseSalary}
                     onChange={(e) => setFormData({...formData, baseSalary: e.target.value})}
                     placeholder="0"
                     className="mt-1 rounded-lg"
-                    required
                   />
                 </div>
 
@@ -527,10 +562,18 @@ export default function PayrollCalculation() {
             <div className="p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-bold">FNF Calculator</h2>
-                <button onClick={() => {
-                  setShowFNFCalculator(false);
-                  setFnfData({ employeeId: '', fnfResult: null });
-                }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowFNFCalculator(false);
+                    setFnfData({
+                      employeeId: '',
+                      terminationDate: '',
+                      terminationReason: 'resignation',
+                      fnfResult: null
+                    });
+                  }}
+                >
                   <X className="w-5 h-5" />
                 </button>
               </div>
@@ -538,23 +581,59 @@ export default function PayrollCalculation() {
               <div className="space-y-4">
                 <div>
                   <Label>Select Employee *</Label>
-                  <Select value={fnfData.employeeId} onValueChange={(value) => setFnfData({...fnfData, employeeId: value})}>
+                  <Select
+                    value={fnfData.employeeId}
+                    onValueChange={(value) => setFnfData({ ...fnfData, employeeId: value })}
+                  >
                     <SelectTrigger className="mt-1 rounded-lg">
                       <SelectValue placeholder="Select employee" />
                     </SelectTrigger>
                     <SelectContent>
                       {employees.map((emp) => (
                         <SelectItem key={emp._id} value={emp._id}>
-                          {emp.userId.name} - {emp.employeeCode}
+                          {emp.userId?.name ?? '—'} - {emp.employeeCode}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
 
+                <div>
+                  <Label>Termination date *</Label>
+                  <Input
+                    type="date"
+                    className="mt-1 rounded-lg"
+                    value={fnfData.terminationDate}
+                    onChange={(e) =>
+                      setFnfData({ ...fnfData, terminationDate: e.target.value })
+                    }
+                  />
+                </div>
+
+                <div>
+                  <Label>Termination reason *</Label>
+                  <Select
+                    value={fnfData.terminationReason}
+                    onValueChange={(value) =>
+                      setFnfData({ ...fnfData, terminationReason: value })
+                    }
+                  >
+                    <SelectTrigger className="mt-1 rounded-lg">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="resignation">Resignation</SelectItem>
+                      <SelectItem value="termination">Termination</SelectItem>
+                      <SelectItem value="retirement">Retirement</SelectItem>
+                      <SelectItem value="death">Death</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 <Button
                   onClick={handleCalculateFNF}
-                  disabled={submitting || !fnfData.employeeId}
+                  disabled={submitting || !fnfData.employeeId || !fnfData.terminationDate}
                   className="w-full rounded-lg"
                 >
                   {submitting ? (
@@ -572,37 +651,49 @@ export default function PayrollCalculation() {
 
                 {fnfData.fnfResult && (
                   <div className="space-y-3 p-4 bg-muted rounded-lg">
-                    <h3 className="font-semibold">FNF Settlement Details</h3>
+                    <h3 className="font-semibold">FNF settlement</h3>
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
-                        <span>Total Earnings:</span>
-                        <span className="font-medium">₹{fnfData.fnfResult.totalEarnings.toLocaleString()}</span>
+                        <span>Status</span>
+                        <span className="font-medium">
+                          {String(fnfData.fnfResult.status ?? '—')}
+                        </span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Total Deductions:</span>
-                        <span className="font-medium">₹{fnfData.fnfResult.totalDeductions.toLocaleString()}</span>
+                        <span>Total earnings (incl. components)</span>
+                        <span className="font-medium">
+                          ₹
+                          {Number(fnfData.fnfResult.totalEarnings ?? 0).toLocaleString()}
+                        </span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Net Salary:</span>
-                        <span className="font-medium">₹{fnfData.fnfResult.totalNetSalary.toLocaleString()}</span>
+                        <span>Total deductions</span>
+                        <span className="font-medium">
+                          ₹
+                          {Number(fnfData.fnfResult.totalDeductions ?? 0).toLocaleString()}
+                        </span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Pending Leaves:</span>
-                        <span className="font-medium">{fnfData.fnfResult.pendingLeaves}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Leave Encashment:</span>
-                        <span className="font-medium">₹{fnfData.fnfResult.leaveEncashment.toLocaleString()}</span>
+                        <span>Leave encashment</span>
+                        <span className="font-medium">
+                          ₹
+                          {Number(
+                            (fnfData.fnfResult.leaveEncashment as { totalLeaveEncashment?: number })
+                              ?.totalLeaveEncashment ?? 0
+                          ).toLocaleString()}
+                        </span>
                       </div>
                       <div className="border-t pt-2 flex justify-between font-semibold">
-                        <span>Total FNF Amount:</span>
-                        <span className="text-green-600">₹{fnfData.fnfResult.fnfAmount.toLocaleString()}</span>
+                        <span>Net settlement</span>
+                        <span className="text-green-600">
+                          ₹{Number(fnfData.fnfResult.netSettlement ?? 0).toLocaleString()}
+                        </span>
                       </div>
                     </div>
 
-                    <Button className="w-full rounded-lg mt-4">
+                    <Button type="button" variant="outline" className="w-full rounded-lg mt-4">
                       <Download className="w-4 h-4 mr-2" />
-                      Generate FNF Letter
+                      FNF letter (not available yet)
                     </Button>
                   </div>
                 )}

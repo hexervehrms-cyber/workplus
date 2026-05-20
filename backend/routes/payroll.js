@@ -10,8 +10,221 @@ import { sendSuccess, sendError } from "../utils/apiResponse.js";
 import logger from "../utils/logger.js";
 import PayrollCycleEngine from "../utils/payrollCycleEngine.js";
 import PayrollCalculationEngine from "../utils/payrollCalculationEngine.js";
+import { aggregateStructureMoney } from "../utils/payrollMoney.js";
+import { isSuperAdmin } from "../utils/orgScopeHelpers.js";
+import { buildPayrollAttendanceData } from "../utils/payrollAttendanceData.js";
 
 const router = express.Router();
+
+function resolvePayrollOrgId(req) {
+  if (isSuperAdmin(req)) {
+    if (!req.query.orgId) {
+      return { error: "orgId query parameter is required for super admin" };
+    }
+    return { orgId: String(req.query.orgId) };
+  }
+  const oid = req.user?.orgId;
+  if (!oid || oid === "system") {
+    return { error: "No organization assigned to this account" };
+  }
+  return { orgId: String(oid) };
+}
+
+/**
+ * Find or create a stored payroll cycle for the engine cycle that contains `fromDate`.
+ */
+async function findOrCreatePayrollCycleForFromDate(orgId, fromDate, userId) {
+  const fd = new Date(fromDate);
+  const cycleMeta = PayrollCycleEngine.getPayrollCycleForDate(fd);
+  let cycle = await PayrollCycle.findOne({
+    orgId: String(orgId),
+    year: cycleMeta.year,
+    month: cycleMeta.month
+  });
+
+  if (!cycle) {
+    const cycleData = PayrollCycleEngine.generatePayrollCycle(
+      cycleMeta.year,
+      cycleMeta.month
+    );
+    try {
+      cycle = await PayrollCycle.create({
+        orgId: String(orgId),
+        cycleNumber: cycleMeta.month,
+        year: cycleMeta.year,
+        month: cycleMeta.month,
+        cycleStartDate: cycleData.cycleStartDate,
+        cycleEndDate: cycleData.cycleEndDate,
+        salaryReleaseDate: cycleData.salaryReleaseDate,
+        salaryHoldUntil: cycleData.salaryHoldUntil,
+        status: "draft",
+        createdBy: userId
+      });
+    } catch (err) {
+      if (err?.code === 11000) {
+        cycle = await PayrollCycle.findOne({
+          orgId: String(orgId),
+          year: cycleMeta.year,
+          month: cycleMeta.month
+        });
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  return cycle;
+}
+
+/**
+ * Core payroll run calculation (shared by /run/calculate and /calculate).
+ */
+async function calculatePayrollRunForEmployee({
+  employeeId,
+  payrollCycleId,
+  orgId,
+  userId,
+  adjustments = {}
+}) {
+  const payrollCycle = await PayrollCycle.findById(payrollCycleId);
+  if (!payrollCycle) {
+    return { error: "NOT_FOUND", message: "Payroll cycle not found" };
+  }
+
+  if (String(payrollCycle.orgId) !== String(orgId)) {
+    return { error: "FORBIDDEN", message: "Payroll cycle does not belong to this organization" };
+  }
+
+  const employee = await Employee.findById(employeeId).lean();
+  if (!employee) {
+    return { error: "NOT_FOUND", message: "Employee not found" };
+  }
+
+  if (String(employee.orgId || "") !== String(orgId)) {
+    return { error: "FORBIDDEN", message: "Employee does not belong to this organization" };
+  }
+
+  const salaryStructure = await SalaryStructure.findOne({
+    employeeId,
+    orgId: String(orgId),
+    status: "approved"
+  }).sort({ effectiveFrom: -1 });
+
+  if (!salaryStructure) {
+    return { error: "NOT_FOUND", message: "No approved salary structure found" };
+  }
+
+  const attendanceData = await buildPayrollAttendanceData({
+    employeeId,
+    userId: employee.userId,
+    orgId: String(orgId),
+    cycleStartDate: payrollCycle.cycleStartDate,
+    cycleEndDate: payrollCycle.cycleEndDate
+  });
+
+  const employmentType = employee.employmentType || "employee";
+  const payrollData = {
+    salaryStructure,
+    attendanceData,
+    employeeType: employmentType,
+    cycleStartDate: payrollCycle.cycleStartDate,
+    cycleEndDate: payrollCycle.cycleEndDate,
+    salaryRevisions: []
+  };
+
+  const calculationResult = PayrollCalculationEngine.calculatePayroll(payrollData);
+
+  if (!calculationResult.success) {
+    return { error: "CALCULATION_ERROR", message: calculationResult.error };
+  }
+
+  let payrollRun = await PayrollRun.findOne({
+    payrollCycleId,
+    employeeId,
+    orgId: String(orgId)
+  });
+
+  if (!payrollRun) {
+    payrollRun = new PayrollRun({
+      payrollCycleId,
+      employeeId,
+      userId: employee.userId,
+      orgId: String(orgId),
+      employeeType: ["intern", "employee", "consultant", "contract_worker"].includes(
+        employmentType
+      )
+        ? employmentType
+        : "employee",
+      salaryStructureId: salaryStructure._id,
+      cycleStartDate: payrollCycle.cycleStartDate,
+      cycleEndDate: payrollCycle.cycleEndDate,
+      attendanceData,
+      createdBy: userId
+    });
+  }
+
+  payrollRun.earnings = { ...calculationResult.earnings };
+  payrollRun.deductions = { ...calculationResult.deductions };
+  payrollRun.attendanceData = attendanceData;
+
+  const bonus = Number(adjustments.bonus);
+  const incentive = Number(adjustments.incentive);
+  const advance = Number(adjustments.advance);
+  const loan = Number(adjustments.loan);
+  if (Number.isFinite(bonus) && bonus > 0) payrollRun.earnings.bonus = bonus;
+  if (Number.isFinite(incentive) && incentive > 0) payrollRun.earnings.incentives = incentive;
+  if (Number.isFinite(advance) && advance > 0) {
+    payrollRun.deductions.otherDeductions = [
+      ...(payrollRun.deductions.otherDeductions || []),
+      { name: 'Advance', amount: advance, type: 'fixed' }
+    ];
+  }
+  if (Number.isFinite(loan) && loan > 0) {
+    payrollRun.deductions.otherDeductions = [
+      ...(payrollRun.deductions.otherDeductions || []),
+      { name: 'Loan', amount: loan, type: 'fixed' }
+    ];
+  }
+  if (adjustments.notes) payrollRun.notes = String(adjustments.notes);
+
+  const { grossEarnings, totalDeductions, netSalary } = aggregateStructureMoney(
+    payrollRun.earnings,
+    payrollRun.deductions
+  );
+  payrollRun.grossEarnings = grossEarnings;
+  payrollRun.totalDeductions = totalDeductions;
+  payrollRun.netSalary = netSalary;
+  payrollRun.payableDaysCalculation = calculationResult.payableDaysData;
+  payrollRun.status = "calculated";
+
+  try {
+    await payrollRun.save();
+  } catch (err) {
+    if (err?.code === 11000) {
+      payrollRun = await PayrollRun.findOne({
+        payrollCycleId,
+        employeeId,
+        orgId: String(orgId)
+      });
+      if (!payrollRun) throw err;
+      payrollRun.earnings = { ...calculationResult.earnings };
+      payrollRun.deductions = { ...calculationResult.deductions };
+      payrollRun.attendanceData = attendanceData;
+      if (Number.isFinite(bonus) && bonus > 0) payrollRun.earnings.bonus = bonus;
+      if (Number.isFinite(incentive) && incentive > 0) payrollRun.earnings.incentives = incentive;
+      payrollRun.grossEarnings = grossEarnings;
+      payrollRun.totalDeductions = totalDeductions;
+      payrollRun.netSalary = netSalary;
+      payrollRun.payableDaysCalculation = calculationResult.payableDaysData;
+      payrollRun.status = "calculated";
+      await payrollRun.save();
+    } else {
+      throw err;
+    }
+  }
+
+  return { payrollRun };
+}
 
 /**
  * GET /api/payroll/employee/dashboard
@@ -56,6 +269,7 @@ router.get(
       // Get salary revisions for history
       const salaryRevisions = await SalaryRevision.find({
         employeeId: employee._id,
+        orgId: String(orgId),
         status: "implemented"
       })
         .sort({ effectiveFrom: -1 })
@@ -220,6 +434,56 @@ router.post(
 );
 
 /**
+ * GET /api/payroll/runs
+ * List payroll runs for the organization (admin / HR).
+ */
+router.get(
+  "/runs",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    try {
+      const scope = resolvePayrollOrgId(req);
+      if (scope.error) {
+        return sendError(res, scope.error, 400, "VALIDATION_ERROR");
+      }
+
+      const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+      const runs = await PayrollRun.find({ orgId: scope.orgId })
+        .populate("employeeId", "employeeCode department designation")
+        .populate("userId", "name email")
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean();
+
+      const data = runs.map((r) => ({
+        _id: r._id,
+        employeeId: r.employeeId,
+        userId: r.userId,
+        baseSalary: r.earnings?.basic ?? 0,
+        perDaySalary: r.payableDaysCalculation?.perDaySalary ?? 0,
+        fromDate: r.cycleStartDate,
+        toDate: r.cycleEndDate,
+        workingDays:
+          r.attendanceData?.totalWorkingDays ??
+          r.payableDaysCalculation?.totalWorkingDays ??
+          0,
+        totalEarnings: r.grossEarnings,
+        totalDeductions: r.totalDeductions,
+        netSalary: r.netSalary,
+        status: r.status === "released" ? "paid" : r.status,
+        createdAt: r.createdAt
+      }));
+
+      return sendSuccess(res, data, "Payroll runs fetched successfully");
+    } catch (error) {
+      logger.error("List payroll runs error", { error: error.message });
+      return sendError(res, "Failed to fetch payroll runs", 500, "FETCH_ERROR");
+    }
+  })
+);
+
+/**
  * POST /api/payroll/run/calculate
  * Calculate payroll for an employee in a cycle
  */
@@ -230,7 +494,6 @@ router.post(
   asyncHandler(async (req, res) => {
     try {
       const { employeeId, payrollCycleId } = req.body;
-      const orgId = req.user.orgId;
 
       if (!employeeId || !payrollCycleId) {
         return sendError(
@@ -241,101 +504,200 @@ router.post(
         );
       }
 
-      // Get payroll cycle
-      const payrollCycle = await PayrollCycle.findById(payrollCycleId);
-      if (!payrollCycle) {
-        return sendError(res, "Payroll cycle not found", 404, "NOT_FOUND");
-      }
-
-      // Get employee
-      const employee = await Employee.findById(employeeId);
+      const employee = await Employee.findById(employeeId).lean();
       if (!employee) {
         return sendError(res, "Employee not found", 404, "NOT_FOUND");
       }
 
-      // Get salary structure
-      const salaryStructure = await SalaryStructure.findOne({
+      const orgId = String(employee.orgId || req.user.orgId);
+      if (!isSuperAdmin(req) && orgId !== String(req.user.orgId)) {
+        return sendError(res, "Forbidden", 403, "FORBIDDEN");
+      }
+
+      const result = await calculatePayrollRunForEmployee({
         employeeId,
-        orgId,
-        status: "approved"
-      }).sort({ effectiveFrom: -1 });
-
-      if (!salaryStructure) {
-        return sendError(res, "No approved salary structure found", 404, "NOT_FOUND");
-      }
-
-      // TODO: Get attendance data from Attendance collection
-      const attendanceData = {
-        totalWorkingDays: 22,
-        presentDays: 20,
-        absentDays: 0,
-        halfDays: 0,
-        unpaidLeaveDays: 0,
-        lateMarks: 0
-      };
-
-      // Calculate payroll
-      const payrollData = {
-        salaryStructure,
-        attendanceData,
-        employeeType: employee.employmentType,
-        cycleStartDate: payrollCycle.cycleStartDate,
-        cycleEndDate: payrollCycle.cycleEndDate,
-        salaryRevisions: []
-      };
-
-      const calculationResult = PayrollCalculationEngine.calculatePayroll(payrollData);
-
-      if (!calculationResult.success) {
-        return sendError(res, calculationResult.error, 500, "CALCULATION_ERROR");
-      }
-
-      // Create or update payroll run
-      let payrollRun = await PayrollRun.findOne({
         payrollCycleId,
-        employeeId,
-        orgId
+        orgId,
+        userId: req.user.userId
       });
 
-      if (!payrollRun) {
-        payrollRun = new PayrollRun({
-          payrollCycleId,
-          employeeId,
-          userId: employee.userId,
-          orgId,
-          employeeType: employee.employmentType,
-          salaryStructureId: salaryStructure._id,
-          cycleStartDate: payrollCycle.cycleStartDate,
-          cycleEndDate: payrollCycle.cycleEndDate,
-          attendanceData,
-          createdBy: req.user.userId
-        });
+      if (result.error) {
+        const code = result.error;
+        const status =
+          code === "NOT_FOUND" ? 404 : code === "FORBIDDEN" ? 403 : 500;
+        return sendError(res, result.message, status, code);
       }
-
-      // Update with calculation results
-      payrollRun.earnings = calculationResult.earnings;
-      payrollRun.deductions = calculationResult.deductions;
-      payrollRun.grossEarnings = calculationResult.grossEarnings;
-      payrollRun.totalDeductions = calculationResult.totalDeductions;
-      payrollRun.netSalary = calculationResult.netSalary;
-      payrollRun.payableDaysCalculation = calculationResult.payableDaysData;
-      payrollRun.status = "calculated";
-
-      await payrollRun.save();
 
       logger.info("Payroll calculated", {
-        payrollRunId: payrollRun._id,
+        payrollRunId: result.payrollRun._id,
         employeeId,
-        netSalary: payrollRun.netSalary
+        netSalary: result.payrollRun.netSalary
       });
 
-      return sendSuccess(res, payrollRun, "Payroll calculated successfully");
+      return sendSuccess(res, result.payrollRun, "Payroll calculated successfully");
     } catch (error) {
       logger.error("Calculate payroll error", {
         error: error.message,
         userId: req.user.userId
       });
       return sendError(res, "Failed to calculate payroll", 500, "CALCULATION_ERROR");
+    }
+  })
+);
+
+/**
+ * POST /api/payroll/calculate
+ * Legacy-friendly: resolve cycle from `fromDate`, then calculate run.
+ */
+router.post(
+  "/calculate",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    try {
+      const {
+        employeeId,
+        fromDate,
+        bonus,
+        incentive,
+        advance,
+        loan,
+        notes
+      } = req.body;
+
+      if (!employeeId || !fromDate) {
+        return sendError(
+          res,
+          "employeeId and fromDate are required",
+          400,
+          "VALIDATION_ERROR"
+        );
+      }
+
+      const employee = await Employee.findById(employeeId).lean();
+      if (!employee) {
+        return sendError(res, "Employee not found", 404, "NOT_FOUND");
+      }
+
+      const orgId = String(employee.orgId || req.user.orgId);
+      if (!isSuperAdmin(req) && orgId !== String(req.user.orgId)) {
+        return sendError(res, "Forbidden", 403, "FORBIDDEN");
+      }
+
+      const cycle = await findOrCreatePayrollCycleForFromDate(
+        orgId,
+        fromDate,
+        req.user.userId
+      );
+
+      const result = await calculatePayrollRunForEmployee({
+        employeeId,
+        payrollCycleId: cycle._id,
+        orgId,
+        userId: req.user.userId,
+        adjustments: { bonus, incentive, advance, loan, notes }
+      });
+
+      if (result.error) {
+        const code = result.error;
+        const status =
+          code === "NOT_FOUND" ? 404 : code === "FORBIDDEN" ? 403 : 500;
+        return sendError(res, result.message, status, code);
+      }
+
+      logger.info("Payroll calculated (legacy /calculate)", {
+        payrollRunId: result.payrollRun._id,
+        employeeId
+      });
+
+      return sendSuccess(res, result.payrollRun, "Payroll calculated successfully");
+    } catch (error) {
+      logger.error("Legacy calculate payroll error", {
+        error: error.message,
+        userId: req.user.userId
+      });
+      return sendError(res, "Failed to calculate payroll", 500, "CALCULATION_ERROR");
+    }
+  })
+);
+
+/**
+ * PUT /api/payroll/:id/approve
+ */
+router.put(
+  "/:id/approve",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    try {
+      const run = await PayrollRun.findById(req.params.id);
+      if (!run) {
+        return sendError(res, "Payroll run not found", 404, "NOT_FOUND");
+      }
+
+      if (!isSuperAdmin(req) && String(run.orgId) !== String(req.user.orgId)) {
+        return sendError(res, "Forbidden", 403, "FORBIDDEN");
+      }
+
+      if (run.status !== "calculated") {
+        return sendError(
+          res,
+          "Only calculated payroll runs can be approved",
+          400,
+          "INVALID_STATE"
+        );
+      }
+
+      run.status = "approved";
+      run.approvedBy = req.user.userId;
+      run.approvalDate = new Date();
+      await run.save();
+
+      return sendSuccess(res, run, "Payroll approved successfully");
+    } catch (error) {
+      logger.error("Approve payroll error", { error: error.message });
+      return sendError(res, "Failed to approve payroll", 500, "UPDATE_ERROR");
+    }
+  })
+);
+
+/**
+ * PUT /api/payroll/:id/mark-paid
+ * Marks payroll as released (shown as "paid" in admin UI).
+ */
+router.put(
+  "/:id/mark-paid",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    try {
+      const run = await PayrollRun.findById(req.params.id);
+      if (!run) {
+        return sendError(res, "Payroll run not found", 404, "NOT_FOUND");
+      }
+
+      if (!isSuperAdmin(req) && String(run.orgId) !== String(req.user.orgId)) {
+        return sendError(res, "Forbidden", 403, "FORBIDDEN");
+      }
+
+      if (run.status !== "approved") {
+        return sendError(
+          res,
+          "Only approved payroll runs can be marked paid",
+          400,
+          "INVALID_STATE"
+        );
+      }
+
+      run.status = "released";
+      run.releasedAt = new Date();
+      run.releasedBy = req.user.userId;
+      await run.save();
+
+      return sendSuccess(res, run, "Payroll marked as paid successfully");
+    } catch (error) {
+      logger.error("Mark payroll paid error", { error: error.message });
+      return sendError(res, "Failed to mark payroll as paid", 500, "UPDATE_ERROR");
     }
   })
 );

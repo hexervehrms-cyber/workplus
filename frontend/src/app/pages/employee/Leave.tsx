@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { LeaveRequestService, LeaveAllocationService, EmployeeService, LeaveTypeSettingsService } from '../../utils/api';
+import { resolveAuthOrgId } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
 import {
@@ -147,23 +148,12 @@ export default function Leave() {
         }
 
         // Fetch enabled leave types
-        let orgId = user?.orgId || user?.tenantId;
+        const orgId = resolveAuthOrgId(user);
         if (!orgId) {
-          const storedUser = localStorage.getItem('user');
-          if (storedUser) {
-            try {
-              const parsedUser = JSON.parse(storedUser);
-              orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-            } catch (e) {
-              orgId = 'system';
-            }
-          } else {
-            orgId = 'system';
-          }
-        }
-
+          console.warn('[LEAVE] Organization context missing — skipping leave type settings');
+        } else {
         try {
-          const enabledTypesResponse = await LeaveTypeSettingsService.getEnabledLeaveTypes(orgId ?? 'system');
+          const enabledTypesResponse = await LeaveTypeSettingsService.getEnabledLeaveTypes(orgId);
           if (enabledTypesResponse.success && enabledTypesResponse.data) {
             setEnabledLeaveTypes(enabledTypesResponse.data.settings);
             setBalanceKpiVisibility(enabledTypesResponse.data.balanceKpiVisibility ?? null);
@@ -175,6 +165,7 @@ export default function Leave() {
           console.error('Error fetching enabled leave types:', error);
           setEnabledLeaveTypes({ ...DEFAULT_ENABLED_LEAVE_TYPES });
           setBalanceKpiVisibility(null);
+        }
         }
       } catch (error) {
         console.error('Error fetching data:', error);

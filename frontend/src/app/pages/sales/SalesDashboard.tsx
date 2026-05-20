@@ -5,14 +5,17 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, L
 import { TrendingUp, TrendingDown, Users, Phone, Target, DollarSign, Award, AlertCircle } from 'lucide-react';
 import { getBearerToken } from '../../utils/apiHelper';
 
+function salesRequestHeaders() {
+  const t = getBearerToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
 const SalesDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const [revenueData, setRevenueData] = useState([]);
   const [error, setError] = useState(null);
-
-  const token = getBearerToken();
 
   useEffect(() => {
     fetchDashboardData();
@@ -21,7 +24,7 @@ const SalesDashboard = () => {
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
-      const headers = { Authorization: `Bearer ${token}` };
+      const headers = salesRequestHeaders();
 
       // Fetch today's metrics
       const metricsRes = await axios.get('/api/sales/performance/today', { headers });

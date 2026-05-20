@@ -146,7 +146,15 @@ export default function AttendanceAdmin() {
       unsubKpi();
       unsubActivity();
     };
-  }, [authLoading, user?.id, user?.role, user?.orgId, user?.tenantId]);
+  }, [
+    authLoading,
+    user?.id,
+    user?.role,
+    user?.orgId,
+    user?.tenantId,
+    activityStartDate,
+    activityEndDate,
+  ]);
 
   // Separate function declarations for reuse
   const fetchAttendance = useCallback(async () => {

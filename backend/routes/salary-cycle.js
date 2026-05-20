@@ -1,4 +1,5 @@
 import express from "express";
+import mongoose from "mongoose";
 import SalaryCycle from "../models/SalaryCycle.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { paginationMiddleware } from "../middleware/pagination.js";
@@ -8,22 +9,49 @@ const router = express.Router();
 
 router.use(paginationMiddleware);
 
+function userOrgId(user) {
+  if (!user) return "";
+  const o = user.orgId || user.tenantId;
+  return o && o !== "system" ? String(o) : "";
+}
+
+function resolveOrgIdForList(req) {
+  if (req.user?.role === "super_admin") {
+    const q = req.query?.orgId;
+    if (!q) {
+      return { error: "orgId query parameter is required for super admin" };
+    }
+    return { orgId: String(q) };
+  }
+  const oid = userOrgId(req.user);
+  if (!oid) {
+    return { error: "No organization assigned to this account" };
+  }
+  return { orgId: oid };
+}
+
+function canAccessOrg(req, orgId) {
+  if (!orgId) return false;
+  if (req.user?.role === "super_admin") return true;
+  return userOrgId(req.user) === String(orgId);
+}
+
 /**
  * GET /api/salary-cycle
- * List all salary cycles with pagination
+ * List salary cycles with pagination (scoped by organization)
  */
 router.get(
   "/",
   asyncHandler(async (req, res) => {
-    const { page, limit, skip } = req.pagination;
-    const { orgId, isActive } = req.query;
-
-    const query = {};
-
-    if (orgId) {
-      query.orgId = orgId;
+    const scope = resolveOrgIdForList(req);
+    if (scope.error) {
+      return res.status(400).json({ success: false, message: scope.error });
     }
 
+    const { page, limit, skip } = req.pagination;
+    const { isActive } = req.query;
+
+    const query = { orgId: scope.orgId };
     if (isActive !== undefined) {
       query.isActive = isActive === "true";
     }
@@ -38,45 +66,23 @@ router.get(
       .limit(limit)
       .lean();
 
-    logger.info("Salary cycles listed", { total, page, limit });
+    logger.info("Salary cycles listed", { total, page, limit, orgId: scope.orgId });
 
     res.paginate(cycles, total);
   })
 );
 
 /**
- * GET /api/salary-cycle/:id
- * Get single salary cycle
- */
-router.get(
-  "/:id",
-  asyncHandler(async (req, res) => {
-    const cycle = await SalaryCycle.findById(req.params.id)
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email");
-
-    if (!cycle) {
-      return res.status(404).json({
-        success: false,
-        message: "Salary cycle not found"
-      });
-    }
-
-    res.json({
-      success: true,
-      data: cycle
-    });
-  })
-);
-
-/**
  * GET /api/salary-cycle/org/:orgId/active
- * Get active salary cycle for organization
+ * Active salary cycle for an organization (registered before /:id)
  */
 router.get(
   "/org/:orgId/active",
   asyncHandler(async (req, res) => {
     const { orgId } = req.params;
+    if (!canAccessOrg(req, orgId)) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
 
     const cycle = await SalaryCycle.getActiveCycle(orgId)
       .populate("createdBy", "name email")
@@ -104,7 +110,7 @@ router.post(
   "/",
   asyncHandler(async (req, res) => {
     const {
-      orgId,
+      orgId: bodyOrgId,
       name,
       description,
       cycleStartDate,
@@ -117,12 +123,24 @@ router.post(
       bonusPolicy,
       deductionPolicy,
       fnfPolicy,
-      taxPolicy,
-      createdBy
+      taxPolicy
     } = req.body;
 
+    const orgId =
+      req.user?.role === "super_admin" ? bodyOrgId : userOrgId(req.user);
+
+    if (!orgId) {
+      return res.status(400).json({
+        success: false,
+        message: "orgId is required"
+      });
+    }
+
+    if (!canAccessOrg(req, orgId)) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
     if (
-      !orgId ||
       !name ||
       cycleStartDate === undefined ||
       cycleEndDate === undefined ||
@@ -131,11 +149,10 @@ router.post(
       return res.status(400).json({
         success: false,
         message:
-          "orgId, name, cycleStartDate, cycleEndDate, and salaryPaymentDate are required"
+          "name, cycleStartDate, cycleEndDate, and salaryPaymentDate are required"
       });
     }
 
-    // Validate dates
     if (cycleStartDate < 1 || cycleStartDate > 31) {
       return res.status(400).json({
         success: false,
@@ -157,7 +174,6 @@ router.post(
       });
     }
 
-    // Check if active cycle already exists
     const existingActive = await SalaryCycle.findOne({
       orgId,
       isActive: true
@@ -170,24 +186,40 @@ router.post(
       });
     }
 
-    const cycle = await SalaryCycle.create({
-      orgId,
-      name,
-      description,
-      cycleStartDate,
-      cycleEndDate,
-      salaryPaymentDate,
-      holdDays: holdDays || 0,
-      workingDaysPerWeek: workingDaysPerWeek || 5,
-      workingDaysPerMonth: workingDaysPerMonth || 22,
-      leavePolicy: leavePolicy || {},
-      bonusPolicy: bonusPolicy || {},
-      deductionPolicy: deductionPolicy || {},
-      fnfPolicy: fnfPolicy || {},
-      taxPolicy: taxPolicy || {},
-      isActive: true,
-      createdBy
-    });
+    const createdBy = req.user?.userId;
+
+    let cycle;
+    try {
+      cycle = await SalaryCycle.create({
+        orgId,
+        name,
+        description,
+        cycleStartDate,
+        cycleEndDate,
+        salaryPaymentDate,
+        holdDays: holdDays || 0,
+        workingDaysPerWeek: workingDaysPerWeek || 5,
+        workingDaysPerMonth: workingDaysPerMonth || 22,
+        leavePolicy: leavePolicy || {},
+        bonusPolicy: bonusPolicy || {},
+        deductionPolicy: deductionPolicy || {},
+        fnfPolicy: fnfPolicy || {},
+        taxPolicy: taxPolicy || {},
+        isActive: true,
+        createdBy
+      });
+    } catch (err) {
+      if (err?.code === 11000) {
+        cycle = await SalaryCycle.findOne({ orgId, isActive: true });
+        if (cycle) {
+          return res.status(409).json({
+            success: false,
+            message: "An active salary cycle already exists for this organization"
+          });
+        }
+      }
+      throw err;
+    }
 
     const populated = await SalaryCycle.findById(cycle._id)
       .populate("createdBy", "name email")
@@ -214,13 +246,27 @@ router.put(
   "/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const updateData = req.body;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({
+        success: false,
+        message: "Salary cycle not found"
+      });
+    }
 
-    // Remove fields that shouldn't be updated
+    const existing = await SalaryCycle.findById(id).lean();
+    if (!existing || !canAccessOrg(req, existing.orgId)) {
+      return res.status(404).json({
+        success: false,
+        message: "Salary cycle not found"
+      });
+    }
+
+    const updateData = { ...req.body };
     delete updateData._id;
     delete updateData.orgId;
     delete updateData.createdAt;
     delete updateData.createdBy;
+    updateData.updatedBy = req.user?.userId;
 
     const cycle = await SalaryCycle.findByIdAndUpdate(id, updateData, {
       new: true,
@@ -250,16 +296,29 @@ router.put(
 
 /**
  * PATCH /api/salary-cycle/:id/deactivate
- * Deactivate salary cycle
  */
 router.patch(
   "/:id/deactivate",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({
+        success: false,
+        message: "Salary cycle not found"
+      });
+    }
+
+    const existing = await SalaryCycle.findById(id).lean();
+    if (!existing || !canAccessOrg(req, existing.orgId)) {
+      return res.status(404).json({
+        success: false,
+        message: "Salary cycle not found"
+      });
+    }
 
     const cycle = await SalaryCycle.findByIdAndUpdate(
       id,
-      { isActive: false },
+      { isActive: false, updatedBy: req.user?.userId },
       { new: true }
     )
       .populate("createdBy", "name email")
@@ -286,12 +345,27 @@ router.patch(
 
 /**
  * DELETE /api/salary-cycle/:id
- * Delete salary cycle
  */
 router.delete(
   "/:id",
   asyncHandler(async (req, res) => {
-    const cycle = await SalaryCycle.findByIdAndDelete(req.params.id);
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({
+        success: false,
+        message: "Salary cycle not found"
+      });
+    }
+
+    const existing = await SalaryCycle.findById(id).lean();
+    if (!existing || !canAccessOrg(req, existing.orgId)) {
+      return res.status(404).json({
+        success: false,
+        message: "Salary cycle not found"
+      });
+    }
+
+    const cycle = await SalaryCycle.findByIdAndDelete(id);
 
     if (!cycle) {
       return res.status(404).json({
@@ -301,12 +375,44 @@ router.delete(
     }
 
     logger.info("Salary cycle deleted", {
-      salaryCycleId: req.params.id
+      salaryCycleId: id
     });
 
     res.json({
       success: true,
       message: "Salary cycle deleted successfully"
+    });
+  })
+);
+
+/**
+ * GET /api/salary-cycle/:id
+ * Single cycle (registered after static paths)
+ */
+router.get(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({
+        success: false,
+        message: "Salary cycle not found"
+      });
+    }
+
+    const cycle = await SalaryCycle.findById(req.params.id)
+      .populate("createdBy", "name email")
+      .populate("updatedBy", "name email");
+
+    if (!cycle || !canAccessOrg(req, cycle.orgId)) {
+      return res.status(404).json({
+        success: false,
+        message: "Salary cycle not found"
+      });
+    }
+
+    res.json({
+      success: true,
+      data: cycle
     });
   })
 );

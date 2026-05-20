@@ -15,8 +15,8 @@ describe('buildOrgIdFilter', () => {
     expect(filter.$or[1].orgId.toString()).toBe(hex);
   });
 
-  it('falls back to system for empty orgId', () => {
-    const filter = buildOrgIdFilter('');
-    expect(filter.$or[0]).toEqual({ orgId: 'system' });
+  it('does not match any tenant when orgId is empty or system', () => {
+    expect(buildOrgIdFilter('')).toEqual({ orgId: '__invalid_tenant__' });
+    expect(buildOrgIdFilter('system')).toEqual({ orgId: '__invalid_tenant__' });
   });
 });

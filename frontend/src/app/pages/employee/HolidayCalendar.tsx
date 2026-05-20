@@ -1,17 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useAuth } from '../../context/AuthContext';
 import EmployeeHolidayCalendar from '../../components/EmployeeHolidayCalendar';
+import { resolveAuthOrgId } from '../../utils/apiHelper';
 
 const EmployeeHolidayCalendarPage: React.FC = () => {
   const { user } = useAuth();
-  const [orgId, setOrgId] = useState<string>('system');
+  const orgId = resolveAuthOrgId(user);
 
-  useEffect(() => {
-    // Get the user's organization ID from auth context
-    if (user?.orgId) {
-      setOrgId(user.orgId);
-    }
-  }, [user]);
+  if (!orgId) {
+    return (
+      <div className="p-6 text-sm text-muted-foreground">
+        Organization context is required to load holidays.
+      </div>
+    );
+  }
 
   return (
     <div className="p-6">

@@ -20,6 +20,7 @@ import {
   clearLegacyAuthCookies,
   setAccessTokenCookie,
 } from "../utils/httpAuth.js";
+import { normalizeAuthOrgId } from "../utils/orgScopeHelpers.js";
 
 const router = express.Router();
 
@@ -84,14 +85,20 @@ router.post("/login",
 
       // Generate access token (short-lived)
       const sessionId = crypto.randomBytes(16).toString('hex');
-      const orgId = user.orgId || 'system';
+      const orgId = normalizeAuthOrgId(user);
+      if (!orgId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Account has no organization assigned. Contact your administrator.',
+          code: 'MISSING_ORG_CONTEXT'
+        });
+      }
       const token = jwt.sign(
         { 
           userId: user._id.toString(),
           email: user.email,
           role: user.role,
-          orgId,
-          tenantId: orgId,
+          ...(orgId ? { orgId, tenantId: orgId } : {}),
           sessionId: sessionId
         },
         process.env.JWT_SECRET,
@@ -163,7 +170,9 @@ router.post("/login",
       await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
 
       // Get employee record if exists
-      let employee = await Employee.findOne({ userId: user._id, orgId }).lean();
+      let employee = await Employee.findOne(
+        orgId ? { userId: user._id, orgId } : { userId: user._id }
+      ).lean();
 
       logger.info('User logged in successfully', {
         userId: user._id,
@@ -361,14 +370,20 @@ router.post("/refresh",
         }
       }
 
-      const orgId = user.orgId || 'system';
+      const orgId = normalizeAuthOrgId(user);
+      if (!orgId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Account has no organization assigned. Contact your administrator.',
+          code: 'MISSING_ORG_CONTEXT'
+        });
+      }
       const accessToken = jwt.sign(
         {
           userId: user._id.toString(),
           email: user.email,
           role: user.role,
-          orgId,
-          tenantId: orgId,
+          ...(orgId ? { orgId, tenantId: orgId } : {}),
           ...(sessionId ? { sessionId } : {}),
         },
         process.env.JWT_SECRET,

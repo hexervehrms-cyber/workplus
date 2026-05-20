@@ -21,7 +21,33 @@ function cacheTtlForEndpoint(endpoint: string): number {
 }
 
 function cacheKeyForEndpoint(endpoint: string): string {
-  return endpoint.trim();
+  const ep = endpoint.trim();
+  const token = TokenManager.get();
+  let sessionKey = 'anon';
+  if (token) {
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1])) as {
+        userId?: string;
+        sub?: string;
+        id?: string;
+        orgId?: string;
+        tenantId?: string;
+        role?: string;
+        exp?: number;
+      };
+      const uid = payload.userId || payload.sub || payload.id;
+      const org = payload.orgId || payload.tenantId;
+      const role = payload.role;
+      if (uid) {
+        sessionKey = `u:${String(uid)}:o:${org || '_'}:r:${role || '_'}`;
+      } else {
+        sessionKey = `t:${token.length}:${token.slice(-16)}`;
+      }
+    } catch {
+      sessionKey = `t:${token.length}:${token.slice(-16)}`;
+    }
+  }
+  return `${sessionKey}::${ep}`;
 }
 
 async function fetchWithTimeout(
@@ -202,6 +228,49 @@ export const clearApiCache = (endpoint?: string) => {
   }
 };
 
+/** Resolved tenant id from auth user (never returns literal "system"). */
+export function resolveAuthOrgId(
+  user: { orgId?: string; tenantId?: string } | null | undefined
+): string | null {
+  const id = user?.orgId || user?.tenantId;
+  if (!id || id === 'system') return null;
+  return String(id);
+}
+
+/** Append orgId for super_admin API calls that require tenant scope. */
+export function appendOrgIdParam(
+  url: string,
+  user: { role?: string; orgId?: string; tenantId?: string } | null | undefined
+): string {
+  if (user?.role !== 'super_admin') return url;
+  const oid = resolveAuthOrgId(user);
+  if (!oid) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}orgId=${encodeURIComponent(oid)}`;
+}
+
+/** Scoped localStorage key for holiday lists (per user + org). */
+export function holidaysStorageKey(
+  userId?: string | null,
+  orgId?: string | null
+): string {
+  return `cached_holidays:${userId || 'anon'}:${orgId || 'none'}`;
+}
+
+export function clearAllHolidayCaches(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('cached_holidays')) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
  * POST request
  */
@@ -306,9 +375,9 @@ export const getBackendUrl = (): string => {
     return 'https://workplus-backend-sg3a.onrender.com';
   }
 
-  // Development: static uploads are served by the Express backend, not Vite
-  if (import.meta.env.DEV) {
-    return 'http://localhost:5000';
+  // Development without VITE_API_URL: API uses `/api` and uploads use `/uploads` (Vite proxies both to Express)
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    return window.location.origin;
   }
 
   return typeof window !== 'undefined' ? window.location.origin : '';

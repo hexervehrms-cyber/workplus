@@ -21,9 +21,10 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { LeaveRequestService } from '../../utils/api';
-import { buildApiUrl, getBearerToken } from '../../utils/apiHelper';
+import { buildApiUrl, getBearerToken, holidaysStorageKey } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
+import realTimeSocket from '../../utils/realTimeSocket';
 
 interface LeaveRequest {
   _id: string;
@@ -99,12 +100,14 @@ export default function Calendar() {
             console.log('✅ Loaded holidays:', holidayData.data.length, 'holidays');
             setHolidays(holidayData.data);
             // Cache holidays for offline access
-            localStorage.setItem('cached_holidays', JSON.stringify(holidayData.data));
+            const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
+            localStorage.setItem(hKey, JSON.stringify(holidayData.data));
           }
         } else {
           console.warn('Holiday fetch failed with status:', holidayResponse.status);
           // Try to use cached holidays
-          const cachedHolidays = localStorage.getItem('cached_holidays');
+          const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
+          const cachedHolidays = localStorage.getItem(hKey);
           if (cachedHolidays) {
             try {
               const parsed = JSON.parse(cachedHolidays);
@@ -125,10 +128,8 @@ export default function Calendar() {
     fetchData();
   }, [user]);
 
-  // Listen for real-time holiday updates via Socket.IO
+  // Listen for real-time holiday updates via Socket.IO (sync subscribe so cleanup always runs)
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-
     const refreshHolidays = async () => {
       try {
         const token = getBearerToken();
@@ -145,7 +146,8 @@ export default function Calendar() {
           const holidayData = await holidayResponse.json();
           if (holidayData.success && Array.isArray(holidayData.data)) {
             setHolidays(holidayData.data);
-            localStorage.setItem('cached_holidays', JSON.stringify(holidayData.data));
+            const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
+            localStorage.setItem(hKey, JSON.stringify(holidayData.data));
           }
         }
       } catch (error) {
@@ -153,12 +155,9 @@ export default function Calendar() {
       }
     };
 
-    import('../../utils/realTimeSocket').then((module) => {
-      unsubscribe = module.default.on('holiday:update', refreshHolidays);
-    });
-
+    const unsubscribe = realTimeSocket.on('holiday:update', refreshHolidays);
     return () => {
-      unsubscribe?.();
+      unsubscribe();
     };
   }, []);
 

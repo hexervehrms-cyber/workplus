@@ -119,7 +119,7 @@ class EventSystem {
         type: eventType,
         data: eventData,
         timestamp: new Date(),
-        orgId: eventData.orgId || 'system'
+        orgId: eventData.orgId || null
       };
 
       // Update statistics

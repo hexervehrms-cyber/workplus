@@ -40,7 +40,7 @@ const getEmployeeToken = async () => {
     const token = jwt.sign(
       {
         userId: employee._id.toString(),
-        orgId: employee.orgId || 'system',
+        orgId: employee.orgId,
         role: employee.role
       },
       process.env.JWT_SECRET || 'your-secret-key',

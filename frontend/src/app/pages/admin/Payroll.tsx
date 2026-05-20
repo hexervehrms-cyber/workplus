@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -11,8 +12,9 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '
 import { Plus, Edit, Trash2, Download, Check, X, Loader, ChevronsUpDown, Eye } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
 import { cn } from '../../components/ui/utils';
-import { apiGet, apiPost, apiPut, apiDelete, buildApiUrl, getBearerToken } from '../../utils/apiHelper';
+import { apiGet, apiPost, apiPut, apiDelete, buildApiUrl, getBearerToken, appendOrgIdParam, resolveAuthOrgId } from '../../utils/apiHelper';
 import { TokenManager } from '../../utils/api';
+import { useAuth } from '../../context/AuthContext';
 
 interface SalaryStructure {
   _id: string;
@@ -88,6 +90,7 @@ async function fetchSalarySlipBlob(slipId: string): Promise<Blob> {
 }
 
 export default function Payroll() {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'structure' | 'slips'>('structure');
   const [structures, setStructures] = useState<SalaryStructure[]>([]);
   const [salarySlips, setSalarySlips] = useState<SalarySlip[]>([]);
@@ -238,7 +241,21 @@ export default function Payroll() {
   const fetchStructures = async () => {
     try {
       setLoading(true);
-      const data = await apiGet('/salary/structures');
+      const params = new URLSearchParams({
+        page: '1',
+        limit: '100',
+        status: 'all'
+      });
+      const oid = user?.orgId || user?.tenantId;
+      if (user?.role === 'super_admin') {
+        if (!oid || oid === 'system') {
+          toast.error('Organization context is required to load salary structures.');
+          setStructures([]);
+          return;
+        }
+        params.set('orgId', oid);
+      }
+      const data = await apiGet(`salary/structures?${params.toString()}`, false);
       setStructures(data.data || []);
     } catch (error) {
       console.error('Error fetching structures:', error);
@@ -251,7 +268,17 @@ export default function Payroll() {
   const fetchSalarySlips = async () => {
     try {
       setLoading(true);
-      const data = await apiGet('/salary/slips/all?limit=500&page=1');
+      const params = new URLSearchParams({ limit: '500', page: '1' });
+      const oid = resolveAuthOrgId(user);
+      if (user?.role === 'super_admin') {
+        if (!oid) {
+          toast.error('Organization context is required to load salary slips.');
+          setSalarySlips([]);
+          return;
+        }
+        params.set('orgId', oid);
+      }
+      const data = await apiGet(`/salary/slips/all?${params.toString()}`, false);
       setSalarySlips(data.data || []);
     } catch (error) {
       console.error('Error fetching salary slips:', error);
@@ -263,7 +290,7 @@ export default function Payroll() {
   // Fetch employees
   const fetchEmployees = async () => {
     try {
-      const data = await apiGet('/employees?simple=true&limit=1000');
+      const data = await apiGet(appendOrgIdParam('/employees?simple=true&limit=1000', user), false);
       console.log('Employees fetched:', data.data);
       setEmployees(data.data || []);
     } catch (error) {
@@ -278,7 +305,7 @@ export default function Payroll() {
       fetchSalarySlips();
     }
     fetchEmployees();
-  }, [activeTab]);
+  }, [activeTab, user?.orgId, user?.tenantId, user?.role]);
 
   // Fetch employees when dialog opens
   useEffect(() => {
@@ -627,16 +654,21 @@ export default function Payroll() {
           <h1 className="text-3xl font-bold">Payroll Management</h1>
           <p className="text-muted-foreground">Manage salary structures and generate salary slips</p>
         </div>
-        <Button
-          onClick={() => {
-            setEditingStructureId(null);
-            setShowStructureDialog(true);
-          }}
-          className="rounded-xl"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Create Salary Structure
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline" className="rounded-xl">
+            <Link to="/admin/payroll-runs">Payroll runs & FNF</Link>
+          </Button>
+          <Button
+            onClick={() => {
+              setEditingStructureId(null);
+              setShowStructureDialog(true);
+            }}
+            className="rounded-xl"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Create Salary Structure
+          </Button>
+        </div>
       </div>
 
       {/* Tabs */}

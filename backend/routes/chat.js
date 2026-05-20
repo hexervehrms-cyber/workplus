@@ -15,6 +15,7 @@ import ChatMessage from '../models/ChatMessage.js';
 import ChatGroup from '../models/ChatGroup.js';
 import User from '../models/User.js';
 import logger from '../utils/logger.js';
+import { assertScopedOrgId } from '../utils/orgScopeHelpers.js';
 import {
   sendTeamsMessage,
   getTeamsChatMessages,
@@ -165,7 +166,8 @@ router.post('/messages', authenticate, asyncHandler(async (req, res) => {
  */
 router.get('/groups', authenticate, asyncHandler(async (req, res) => {
   const userId = req.user.userId;
-  const orgId = req.user.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
 
   const groups = await ChatGroup.find({ orgId, members: userId })
     .select('conversationId name members createdAt')
@@ -189,7 +191,8 @@ router.get('/groups', authenticate, asyncHandler(async (req, res) => {
  */
 router.post('/groups', authenticate, asyncHandler(async (req, res) => {
   const creatorId = req.user.userId;
-  const orgId = req.user.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const groupName = String(req.body?.name || '').trim();
   const rawMembers = Array.isArray(req.body?.memberIds) ? req.body.memberIds : [];
 
@@ -295,7 +298,8 @@ router.post(
   chatFileUpload.single('file'),
   asyncHandler(async (req, res) => {
     const senderId = req.user.userId;
-    const orgId = req.user.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
     const { recipientId, conversationId: groupConversationId } = req.body;
 
     if (!req.file) {
@@ -435,7 +439,8 @@ router.get('/conversations/:conversationId', authenticate, asyncHandler(async (r
   const { conversationId } = req.params;
   const { page = 1, limit = 50 } = req.query;
   const userId = req.user.userId;
-  const orgId = req.user.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
 
   try {
     // Verify user has access to this conversation
@@ -916,7 +921,8 @@ router.post(
     const { userId: targetUserId } = req.params;
     const requesterId = req.user.userId;
     const requesterRole = req.user.role;
-    const orgId = req.user.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
 
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No avatar file provided' });
@@ -972,7 +978,8 @@ router.get('/users', authenticate, asyncHandler(async (req, res) => {
   try {
     const currentUserId = req.user.userId;
     const currentUserRole = req.user.role;
-    const orgId = req.user.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
 
     let filter = { 
       _id: { $ne: currentUserId },

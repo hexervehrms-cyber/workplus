@@ -2,8 +2,6 @@ import { createBrowserRouter, Outlet } from 'react-router';
 import { lazy, Suspense } from 'react';
 import { MainLayout } from './layouts/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
-import { ErrorBoundary } from './components/ErrorBoundary';
-import { RouteErrorBoundary } from './components/RouteErrorBoundary';
 import Login from './pages/Login';
 import HomeGate from './components/landing/HomeGate';
 
@@ -38,6 +36,7 @@ const HREmployeeOnboarding = lazy(() => import('./pages/admin/EmployeeOnboarding
 const AdminCompanyDocs = lazy(() => import('./pages/admin/CompanyDocs'));
 const AdminHolidayCalendar = lazy(() => import('./pages/admin/HolidayCalendar'));
 const AdminPayroll = lazy(() => import('./pages/admin/Payroll'));
+const AdminPayrollRuns = lazy(() => import('./pages/admin/PayrollCalculation'));
 const AttendanceCalendar = lazy(() => import('./pages/admin/AttendanceCalendar'));
 const AttendanceHistory = lazy(() => import('./pages/admin/AttendanceHistory'));
 const LeaveAllocation = lazy(() => import('./pages/admin/LeaveAllocation'));
@@ -76,11 +75,9 @@ const routes = [
       { path: 'login', element: <Login /> },
       {
         element: (
-          <ErrorBoundary>
-            <ProtectedRoute>
-              <MainLayout />
-            </ProtectedRoute>
-          </ErrorBoundary>
+          <ProtectedRoute>
+            <MainLayout />
+          </ProtectedRoute>
         ),
         children: [
       {
@@ -296,6 +293,14 @@ const routes = [
         ),
       },
       {
+        path: 'admin/payroll-runs',
+        element: (
+          <ProtectedRoute requiredRole={['admin']}>
+            <AdminPayrollRuns />
+          </ProtectedRoute>
+        ),
+      },
+      {
         path: 'admin/announcements',
         element: (
           <ProtectedRoute requiredRole={['admin']}>
@@ -355,9 +360,7 @@ const routes = [
         path: 'employee',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
-            <RouteErrorBoundary>
-              <EmployeeDashboard />
-            </RouteErrorBoundary>
+            <EmployeeDashboard />
           </ProtectedRoute>
         ),
       },
@@ -397,9 +400,7 @@ const routes = [
         path: 'employee/attendance',
         element: (
           <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
-            <RouteErrorBoundary>
-              <Attendance />
-            </RouteErrorBoundary>
+            <Attendance />
           </ProtectedRoute>
         ),
       },

@@ -5,6 +5,7 @@ import { authorize, requirePermission, auditLog } from "../middleware/auth.js";
 import Role from "../models/Role.js";
 import Permission from "../models/Permission.js";
 import User from "../models/User.js";
+import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
 
 const router = express.Router();
 
@@ -17,7 +18,8 @@ router.get("/",
   asyncHandler(async (req, res) => {
     try {
       // First try to get roles from database
-      const orgId = req.user?.orgId || 'system';
+      const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
       
       let roles = [];
       try {
@@ -158,7 +160,8 @@ router.get("/:id",
   auditLog('view_role_details', 'role'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
@@ -209,7 +212,8 @@ router.post("/",
   requirePermission('roles', 'create'),
   auditLog('create_role', 'role'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     
     const {
@@ -313,7 +317,8 @@ router.put("/:id",
   auditLog('update_role', 'role'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -403,7 +408,8 @@ router.delete("/:id",
   auditLog('delete_role', 'role'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
@@ -463,7 +469,8 @@ router.post("/:id/permissions",
   auditLog('add_role_permission', 'role'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const { module, actions, scope = 'own', conditions = [] } = req.body;
     
     if (!module || !actions || !Array.isArray(actions)) {
@@ -501,7 +508,8 @@ router.delete("/:id/permissions",
   auditLog('remove_role_permission', 'role'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const { module, actions, scope } = req.body;
     
     if (!module) {
@@ -539,7 +547,8 @@ router.get("/:id/users",
   auditLog('view_role_users', 'role'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const { page = 1, limit = 50 } = req.query;
     
     const role = await Role.findOne({ _id: id, orgId });
@@ -590,7 +599,8 @@ router.post("/initialize-system-roles",
   authorize('super_admin', 'admin'),
   auditLog('initialize_system_roles', 'roles'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     
     try {
@@ -622,7 +632,8 @@ router.get("/hierarchy",
   requirePermission('roles', 'read'),
   auditLog('view_role_hierarchy', 'roles'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     
     const roles = await Role.find({ orgId, isActive: true })
       .populate('parentRole', 'name displayName level')

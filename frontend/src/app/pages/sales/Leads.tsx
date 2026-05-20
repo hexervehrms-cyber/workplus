@@ -4,6 +4,11 @@ import axios from 'axios';
 import { Plus, Edit2, Trash2, Search, Filter } from 'lucide-react';
 import { getBearerToken } from '../../utils/apiHelper';
 
+function salesRequestHeaders() {
+  const t = getBearerToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
 const Leads = () => {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -22,9 +27,6 @@ const Leads = () => {
     notes: ''
   });
 
-  const token = getBearerToken();
-  const headers = { Authorization: `Bearer ${token}` };
-
   useEffect(() => {
     fetchLeads();
   }, [filterStatus]);
@@ -35,7 +37,7 @@ const Leads = () => {
       const url = filterStatus
         ? `/api/sales/leads/status/${filterStatus}`
         : '/api/sales/leads';
-      const res = await axios.get(url, { headers });
+      const res = await axios.get(url, { headers: salesRequestHeaders() });
       setLeads(res.data.data || []);
     } catch (error) {
       console.error('Error fetching leads:', error);
@@ -48,9 +50,9 @@ const Leads = () => {
     e.preventDefault();
     try {
       if (editingLead) {
-        await axios.patch(`/api/sales/leads/${editingLead._id}`, formData, { headers });
+        await axios.patch(`/api/sales/leads/${editingLead._id}`, formData, { headers: salesRequestHeaders() });
       } else {
-        await axios.post('/api/sales/leads', formData, { headers });
+        await axios.post('/api/sales/leads', formData, { headers: salesRequestHeaders() });
       }
       fetchLeads();
       setShowModal(false);
@@ -79,7 +81,7 @@ const Leads = () => {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this lead?')) {
       try {
-        await axios.delete(`/api/sales/leads/${id}`, { headers });
+        await axios.delete(`/api/sales/leads/${id}`, { headers: salesRequestHeaders() });
         fetchLeads();
       } catch (error) {
         console.error('Error deleting lead:', error);

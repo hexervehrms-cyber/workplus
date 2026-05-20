@@ -17,24 +17,36 @@ import bcrypt from 'bcrypt';
 import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
 import { findEmployeeForSelfService } from '../utils/employeeSelfService.js';
+import {
+  employeeLookupQuery,
+  isSuperAdmin,
+  resolveScopedOrgId,
+  userOrgIdFromReq
+} from '../utils/orgScopeHelpers.js';
+
+const LIFECYCLE_ROLES = ['super_admin', 'admin', 'hr'];
 
 const router = express.Router();
-
-// Apply pagination middleware to all routes
 router.use(paginationMiddleware);
 
 /**
  * GET /api/employees/stats/summary
  * Get employee statistics
  */
-router.get('/stats/summary', asyncHandler(async (req, res) => {
-  const userOrgId = req.user?.orgId || 'system';
+router.get('/stats/summary', authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+  const userOrgId = userOrgIdFromReq(req) || req.validatedOrgId;
   const requestedOrgId = req.query.orgId;
 
-  let scopedOrgId = userOrgId;
-  if (req.user?.role === 'super_admin' && requestedOrgId) {
+  let scopedOrgId = resolveScopedOrgId(req) || userOrgId;
+  if (!scopedOrgId) {
+    return res.status(400).json({
+      success: false,
+      message: 'orgId query parameter is required',
+    });
+  }
+  if (isSuperAdmin(req) && requestedOrgId) {
     scopedOrgId = String(requestedOrgId);
-  } else if (requestedOrgId && String(requestedOrgId) !== String(userOrgId)) {
+  } else if (requestedOrgId && userOrgId && String(requestedOrgId) !== String(userOrgId)) {
     return res.status(403).json({
       success: false,
       message: 'Unauthorized org access',
@@ -72,8 +84,24 @@ router.get('/stats/summary', asyncHandler(async (req, res) => {
  * GET /api/employees/lifecycle/analytics
  * Get lifecycle analytics for organization
  */
-router.get('/lifecycle/analytics', asyncHandler(async (req, res) => {
+router.get('/lifecycle/analytics', authorize(...LIFECYCLE_ROLES), asyncHandler(async (req, res) => {
   const { orgId, timeframe = 30 } = req.query;
+
+  let scopedOrgId = req.user.orgId;
+  if (req.user.role === 'super_admin') {
+    if (!orgId) {
+      return res.status(400).json({
+        success: false,
+        message: 'orgId query parameter is required',
+      });
+    }
+    scopedOrgId = String(orgId);
+  } else if (orgId && String(orgId) !== String(req.user.orgId)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Unauthorized org access',
+    });
+  }
 
   if (!global.employeeLifecycleEngine) {
     return res.status(503).json({
@@ -83,7 +111,7 @@ router.get('/lifecycle/analytics', asyncHandler(async (req, res) => {
   }
 
   const analytics = await global.employeeLifecycleEngine.getLifecycleAnalytics(
-    orgId || req.user.orgId,
+    scopedOrgId,
     parseInt(timeframe)
   );
 
@@ -96,7 +124,9 @@ router.get('/lifecycle/analytics', asyncHandler(async (req, res) => {
 /**
  * GET /api/employees
  * List all employees with pagination
- * Query params: page, limit, status, department, simple
+ * Query params: page, limit, status, department, simple, search
+ * Super admin: pass `orgId` to list employees for that tenant (Mongo organization id). Without `orgId`, only
+ * employees tied to the super-admin home org / system org ids are returned.
  * RBAC: Admin/HR can see all employees in org, Employees can only see basic info
  */
 router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), asyncHandler(async (req, res) => {
@@ -107,17 +137,17 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
 
   // Build query based on role
   let query = {};
-  
-  // Handle different orgId formats - super admin can see all orgs
+
   if (userRole === 'super_admin') {
-    // Super admin can see all organizations
-    query = {
-      $or: [
-        { orgId: userOrgId },
-        { orgId: 'system' },
-        { orgId: 'workplus_system' }
-      ]
-    };
+    const requestedOrg = req.query.orgId ? String(req.query.orgId).trim() : '';
+    if (!requestedOrg) {
+      return res.status(400).json({
+        success: false,
+        message: 'orgId query parameter is required',
+        code: 'MISSING_ORG_CONTEXT',
+      });
+    }
+    query = { orgId: requestedOrg };
   } else {
     query = { orgId: userOrgId };
   }
@@ -145,12 +175,17 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
   }
   
   if (search) {
-    // Search in employee code or populated user name/email
-    query.$or = [
+    const searchOr = [
       { employeeCode: { $regex: search, $options: 'i' } },
       { department: { $regex: search, $options: 'i' } },
-      { designation: { $regex: search, $options: 'i' } }
+      { designation: { $regex: search, $options: 'i' } },
     ];
+    // Do not replace a top-level $or (e.g. super_admin multi-org) — AND it with search
+    if (query.$or) {
+      query = { $and: [{ $or: query.$or }, { $or: searchOr }] };
+    } else {
+      query = { ...query, $or: searchOr };
+    }
   }
 
   // Get total count for pagination
@@ -221,10 +256,17 @@ router.get('/:id', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'
     };
   }
 
-  const employee = await Employee.findOne({ 
-    _id: req.params.id, 
-    orgId: userOrgId 
-  }, projection)
+  const query = { _id: req.params.id };
+  if (userRole === 'super_admin') {
+    const requestedOrg = req.query.orgId ? String(req.query.orgId).trim() : '';
+    if (requestedOrg) {
+      query.orgId = requestedOrg;
+    }
+  } else {
+    query.orgId = userOrgId;
+  }
+
+  const employee = await Employee.findOne(query, projection)
     .populate('userId', userRole === 'employee' ? 'name email avatar' : 'name email avatar role isActive organization')
     .lean(); // P0 FIX: Use .lean() for read-only queries
 
@@ -232,6 +274,17 @@ router.get('/:id', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'
     return res.status(404).json({
       success: false,
       message: 'Employee not found'
+    });
+  }
+
+  if (
+    userRole !== 'super_admin' &&
+    userOrgId &&
+    String(employee.orgId) !== String(userOrgId)
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: 'Unauthorized org access'
     });
   }
 
@@ -254,8 +307,15 @@ router.get('/:id', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'
  * Get employee by user ID
  */
 router.get('/user/:userId', asyncHandler(async (req, res) => {
-  const authOrgId = req.user.orgId || 'system';
+  const authOrgId = resolveScopedOrgId(req) || userOrgIdFromReq(req);
   const targetUserId = req.params.userId;
+
+  if (!authOrgId && !isSuperAdmin(req)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Organization context required',
+    });
+  }
 
   if (req.user.role === 'employee' && String(req.user.userId) !== String(targetUserId)) {
     return res.status(403).json({
@@ -264,14 +324,34 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
     });
   }
 
-  const employee = await findEmployeeForSelfService(targetUserId, authOrgId, {
-    createIfMissing: false,
-  });
+  let employee = null;
+  if (isSuperAdmin(req) && !authOrgId) {
+    employee = await Employee.findOne({ userId: targetUserId })
+      .select('_id firstName lastName orgId userId status')
+      .lean();
+  } else {
+    employee = await findEmployeeForSelfService(targetUserId, authOrgId || '', {
+      createIfMissing: false,
+      allowCrossOrgFallback: false
+    });
+  }
 
   if (!employee) {
     return res.status(404).json({
       success: false,
       message: 'Employee not found',
+    });
+  }
+
+  const isSelf = String(req.user.userId) === String(targetUserId);
+  if (
+    req.user.role !== 'super_admin' &&
+    !isSelf &&
+    String(employee.orgId) !== String(authOrgId)
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: 'Unauthorized org access',
     });
   }
 
@@ -323,9 +403,15 @@ router.post('/', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHan
     });
   }
 
-  // Get organization ID from authenticated user
-  const orgId = req.user?.orgId || req.user?.organizationId || 'system';
-  
+  const orgId = resolveScopedOrgId(req);
+  if (!orgId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Valid organization context is required (assign org to admin or pass orgId for super admin)',
+      code: 'MISSING_ORG_CONTEXT'
+    });
+  }
+
   logger.info('Creating employee', { 
     name, 
     email, 
@@ -347,11 +433,11 @@ router.post('/', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHan
 
     // Check if employee code already exists (if provided)
     if (employeeCode) {
-      const existingEmployee = await Employee.findOne({ employeeCode }).lean();
+      const existingEmployee = await Employee.findOne({ orgId, employeeCode }).lean();
       if (existingEmployee) {
         return res.status(400).json({
           success: false,
-          message: 'Employee code already exists'
+          message: 'Employee code already exists in this organization'
         });
       }
     }
@@ -416,7 +502,7 @@ router.post('/', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHan
           joiningDate,
           managerId,
           orgId: orgId,
-          createdBy: req.user?.userId || 'system'
+          createdBy: req.user?.userId
         });
       } catch (onboardingError) {
         logger.warn('Failed to start onboarding workflow', {
@@ -432,7 +518,7 @@ router.post('/', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHan
         employee: populatedEmployee,
         user,
         onboardingStarted: !!onboardingResult,
-        createdBy: req.user?.userId || 'system',
+        createdBy: req.user?.userId,
         orgId: orgId
       });
     }
@@ -479,7 +565,7 @@ router.post('/', authenticate, authorize('super_admin', 'admin', 'hr'), asyncHan
         req.emitActivityUpdate({
           action: 'employee_create',
           description: `New employee ${name} created`,
-          userId: req.user?.userId || 'system',
+          userId: req.user?.userId,
           orgId: orgId,
           severity: 'medium',
           category: 'admin'
@@ -711,7 +797,7 @@ router.put('/:id', authenticate, authorize('super_admin', 'admin', 'hr', 'employ
   req.emitActivityUpdate({
     action: 'employee_update',
     description: `Employee ${employee.userId?.name} updated`,
-    userId: req.user?.userId || 'system',
+    userId: req.user?.userId,
     orgId: employee.orgId,
     severity: 'low',
     category: 'admin'
@@ -796,7 +882,7 @@ router.delete('/:id', authenticate, authorize('super_admin', 'admin', 'hr'), asy
   req.emitActivityUpdate({
     action: 'employee_delete',
     description: `Employee terminated`,
-    userId: req.user?.userId || 'system',
+    userId: req.user?.userId,
     orgId: employee.orgId,
     severity: 'high',
     category: 'admin'
@@ -827,11 +913,11 @@ router.delete('/:id', authenticate, authorize('super_admin', 'admin', 'hr'), asy
  * POST /api/employees/:id/start-onboarding
  * Start onboarding process for an employee
  */
-router.post('/:id/start-onboarding', asyncHandler(async (req, res) => {
+router.post('/:id/start-onboarding', authorize(...LIFECYCLE_ROLES), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { managerId, customTasks } = req.body;
 
-  const employee = await Employee.findById(id).populate('userId');
+  const employee = await Employee.findOne(employeeLookupQuery(req, id)).populate('userId');
   if (!employee) {
     return res.status(404).json({
       success: false,
@@ -871,7 +957,7 @@ router.post('/:id/start-onboarding', asyncHandler(async (req, res) => {
  * POST /api/employees/:id/start-offboarding
  * Start offboarding process for an employee
  */
-router.post('/:id/start-offboarding', asyncHandler(async (req, res) => {
+router.post('/:id/start-offboarding', authorize(...LIFECYCLE_ROLES), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { reason, lastWorkingDay, notes } = req.body;
 
@@ -882,7 +968,7 @@ router.post('/:id/start-offboarding', asyncHandler(async (req, res) => {
     });
   }
 
-  const employee = await Employee.findById(id).populate('userId');
+  const employee = await Employee.findOne(employeeLookupQuery(req, id)).populate('userId');
   if (!employee) {
     return res.status(404).json({
       success: false,
@@ -919,7 +1005,7 @@ router.post('/:id/start-offboarding', asyncHandler(async (req, res) => {
  * PUT /api/employees/:id/lifecycle-stage
  * Update employee lifecycle stage
  */
-router.put('/:id/lifecycle-stage', asyncHandler(async (req, res) => {
+router.put('/:id/lifecycle-stage', authorize(...LIFECYCLE_ROLES), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { stage, metadata } = req.body;
 
@@ -927,6 +1013,14 @@ router.put('/:id/lifecycle-stage', asyncHandler(async (req, res) => {
     return res.status(400).json({
       success: false,
       message: 'Lifecycle stage is required'
+    });
+  }
+
+  const employee = await Employee.findOne(employeeLookupQuery(req, id)).select('_id').lean();
+  if (!employee) {
+    return res.status(404).json({
+      success: false,
+      message: 'Employee not found'
     });
   }
 
@@ -963,7 +1057,7 @@ router.put('/:id/lifecycle-stage', asyncHandler(async (req, res) => {
  * PUT /api/employees/:id/checklist/:taskId
  * Update onboarding/offboarding checklist task
  */
-router.put('/:id/checklist/:taskId', asyncHandler(async (req, res) => {
+router.put('/:id/checklist/:taskId', authorize(...LIFECYCLE_ROLES), asyncHandler(async (req, res) => {
   const { id, taskId } = req.params;
   const { status, notes } = req.body;
 
@@ -971,6 +1065,14 @@ router.put('/:id/checklist/:taskId', asyncHandler(async (req, res) => {
     return res.status(400).json({
       success: false,
       message: 'Task status is required'
+    });
+  }
+
+  const employee = await Employee.findOne(employeeLookupQuery(req, id)).select('_id').lean();
+  if (!employee) {
+    return res.status(404).json({
+      success: false,
+      message: 'Employee not found'
     });
   }
 
@@ -1000,10 +1102,10 @@ router.put('/:id/checklist/:taskId', asyncHandler(async (req, res) => {
  * GET /api/employees/:id/lifecycle
  * Get employee lifecycle information
  */
-router.get('/:id/lifecycle', asyncHandler(async (req, res) => {
+router.get('/:id/lifecycle', authorize(...LIFECYCLE_ROLES), asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const employee = await Employee.findById(id)
+  const employee = await Employee.findOne(employeeLookupQuery(req, id))
     .populate('userId', 'name email')
     .select('lifecycleStage onboardingChecklist offboardingChecklist onboardingStatus offboardingStatus')
     .lean();

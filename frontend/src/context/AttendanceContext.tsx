@@ -47,6 +47,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [lastUpdateSource, setLastUpdateSource] = useState('init');
   const lastUpdateTimeRef = useRef(Date.now());
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevUserIdRef = useRef<string | null>(null);
 
   const resolveUserId = useCallback((): string | null => {
     const id = user?.id ?? user?.userId;
@@ -161,7 +162,21 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   );
 
   useEffect(() => {
-    if (!user?.id && !user?.userId) return;
+    const uid = user?.id ?? user?.userId;
+    const uidStr = uid != null ? String(uid) : null;
+
+    if (!uidStr) {
+      setAttendanceState(defaultState);
+      setLastUpdateSource('init');
+      prevUserIdRef.current = null;
+      return;
+    }
+
+    if (prevUserIdRef.current != null && prevUserIdRef.current !== uidStr) {
+      setAttendanceState(defaultState);
+      setLastUpdateSource('user_change');
+    }
+    prevUserIdRef.current = uidStr;
     loadFromLocalStorage();
   }, [user?.id, user?.userId, loadFromLocalStorage]);
 

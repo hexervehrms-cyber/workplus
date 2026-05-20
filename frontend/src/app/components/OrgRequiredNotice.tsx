@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { AlertCircle } from 'lucide-react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';

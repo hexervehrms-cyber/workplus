@@ -66,7 +66,10 @@ export async function refreshAccessToken(): Promise<string | null> {
 export async function ensureAccessToken(): Promise<string | null> {
   await hydrateAccessToken();
   let token = getAccessToken();
-  if (!token) return null;
+  if (!token) {
+    token = await refreshAccessToken();
+    return token;
+  }
   if (!isTokenExpired(token)) return token;
   return refreshAccessToken();
 }

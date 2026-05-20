@@ -7,7 +7,7 @@
 
 import { io, Socket } from 'socket.io-client';
 import { TokenManager } from './api';
-import { ensureAccessToken } from './sessionAuth';
+import { ensureAccessToken, refreshAccessToken } from './sessionAuth';
 
 // Socket configuration
 // In production, VITE_SOCKET_URL is set to the backend URL
@@ -90,8 +90,7 @@ export class SocketService {
 
       void (async () => {
       try {
-        await ensureAccessToken();
-        const token = TokenManager.get();
+        const token = (await ensureAccessToken()) || TokenManager.get();
         
         this.socket = io(SOCKET_URL, {
           transports: ['websocket', 'polling'],
@@ -181,15 +180,16 @@ export class SocketService {
             console.warn('Socket.IO auth warning:', error?.message || error);
             return;
           }
-          const refreshed = await ensureAccessToken();
+          const refreshed = (await refreshAccessToken()) || (await ensureAccessToken());
           if (refreshed && this.socket?.auth && typeof this.socket.auth === 'object') {
             (this.socket.auth as { token?: string }).token = refreshed;
+            TokenManager.set(refreshed);
             this.socket.emit('authenticate', {
               ...(this.tenantId ? { tenantId: this.tenantId } : {}),
             });
             return;
           }
-          console.error('❌ Socket.IO auth error:', error);
+          console.warn('Socket.IO auth error (non-fatal):', error?.message || error);
         });
 
       } catch (error: any) {

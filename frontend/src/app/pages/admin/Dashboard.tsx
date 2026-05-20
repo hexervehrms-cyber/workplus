@@ -18,11 +18,12 @@ import {
   Zap,
   Trash2,
   Edit,
-  Download
+  Download,
+  Loader2,
 } from 'lucide-react';
 import { useCurrency } from '../../context/CurrencyContext';
 import { useAuth } from '../../context/AuthContext';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -44,9 +45,8 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 import { useIsMounted } from '../../hooks/useIsMounted';
 import { useFetchGeneration } from '../../hooks/useFetchGeneration';
 import { apiClient } from '../../utils/api';
-import { TokenManager } from '../../utils/api';
 import realTimeSocket from '../../utils/realTimeSocket';
-import { socketService } from '../../utils/socket';
+import { ensureArray, safeCell } from '../../utils/safeUi';
 
 const DASHBOARD_SOCKET_DEBOUNCE_MS = 2500;
 
@@ -164,6 +164,40 @@ function getErrorMessage(err: unknown, fallback: string) {
   return err instanceof Error ? err.message : fallback;
 }
 
+function safeNum(value: unknown, fallback = 0): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeDashboardStats(raw: Partial<DashboardStats> | null | undefined): DashboardStats {
+  return {
+    totalEmployees: safeNum(raw?.totalEmployees, defaultDashboardStats.totalEmployees),
+    avgProductivity: safeNum(raw?.avgProductivity, defaultDashboardStats.avgProductivity),
+    thisMonthExpenses: safeNum(raw?.thisMonthExpenses, defaultDashboardStats.thisMonthExpenses),
+    thisMonthPayroll: safeNum(raw?.thisMonthPayroll, defaultDashboardStats.thisMonthPayroll),
+    totalCost: safeNum(raw?.totalCost, defaultDashboardStats.totalCost),
+    loggedInEmployees: safeNum(raw?.loggedInEmployees, defaultDashboardStats.loggedInEmployees),
+    onLeave: safeNum(raw?.onLeave, defaultDashboardStats.onLeave),
+  };
+}
+
+function normalizeQuickStats(raw: Partial<QuickStats> | null | undefined): QuickStats {
+  return {
+    totalEmployees: safeNum(raw?.totalEmployees, defaultQuickStats.totalEmployees),
+    presentToday: safeNum(raw?.presentToday, defaultQuickStats.presentToday),
+    attendanceRate: safeNum(raw?.attendanceRate, defaultQuickStats.attendanceRate),
+    pendingLeaves: safeNum(raw?.pendingLeaves, defaultQuickStats.pendingLeaves),
+    pendingExpenses: safeNum(raw?.pendingExpenses, defaultQuickStats.pendingExpenses),
+    activeUsers: safeNum(raw?.activeUsers, defaultQuickStats.activeUsers),
+    onLeave: safeNum(raw?.onLeave, defaultQuickStats.onLeave),
+    onBreak: safeNum(raw?.onBreak, defaultQuickStats.onBreak),
+    totalSales: safeNum(raw?.totalSales, defaultQuickStats.totalSales),
+    totalLoss: safeNum(raw?.totalLoss, defaultQuickStats.totalLoss),
+    totalBonus: safeNum(raw?.totalBonus, defaultQuickStats.totalBonus),
+    totalIncentive: safeNum(raw?.totalIncentive, defaultQuickStats.totalIncentive),
+  };
+}
+
 function formatTime(value?: string | null) {
   if (!value) return '—';
   const d = new Date(value);
@@ -217,6 +251,26 @@ export default function AdminDashboard() {
   const [todaysAttendance, setTodaysAttendance] = useState<AttendanceRow[]>([]);
   const [todayBreakLog, setTodayBreakLog] = useState<BreakRow[]>([]);
   const [lastUpdate, setLastUpdate] = useState(Date.now()); // Force re-render timestamp
+
+  const chartExpenseData = useMemo(() => ensureArray<ExpenseTrendRow>(expenseData), [expenseData]);
+  const safeLeaveRequests = useMemo(() => ensureArray<LeaveRequestRow>(leaveRequests), [leaveRequests]);
+  const safeTodaysAttendance = useMemo(() => ensureArray<AttendanceRow>(todaysAttendance), [todaysAttendance]);
+  const safeTodayBreakLog = useMemo(() => ensureArray<BreakRow>(todayBreakLog), [todayBreakLog]);
+  const pendingLeaveCount = useMemo(
+    () => safeLeaveRequests.filter((r) => r?.status === 'pending').length,
+    [safeLeaveRequests]
+  );
+
+  const formatMoney = useCallback(
+    (amount: unknown) => {
+      try {
+        return formatCurrency(safeNum(amount, 0));
+      } catch {
+        return '₹0.00';
+      }
+    },
+    [formatCurrency]
+  );
   
   // Edit leave modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -250,23 +304,23 @@ export default function AdminDashboard() {
 
     // Process results with fallbacks
     if (statsResponse.status === 'fulfilled' && statsResponse.value.success) {
-      setDashboardStats(statsResponse.value.data ?? defaultDashboardStats);
+      setDashboardStats(normalizeDashboardStats(statsResponse.value.data));
     }
     if (quickStatsResponse.status === 'fulfilled' && quickStatsResponse.value.success) {
-      setQuickStats(quickStatsResponse.value.data ?? defaultQuickStats);
+      setQuickStats(normalizeQuickStats(quickStatsResponse.value.data));
       setLastUpdate(Date.now());
     }
     if (expenseTrendsResponse.status === 'fulfilled' && expenseTrendsResponse.value.success) {
-      setExpenseData(expenseTrendsResponse.value.data ?? []);
+      setExpenseData(ensureArray<ExpenseTrendRow>(expenseTrendsResponse.value.data));
     }
     if (leaveResponse.status === 'fulfilled' && leaveResponse.value.success) {
-      setLeaveRequests(leaveResponse.value.data ?? []);
+      setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.value.data));
     }
     if (attendanceResponse.status === 'fulfilled' && attendanceResponse.value.success) {
-      setTodaysAttendance(attendanceResponse.value.data ?? []);
+      setTodaysAttendance(ensureArray<AttendanceRow>(attendanceResponse.value.data));
     }
     if (todayBreaksResponse.status === 'fulfilled' && todayBreaksResponse.value.success) {
-      setTodayBreakLog(todayBreaksResponse.value.data ?? []);
+      setTodayBreakLog(ensureArray<BreakRow>(todayBreaksResponse.value.data));
     }
   }, [filterType, customStartDate, customEndDate, mounted, nextGeneration, isStale]);
 
@@ -301,10 +355,10 @@ export default function AdminDashboard() {
       ]);
       if (!mounted.current) return;
       if (todayBreaksResponse.success) {
-        setTodayBreakLog(todayBreaksResponse.data ?? []);
+        setTodayBreakLog(ensureArray<BreakRow>(todayBreaksResponse.data));
       }
       if (attendanceResponse.success) {
-        setTodaysAttendance(attendanceResponse.data ?? []);
+        setTodaysAttendance(ensureArray<AttendanceRow>(attendanceResponse.data));
       }
       setLastUpdate(Date.now());
     } catch (error) {
@@ -489,10 +543,10 @@ export default function AdminDashboard() {
 
   // Tick live durations for active breaks in the log table
   useEffect(() => {
-    if (!todayBreakLog.some((r) => r.status === 'active')) return;
+    if (!safeTodayBreakLog.some((r) => r.status === 'active')) return;
     const timer = setInterval(() => setLastUpdate(Date.now()), 60000);
     return () => clearInterval(timer);
-  }, [todayBreakLog]);
+  }, [safeTodayBreakLog]);
 
   const handleApproveLeave = async (requestId: string) => {
     try {
@@ -514,7 +568,7 @@ export default function AdminDashboard() {
         // Refresh leave requests
         const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
         if (leaveResponse.success) {
-          setLeaveRequests(leaveResponse.data ?? []);
+          setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.data));
         }
         alert('Leave request approved successfully');
       }
@@ -551,7 +605,7 @@ export default function AdminDashboard() {
         // Refresh leave requests
         const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
         if (leaveResponse.success) {
-          setLeaveRequests(leaveResponse.data ?? []);
+          setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.data));
         }
         alert('Leave request rejected successfully');
       }
@@ -577,7 +631,7 @@ export default function AdminDashboard() {
         // Refresh leave requests
         const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
         if (leaveResponse.success) {
-          setLeaveRequests(leaveResponse.data ?? []);
+          setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.data));
         }
         alert('Leave request deleted successfully');
       }
@@ -624,7 +678,7 @@ export default function AdminDashboard() {
         // Refresh leave requests
         const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
         if (leaveResponse.success) {
-          setLeaveRequests(leaveResponse.data ?? []);
+          setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.data));
         }
         alert('Leave request updated successfully');
       }
@@ -706,8 +760,11 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
   };
 
   if (loading) {
-    // Don't show loading spinner - let content load in background
-    return null;
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center p-8" role="status" aria-label="Loading dashboard">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
   }
 
   return (
@@ -785,21 +842,21 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
           <KPICard
             key={`expense-${lastUpdate}-${dashboardStats.thisMonthExpenses}`}
             title="This Month Expense"
-            value={formatCurrency(dashboardStats.thisMonthExpenses)}
+            value={formatMoney(dashboardStats.thisMonthExpenses)}
             icon={selectedCurrency.code === 'INR' ? IndianRupee : Receipt}
             color="accent"
           />
           <KPICard
             key={`payroll-${lastUpdate}-${dashboardStats.thisMonthPayroll}`}
             title="This Month Payroll"
-            value={formatCurrency(dashboardStats.thisMonthPayroll)}
+            value={formatMoney(dashboardStats.thisMonthPayroll)}
             icon={selectedCurrency.code === 'INR' ? IndianRupee : DollarSign}
             color="primary"
           />
           <KPICard
             key={`totalcost-${lastUpdate}-${dashboardStats.totalCost}`}
             title="Total Cost (Payroll + Expenses)"
-            value={formatCurrency(dashboardStats.totalCost)}
+            value={formatMoney(dashboardStats.totalCost)}
             icon={selectedCurrency.code === 'INR' ? IndianRupee : DollarSign}
             color="destructive"
           />
@@ -820,7 +877,7 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
           <KPICard
             key={`activeUsers-${quickStats.activeUsers}-${lastUpdate}`}
             title="Logged In Employees"
-            value={quickStats.activeUsers.toString()}
+            value={String(safeNum(quickStats.activeUsers, 0))}
             icon={LogIn}
             color="primary"
             emphasize
@@ -828,7 +885,7 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
           <KPICard
             key={`onBreak-${quickStats.onBreak}-${lastUpdate}`}
             title="On Break"
-            value={quickStats.onBreak.toString()}
+            value={String(safeNum(quickStats.onBreak, 0))}
             icon={Coffee}
             color="accent"
             emphasize
@@ -856,25 +913,25 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <KPICard
             title="Total Sales"
-            value={formatCurrency(quickStats.totalSales)}
+            value={formatMoney(quickStats.totalSales)}
             icon={TrendingUp}
             color="secondary"
           />
           <KPICard
             title="Total Loss"
-            value={formatCurrency(quickStats.totalLoss)}
+            value={formatMoney(quickStats.totalLoss)}
             icon={TrendingDown}
             color="destructive"
           />
           <KPICard
             title="Total Bonus"
-            value={formatCurrency(quickStats.totalBonus)}
+            value={formatMoney(quickStats.totalBonus)}
             icon={Gift}
             color="accent"
           />
           <KPICard
             title="Total Incentive"
-            value={formatCurrency(quickStats.totalIncentive)}
+            value={formatMoney(quickStats.totalIncentive)}
             icon={Zap}
             color="primary"
           />
@@ -901,7 +958,7 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
         <Card className="p-6 rounded-2xl">
           <h3 className="font-semibold text-lg mb-4">Monthly Expenses</h3>
           <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={expenseData}>
+            <BarChart data={chartExpenseData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
               <XAxis dataKey="month" stroke="#6B7280" />
               <YAxis stroke="#6B7280" />
@@ -919,7 +976,7 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             <h3 className="font-semibold text-lg">Leave Requests</h3>
             <p className="text-sm text-muted-foreground">Pending approval</p>
           </div>
-          <Badge variant="secondary">{leaveRequests.filter(r => r.status === 'pending').length} Pending</Badge>
+          <Badge variant="secondary">{pendingLeaveCount} Pending</Badge>
         </div>
         <Table>
           <TableHeader>
@@ -934,17 +991,21 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             </TableRow>
           </TableHeader>
           <TableBody>
-            {leaveRequests.length === 0 ? (
+            {safeLeaveRequests.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center text-muted-foreground">
                   No pending leave requests
                 </TableCell>
               </TableRow>
             ) : (
-              leaveRequests.map((request) => {
+              safeLeaveRequests.map((request) => {
                 const requestId = request._id || request.id || '';
-                const employeeName = request.userId?.name || request.employeeName || 'Unknown';
-                const leaveType = request.type || request.leaveType || 'N/A';
+                const employeeName = safeCell(
+                  request.employeeName ||
+                    (typeof request.userId === 'object' ? request.userId?.name : null) ||
+                    'Unknown'
+                );
+                const leaveType = safeCell(request.type || request.leaveType || 'N/A');
                 const startMs = new Date(request.startDate).getTime();
                 const endMs = new Date(request.endDate).getTime();
                 const days =
@@ -960,7 +1021,7 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
                     <TableCell>{days}</TableCell>
                     <TableCell>
                       <Badge variant={request.status === 'pending' ? 'secondary' : 'default'}>
-                        {request.status}
+                        {safeCell(request.status)}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -1043,20 +1104,28 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             </TableRow>
           </TableHeader>
           <TableBody>
-            {todaysAttendance.length === 0 ? (
+            {safeTodaysAttendance.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                   No attendance records for today
                 </TableCell>
               </TableRow>
             ) : (
-              todaysAttendance.map((attendance) => {
+              safeTodaysAttendance.map((attendance) => {
                 const breakInfo = summarizeAttendanceBreaks(attendance.breaks);
-                const rowKey = attendance._id || `${attendance.employeeName}-${attendance.checkIn}`;
+                const rowKey = attendance._id || `${safeCell(attendance.employeeName)}-${attendance.checkIn}`;
                 return (
                   <TableRow key={rowKey}>
-                    <TableCell className="font-medium">{attendance.employeeName}</TableCell>
-                    <TableCell>{attendance.department || attendance.employeeId?.department || 'N/A'}</TableCell>
+                    <TableCell className="font-medium">{safeCell(attendance.employeeName)}</TableCell>
+                    <TableCell>
+                      {safeCell(
+                        attendance.department ||
+                          (typeof attendance.employeeId === 'object'
+                            ? attendance.employeeId?.department
+                            : null) ||
+                          'N/A'
+                      )}
+                    </TableCell>
                     <TableCell>{formatTime(attendance.checkIn)}</TableCell>
                     <TableCell>{formatTime(breakInfo.start)}</TableCell>
                     <TableCell>{formatTime(breakInfo.end)}</TableCell>
@@ -1086,7 +1155,7 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             <h3 className="font-semibold text-lg">All Employees Break Records</h3>
             <p className="text-sm text-muted-foreground">Break start and end times stored for every employee today</p>
           </div>
-          <Badge variant="secondary">{todayBreakLog.length} entries</Badge>
+          <Badge variant="secondary">{safeTodayBreakLog.length} entries</Badge>
         </div>
         <Table>
           <TableHeader>
@@ -1101,14 +1170,14 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             </TableRow>
           </TableHeader>
           <TableBody>
-            {todayBreakLog.length === 0 ? (
+            {safeTodayBreakLog.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                   No break records for today yet
                 </TableCell>
               </TableRow>
             ) : (
-              todayBreakLog.map((row) => {
+              safeTodayBreakLog.map((row) => {
                 const rowKey = `${row.attendanceId}-${row.breakIndex}-${row.startTime}`;
                 const duration =
                   row.status === 'active' && row.startTime
@@ -1116,9 +1185,9 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
                     : row.duration;
                 return (
                   <TableRow key={rowKey}>
-                    <TableCell className="font-medium">{row.employeeName}</TableCell>
-                    <TableCell>{row.department || 'N/A'}</TableCell>
-                    <TableCell>{row.breakType || 'regular'}</TableCell>
+                    <TableCell className="font-medium">{safeCell(row.employeeName)}</TableCell>
+                    <TableCell>{safeCell(row.department || 'N/A')}</TableCell>
+                    <TableCell>{safeCell(row.breakType || 'regular')}</TableCell>
                     <TableCell>{formatTime(row.startTime)}</TableCell>
                     <TableCell>{formatTime(row.endTime)}</TableCell>
                     <TableCell>{duration != null ? `${duration} min` : '—'}</TableCell>

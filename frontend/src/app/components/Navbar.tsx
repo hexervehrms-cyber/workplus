@@ -176,7 +176,11 @@ export function Navbar() {
   useEffect(() => {
     if (authLoading || !user) return;
 
-    fetchNotifications();
+    void (async () => {
+      const { ensureAccessToken } = await import('../utils/sessionAuth');
+      await ensureAccessToken();
+      fetchNotifications();
+    })();
     const interval = setInterval(fetchNotifications, 30000);
 
     const onSocketNotification = (payload: {

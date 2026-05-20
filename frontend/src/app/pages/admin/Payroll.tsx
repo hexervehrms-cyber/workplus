@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -322,8 +322,7 @@ export default function Payroll() {
 
     try {
       setSubmitting(true);
-      const token = getBearerToken();
-      
+
       const endpoint = editingStructureId 
         ? `/salary/structure/${editingStructureId}`
         : '/salary/structure';

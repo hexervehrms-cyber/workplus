@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { Send, MessageSquare, X, Minimize2, Maximize2, Loader2, UserPlus, UsersRound } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Card } from './ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Button } from './ui/button';
@@ -133,8 +133,8 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
         if (!chatSocket.isConnected()) {
           await chatSocket.connect(
             authUserId,
-            authUser.role,
-            authUser.orgId || authUser.tenantId || undefined
+            authUser?.role || 'employee',
+            authUser?.orgId || authUser?.tenantId || undefined
           );
         }
 
@@ -165,15 +165,15 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
         const response = await apiClient.get<any[]>('/chat/users');
 
         if (response.data && Array.isArray(response.data)) {
-          const myId = String(authUser.id);
-          const hideSuperAdmin = authUser.role !== 'super_admin';
+          const myId = authUserId;
+          const hideSuperAdmin = authUser?.role !== 'super_admin';
           const formattedUsers: ChatUser[] = response.data
             .filter((u: any) => String(u._id || u.id) !== myId)
             .filter((u: any) => !hideSuperAdmin || u.role !== 'super_admin')
             .map((u: any) => ({
               id: String(u._id || u.id),
-              name: u.name,
-              email: u.email,
+              name: (u.name && String(u.name).trim()) || 'User',
+              email: (u.email && String(u.email).trim()) || 'Email not on file',
               avatar: u.avatar,
               isOnline: true,
               unreadCount: 0,
@@ -250,7 +250,7 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
         {
           messageId: tempId,
           senderId: myId,
-          senderName: authUser.name || 'You',
+          senderName: authUser?.name || 'You',
           content: text,
           timestamp: new Date(),
           isOwn: true,
@@ -362,7 +362,7 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
                         <div className="relative">
                           <Avatar className="h-8 w-8">
                             <AvatarImage src={chatUser.avatar} />
-                            <AvatarFallback>{chatUser.name.charAt(0)}</AvatarFallback>
+                            <AvatarFallback>{(chatUser.name || 'U').charAt(0)}</AvatarFallback>
                           </Avatar>
                           {chatUser.isOnline && (
                             <div className="absolute bottom-0 right-0 w-2 h-2 bg-green-500 rounded-full border border-background" />
@@ -396,7 +396,7 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
                 >
                   <Avatar className="h-8 w-8">
                     <AvatarImage src={selectedUser.avatar} />
-                    <AvatarFallback>{selectedUser.name.charAt(0)}</AvatarFallback>
+                    <AvatarFallback>{(selectedUser.name || 'U').charAt(0)}</AvatarFallback>
                   </Avatar>
                   <div className="text-left">
                     <p className="text-sm font-medium">{selectedUser.name}</p>

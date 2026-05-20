@@ -9,6 +9,11 @@ import {
   setAccessTokenMirror,
   clearAccessTokenMirror
 } from './sessionAccessMirror';
+import {
+  ensureAccessToken,
+  refreshAccessToken,
+  hydrateAccessToken,
+} from './sessionAuth';
 
 // API Configuration - Production Ready
 // In production, VITE_API_URL should be the full backend URL (e.g., https://workplus-backend-sg3a.onrender.com)
@@ -156,7 +161,7 @@ function isTokenExpired(token: string): boolean {
   }
 }
 
-export { ensureAccessToken, refreshAccessToken, hydrateAccessToken } from './sessionAuth';
+export { ensureAccessToken, refreshAccessToken, hydrateAccessToken };
 
 // Fetch with timeout
 async function fetchWithTimeout(url: string, options: RequestInit, timeout: number): Promise<Response> {
@@ -203,19 +208,27 @@ export class ApiClient {
     retryCount = 0
   ): Promise<ApiResponse<T>> {
     const url = this.buildUrl(endpoint);
-    let authToken = TokenManager.get();
+    let authToken = (await ensureAccessToken()) || TokenManager.get();
 
     if (authToken && isTokenExpired(authToken)) {
       try {
-        const refreshService = new TokenRefreshService();
-        const refreshResult = await refreshService.refreshToken();
-        if (refreshResult.success && refreshResult.data?.token) {
-          authToken = refreshResult.data.token;
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          authToken = refreshed;
+          TokenManager.set(refreshed);
         } else {
-          TokenManager.clear();
-          throw new ApiError('Session expired', 401, 'TOKEN_EXPIRED');
+          const refreshService = new TokenRefreshService();
+          const refreshResult = await refreshService.refreshToken();
+          if (refreshResult.success && refreshResult.data?.token) {
+            authToken = refreshResult.data.token;
+            TokenManager.set(authToken);
+          } else {
+            TokenManager.clear();
+            throw new ApiError('Session expired', 401, 'TOKEN_EXPIRED');
+          }
         }
-      } catch {
+      } catch (err) {
+        if (err instanceof ApiError) throw err;
         TokenManager.clear();
         throw new ApiError('Session expired', 401, 'TOKEN_EXPIRED');
       }
@@ -246,6 +259,13 @@ export class ApiClient {
 
       // Handle non-OK responses
       if (!response.ok) {
+        if (response.status === 401 && retryCount < MAX_RETRIES) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) {
+            TokenManager.set(refreshed);
+            return this.request<T>(endpoint, options, retryCount + 1);
+          }
+        }
         const error = new ApiError(
           data.message || data.error || `Request failed with status ${response.status}`,
           response.status,

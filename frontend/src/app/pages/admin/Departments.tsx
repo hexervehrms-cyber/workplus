@@ -74,6 +74,7 @@ export default function AdminDepartments() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'active' | 'inactive' | 'all'>('active');
   const [formData, setFormData] = useState(emptyForm);
+  const [formError, setFormError] = useState<string | null>(null);
   const [selectedDept, setSelectedDept] = useState<Department | null>(null);
   const [detailEmployees, setDetailEmployees] = useState<DeptEmployee[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -185,6 +186,7 @@ export default function AdminDepartments() {
   const openAddForm = (prefillName?: string) => {
     setEditingDepartment(null);
     setFormData(prefillName ? { ...emptyForm, name: prefillName } : emptyForm);
+    setFormError(null);
     setShowForm(true);
   };
 
@@ -209,14 +211,18 @@ export default function AdminDepartments() {
     setShowForm(false);
     setEditingDepartment(null);
     setFormData(emptyForm);
+    setFormError(null);
   };
 
   const handleSave = async () => {
     if (!formData.name.trim()) {
-      toast.error('Department name is required');
+      const msg = 'Department name is required';
+      setFormError(msg);
+      toast.error(msg);
       return;
     }
 
+    setFormError(null);
     setSaving(true);
     try {
       const payload: Record<string, unknown> = {
@@ -265,6 +271,7 @@ export default function AdminDepartments() {
           : err instanceof Error
             ? err.message
             : 'Failed to save department';
+      setFormError(msg);
       toast.error(msg);
     } finally {
       setSaving(false);
@@ -320,6 +327,11 @@ export default function AdminDepartments() {
               </Button>
             </div>
             <div className="space-y-4">
+              {formError && (
+                <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">
+                  {formError}
+                </p>
+              )}
               <div>
                 <label className="text-sm font-medium">Department Name *</label>
                 <Input

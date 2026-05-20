@@ -29,10 +29,27 @@ export function safeFormatInr(value: unknown): string {
 /** Coerce API list payloads to arrays (paginated wrappers sometimes nest data). */
 export function ensureArray<T>(value: unknown): T[] {
   if (Array.isArray(value)) return value;
-  if (value && typeof value === 'object' && Array.isArray((value as { data?: unknown }).data)) {
-    return (value as { data: T[] }).data;
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    if (Array.isArray(obj.data)) return obj.data as T[];
+    if (Array.isArray(obj.items)) return obj.items as T[];
+    if (Array.isArray(obj.results)) return obj.results as T[];
   }
   return [];
+}
+
+/** Safe table cell text — never throw when API returns objects/null. */
+export function safeCell(value: unknown): string {
+  if (value == null || value === '') return '—';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'object') {
+    const o = value as Record<string, unknown>;
+    if (typeof o.name === 'string') return o.name;
+    if (typeof o.label === 'string') return o.label;
+  }
+  return '—';
 }
 
 /** Run async work without bubbling rejections to the error boundary. */

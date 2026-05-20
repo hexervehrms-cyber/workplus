@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import {
   Send,
   Search,
@@ -241,7 +241,7 @@ export default function TeamsMessenger() {
       ]);
 
       const rawUsers = Array.isArray(usersRes.data) ? usersRes.data : [];
-      const hideSuperAdmin = user.role !== 'super_admin';
+      const hideSuperAdmin = user?.role !== 'super_admin';
       const formattedUsers: ChatUser[] = rawUsers
         .filter((u: any) => String(u._id || u.id) !== myId)
         .filter((u: any) => !hideSuperAdmin || u.role !== 'super_admin')
@@ -356,8 +356,8 @@ export default function TeamsMessenger() {
         if (!appSocket.isConnected()) {
           await appSocket.connect(
             myAuthId,
-            user.role,
-            user.orgId || user.tenantId || undefined
+            user?.role || 'admin',
+            user?.orgId || user?.tenantId || undefined
           );
         }
 
@@ -648,7 +648,7 @@ export default function TeamsMessenger() {
       const newMessage: Message = {
         messageId: `temp-${Date.now()}`, // Temporary ID until server confirms
         senderId: myAuthId,
-        senderName: user.name || 'You',
+        senderName: user?.name || 'You',
         recipientId: isGroup ? undefined : selectedUser.id,
         content: messageInput,
         timestamp: new Date(),
@@ -823,7 +823,7 @@ export default function TeamsMessenger() {
         const newMessage: Message = {
           messageId: payload?.messageId || `temp-${Date.now()}`,
           senderId: myAuthId,
-          senderName: user.name || 'You',
+          senderName: user?.name || 'You',
           recipientId: selectedUser.chatKind === 'group' ? undefined : selectedUser.id,
           content: fileUrl,
           timestamp: new Date(),
@@ -894,7 +894,7 @@ export default function TeamsMessenger() {
       return;
     }
     const canEditOther =
-      user.role === 'admin' || user.role === 'super_admin';
+      user?.role === 'admin' || user?.role === 'super_admin';
     const isSelf = selectedUser.id === myAuthId;
     if (!isSelf && !canEditOther) {
       toast.error('You can only change your own profile photo here');

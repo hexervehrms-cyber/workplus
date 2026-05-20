@@ -39,6 +39,39 @@ export function holidayOrgReadFilter(scopedOrgId) {
   return { $or: [{ orgId: o }, { organizationId: o }] };
 }
 
+const pickHolidayOrg = (v) => {
+  if (v == null || v === '') return null;
+  const s = String(v).trim();
+  if (!s || s === 'system') return null;
+  return s;
+};
+
+/**
+ * Resolve tenant org for holiday routes (GET/POST). Accepts JWT scope, ?orgId=, body.orgId, legacy organizationId.
+ */
+export function resolveHolidayOrgIdForRequest(req) {
+  const fromValidated = pickHolidayOrg(req.validatedOrgId);
+  const fromUser = pickHolidayOrg(userOrgIdFromReq(req));
+  const fromQuery = pickHolidayOrg(req.query?.orgId);
+  const fromBody = pickHolidayOrg(req.body?.orgId);
+  const fromLegacyBody = pickHolidayOrg(req.body?.organizationId);
+
+  if (isSuperAdmin(req)) {
+    return (
+      fromQuery ||
+      fromBody ||
+      fromLegacyBody ||
+      fromUser ||
+      fromValidated ||
+      null
+    );
+  }
+
+  const tenant = fromValidated || fromUser;
+  if (tenant) return tenant;
+  return fromBody || fromLegacyBody || null;
+}
+
 /** Match users belonging to a tenant (orgId / legacy tenantId / organizationId). */
 export function userOrgMatchFilter(scopedOrgId) {
   const o = String(scopedOrgId);

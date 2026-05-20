@@ -15,7 +15,7 @@ import {
   Clock,
   AlertCircle
 } from 'lucide-react';
-import { apiFetchBlob, apiGet } from '../utils/apiHelper';
+import { apiFetchBlob, apiGet, appendOrgIdParam } from '../utils/apiHelper';
 
 interface Holiday {
   id: string;
@@ -60,7 +60,7 @@ const EmployeeHolidayCalendar: React.FC<{ organizationId?: string }> = ({
     setLoading(true);
     try {
       const data = await apiGet<{ data?: Holiday[] }>(
-        `holidays?year=${selectedYear}`,
+        appendOrgIdParam(`holidays?year=${selectedYear}&limit=500`, null, organizationId),
         false
       );
       const holidays = data?.data || [];

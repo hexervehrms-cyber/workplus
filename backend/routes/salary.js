@@ -24,6 +24,8 @@ import {
   findScopedEmployee,
   userOrgIdFromReq
 } from "../utils/orgScopeHelpers.js";
+import { buildSalarySlipHtml } from "../utils/salarySlipHtml.js";
+import Organization from "../models/Organization.js";
 
 const router = express.Router();
 
@@ -78,7 +80,11 @@ async function assertSlipOrgAccess(req, slip) {
   if (isSuperAdmin(req)) {
     return { ok: true };
   }
-  if (String(slip.orgId) !== String(req.user.orgId)) {
+  const callerOrg = userOrgIdFromReq(req) || req.user.orgId;
+  if (!callerOrg || !slip.orgId) {
+    return { ok: true };
+  }
+  if (String(slip.orgId) !== String(callerOrg)) {
     return { ok: false, status: 403, message: "Forbidden" };
   }
   return { ok: true };
@@ -670,16 +676,18 @@ router.get(
         return sendError(res, "Salary slip not found", 404, "NOT_FOUND");
       }
 
-      const requestUserId = req.user.userId?.toString?.() || String(req.user.userId);
-      const employeeUserId = slip.employeeId?.userId
-        ? String(slip.employeeId.userId._id || slip.employeeId.userId)
-        : null;
-      const isOwner =
-        (slip.userId && String(slip.userId) === requestUserId) ||
-        (employeeUserId && employeeUserId === requestUserId);
       const isPrivileged = ["admin", "hr", "super_admin"].includes(req.user.role);
-      if (!isOwner && !isPrivileged) {
-        return sendError(res, "Unauthorized", 403, "FORBIDDEN");
+      const employeeId = slip.employeeId?._id || slip.employeeId;
+      if (!isPrivileged) {
+        const access = await assertCanAccessEmployeeSalaryData(req, employeeId);
+        if (!access.ok) {
+          return sendError(
+            res,
+            access.message,
+            access.status,
+            access.status === 403 ? "FORBIDDEN" : "NOT_FOUND"
+          );
+        }
       }
 
       const orgAccess = await assertSlipOrgAccess(req, slip);
@@ -902,10 +910,12 @@ router.get(
       const slip = await SalarySlip.findById(slipId)
         .populate({
           path: "employeeId",
-          select: "firstName lastName employeeCode email userId",
+          select:
+            "firstName lastName employeeCode email userId department designation joiningDate",
           populate: { path: "userId", select: "_id" }
         })
-        .populate("salaryStructureId");
+        .populate("salaryStructureId")
+        .lean();
 
       if (!slip) {
         return sendError(res, "Salary slip not found", 404, "NOT_FOUND");
@@ -918,7 +928,7 @@ router.get(
           : slip.userId._id
             ? slip.userId._id.toString()
             : slip.userId.toString();
-      const employeeDoc = slip.employeeId;
+      const employeeDoc = slip.employeeId || {};
       let employeeUserId = null;
       if (employeeDoc?.userId) {
         const u = employeeDoc.userId;
@@ -937,314 +947,19 @@ router.get(
       if (!orgAccess.ok) {
         return sendError(res, orgAccess.message, orgAccess.status, orgAccess.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
       }
+      let organization = null;
+      const orgId = slip.orgId || employeeDoc.orgId;
+      if (orgId) {
+        organization = await Organization.findById(orgId)
+          .select("name address logo settings")
+          .lean();
+      }
 
-      // Generate PDF content as HTML with professional format
-      const monthName = new Date(slip.year, slip.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-      const employee = slip.employeeId;
-      const slipNumber = `S${slip._id.toString().slice(-6).toUpperCase()}`;
-      const organization = slip.salaryStructureId?.location || 'WorkPlus HRMS';
-
-      const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { 
-              font-family: 'Arial', sans-serif; 
-              background-color: #f5f5f5;
-              padding: 20px;
-            }
-            .container {
-              background-color: white;
-              max-width: 900px;
-              margin: 0 auto;
-              padding: 40px;
-              box-shadow: 0 0 10px rgba(0,0,0,0.1);
-            }
-            .header-top {
-              display: flex;
-              justify-content: space-between;
-              align-items: center;
-              margin-bottom: 30px;
-              border-bottom: 3px solid #1a5f3f;
-              padding-bottom: 20px;
-            }
-            .company-info {
-              flex: 1;
-            }
-            .company-logo {
-              font-size: 24px;
-              font-weight: bold;
-              color: #1a5f3f;
-              margin-bottom: 5px;
-            }
-            .company-address {
-              font-size: 12px;
-              color: #666;
-            }
-            .slip-header {
-              text-align: center;
-              flex: 1;
-            }
-            .slip-title {
-              font-size: 32px;
-              font-weight: bold;
-              color: #000;
-              margin-bottom: 10px;
-            }
-            .slip-details {
-              text-align: right;
-              flex: 1;
-            }
-            .slip-detail-row {
-              display: flex;
-              justify-content: space-between;
-              font-size: 13px;
-              margin-bottom: 5px;
-            }
-            .slip-detail-label {
-              font-weight: bold;
-              margin-right: 20px;
-            }
-            .content {
-              display: grid;
-              grid-template-columns: 1fr 1fr;
-              gap: 30px;
-              margin-bottom: 30px;
-            }
-            .section {
-              margin-bottom: 20px;
-            }
-            .section-title {
-              font-weight: bold;
-              font-size: 13px;
-              text-transform: uppercase;
-              border-bottom: 2px solid #000;
-              padding-bottom: 8px;
-              margin-bottom: 12px;
-            }
-            .info-table {
-              width: 100%;
-              border-collapse: collapse;
-              font-size: 12px;
-            }
-            .info-table td {
-              border: 1px solid #000;
-              padding: 8px;
-            }
-            .info-table td:first-child {
-              font-weight: bold;
-              background-color: #f0f0f0;
-              width: 50%;
-            }
-            .earnings-table {
-              width: 100%;
-              border-collapse: collapse;
-              font-size: 12px;
-            }
-            .earnings-table td {
-              border: 1px solid #000;
-              padding: 8px;
-            }
-            .earnings-table td:first-child {
-              font-weight: bold;
-              background-color: #f0f0f0;
-            }
-            .earnings-table td:last-child {
-              text-align: right;
-            }
-            .summary-section {
-              grid-column: 1 / -1;
-              display: grid;
-              grid-template-columns: 1fr 1fr;
-              gap: 30px;
-            }
-            .summary-table {
-              width: 100%;
-              border-collapse: collapse;
-              font-size: 12px;
-            }
-            .summary-table td {
-              border: 1px solid #000;
-              padding: 10px;
-            }
-            .summary-table td:first-child {
-              font-weight: bold;
-              background-color: #f0f0f0;
-              width: 60%;
-            }
-            .summary-table td:last-child {
-              text-align: right;
-            }
-            .net-salary-box {
-              background-color: #1a5f3f;
-              color: white;
-              padding: 15px;
-              text-align: center;
-              font-weight: bold;
-              font-size: 14px;
-              border-radius: 4px;
-              margin-top: 10px;
-            }
-            .net-salary-label {
-              font-size: 12px;
-              margin-bottom: 5px;
-            }
-            .net-salary-amount {
-              font-size: 18px;
-            }
-            .signature-section {
-              margin-top: 30px;
-              text-align: right;
-              font-size: 12px;
-            }
-            .footer {
-              margin-top: 30px;
-              text-align: center;
-              font-size: 11px;
-              color: #666;
-              border-top: 1px solid #ddd;
-              padding-top: 15px;
-            }
-            .footer-bar {
-              background-color: #1a5f3f;
-              height: 20px;
-              margin-top: 20px;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <!-- Header -->
-            <div class="header-top">
-              <div class="company-info">
-                <div class="company-logo">WorkPlus HRMS</div>
-                <div class="company-address">123 Anywhere St, Any City</div>
-              </div>
-              <div class="slip-header">
-                <div class="slip-title">SALARY SLIP</div>
-              </div>
-              <div class="slip-details">
-                <div class="slip-detail-row">
-                  <span class="slip-detail-label">Pay Period</span>
-                  <span>${monthName}</span>
-                </div>
-                <div class="slip-detail-row">
-                  <span class="slip-detail-label">Slip Number</span>
-                  <span>${slipNumber}</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Main Content -->
-            <div class="content">
-              <!-- Employee Information -->
-              <div class="section">
-                <div class="section-title">EMPLOYEE INFORMATION</div>
-                <table class="info-table">
-                  <tr>
-                    <td>Employee Name</td>
-                    <td>${employee.firstName} ${employee.lastName}</td>
-                  </tr>
-                  <tr>
-                    <td>Employee NIP/ID</td>
-                    <td>${employee.employeeCode || 'N/A'}</td>
-                  </tr>
-                  <tr>
-                    <td>Department</td>
-                    <td>${slip.salaryStructureId?.location || 'N/A'}</td>
-                  </tr>
-                  <tr>
-                    <td>Designation</td>
-                    <td>${slip.salaryStructureId?.employeeType || 'N/A'}</td>
-                  </tr>
-                  <tr>
-                    <td>Email</td>
-                    <td>${employee.email || 'N/A'}</td>
-                  </tr>
-                </table>
-              </div>
-
-              <!-- Salary Details (Income) -->
-              <div class="section">
-                <div class="section-title">SALARY DETAILS</div>
-                <div style="margin-bottom: 10px;">
-                  <strong>Income</strong>
-                </div>
-                <table class="earnings-table">
-                  ${slip.earnings.basic ? `<tr><td>Basic Salary</td><td>₹${slip.earnings.basic.toLocaleString()}</td></tr>` : ''}
-                  ${slip.earnings.hra ? `<tr><td>House Rent Allowance (HRA)</td><td>₹${slip.earnings.hra.toLocaleString()}</td></tr>` : ''}
-                  ${slip.earnings.medicalExpenses ? `<tr><td>Medical Expenses</td><td>₹${slip.earnings.medicalExpenses.toLocaleString()}</td></tr>` : ''}
-                  ${slip.earnings.travel ? `<tr><td>Travel Allowance</td><td>₹${slip.earnings.travel.toLocaleString()}</td></tr>` : ''}
-                  ${slip.earnings.internetCharges ? `<tr><td>Internet Charges</td><td>₹${slip.earnings.internetCharges.toLocaleString()}</td></tr>` : ''}
-                  ${slip.earnings.nightShiftAllowance ? `<tr><td>Night Shift Allowance</td><td>₹${slip.earnings.nightShiftAllowance.toLocaleString()}</td></tr>` : ''}
-                  ${slip.earnings.incentives ? `<tr><td>Incentives</td><td>₹${slip.earnings.incentives.toLocaleString()}</td></tr>` : ''}
-                  ${slip.earnings.bonus ? `<tr><td>Bonus / Incentive</td><td>₹${slip.earnings.bonus.toLocaleString()}</td></tr>` : ''}
-                  ${slip.earnings.commission ? `<tr><td>Commission</td><td>₹${slip.earnings.commission.toLocaleString()}</td></tr>` : ''}
-                  ${slip.earnings.otherEarnings && slip.earnings.otherEarnings.length > 0 ? slip.earnings.otherEarnings.map(e => `<tr><td>${e.name}</td><td>₹${e.amount.toLocaleString()}</td></tr>`).join('') : ''}
-                </table>
-              </div>
-
-              <!-- Salary Summary -->
-              <div class="section">
-                <div class="section-title">SALARY SUMMARY</div>
-                <table class="summary-table">
-                  <tr>
-                    <td>Total Revenue</td>
-                    <td>₹${slip.grossEarnings.toLocaleString()}</td>
-                  </tr>
-                  <tr>
-                    <td>Total Deductions</td>
-                    <td>₹${slip.totalDeductions.toLocaleString()}</td>
-                  </tr>
-                  <tr>
-                    <td>Net Salary Received</td>
-                    <td>₹${slip.netSalary.toLocaleString()}</td>
-                  </tr>
-                </table>
-              </div>
-
-              <!-- Deductions -->
-              <div class="section">
-                <div class="section-title">DEDUCTIONS</div>
-                <table class="earnings-table">
-                  ${slip.deductions.providentFund ? `<tr><td>Provident Fund (PF)</td><td>₹${slip.deductions.providentFund.toLocaleString()}</td></tr>` : ''}
-                  ${slip.deductions.employeeStateInsurance ? `<tr><td>Employee State Insurance (ESI)</td><td>₹${slip.deductions.employeeStateInsurance.toLocaleString()}</td></tr>` : ''}
-                  ${slip.deductions.professionalTax ? `<tr><td>Professional Tax</td><td>₹${slip.deductions.professionalTax.toLocaleString()}</td></tr>` : ''}
-                  ${slip.deductions.incomeTax ? `<tr><td>Income Tax</td><td>₹${slip.deductions.incomeTax.toLocaleString()}</td></tr>` : ''}
-                  ${slip.deductions.leaveDeduction ? `<tr><td>Leave Deduction</td><td>₹${slip.deductions.leaveDeduction.toLocaleString()}</td></tr>` : ''}
-                  ${slip.deductions.otherDeductions && slip.deductions.otherDeductions.length > 0 ? slip.deductions.otherDeductions.map(d => `<tr><td>${d.name}</td><td>₹${d.amount.toLocaleString()}</td></tr>`).join('') : ''}
-                </table>
-              </div>
-
-              <!-- Net Salary Box -->
-              <div class="section">
-                <div class="net-salary-box">
-                  <div class="net-salary-label">Net Salary Received</div>
-                  <div class="net-salary-amount">₹${slip.netSalary.toLocaleString()}</div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Signature Section -->
-            <div class="signature-section">
-              <div style="margin-bottom: 30px;">HR / Finance Signature</div>
-              <div style="border-top: 1px solid #000; width: 150px; margin-left: auto;"></div>
-            </div>
-
-            <!-- Footer -->
-            <div class="footer">
-              <p>Slip Print Date: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
-              <p>This is a system-generated document. No signature required.</p>
-            </div>
-
-            <div class="footer-bar"></div>
-          </div>
-        </body>
-        </html>
-      `;
+      const htmlContent = buildSalarySlipHtml({
+        slip,
+        employee: employeeDoc,
+        organization: organization || {},
+      });
 
       // Set response headers for PDF download
       res.setHeader('Content-Type', 'text/html; charset=utf-8');

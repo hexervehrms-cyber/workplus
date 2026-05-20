@@ -5,20 +5,27 @@ import { authenticate, authorize } from "../middleware/auth.js";
 import Holiday from "../models/Holiday.js";
 import logger from "../utils/logger.js";
 import redis from "../utils/redis.js";
-import { holidayOrgReadFilter, resolveScopedOrgId } from "../utils/orgScopeHelpers.js";
+import {
+  holidayOrgReadFilter,
+  resolveHolidayOrgIdForRequest,
+} from "../utils/orgScopeHelpers.js";
+import { enforceOrgIdInQuery } from "../middleware/orgIdValidation.js";
 
 const router = express.Router();
+
+router.use(enforceOrgIdInQuery);
 
 const HOLIDAYS_CACHE_KEY = (orgId, year, month) => `holidays:${orgId}:${year}:${month}`;
 const CALENDAR_CACHE_KEY = (orgId, year) => `calendar:${orgId}:${year}`;
 const UPCOMING_CACHE_KEY = (orgId, days) => `upcoming:${orgId}:${days}`;
 
 function requireHolidayOrgId(req, res) {
-  const orgId = resolveScopedOrgId(req);
+  const orgId = resolveHolidayOrgIdForRequest(req);
   if (!orgId) {
     res.status(400).json({
       success: false,
-      message: "orgId is required (query orgId for super admin)",
+      message:
+        "orgId is required. Link your account to an organization or pass orgId (super admin).",
       code: "MISSING_ORG_CONTEXT"
     });
     return null;
@@ -311,17 +318,23 @@ router.post("/", authenticate, authorize("super_admin", "admin", "hr"), asyncHan
     });
   }
 
+  const scopedOrgId = String(orgId).trim();
   const holiday = await Holiday.create({
     name: name.trim(),
     date: parsedDate,
     type,
     description: description?.trim(),
     isRecurring,
-    orgId,
+    orgId: scopedOrgId,
+    organizationId: scopedOrgId,
     createdBy: userId
   });
 
-  logger.info("Holiday created", { holidayId: holiday._id, orgId, name });
+  logger.info("Holiday created", { holidayId: holiday._id, orgId: scopedOrgId, name });
+
+  if (req.emitHolidayUpdate) {
+    req.emitHolidayUpdate("created", holiday, scopedOrgId);
+  }
 
   try {
     const y = parsedDate.getFullYear();
@@ -371,6 +384,7 @@ router.post("/bulk-import", authenticate, authorize("super_admin", "admin", "hr"
 
   const templates = holidayTemplates[country] || holidayTemplates.US;
   const holidaysToCreate = [];
+  const scopedOrgId = String(orgId).trim();
 
   for (const template of templates) {
     if (!includeOptional && template.type === "optional") {
@@ -391,7 +405,8 @@ router.post("/bulk-import", authenticate, authorize("super_admin", "admin", "hr"
         date: holidayDate,
         type: template.type,
         description: `${template.name} - ${country} holiday`,
-        orgId,
+        orgId: scopedOrgId,
+        organizationId: scopedOrgId,
         createdBy: userId
       });
     }
@@ -498,9 +513,15 @@ router.put("/:id", authenticate, authorize("super_admin", "admin", "hr"), asyncH
   if (type) holiday.type = type;
   if (description !== undefined) holiday.description = description?.trim();
   if (isRecurring !== undefined) holiday.isRecurring = isRecurring;
-  if (!holiday.orgId) holiday.orgId = orgId;
+  const scopedOrgId = String(orgId).trim();
+  if (!holiday.orgId) holiday.orgId = scopedOrgId;
+  holiday.organizationId = scopedOrgId;
 
   await holiday.save();
+
+  if (req.emitHolidayUpdate) {
+    req.emitHolidayUpdate("updated", holiday, scopedOrgId);
+  }
 
   try {
     await redis.del(HOLIDAYS_CACHE_KEY(orgId, oldDate.getFullYear(), oldDate.getMonth() + 1));

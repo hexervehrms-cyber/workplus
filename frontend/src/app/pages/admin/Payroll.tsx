@@ -1379,136 +1379,36 @@ export default function Payroll() {
 
       {/* View Salary Slip Dialog */}
       <Dialog open={showViewSlipDialog} onOpenChange={(open) => !open && closeViewSlipDialog()}>
-        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Salary Slip Details</DialogTitle>
+        <DialogContent className="max-w-4xl max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
+            <DialogTitle>Salary payslip</DialogTitle>
             <DialogDescription>
               {viewingSlip && `${viewingSlip.employeeName} - ${new Date(viewingSlip.year, viewingSlip.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`}
             </DialogDescription>
           </DialogHeader>
 
           {viewSlipLoading ? (
-            <div className="flex justify-center py-12">
+            <div className="flex justify-center items-center min-h-[480px]">
               <Loader className="w-8 h-8 animate-spin" />
             </div>
           ) : viewingSlip ? (
-            <div className="space-y-6">
-              {previewUrl && (
-                <div>
-                  <p className="text-sm font-medium mb-2">Payslip preview</p>
-                  <iframe title="Salary slip preview" src={previewUrl} className="w-full h-[280px] rounded-md border bg-white" />
-                </div>
-              )}
-              <div className="bg-muted p-4 rounded-lg">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Employee Name</p>
-                    <p className="font-semibold">{viewingSlip.employeeName}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Period</p>
-                    <p className="font-semibold">
-                      {new Date(viewingSlip.year, viewingSlip.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Status</p>
-                    <Badge variant={viewingSlip.status === 'approved' ? 'default' : 'secondary'}>
-                      {viewingSlip.status}
-                    </Badge>
-                  </div>
-                  {viewingSlip.approvalDate && (
-                    <div>
-                      <p className="text-sm text-muted-foreground">Approved On</p>
-                      <p className="font-semibold">
-                        {new Date(viewingSlip.approvalDate).toLocaleDateString('en-US', { 
-                          day: 'numeric', 
-                          month: 'short', 
-                          year: 'numeric' 
-                        })}
-                      </p>
-                    </div>
-                  )}
-                </div>
+            <>
+              <div className="px-6 pb-2 flex flex-wrap items-center gap-3 text-sm shrink-0">
+                <Badge variant={viewingSlip.status === 'approved' ? 'default' : 'secondary'}>
+                  {viewingSlip.status}
+                </Badge>
+                <span className="text-muted-foreground">
+                  Net: <span className="font-semibold text-foreground">₹{safeFormatInr(viewingSlip.netSalary)}</span>
+                </span>
               </div>
-
-              {/* Earnings & Deductions */}
-              <div className="grid grid-cols-2 gap-6">
-                {/* Earnings */}
-                <div className="space-y-3">
-                  <h3 className="font-semibold text-lg border-b pb-2">Earnings</h3>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-sm">Gross Earnings</span>
-                      <span className="font-medium">₹{safeFormatInr(viewingSlip.grossEarnings)}</span>
-                    </div>
-                    {viewingSlip.earnings?.basic ? (
-                      <div className="flex justify-between text-sm py-1 border-b">
-                        <span>Basic</span>
-                        <span>₹{safeFormatInr(viewingSlip.earnings.basic)}</span>
-                      </div>
-                    ) : null}
-                    {viewingSlip.earnings?.hra ? (
-                      <div className="flex justify-between text-sm py-1 border-b">
-                        <span>HRA</span>
-                        <span>₹{safeFormatInr(viewingSlip.earnings.hra)}</span>
-                      </div>
-                    ) : null}
-                    {viewingSlip.earnings?.bonus ? (
-                      <div className="flex justify-between text-sm py-1 border-b">
-                        <span>Bonus</span>
-                        <span>₹{safeFormatInr(viewingSlip.earnings.bonus)}</span>
-                      </div>
-                    ) : null}
-                    {viewingSlip.earnings?.incentives ? (
-                      <div className="flex justify-between text-sm py-1 border-b">
-                        <span>Incentives</span>
-                        <span>₹{viewingSlip.earnings.incentives.toLocaleString()}</span>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-
-                {/* Deductions */}
-                <div className="space-y-3">
-                  <h3 className="font-semibold text-lg border-b pb-2">Deductions</h3>
-                  <div className="space-y-2">
-                    {viewingSlip.deductions?.providentFund ? (
-                      <div className="flex justify-between text-sm py-1 border-b">
-                        <span>PF</span>
-                        <span>₹{safeFormatInr(viewingSlip.deductions.providentFund)}</span>
-                      </div>
-                    ) : null}
-                    {viewingSlip.deductions?.professionalTax ? (
-                      <div className="flex justify-between text-sm py-1 border-b">
-                        <span>Prof. Tax</span>
-                        <span>₹{safeFormatInr(viewingSlip.deductions.professionalTax)}</span>
-                      </div>
-                    ) : null}
-                    <div className="flex justify-between pt-2 font-semibold text-sm">
-                      <span>Total Deductions</span>
-                      <span>
-                        ₹
-                        {safeFormatInr(
-                          viewingSlip.totalDeductions ??
-                            (viewingSlip.grossEarnings ?? 0) - (viewingSlip.netSalary ?? 0)
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Net Salary */}
-              <div className="bg-primary/10 p-4 rounded-lg">
-                <div className="flex justify-between items-center">
-                  <span className="text-lg font-semibold">Net Salary</span>
-                  <span className="text-2xl font-bold text-primary">₹{safeFormatInr(viewingSlip.netSalary)}</span>
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="flex gap-2 justify-end border-t pt-4">
+              {previewUrl ? (
+                <iframe
+                  title="Salary slip preview"
+                  src={previewUrl}
+                  className="w-[calc(100%-3rem)] mx-6 mb-2 h-[min(72vh,680px)] rounded-lg border border-border bg-white shrink-0"
+                />
+              ) : null}
+              <div className="flex gap-2 justify-end border-t px-6 py-4 shrink-0">
                 <Button variant="outline" onClick={closeViewSlipDialog} className="rounded-lg">
                   Close
                 </Button>
@@ -1531,7 +1431,7 @@ export default function Payroll() {
                   Delete
                 </Button>
               </div>
-            </div>
+            </>
           ) : null}
         </DialogContent>
       </Dialog>

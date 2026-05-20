@@ -154,12 +154,16 @@ export default function InviteManagement() {
     const onboardingUrl = `${window.location.origin}/onboarding/${invite.token}`;
     setSubmitting(true);
     try {
-      const data = await apiPost<{ message?: string }>('onboarding/send-email', {
-        token: invite.token,
-        employeeEmail: invite.email,
-        employeeName: invite.employeeName || invite.email,
-        onboardingUrl,
-      });
+      const data = await apiPost<{ message?: string }>(
+        'onboarding/send-email',
+        {
+          token: invite.token,
+          employeeEmail: invite.email,
+          employeeName: invite.employeeName || invite.email,
+          onboardingUrl,
+        },
+        { timeoutMs: 90_000 }
+      );
       toast.success(data?.message || 'Invite email sent');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to send email');

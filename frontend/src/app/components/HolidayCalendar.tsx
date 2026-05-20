@@ -32,6 +32,7 @@ import {
   apiGet,
   apiPost,
   apiPut,
+  clearApiCache,
 } from '../utils/apiHelper';
 import { useAuth } from '../context/AuthContext';
 import { toast } from '../utils/portalToast';
@@ -106,7 +107,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         return;
       }
       const data = await apiGet<{ data?: Holiday[] }>(
-        appendOrgIdParam(`holidays?year=${selectedYear}&limit=500`, user),
+        appendOrgIdParam(`holidays?year=${selectedYear}&limit=500`, user, organizationId),
         false
       );
       setHolidays(data?.data || []);
@@ -120,7 +121,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
     try {
       // Get all holiday calendars
       const data = await apiGet<{ data?: { calendar?: Record<string, Holiday[]> } }>(
-        appendOrgIdParam(`holidays/calendar/${selectedYear}`, user),
+        appendOrgIdParam(`holidays/calendar/${selectedYear}`, user, organizationId),
         false
       );
       if (data?.data?.calendar) {
@@ -175,7 +176,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
     }
 
     try {
-      await apiDelete(appendOrgIdParam(`holidays/${holidayId}`, user));
+      await apiDelete(appendOrgIdParam(`holidays/${holidayId}`, user, organizationId));
       setHolidays((prev) => prev.filter((h) => (h._id || h.id) !== holidayId));
       alert('Holiday deleted successfully!');
     } catch (error) {
@@ -185,6 +186,10 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
   };
 
   const handleSaveHoliday = async () => {
+    if (!organizationId) {
+      toast.error('Organization context is required to save holidays');
+      return;
+    }
     if (!holidayFormData.name.trim()) {
       alert('Please enter holiday name');
       return;
@@ -198,8 +203,9 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       if (editingHoliday) {
         const holidayId = editingHoliday._id || editingHoliday.id;
         const updatedHoliday = await apiPut<{ data?: Holiday & { _id?: string } }>(
-          appendOrgIdParam(`holidays/${holidayId}`, user),
+          appendOrgIdParam(`holidays/${holidayId}`, user, organizationId),
           {
+            orgId: organizationId,
             name: holidayFormData.name,
             date: holidayFormData.date,
             type: holidayFormData.type,
@@ -217,8 +223,9 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         alert('Holiday updated successfully!');
       } else {
         const newHolidayData = await apiPost<{ data?: Holiday & { _id?: string } }>(
-          appendOrgIdParam('holidays', user),
+          appendOrgIdParam('holidays', user, organizationId),
           {
+            orgId: organizationId,
             name: holidayFormData.name,
             date: holidayFormData.date,
             type: holidayFormData.type,
@@ -256,7 +263,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         description: '',
         isRecurring: false
       });
-      // Reload holidays to reflect changes
+      clearApiCache('/holidays');
       loadHolidays();
     } catch (error) {
       console.error('Error saving holiday:', error);
@@ -315,7 +322,10 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
 
   const handlePublishCalendar = async (calendarId: string) => {
     try {
-      await apiPost(appendOrgIdParam(`holidays/calendars/${calendarId}/publish`, user), {});
+      await apiPost(
+        appendOrgIdParam(`holidays/calendars/${calendarId}/publish`, user, organizationId),
+        {}
+      );
       setCalendars((prev) =>
         prev.map((cal) =>
           cal.id === calendarId
@@ -345,7 +355,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
   const handleDownloadCalendar = async (calendarId: string) => {
     try {
       const blob = await apiFetchBlob(
-        appendOrgIdParam(`holidays/calendars/${calendarId}/download`, user)
+        appendOrgIdParam(`holidays/calendars/${calendarId}/download`, user, organizationId)
       );
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');

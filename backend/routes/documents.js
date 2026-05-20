@@ -34,12 +34,41 @@ const router = express.Router();
 const MANAGE_DOC_ROLES = ["super_admin", "admin", "hr"];
 
 function resolveWriteOrgId(req, bodyOrgId) {
+  const pick = (v) => {
+    if (v == null || v === "") return null;
+    const s = String(v).trim();
+    if (!s || s === "system") return null;
+    return s;
+  };
   if (isSuperAdmin(req)) {
-    const picked =
-      bodyOrgId || resolveScopedOrgId(req) || userOrgIdFromReq(req);
-    return picked ? String(picked) : "";
+    return (
+      pick(bodyOrgId) ||
+      pick(resolveScopedOrgId(req)) ||
+      pick(userOrgIdFromReq(req)) ||
+      null
+    );
   }
-  return String(userOrgIdFromReq(req) || req.validatedOrgId || "");
+  return pick(userOrgIdFromReq(req)) || pick(req.validatedOrgId) || pick(bodyOrgId) || null;
+}
+
+const EMPLOYMENT_DOCUMENT_TYPES = [
+  "general",
+  "experience_letter",
+  "offer_letter",
+  "relieving_letter",
+  "appraisal_letter",
+  "salary_slips",
+  "bank_statement",
+];
+
+function buildDocumentOrgFilter(req, employeeOrgId) {
+  const ids = new Set();
+  const scoped = userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId;
+  if (scoped) ids.add(String(scoped));
+  if (employeeOrgId) ids.add(String(employeeOrgId));
+  if (!ids.size) return null;
+  if (ids.size === 1) return { orgId: [...ids][0] };
+  return { orgId: { $in: [...ids] } };
 }
 
 async function assertPersonalDocumentAccess(req, document) {
@@ -76,14 +105,15 @@ async function assertCanAccessEmployeeDocuments(req, employeeIdParam) {
     if (!isSuperAdmin(req) && String(emp.orgId) !== String(req.user.orgId)) {
       return { ok: false, status: 403, message: "Unauthorized access" };
     }
-    return { ok: true, userId: String(emp.userId) };
+    return {
+      ok: true,
+      userId: String(emp.userId),
+      employeeOrgId: emp.orgId,
+    };
   }
 
-  const self = await Employee.findOne({
-    userId: req.user.userId,
-    orgId: req.user.orgId
-  })
-    .select("_id userId")
+  const self = await Employee.findOne({ userId: req.user.userId })
+    .select("_id userId orgId")
     .lean();
 
   const param = String(employeeIdParam);
@@ -93,7 +123,22 @@ async function assertCanAccessEmployeeDocuments(req, employeeIdParam) {
   ) {
     return { ok: false, status: 403, message: "Unauthorized access" };
   }
-  return { ok: true, userId: String(self.userId) };
+
+  const scopedOrg = userOrgIdFromReq(req) || req.validatedOrgId;
+  if (
+    scopedOrg &&
+    self.orgId &&
+    String(self.orgId) !== String(scopedOrg) &&
+    !isSuperAdmin(req)
+  ) {
+    logger.warn("Employee org mismatch on document access", {
+      userId: req.user.userId,
+      employeeOrgId: self.orgId,
+      tokenOrgId: scopedOrg,
+    });
+  }
+
+  return { ok: true, userId: String(self.userId), employeeOrgId: self.orgId };
 }
 
 /** Resolve org id for reads — non–super-admins are limited to their tenant. */
@@ -307,7 +352,12 @@ router.post(
       const resolvedType = resolveDocumentType(type, name);
       const orgId = resolveWriteOrgId(req, req.body?.orgId);
       if (!orgId) {
-        return sendError(res, "Organization context is required", 400, "MISSING_ORG_CONTEXT");
+        return sendError(
+          res,
+          "Organization context is required. Sign out and sign in again, or contact HR.",
+          400,
+          "MISSING_ORG_CONTEXT"
+        );
       }
 
       // Create document record in database
@@ -477,7 +527,7 @@ router.get(
   asyncHandler(async (req, res) => {
     try {
       const { employeeId } = req.params;
-      const { page = 1, limit = 50 } = req.query;
+      const { page = 1, limit = 50, scope } = req.query;
       const skip = (page - 1) * limit;
 
       const access = await assertCanAccessEmployeeDocuments(req, employeeId);
@@ -488,7 +538,14 @@ router.get(
 
       const docFilter = { userId };
       if (!isSuperAdmin(req)) {
-        docFilter.orgId = String(req.user.orgId);
+        const orgClause = buildDocumentOrgFilter(req, access.employeeOrgId);
+        if (orgClause) Object.assign(docFilter, orgClause);
+      }
+
+      if (scope === "employment") {
+        docFilter.type = { $in: EMPLOYMENT_DOCUMENT_TYPES };
+      } else if (scope === "education") {
+        docFilter.type = { $regex: /^education_/ };
       }
 
       // Get total count

@@ -12,8 +12,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from '../../components/ui/dialog';
-import { ScrollArea } from '../../components/ui/scroll-area';
-import { Separator } from '../../components/ui/separator';
 import { toast } from '../../utils/portalToast';
 import { apiFetchBlob, apiGet } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
@@ -68,23 +66,24 @@ export default function Payroll() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [viewingSlip, setViewingSlip] = useState<SalarySlip | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
   useEffect(() => {
     fetchEmployeeAndSlips();
-  }, [user?.id]);
+  }, [user?.userId, user?.id]);
 
   const fetchEmployeeAndSlips = async () => {
     try {
       setLoading(true);
 
-      if (!user?.id) {
-        console.error('User not authenticated');
+      const authUserId = user?.userId || user?.id;
+      if (!authUserId) {
         toast.error('User not authenticated');
         return;
       }
 
-      const employeeData = await apiGet(`/employees/user/${user.id}`);
+      const employeeData = await apiGet(`/employees/user/${authUserId}`);
 
       if (!employeeData.data || !employeeData.data._id) {
         toast.error('Employee record not found');
@@ -134,28 +133,31 @@ export default function Payroll() {
     }
   };
 
+  const findSlipById = (slipId: string): SalarySlip | undefined => {
+    const fromList = salarySlips.find((s) => s._id === slipId);
+    if (fromList) return fromList;
+    if (currentSlip?._id === slipId) return currentSlip;
+    return undefined;
+  };
+
   const handleViewSalarySlip = async (slipId: string) => {
+    const slip = findSlipById(slipId);
+    if (!slip) {
+      toast.error('Payslip not found for this period');
+      return;
+    }
+    setViewingSlip(slip);
+    setPreviewOpen(true);
+    setPreviewLoading(true);
     try {
-      setPreviewLoading(true);
-      const res = await apiGet<{ success?: boolean; data?: SalarySlip }>(
-        `/salary/slip/by-id/${slipId}?_t=${Date.now()}`,
-        false
-      );
-      const slip = (res as { data?: SalarySlip })?.data ?? (res as SalarySlip);
-      if (!slip?._id) {
-        const fromList = salarySlips.find((s) => s._id === slipId);
-        if (fromList) {
-          setViewingSlip(fromList);
-          setPreviewOpen(true);
-          return;
-        }
-        throw new Error('Could not load payslip details');
-      }
-      setViewingSlip(slip);
-      setPreviewOpen(true);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      const blob = await fetchSalarySlipBlob(slipId);
+      setPreviewUrl(URL.createObjectURL(blob));
     } catch (error) {
       console.error('Error loading payslip preview:', error);
       toast.error('Failed to load payslip preview');
+      setPreviewOpen(false);
+      setViewingSlip(null);
     } finally {
       setPreviewLoading(false);
     }
@@ -164,7 +166,17 @@ export default function Payroll() {
   const closePreview = () => {
     setPreviewOpen(false);
     setViewingSlip(null);
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
   };
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
 
   const currentSlip = salarySlips.find(
     (slip) => slip.month === selectedMonth && slip.year === selectedYear
@@ -181,7 +193,7 @@ export default function Payroll() {
   return (
     <div className="p-6 space-y-6">
       <Dialog open={previewOpen} onOpenChange={(open) => !open && closePreview()}>
-        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+        <DialogContent className="max-w-4xl max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
           <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
             <DialogTitle>Salary payslip</DialogTitle>
             {viewingSlip && (
@@ -194,102 +206,25 @@ export default function Payroll() {
               </DialogDescription>
             )}
           </DialogHeader>
-          {previewLoading ? (
-            <div className="flex items-center justify-center py-16">
-              <Loader className="w-8 h-8 animate-spin text-primary" />
-            </div>
-          ) : viewingSlip ? (
-            <ScrollArea className="flex-1 px-6 max-h-[calc(90vh-10rem)]">
-              <div className="space-y-4 pb-4">
-                <div className="grid grid-cols-3 gap-3">
-                  <Card className="p-4 bg-muted/40">
-                    <p className="text-xs text-muted-foreground">Gross</p>
-                    <p className="text-lg font-bold text-foreground">₹{viewingSlip.grossEarnings.toLocaleString()}</p>
-                  </Card>
-                  <Card className="p-4 bg-muted/40">
-                    <p className="text-xs text-muted-foreground">Deductions</p>
-                    <p className="text-lg font-bold text-destructive">₹{viewingSlip.totalDeductions.toLocaleString()}</p>
-                  </Card>
-                  <Card className="p-4 bg-primary/10 border-primary/20">
-                    <p className="text-xs text-muted-foreground">Net pay</p>
-                    <p className="text-lg font-bold text-primary">₹{viewingSlip.netSalary.toLocaleString()}</p>
-                  </Card>
-                </div>
-                {viewingSlip.attendanceData && (
-                  <>
-                    <h4 className="font-semibold text-foreground">Attendance</h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
-                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
-                        <p className="text-muted-foreground">Working days</p>
-                        <p className="font-semibold">{viewingSlip.attendanceData.totalWorkingDays}</p>
-                      </div>
-                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
-                        <p className="text-muted-foreground">Present</p>
-                        <p className="font-semibold text-secondary">{viewingSlip.attendanceData.presentDays}</p>
-                      </div>
-                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
-                        <p className="text-muted-foreground">Absent</p>
-                        <p className="font-semibold text-destructive">{viewingSlip.attendanceData.absentDays}</p>
-                      </div>
-                      <div className="p-3 rounded-lg bg-muted/50 border border-border">
-                        <p className="text-muted-foreground">Leaves</p>
-                        <p className="font-semibold">{viewingSlip.attendanceData.leavesTaken}</p>
-                      </div>
-                    </div>
-                  </>
-                )}
-                <Separator />
-                <h4 className="font-semibold text-foreground">Earnings</h4>
-                <div className="rounded-lg border border-border overflow-hidden text-sm">
-                  {[
-                    ['Basic', viewingSlip.earnings?.basic],
-                    ['HRA', viewingSlip.earnings?.hra],
-                    ['Medical', viewingSlip.earnings?.medicalExpenses],
-                    ['Travel', viewingSlip.earnings?.travel],
-                    ['Incentives', viewingSlip.earnings?.incentives],
-                    ['Bonus', viewingSlip.earnings?.bonus],
-                  ]
-                    .filter(([, v]) => Number(v ?? 0) > 0)
-                    .map(([label, amount]) => (
-                      <div key={String(label)} className="flex justify-between px-4 py-2 border-b border-border">
-                        <span className="text-muted-foreground">{label}</span>
-                        <span className="font-medium">₹{Number(amount).toLocaleString()}</span>
-                      </div>
-                    ))}
-                  <div className="flex justify-between px-4 py-3 bg-secondary/10 font-semibold">
-                    <span>Total earnings</span>
-                    <span>₹{viewingSlip.grossEarnings.toLocaleString()}</span>
-                  </div>
-                </div>
-                <h4 className="font-semibold text-foreground">Deductions</h4>
-                <div className="rounded-lg border border-border overflow-hidden text-sm">
-                  {[
-                    ['PF', viewingSlip.deductions?.providentFund],
-                    ['ESI', viewingSlip.deductions?.employeeStateInsurance],
-                    ['Professional tax', viewingSlip.deductions?.professionalTax],
-                    ['Income tax', viewingSlip.deductions?.incomeTax],
-                  ]
-                    .filter(([, v]) => Number(v ?? 0) > 0)
-                    .map(([label, amount]) => (
-                      <div key={String(label)} className="flex justify-between px-4 py-2 border-b border-border">
-                        <span className="text-muted-foreground">{label}</span>
-                        <span className="font-medium">₹{Number(amount).toLocaleString()}</span>
-                      </div>
-                    ))}
-                  <div className="flex justify-between px-4 py-3 bg-destructive/10 font-semibold">
-                    <span>Total deductions</span>
-                    <span>₹{viewingSlip.totalDeductions.toLocaleString()}</span>
-                  </div>
-                </div>
+          <div className="flex-1 min-h-[480px] px-4 pb-2">
+            {previewLoading ? (
+              <div className="flex items-center justify-center h-[480px]">
+                <Loader className="w-8 h-8 animate-spin text-primary" />
               </div>
-            </ScrollArea>
-          ) : null}
+            ) : previewUrl ? (
+              <iframe
+                title="Salary slip preview"
+                src={previewUrl}
+                className="w-full h-[min(70vh,640px)] rounded-lg border border-border bg-white"
+              />
+            ) : null}
+          </div>
           <DialogFooter className="px-6 py-4 border-t border-border shrink-0">
             <Button variant="outline" onClick={closePreview}>Close</Button>
             {viewingSlip && (
               <Button onClick={() => void handleDownloadSalarySlip(viewingSlip._id)}>
                 <Download className="w-4 h-4 mr-2" />
-                Download PDF
+                Download
               </Button>
             )}
           </DialogFooter>
@@ -360,9 +295,9 @@ export default function Payroll() {
             </div>
             <div className="flex flex-wrap items-end justify-end gap-2">
               <Button
+                type="button"
                 variant="outline"
                 onClick={() => void handleViewSalarySlip(currentSlip._id)}
-                disabled={previewLoading}
                 className="rounded-lg"
               >
                 <Eye className="w-4 h-4 mr-2" />
@@ -562,10 +497,10 @@ export default function Payroll() {
                 <div className="flex items-center gap-2 flex-wrap justify-end">
                   <Badge variant={slip.status === 'approved' ? 'default' : 'secondary'}>{slip.status}</Badge>
                   <Button
+                    type="button"
                     size="sm"
                     variant="outline"
                     onClick={() => void handleViewSalarySlip(slip._id)}
-                    disabled={previewLoading}
                     className="rounded-lg"
                     title="View payslip"
                   >

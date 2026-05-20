@@ -272,10 +272,22 @@ router.post('/send-email',
       }
 
       const orgName = req.user.orgName || 'WorkPlus';
-      const smtp =
-        (await resolveOrganizationSmtp(req.user.orgId)) || buildEnvSmtp();
+      const orgSmtp = await resolveOrganizationSmtp(req.user.orgId);
+      const envSmtp = buildEnvSmtp();
+      const smtpCandidates = [];
+      const smtpSeen = new Set();
+      for (const entry of [
+        { smtp: envSmtp, label: 'env' },
+        { smtp: orgSmtp, label: 'org' },
+      ]) {
+        if (!entry.smtp) continue;
+        const key = `${entry.smtp.host}|${entry.smtp.user}`;
+        if (smtpSeen.has(key)) continue;
+        smtpSeen.add(key);
+        smtpCandidates.push(entry);
+      }
 
-      if (!smtp) {
+      if (!smtpCandidates.length) {
         return res.status(503).json({
           success: false,
           code: 'SMTP_NOT_CONFIGURED',
@@ -292,20 +304,39 @@ router.post('/send-email',
         });
       }
 
-      logger.info('Sending onboarding email', {
-        employeeEmail: normalizedEmail,
-        employeeName,
-        from: smtp.fromEmail || smtp.user,
-        tokenPrefix: token.substring(0, 10) + '...',
-      });
+      let sent = false;
+      let usedSmtp = smtpCandidates[0].smtp;
+      let lastError = null;
 
-      const sent = await EmailNotificationService.sendOnboardingInviteEmail({
-        to: normalizedEmail,
-        employeeName,
-        onboardingUrl,
-        orgName,
-        organizationSmtp: smtp,
-      });
+      for (const candidate of smtpCandidates) {
+        logger.info('Sending onboarding email', {
+          employeeEmail: normalizedEmail,
+          employeeName,
+          from: candidate.smtp.fromEmail || candidate.smtp.user,
+          smtpSource: candidate.label,
+          tokenPrefix: token.substring(0, 10) + '...',
+        });
+
+        try {
+          sent = await EmailNotificationService.sendOnboardingInviteEmail({
+            to: normalizedEmail,
+            employeeName,
+            onboardingUrl,
+            orgName,
+            organizationSmtp: candidate.smtp,
+          });
+          if (sent) {
+            usedSmtp = candidate.smtp;
+            break;
+          }
+        } catch (sendErr) {
+          lastError = sendErr;
+          logger.warn('Onboarding email attempt failed', {
+            smtpSource: candidate.label,
+            error: sendErr.message,
+          });
+        }
+      }
 
       if (!sent) {
         const smtpStatus = getSmtpServiceStatus();
@@ -322,6 +353,7 @@ router.post('/send-email',
           success: false,
           code: 'SMTP_SEND_FAILED',
           message:
+            lastError?.message ||
             'Failed to send email. Verify SMTP_HOST, SMTP_USER, and SMTP_PASS (Microsoft 365 app password) on Render or in Admin → Notification Settings.',
         });
       }
@@ -329,17 +361,17 @@ router.post('/send-email',
       logger.info('Onboarding email sent successfully', {
         employeeEmail: normalizedEmail,
         employeeName,
-        from: smtp.fromEmail || smtp.user,
+        from: usedSmtp.fromEmail || usedSmtp.user,
         tokenPrefix: token.substring(0, 10) + '...',
       });
 
       res.json({
         success: true,
-        message: `Onboarding email sent to ${normalizedEmail} from ${smtp.fromEmail || smtp.user}`,
+        message: `Onboarding email sent to ${normalizedEmail} from ${usedSmtp.fromEmail || usedSmtp.user}`,
         data: {
           employeeEmail: normalizedEmail,
           employeeName,
-          from: smtp.fromEmail || smtp.user,
+          from: usedSmtp.fromEmail || usedSmtp.user,
           replyTo: getHrInboxEmail(),
           sentAt: new Date(),
         },

@@ -99,3 +99,80 @@ export function getTypeBalance(
     }
   );
 }
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+export interface LeaveBalanceKpiSummary {
+  totalRemaining: number;
+  totalAllocated: number;
+  hasAllocation: boolean;
+  balanceSourceMonth?: number;
+}
+
+/** Load leave balance KPI totals from admin allocation API. */
+export async function fetchLeaveBalanceKpiSummary(
+  employeeId: string,
+  year?: number,
+  month?: number
+): Promise<LeaveBalanceKpiSummary> {
+  const { LeaveAllocationService } = await import('./api');
+  const now = new Date();
+  const y = year ?? now.getFullYear();
+  const m = month ?? now.getMonth() + 1;
+
+  const balanceRes = await LeaveAllocationService.getEmployeeBalance(employeeId, y, m);
+  if (!balanceRes?.success) {
+    return { totalRemaining: 0, totalAllocated: 0, hasAllocation: false };
+  }
+
+  const parsed = parseBalanceApiResponse(balanceRes);
+  const body = balanceRes as {
+    balanceSourceMonth?: number;
+    resolvedMonth?: number;
+  };
+  const sourceMonth = body.balanceSourceMonth ?? body.resolvedMonth;
+
+  return {
+    totalRemaining: sumRemainingDays(parsed.balances),
+    totalAllocated: sumAllocatedDays(parsed.balances),
+    hasAllocation: parsed.hasAllocation,
+    balanceSourceMonth:
+      sourceMonth && sourceMonth !== m ? sourceMonth : undefined,
+  };
+}
+
+export function formatLeaveBalanceKpi(summary: LeaveBalanceKpiSummary): {
+  value: string;
+  subtitle: string;
+} {
+  const { totalRemaining, totalAllocated, hasAllocation, balanceSourceMonth } =
+    summary;
+
+  if (!hasAllocation || (totalRemaining === 0 && totalAllocated === 0)) {
+    return {
+      value: '0 days',
+      subtitle: 'No leave allocated yet — contact HR',
+    };
+  }
+
+  const value = `${totalRemaining} day${totalRemaining === 1 ? '' : 's'}`;
+  let subtitle = `${totalAllocated} day${totalAllocated === 1 ? '' : 's'} allocated`;
+  if (balanceSourceMonth && balanceSourceMonth >= 1 && balanceSourceMonth <= 12) {
+    subtitle += ` (${MONTH_NAMES[balanceSourceMonth - 1]} pool)`;
+  }
+
+  return { value, subtitle };
+}

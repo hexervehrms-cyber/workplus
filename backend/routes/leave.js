@@ -27,6 +27,7 @@ import {
   computeLeaveRemaining,
   findCurrentLeaveAllocation,
   getLeaveFieldName,
+  getAllocatedTotal,
 } from '../utils/leaveBalanceHelpers.js';
 import { authorize } from '../middleware/auth.js';
 import {
@@ -928,18 +929,26 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     resolvedHourly = false;
   }
 
-  // Validate required fields
-  if (!userId || !employeeId || !leaveType || !startDate || !endDate || !reason || !orgId) {
+  // Validate required fields (orgId resolved from JWT / body below)
+  if (!userId || !employeeId || !leaveType || !startDate || !endDate || !reason) {
     return res.status(400).json({
       success: false,
       message: 'All fields are required'
     });
   }
 
-  const tenantOrg = scopedOrgId(req) || orgId;
+  const tenantOrg =
+    scopedOrgId(req) || userOrgIdFromReq(req) || String(orgId || '').trim() || null;
+  const resolvedOrgId = tenantOrg || String(orgId || '').trim();
+  if (!resolvedOrgId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context is required',
+    });
+  }
   const isPrivilegedCreator = ['admin', 'hr', 'manager', 'super_admin'].includes(req.user.role);
   if (!isPrivilegedCreator) {
-    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+    const emp = await findEmployeeForSelfService(req.user.userId, resolvedOrgId, {
       allowCrossOrgFallback: true,
       createIfMissing: true,
     });
@@ -951,12 +960,11 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     }
     if (
       String(userId) !== String(req.user.userId) ||
-      String(employeeId) !== String(emp._id) ||
-      String(orgId) !== String(tenantOrg)
+      String(employeeId) !== String(emp._id)
     ) {
       return res.status(403).json({
         success: false,
-        message: 'Cannot submit leave on behalf of another user or organization',
+        message: 'Cannot submit leave on behalf of another user',
       });
     }
   } else if (
@@ -1155,13 +1163,19 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
 
   // CRITICAL: Check leave balance before creating request
   const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
-  const resolvedOrgId = String(tenantOrg || orgId);
-  const allocation = await findCurrentLeaveAllocation(LeaveAllocation, employeeId, resolvedOrgId);
+  const allocationOrgId = String(resolvedOrgId || tenantOrg || orgId);
+  const allocation = await findCurrentLeaveAllocation(
+    LeaveAllocation,
+    employeeId,
+    allocationOrgId,
+    start
+  );
 
   const leaveField = getLeaveFieldName(leaveType);
   if (allocation && leaveField) {
+    const allocatedTotal = getAllocatedTotal(allocation, leaveType);
     const availableBalance = computeLeaveRemaining(allocation, leaveType);
-    if (availableBalance < days) {
+    if (allocatedTotal > 0 && availableBalance < days) {
       return res.status(400).json({
         success: false,
         message: `Insufficient leave balance. Available: ${availableBalance} days, Requested: ${days} days`,
@@ -1190,7 +1204,7 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     endDate: end,
     reason,
     status: 'pending',
-    orgId: resolvedOrgId,
+    orgId: allocationOrgId,
     isHalfDay: resolvedHalfDay,
     halfDaySession: resolvedHalfSession,
     isHourlyLeave: resolvedHourly,

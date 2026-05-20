@@ -3,9 +3,20 @@ import { KPICard } from '../../components/KPICard';
 import InteractiveCalendar from '../../components/InteractiveCalendar';
 import ChatWidget from '../../components/ChatWidget';
 import { useAuth } from '../../context/AuthContext';
-import { TokenManager, LeaveAllocationService } from '../../utils/api';
-import { parseBalanceApiResponse, sumAllocatedDays, sumRemainingDays } from '../../utils/leaveBalance';
-import { apiGet, apiGetSafe, clearApiCache, holidaysStorageKey } from '../../utils/apiHelper';
+import { TokenManager } from '../../utils/api';
+import {
+  fetchLeaveBalanceKpiSummary,
+  formatLeaveBalanceKpi,
+} from '../../utils/leaveBalance';
+import { resolveEmployeeMongoId } from '../../utils/resolveEmployeeId';
+import {
+  apiGet,
+  apiGetSafe,
+  appendOrgIdParam,
+  clearApiCache,
+  holidaysStorageKey,
+  resolveAuthOrgId,
+} from '../../utils/apiHelper';
 import { safeLocaleTime, safeFormatTime, runSafe } from '../../utils/safeUi';
 import { postAttendanceAction } from '../../utils/attendanceApi';
 import {
@@ -450,9 +461,17 @@ export default function EmployeeDashboard() {
       debug.group('[FETCH DASHBOARD]');
       debug.log('⚡ Fetching all dashboard data in parallel...');
 
+      const holidayYear = new Date().getFullYear();
+      const tenantOrgId = resolveAuthOrgId(user);
+      const holidaysUrl = appendOrgIdParam(
+        `holidays?year=${holidayYear}&limit=500`,
+        user,
+        tenantOrgId
+      );
+
       const [attendanceResult, holidaysResult] = await Promise.allSettled([
         apiGetSafe('/attendance/today', false),
-        apiGetSafe('/holidays'),
+        apiGetSafe(holidaysUrl, false),
       ]);
 
       const holidayKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
@@ -704,24 +723,23 @@ export default function EmployeeDashboard() {
       let leaveBalanceLabel = '0 days';
       let leaveBalanceSubtitle = '';
       try {
-        const empId = employeeIdRef.current || (await ensureEmployeeId());
+        const empId =
+          employeeIdRef.current || (await resolveEmployeeMongoId(user));
         if (empId) {
+          employeeIdRef.current = empId;
+          setEmployeeId(empId);
           const now = new Date();
-          const balanceRes = await LeaveAllocationService.getEmployeeBalance(
+          const summary = await fetchLeaveBalanceKpiSummary(
             empId,
             now.getFullYear(),
             now.getMonth() + 1
           );
-          if (balanceRes.success) {
-            const parsed = parseBalanceApiResponse(balanceRes);
-            const totalRemaining = sumRemainingDays(parsed.balances);
-            const totalAllocated = sumAllocatedDays(parsed.balances);
-            leaveBalanceLabel = `${totalRemaining} day${totalRemaining === 1 ? '' : 's'}`;
-            leaveBalanceSubtitle = `${totalAllocated} allocated this month`;
-          }
+          const formatted = formatLeaveBalanceKpi(summary);
+          leaveBalanceLabel = formatted.value;
+          leaveBalanceSubtitle = formatted.subtitle;
         }
-      } catch {
-        /* keep default */
+      } catch (err) {
+        debug.warn('Leave balance KPI fetch failed', err);
       }
 
       setKpiMetrics((prev) => ({
@@ -738,36 +756,18 @@ export default function EmployeeDashboard() {
       if (timeoutId) clearTimeout(timeoutId);
       if (mountedRef.current) setLoading(false);
     }
-  }, [user?.id, isRecentlyUpdated, updateAttendance, loadFromLocalStorage, ingestWeekHoursFromServer]);
+  }, [user, isRecentlyUpdated, updateAttendance, loadFromLocalStorage, ingestWeekHoursFromServer]);
 
   fetchDashboardDataRef.current = fetchDashboardData;
 
   const ensureEmployeeId = async (): Promise<string | null> => {
     if (employeeIdRef.current) return employeeIdRef.current;
-
-    if (!user?.id) return null;
-    const fromUser = user.employeeId != null ? String(user.employeeId) : '';
-    if (isLikelyMongoObjectId(fromUser)) {
-      setEmployeeId(fromUser);
-      return fromUser;
+    const empId = await resolveEmployeeMongoId(user);
+    if (empId) {
+      setEmployeeId(empId);
+      employeeIdRef.current = empId;
     }
-
-    try {
-      const result = await apiGet<{ data?: { _id?: string; id?: string } }>(
-        `employees/user/${user.id}`,
-        false
-      );
-      const empId = result?.data?._id || result?.data?.id;
-      if (empId && isLikelyMongoObjectId(String(empId))) {
-        const idStr = String(empId);
-        setEmployeeId(idStr);
-        return idStr;
-      }
-    } catch (err) {
-      debug.error('Error fetching employee data:', err);
-    }
-
-    return null;
+    return empId;
   };
 
   const refreshLeaveBalance = useCallback(async () => {
@@ -776,25 +776,23 @@ export default function EmployeeDashboard() {
       const empId = await ensureEmployeeId();
       if (!empId) return;
       const now = new Date();
-      const balanceRes = await LeaveAllocationService.getEmployeeBalance(
+      const summary = await fetchLeaveBalanceKpiSummary(
         empId,
         now.getFullYear(),
         now.getMonth() + 1
       );
-      if (balanceRes.success && mountedRef.current) {
-        const parsed = parseBalanceApiResponse(balanceRes);
-        const totalRemaining = sumRemainingDays(parsed.balances);
-        const totalAllocated = sumAllocatedDays(parsed.balances);
+      if (mountedRef.current) {
+        const formatted = formatLeaveBalanceKpi(summary);
         setKpiMetrics((prev) => ({
           ...prev,
-          leaveBalance: `${totalRemaining} day${totalRemaining === 1 ? '' : 's'}`,
-          leaveBalanceSubtitle: `${totalAllocated} allocated this month`,
+          leaveBalance: formatted.value,
+          leaveBalanceSubtitle: formatted.subtitle,
         }));
       }
     } catch (err) {
       debug.warn('refreshLeaveBalance failed', err);
     }
-  }, [user?.id]);
+  }, [user]);
 
   const safeRefresh = useCallback(
     async (forceRefresh = false) => {

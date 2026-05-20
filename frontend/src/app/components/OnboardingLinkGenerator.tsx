@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useDepartments } from '../hooks/useDepartments';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
@@ -6,10 +6,12 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Card } from './ui/card';
-import { Copy, Check, Loader, Mail, Link as LinkIcon } from 'lucide-react';
+import { Copy, Check, Loader, Mail, Link as LinkIcon, RefreshCw } from 'lucide-react';
 import { toast } from '../utils/portalToast';
-import { apiClient, TokenManager } from '../utils/api';
+import { apiClient } from '../utils/api';
 import { apiPost } from '../utils/apiHelper';
+
+const ONBOARDING_EMAIL_TIMEOUT_MS = 90_000;
 
 interface OnboardingLinkGeneratorProps {
   isOpen: boolean;
@@ -26,7 +28,9 @@ interface GeneratedLink {
 }
 
 const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpen, onClose, onSuccess }) => {
-  const { departmentNames, loading: deptLoading } = useDepartments();
+  const { departmentNames, loading: deptLoading, error: deptError, reload: reloadDepartments } =
+    useDepartments({ enabled: isOpen, seedIfEmpty: true });
+
   const [step, setStep] = useState<'form' | 'result'>('form');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -37,6 +41,22 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
     employeeName: '',
     department: ''
   });
+
+  const departmentOptions =
+    departmentNames.length > 0 ? departmentNames : ['General'];
+
+  useEffect(() => {
+    if (!isOpen) return;
+    void reloadDepartments();
+  }, [isOpen, reloadDepartments]);
+
+  useEffect(() => {
+    if (!isOpen || deptLoading || !formData.department) return;
+    const options = departmentNames.length > 0 ? departmentNames : ['General'];
+    if (!options.includes(formData.department)) {
+      setFormData((prev) => ({ ...prev, department: '' }));
+    }
+  }, [isOpen, deptLoading, departmentNames, formData.department]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -54,16 +74,19 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
   };
 
   const handleGenerateLink = async () => {
-    // Validate form
-    if (!formData.employeeEmail || !formData.employeeName || !formData.department) {
-      toast.error('Please fill in all fields');
+    const department = formData.department || departmentOptions[0] || 'General';
+    if (!formData.employeeEmail || !formData.employeeName) {
+      toast.error('Please fill in employee email and name');
       return;
     }
 
-try {
+    try {
       setLoading(true);
 
-      const data = await apiClient.post<GeneratedLink>('/onboarding/generate-link', formData);
+      const data = await apiClient.post<GeneratedLink>('/onboarding/generate-link', {
+        ...formData,
+        department,
+      });
 
       if (!data?.success) {
         throw new Error(data?.message || 'Failed to generate onboarding link');
@@ -94,20 +117,28 @@ try {
   };
 
   const handleSendEmail = async () => {
-    if (!generatedLink) return;
+    if (!generatedLink?.token) {
+      toast.error('Missing onboarding token — generate the link again');
+      return;
+    }
 
     try {
       setLoading(true);
 
-      const data = await apiPost<{ message?: string; code?: string }>(
+      const data = await apiPost<{ success?: boolean; message?: string; code?: string }>(
         'onboarding/send-email',
         {
           token: generatedLink.token,
           employeeEmail: generatedLink.employeeEmail,
           employeeName: generatedLink.employeeName,
           onboardingUrl: generatedLink.onboardingUrl,
-        }
+        },
+        { timeoutMs: ONBOARDING_EMAIL_TIMEOUT_MS }
       );
+
+      if (data?.success === false) {
+        throw new Error(data?.message || 'Failed to send email');
+      }
 
       toast.success(
         data?.message || `Onboarding email sent to ${generatedLink.employeeEmail}`
@@ -115,12 +146,19 @@ try {
       handleSuccess();
     } catch (error) {
       console.error('Send email error:', error);
-      const msg =
-        error instanceof Error && error.name === 'AbortError'
-          ? 'Email request timed out. Check SMTP settings on the server or try again.'
-          : error instanceof Error
-            ? error.message
-            : 'Failed to send email';
+      const err = error as Error & { code?: string };
+      let msg = err instanceof Error ? err.message : 'Failed to send email';
+      if (err.code === 'SMTP_NOT_CONFIGURED') {
+        msg =
+          'Email is not configured on the server. Set SMTP_HOST, SMTP_USER, and SMTP_PASS for hr@hexerve.com in Render or Admin → Notification Settings.';
+      } else if (err.code === 'EMAIL_RATE_LIMIT') {
+        msg = 'Too many emails sent recently. Wait a few minutes and try again.';
+      } else if (err.code === 'SMTP_CIRCUIT_OPEN') {
+        msg = 'Email service is temporarily busy. Wait a minute and try again.';
+      } else if (msg.includes('timed out')) {
+        msg =
+          'Email is taking longer than expected. The message may still be sent — check the candidate inbox or try again.';
+      }
       toast.error(msg);
     } finally {
       setLoading(false);
@@ -145,7 +183,7 @@ try {
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
+    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) handleClose(); }}>
       <DialogContent className="max-w-2xl rounded-2xl">
         <DialogHeader>
           <DialogTitle>Generate Onboarding Link</DialogTitle>
@@ -179,20 +217,38 @@ try {
                 />
               </div>
               <div className="md:col-span-2">
-                <Label>Department *</Label>
-                <Select value={formData.department} onValueChange={handleSelectChange}>
+                <div className="flex items-center justify-between">
+                  <Label>Department *</Label>
+                  {deptError && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => void reloadDepartments()}
+                    >
+                      <RefreshCw className="w-3 h-3 mr-1" />
+                      Retry
+                    </Button>
+                  )}
+                </div>
+                <Select
+                  value={formData.department || undefined}
+                  onValueChange={handleSelectChange}
+                  disabled={deptLoading}
+                >
                   <SelectTrigger className="mt-2 rounded-xl">
-                    <SelectValue placeholder="Select department" />
+                    <SelectValue
+                      placeholder={deptLoading ? 'Loading departments…' : 'Select department'}
+                    />
                   </SelectTrigger>
                   <SelectContent>
                     {deptLoading ? (
                       <SelectItem value="_loading" disabled>
                         Loading departments…
                       </SelectItem>
-                    ) : departmentNames.length === 0 ? (
-                      <SelectItem value="General">General</SelectItem>
                     ) : (
-                      departmentNames.map((dept) => (
+                      departmentOptions.map((dept) => (
                         <SelectItem key={dept} value={dept}>
                           {dept}
                         </SelectItem>
@@ -200,6 +256,9 @@ try {
                     )}
                   </SelectContent>
                 </Select>
+                {deptError && (
+                  <p className="text-xs text-destructive mt-1">{deptError}</p>
+                )}
               </div>
             </div>
 
@@ -215,7 +274,7 @@ try {
               </Button>
               <Button 
                 onClick={handleGenerateLink} 
-                disabled={loading}
+                disabled={loading || deptLoading}
                 className="rounded-xl"
               >
                 {loading ? (
@@ -301,7 +360,7 @@ try {
             </div>
 
             <div className="flex justify-end gap-3">
-              <Button variant="outline" onClick={handleSuccess} className="rounded-xl">
+              <Button variant="outline" onClick={handleSuccess} className="rounded-xl" disabled={loading}>
                 Done
               </Button>
               <Button 
@@ -330,4 +389,3 @@ try {
 };
 
 export default OnboardingLinkGenerator;
-

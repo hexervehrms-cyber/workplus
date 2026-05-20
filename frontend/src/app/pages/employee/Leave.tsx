@@ -22,6 +22,7 @@ import {
 } from '../../components/ui/select';
 import { LeaveRequestService, LeaveAllocationService, EmployeeService, LeaveTypeSettingsService } from '../../utils/api';
 import { resolveAuthOrgId } from '../../utils/apiHelper';
+import { resolveEmployeeMongoId } from '../../utils/resolveEmployeeId';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
@@ -57,6 +58,42 @@ const DEFAULT_ENABLED_LEAVE_TYPES: Record<string, boolean> = {
   sandwichLeave: false
 };
 
+const LEAVE_TYPE_LABELS: Record<string, string> = {
+  sickLeave: 'Sick Leave',
+  casualLeave: 'Casual Leave',
+  earnedLeave: 'Earned Leave',
+  medicalLeave: 'Medical Leave',
+  maternityLeave: 'Maternity Leave',
+  paternityLeave: 'Paternity Leave',
+  compensatoryOff: 'Compensatory Off (Comp Off)',
+  personal: 'Personal',
+  emergency: 'Emergency',
+  ncns: 'NCNS (No Call No Show)',
+  sandwichLeave: 'Sandwich Leave',
+};
+
+const DEFAULT_LEAVE_TYPE_ORDER = [
+  'casualLeave',
+  'sickLeave',
+  'earnedLeave',
+  'personal',
+  'emergency',
+  'compensatoryOff',
+  'maternityLeave',
+  'paternityLeave',
+  'medicalLeave',
+  'ncns',
+  'sandwichLeave',
+];
+
+function defaultLeaveTypeLabel(enabled: Record<string, boolean> | null): string {
+  if (!enabled) return LEAVE_TYPE_LABELS.casualLeave;
+  for (const key of DEFAULT_LEAVE_TYPE_ORDER) {
+    if (enabled[key] && LEAVE_TYPE_LABELS[key]) return LEAVE_TYPE_LABELS[key];
+  }
+  return '';
+}
+
 export default function Leave() {
   const { user } = useAuth();
   const authUserId = user?.userId || user?.id ? String(user.userId || user.id) : '';
@@ -69,6 +106,7 @@ export default function Leave() {
   const [leaveKpiReady, setLeaveKpiReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showLeaveForm, setShowLeaveForm] = useState(false);
+  const [submittingLeave, setSubmittingLeave] = useState(false);
   const [editingLeaveId, setEditingLeaveId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     type: '',
@@ -270,17 +308,9 @@ export default function Leave() {
 
   // Submit or update leave request
   const handleSubmitLeave = async () => {
-    console.log('🔵 handleSubmitLeave called');
-    console.log('📊 Form data:', formData);
-    console.log('👤 User:', user);
-    
+    if (submittingLeave) return;
+
     if (!authUserId || !formData.type || !formData.startDate || !formData.reason) {
-      console.error('❌ Validation failed:', {
-        userId: !!authUserId,
-        type: !!formData.type,
-        startDate: !!formData.startDate,
-        reason: !!formData.reason
-      });
       toast.error('Please fill in all required fields');
       return;
     }
@@ -300,8 +330,8 @@ export default function Leave() {
       return;
     }
 
+    setSubmittingLeave(true);
     try {
-      const { resolveEmployeeMongoId } = await import('../../utils/resolveEmployeeId');
       const employeeId = await resolveEmployeeMongoId(user);
 
       if (!employeeId) {
@@ -309,9 +339,19 @@ export default function Leave() {
         return;
       }
 
-      const orgId = user.orgId || user.tenantId;
+      let orgId = resolveAuthOrgId(user);
       if (!orgId) {
-        toast.error('Organization not set on your account.');
+        try {
+          const employeeResponse = await EmployeeService.getEmployeeByUserId(authUserId);
+          if (employeeResponse?.orgId) {
+            orgId = String(employeeResponse.orgId);
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+      if (!orgId) {
+        toast.error('Organization not set on your account. Please sign out and sign in again, or contact HR.');
         return;
       }
 
@@ -359,23 +399,21 @@ export default function Leave() {
       };
 
       const leaveTypeKey = leaveTypeMap[formData.type];
-      const balance = leaveBalance?.[leaveTypeKey];
-      
-      console.log('Leave submission validation:', {
-        leaveType: formData.type,
-        leaveTypeKey,
-        balance,
-        daysRequested: days,
-        hoursRequested: hours,
-        leaveDuration: formData.leaveDuration,
-        isEditing: !!editingLeaveId
-      });
+      const balance = leaveTypeKey ? leaveBalance?.[leaveTypeKey] : undefined;
 
-      // For new requests, check if there's enough balance
-      // For editing, skip the balance check since leaves are already deducted
+      // Only block when HR allocated days for this type and remaining is insufficient
       const remaining = balance?.remaining ?? 0;
-      if (hasLeaveAllocation && !editingLeaveId && balance && remaining < days) {
-        toast.error(`Insufficient ${formData.type} balance. Available: ${remaining} days, Requested: ${days.toFixed(2)} days`);
+      const allocatedTotal = balance?.total ?? 0;
+      if (
+        !editingLeaveId &&
+        hasLeaveAllocation &&
+        balance &&
+        allocatedTotal > 0 &&
+        remaining < days
+      ) {
+        toast.error(
+          `Insufficient ${formData.type} balance. Available: ${remaining} day(s), requested: ${days.toFixed(2)} day(s).`
+        );
         return;
       }
 
@@ -469,8 +507,11 @@ export default function Leave() {
         toast.error(response?.message || 'Failed to save leave request');
       }
     } catch (error) {
-      console.error('Error saving leave request:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to submit leave request');
+      const message =
+        error instanceof Error ? error.message : 'Failed to submit leave request';
+      toast.error(message);
+    } finally {
+      setSubmittingLeave(false);
     }
   };
 
@@ -484,10 +525,12 @@ export default function Leave() {
         </div>
         <Button 
           onClick={() => {
-            console.log('🔵 Request Leave button clicked');
-            console.log('📊 Current showLeaveForm state:', showLeaveForm);
+            const defaultType = defaultLeaveTypeLabel(enabledLeaveTypes);
+            setFormData((prev) => ({
+              ...prev,
+              type: prev.type || defaultType,
+            }));
             setShowLeaveForm(true);
-            console.log('✅ showLeaveForm set to true');
           }}
           className="w-full sm:w-auto rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl"
         >
@@ -790,25 +833,12 @@ Reason: ${leave.reason}
                 </SelectTrigger>
                 <SelectContent className="rounded-xl border-foreground/20">
                   {enabledLeaveTypes && Object.entries(enabledLeaveTypes).map(([key, enabled]) => {
-                    if (!enabled || key === 'vacation') return null; // Exclude vacation
-                    
-                    const leaveTypeLabels: { [key: string]: string } = {
-                      sickLeave: 'Sick Leave',
-                      casualLeave: 'Casual Leave',
-                      earnedLeave: 'Earned Leave',
-                      medicalLeave: 'Medical Leave',
-                      maternityLeave: 'Maternity Leave',
-                      paternityLeave: 'Paternity Leave',
-                      compensatoryOff: 'Compensatory Off (Comp Off)',
-                      personal: 'Personal',
-                      emergency: 'Emergency',
-                      ncns: 'NCNS (No Call No Show)',
-                      sandwichLeave: 'Sandwich Leave'
-                    };
-                    
+                    if (!enabled || key === 'vacation') return null;
+                    const label = LEAVE_TYPE_LABELS[key];
+                    if (!label) return null;
                     return (
-                      <SelectItem key={key} value={leaveTypeLabels[key]} className="rounded-lg">
-                        {leaveTypeLabels[key]}
+                      <SelectItem key={key} value={label} className="rounded-lg">
+                        {label}
                       </SelectItem>
                     );
                   })}
@@ -958,10 +988,15 @@ Reason: ${leave.reason}
               </Button>
               <Button
                 type="button"
-                className="flex-1 rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl"
+                disabled={submittingLeave}
+                className="flex-1 rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-60"
                 onClick={() => void handleSubmitLeave()}
               >
-                {editingLeaveId ? 'Save Changes' : 'Submit Request'}
+                {submittingLeave
+                  ? 'Submitting…'
+                  : editingLeaveId
+                    ? 'Save Changes'
+                    : 'Submit Request'}
               </Button>
             </div>
           </div>

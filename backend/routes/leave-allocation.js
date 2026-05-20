@@ -11,6 +11,11 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { paginationMiddleware } from '../middleware/pagination.js';
 import idempotencyMiddleware from '../middleware/idempotency.js';
 import logger from '../utils/logger.js';
+import {
+  LEAVE_BALANCE_KEYS,
+  allocationHasBalance,
+  resolveLeaveAllocation,
+} from '../utils/leaveBalanceHelpers.js';
 
 const router = express.Router();
 
@@ -336,31 +341,16 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
   let currentYear = year ? parseInt(year) : now.getFullYear();
   let currentMonth = month ? parseInt(month) : now.getMonth() + 1;
 
-  // Get allocation for specified month
-  const allocation = await LeaveAllocation.findOne({
+  const { allocation, resolvedMonth, resolvedYear } = await resolveLeaveAllocation(
+    LeaveAllocation,
     employeeId,
-    year: currentYear,
-    month: currentMonth
-  });
-
-  const leaveKeys = [
-    'vacation',
-    'sickLeave',
-    'casualLeave',
-    'earnedLeave',
-    'medicalLeave',
-    'maternityLeave',
-    'paternityLeave',
-    'compensatoryOff',
-    'personal',
-    'emergency',
-    'ncns',
-    'sandwichLeave'
-  ];
+    currentYear,
+    currentMonth
+  );
 
   const buildBreakdown = (allocDoc) => {
     const breakdown = {};
-    for (const key of leaveKeys) {
+    for (const key of LEAVE_BALANCE_KEYS) {
       const allocated = allocDoc?.allocations?.[key] || 0;
       const carried = allocDoc?.carriedForward?.[key] || 0;
       const used = allocDoc?.used?.[key] || 0;
@@ -378,11 +368,13 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
     return breakdown;
   };
 
-  if (!allocation) {
+  if (!allocation || !allocationHasBalance(allocation)) {
     return res.json({
       success: true,
       hasAllocation: false,
       data: buildBreakdown(null),
+      resolvedYear: currentYear,
+      resolvedMonth: currentMonth,
     });
   }
 
@@ -391,6 +383,10 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
     hasAllocation: true,
     data: buildBreakdown(allocation),
     allocation,
+    resolvedYear: resolvedYear ?? currentYear,
+    resolvedMonth: resolvedMonth ?? currentMonth,
+    balanceSourceMonth:
+      resolvedMonth && resolvedMonth !== currentMonth ? resolvedMonth : undefined,
   });
 }));
 

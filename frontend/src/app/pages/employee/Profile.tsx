@@ -13,7 +13,15 @@ import { useState, useEffect } from 'react';
 import { useIsMounted } from '../../hooks/useIsMounted';
 import { toast } from '../../utils/portalToast';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog';
-import { apiGet, apiPost, apiPut, apiDelete, apiUpload, clearApiCache } from '../../utils/apiHelper';
+import {
+  apiGet,
+  apiPost,
+  apiPut,
+  apiDelete,
+  apiUpload,
+  clearApiCache,
+  resolveAuthOrgId,
+} from '../../utils/apiHelper';
 import {
   downloadDocumentFile,
   openDocumentInNewTab,
@@ -303,17 +311,15 @@ export default function Profile() {
   });
 
   const loadDocuments = async () => {
-    const employeeDocKey = employee?._id || authUser?.employeeId;
-    const fallbackUserId = authUser?.userId || authUser?.id;
-    const docScopeId = employeeDocKey || fallbackUserId;
-    if (!docScopeId) return;
+    const userId = authUser?.userId || authUser?.id;
+    if (!userId) return;
 
     try {
-      clearApiCache(`/documents/employee/${docScopeId}`);
+      clearApiCache(`/documents/employee/${userId}`);
       const data = await apiGet<{
         success?: boolean;
         data?: Record<string, unknown>[];
-      }>(`/documents/employee/${docScopeId}?limit=200`, false);
+      }>(`/documents/employee/${userId}?limit=200&scope=employment`, false);
       const list = Array.isArray(data?.data) ? data.data : [];
       const mapped: Document[] = list.map((d: Record<string, unknown>) => ({
         _id: String(d._id || ''),
@@ -325,13 +331,18 @@ export default function Profile() {
         status: String(d.status || 'uploaded'),
         filePath: d.filePath ? String(d.filePath) : d.fileUrl ? String(d.fileUrl) : undefined,
         fileName: d.fileName ? String(d.fileName) : undefined,
-        category: d.type ? String(d.type) : undefined,
+        category: String(d.name || d.type || 'Document'),
       }));
       if (mounted.current) {
         setDocuments(mapped.filter((d) => d._id));
       }
     } catch (error) {
       console.error('Error loading documents from backend:', error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Could not load your uploaded documents'
+      );
     }
   };
 
@@ -340,10 +351,10 @@ export default function Profile() {
   }, []);
 
   useEffect(() => {
-    if (employee?._id || authUser?.userId || authUser?.id) {
+    if (authUser?.userId || authUser?.id) {
       void loadDocuments();
     }
-  }, [employee?._id, authUser?.userId, authUser?.id]);
+  }, [authUser?.userId, authUser?.id]);
 
   // Update form when employee data changes
   useEffect(() => {
@@ -724,16 +735,22 @@ export default function Profile() {
       setUploadingFile(true);
       console.log('📤 Starting document upload:', { fileName: file.name, fileSize: file.size, category: selectedCategory });
       
-      // Validate file size (max 50MB)
-      if (file.size > 50 * 1024 * 1024) {
-        throw new Error('File size exceeds 50MB limit');
+      const orgId = resolveAuthOrgId(authUser);
+      if (!orgId) {
+        throw new Error(
+          'Organization context is missing. Please sign out, sign in again, or contact HR.'
+        );
       }
 
-      // Create FormData for file upload
+      if (file.size > 10 * 1024 * 1024) {
+        throw new Error('File size exceeds 10MB limit');
+      }
+
       const formData = new FormData();
       formData.append('document', file);
       formData.append('name', selectedCategory);
       formData.append('type', mapCategoryToDocumentType(selectedCategory));
+      formData.append('orgId', orgId);
 
       console.log('📤 FormData prepared, sending to backend...');
 
@@ -754,12 +771,29 @@ export default function Profile() {
         throw new Error(data.message || 'Upload failed');
       }
 
-      const uploadedDoc = data?.data;
-      if (!uploadedDoc?._id) {
+      const uploadedDoc = (data?.data || data) as Record<string, unknown>;
+      const docId = uploadedDoc?._id ? String(uploadedDoc._id) : '';
+      if (!docId) {
         throw new Error('Invalid response from server - missing document ID');
       }
 
-      await loadDocuments();
+      const newEntry: Document = {
+        _id: docId,
+        name: String(uploadedDoc.name || selectedCategory),
+        size: String(uploadedDoc.size || `${(file.size / 1024).toFixed(2)} KB`),
+        uploadedAt: uploadedDoc.uploadedAt
+          ? new Date(String(uploadedDoc.uploadedAt)).toLocaleDateString()
+          : new Date().toLocaleDateString(),
+        status: String(uploadedDoc.status || 'uploaded'),
+        filePath: uploadedDoc.filePath ? String(uploadedDoc.filePath) : undefined,
+        fileName: uploadedDoc.fileName ? String(uploadedDoc.fileName) : file.name,
+        category: selectedCategory,
+      };
+      setDocuments((prev) => {
+        const withoutDup = prev.filter((d) => d._id !== docId);
+        return [newEntry, ...withoutDup];
+      });
+      void loadDocuments();
       toast.success(`${selectedCategory} uploaded successfully`);
       
       // Reset file input

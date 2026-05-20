@@ -21,7 +21,15 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { LeaveRequestService } from '../../utils/api';
-import { apiDelete, apiGet, apiPost, getBearerToken, holidaysStorageKey } from '../../utils/apiHelper';
+import {
+  apiDelete,
+  apiGet,
+  apiPost,
+  appendOrgIdParam,
+  getBearerToken,
+  holidaysStorageKey,
+  resolveAuthOrgId,
+} from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
@@ -87,8 +95,9 @@ export default function Calendar() {
           return;
         }
 
+        const holidayYear = new Date().getFullYear();
         const holidayData = await apiGet<{ success?: boolean; data?: unknown[] }>(
-          'holidays',
+          appendOrgIdParam(`holidays?year=${holidayYear}&limit=500`, user, resolveAuthOrgId(user)),
           false
         );
         if (holidayData?.success && Array.isArray(holidayData.data)) {
@@ -128,8 +137,9 @@ export default function Calendar() {
         const token = getBearerToken();
         if (!token) return;
 
+        const holidayYear = new Date().getFullYear();
         const holidayData = await apiGet<{ success?: boolean; data?: unknown[] }>(
-          'holidays',
+          appendOrgIdParam(`holidays?year=${holidayYear}&limit=500`, user, resolveAuthOrgId(user)),
           false
         );
         if (holidayData?.success && Array.isArray(holidayData.data)) {
@@ -320,7 +330,13 @@ export default function Calendar() {
     }
 
     try {
-      await apiPost('holidays', {
+      const orgId = resolveAuthOrgId(user);
+      if (!orgId) {
+        toast.error('Organization context is required to add holidays');
+        return;
+      }
+      await apiPost(appendOrgIdParam('holidays', user, orgId), {
+        orgId,
         date: holidayForm.date,
         name: holidayForm.name,
         description: holidayForm.description,

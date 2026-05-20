@@ -110,32 +110,40 @@ export function bearerAuthHeaders(extra?: Record<string, string>): HeadersInit {
  * @param options - Fetch options
  * @returns Response data
  */
+export type ApiRequestOptions = RequestInit & {
+  skipContentType?: boolean;
+  /** Override default 30s timeout (e.g. onboarding send-email uses 90s on server). */
+  timeoutMs?: number;
+};
+
 export const apiRequest = async <T = any>(
   endpoint: string,
-  options: RequestInit & { skipContentType?: boolean } = {},
+  options: ApiRequestOptions = {},
   retriedAuth = false
 ): Promise<T> => {
   const url = buildApiUrl(endpoint);
   const token = await ensureAccessToken();
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const { timeoutMs: _timeoutMs, skipContentType, ...fetchOptions } = options;
 
   const headers: Record<string, string> = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(options.headers as Record<string, string> | undefined),
+    ...(fetchOptions.headers as Record<string, string> | undefined),
   };
 
   // Only set Content-Type if not FormData and not skipped
-  if (!options.skipContentType && !(options.body instanceof FormData)) {
+  if (!skipContentType && !(fetchOptions.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json';
   }
 
   const config: RequestInit = {
-    ...options,
+    ...fetchOptions,
     headers,
-    credentials: options.credentials ?? 'include'
+    credentials: fetchOptions.credentials ?? 'include'
   };
 
   try {
-    let response = await fetchWithTimeout(url, config, REQUEST_TIMEOUT_MS);
+    let response = await fetchWithTimeout(url, config, timeoutMs);
 
     if (response.status === 401 && !retriedAuth) {
       const refreshed = await refreshAccessToken();
@@ -147,14 +155,22 @@ export const apiRequest = async <T = any>(
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `API request failed: ${response.status}`);
+      const err = new Error(
+        errorData.message || `API request failed: ${response.status}`
+      ) as Error & { code?: string; status?: number };
+      err.code = errorData.code;
+      err.status = response.status;
+      throw err;
     }
 
     const data = await response.json();
+    if (data && typeof data === 'object' && data.success === false) {
+      throw new Error(data.message || 'Request failed');
+    }
     return data;
   } catch (error: any) {
     if (error?.name === 'AbortError') {
-      throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+      throw new Error(`Request timed out after ${timeoutMs / 1000}s`);
     }
     console.error(`API request failed for ${endpoint}:`, error);
     throw error;
@@ -293,15 +309,17 @@ export function resolveAuthOrgId(
   return String(id);
 }
 
-/** Append orgId for super_admin API calls that require tenant scope. */
+/** Append orgId query param when tenant scope must be explicit (super admin or fallback). */
 export function appendOrgIdParam(
   url: string,
-  user: { role?: string; orgId?: string; tenantId?: string } | null | undefined
+  user: { role?: string; orgId?: string; tenantId?: string } | null | undefined,
+  explicitOrgId?: string | null
 ): string {
-  if (user?.role !== 'super_admin') return url;
-  const oid = resolveAuthOrgId(user);
+  const oid = explicitOrgId || resolveAuthOrgId(user);
   if (!oid) return url;
+  if (user?.role !== 'super_admin' && url.includes('orgId=')) return url;
   const sep = url.includes('?') ? '&' : '?';
+  if (new RegExp(`(?:\\?|&)orgId=`).test(url)) return url;
   return `${url}${sep}orgId=${encodeURIComponent(oid)}`;
 }
 
@@ -330,7 +348,11 @@ export function clearAllHolidayCaches(): void {
 /**
  * POST request
  */
-export const apiPost = async <T = any>(endpoint: string, data?: any): Promise<T> => {
+export const apiPost = async <T = any>(
+  endpoint: string,
+  data?: any,
+  config?: Pick<ApiRequestOptions, 'timeoutMs'>
+): Promise<T> => {
   // Clear cache on POST (data mutation)
   clearApiCache();
   
@@ -339,13 +361,15 @@ export const apiPost = async <T = any>(endpoint: string, data?: any): Promise<T>
     return apiRequest<T>(endpoint, {
       method: 'POST',
       body: data,
-      skipContentType: true // Don't set Content-Type header for FormData
+      skipContentType: true, // Don't set Content-Type header for FormData
+      ...config,
     });
   }
   
   return apiRequest<T>(endpoint, {
     method: 'POST',
-    body: data ? JSON.stringify(data) : undefined
+    body: data ? JSON.stringify(data) : undefined,
+    ...config,
   });
 };
 
@@ -387,10 +411,11 @@ export const apiDelete = async <T = any>(endpoint: string): Promise<T> => {
  */
 export const apiUpload = async <T = any>(
   endpoint: string,
-  formData: FormData
+  formData: FormData,
+  retriedAuth = false
 ): Promise<T> => {
   const url = buildApiUrl(endpoint);
-  const token = TokenManager.get();
+  const token = (await ensureAccessToken()) || TokenManager.get();
 
   const response = await fetchWithTimeout(
     url,
@@ -405,14 +430,27 @@ export const apiUpload = async <T = any>(
     REQUEST_TIMEOUT_MS
   );
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.message || 'Upload failed');
+  if (response.status === 401 && !retriedAuth) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      TokenManager.set(refreshed);
+      return apiUpload<T>(endpoint, formData, true);
+    }
   }
 
-  // Clear cache on upload
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      (errorData as { message?: string }).message || 'Upload failed'
+    );
+  }
+
   clearApiCache();
-  return response.json();
+  const data = await response.json();
+  if (data && typeof data === 'object' && data.success === false) {
+    throw new Error(data.message || 'Upload failed');
+  }
+  return data;
 };
 
 /**

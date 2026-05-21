@@ -16,7 +16,7 @@ import {
   holidaysStorageKey,
   resolveAuthOrgId,
 } from '../../utils/apiHelper';
-import { safeLocaleTime, safeFormatTime, runSafe } from '../../utils/safeUi';
+import { safeLocaleTime, safeFormatTime, runSafe, authUserKey } from '../../utils/safeUi';
 import { postAttendanceAction } from '../../utils/attendanceApi';
 import {
   formatWeekHours,
@@ -229,6 +229,7 @@ function StaticGreetingHeader({ userName }: { userName: string }) {
 
 export default function EmployeeDashboard() {
   const { user, loading: authLoading } = useAuth();
+  const authUid = authUserKey(user);
   const { attendance: todayAttendance, updateAttendance, loadFromLocalStorage } = useAttendance();
   const [loading, setLoading] = useState(false);
   const [attendanceBusy, setAttendanceBusy] = useState<
@@ -314,9 +315,9 @@ export default function EmployeeDashboard() {
     if (!force && key !== calendarWeekKey()) return;
     const safe = Math.max(0, hours);
     setKpiMetrics((prev) => ({ ...prev, hoursThisWeek: formatWeekHours(safe) }));
-    const uid = user?.id ? String(user.id) : null;
+    const uid = authUid;
     writeCachedWeekHours(uid, safe);
-  }, [user?.id]);
+  }, [authUid]);
 
   const ingestWeekHoursFromServer = useCallback(
     (hoursThisWeek: number, weekKey?: string, todayLiveHours = 0) => {
@@ -327,7 +328,7 @@ export default function EmployeeDashboard() {
   );
 
   const syncWeeklyHours = useCallback(async () => {
-    if (!user?.id) return;
+    if (!authUid) return;
     const now = Date.now();
     if (now - lastWeekSyncRef.current < 15_000) return;
     lastWeekSyncRef.current = now;
@@ -363,15 +364,15 @@ export default function EmployeeDashboard() {
     } catch (err) {
       debug.warn('syncWeeklyHours failed', err);
     }
-  }, [user?.id, ingestWeekHoursFromServer]);
+  }, [authUid, ingestWeekHoursFromServer]);
 
   useEffect(() => {
-    if (!user?.id) return;
-    const cached = readCachedWeekHours(String(user.id));
+    if (!authUid) return;
+    const cached = readCachedWeekHours(authUid);
     if (cached) {
       setKpiMetrics((prev) => ({ ...prev, hoursThisWeek: formatWeekHours(cached.hours) }));
     }
-  }, [user?.id]);
+  }, [authUid]);
 
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
@@ -474,7 +475,7 @@ export default function EmployeeDashboard() {
         apiGetSafe(holidaysUrl, false),
       ]);
 
-      const holidayKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
+      const holidayKey = holidaysStorageKey(authUid, user?.orgId || user?.tenantId);
       const cachedHolidays = localStorage.getItem(holidayKey);
       if (cachedHolidays) {
         try {
@@ -652,7 +653,7 @@ export default function EmployeeDashboard() {
           });
         }
 
-        const uid = user?.id ? String(user.id) : null;
+        const uid = authUid;
         writePersistedAttendance(uid, {
           checkedIn: isCurrentlyCheckedIn,
           isCheckedIn: isCurrentlyCheckedIn,
@@ -667,7 +668,7 @@ export default function EmployeeDashboard() {
           timestamp: Date.now()
         });
       } else {
-        const uid = user?.id ? String(user.id) : null;
+        const uid = authUid;
         const cached = await readPersistedAttendance(uid);
         const hasFreshCheckedIn =
           cached &&
@@ -771,7 +772,7 @@ export default function EmployeeDashboard() {
   };
 
   const refreshLeaveBalance = useCallback(async () => {
-    if (!user?.id) return;
+    if (!authUid) return;
     try {
       const empId = await ensureEmployeeId();
       if (!empId) return;
@@ -829,13 +830,13 @@ export default function EmployeeDashboard() {
 
   // Fetch data on mount — cache hydrates via AttendanceContext when user is ready
   useEffect(() => {
-    if (!user?.id) return;
+    if (!authUid) return;
     loadFromLocalStorage();
     const timeoutId = setTimeout(() => {
       void fetchDashboardDataRef.current?.(true);
     }, 300);
     return () => clearTimeout(timeoutId);
-  }, [user?.id, loadFromLocalStorage]);
+  }, [authUid, loadFromLocalStorage]);
 
   // Seed employeeId from auth profile (avoids 404 on strict org employee lookup)
   useEffect(() => {
@@ -845,14 +846,14 @@ export default function EmployeeDashboard() {
     } else {
       void ensureEmployeeId();
     }
-  }, [user?.id, user?.employeeId]);
+  }, [authUid, user?.employeeId]);
 
   // ============================================================================
   // SOCKET.IO LISTENERS - FIXED: Use refs to prevent stale closures
   // ============================================================================
   useEffect(() => {
     // Match realTimeSocket: org can be orgId or tenantId; listeners only need employeeId + user session
-    if (!user?.id || !employeeIdRef.current) return;
+    if (!authUid || !employeeIdRef.current) return;
 
     debug.group('[SOCKET LISTENERS SETUP]');
     debug.log('📡 [EMPLOYEE-DASHBOARD] Setting up Socket.IO listeners with employeeId:', employeeIdRef.current);
@@ -878,9 +879,9 @@ export default function EmployeeDashboard() {
       const matchEmployee =
         data.employeeId && String(data.employeeId) === String(employeeIdRef.current);
       const matchUser =
-        user?.id &&
-        (String(data.userId) === String(user.id) ||
-          String(data.attendance?.userId) === String(user.id));
+        authUid &&
+        (String(data.userId) === authUid ||
+          String(data.attendance?.userId) === authUid);
       if (matchEmployee || matchUser) {
         setLastSocketEventTime(Date.now());
         completedBreakSecondsRef.current = breakSecondsRef.current;
@@ -942,7 +943,7 @@ export default function EmployeeDashboard() {
       unsubscribeCheckedIn();
       unsubscribeCheckedOut();
     };
-  }, [user?.id, employeeId]);
+  }, [authUid, employeeId]);
 
   // Fetch attendance history
   const resetCurrentBreakSegment = useCallback(() => {
@@ -1028,7 +1029,7 @@ export default function EmployeeDashboard() {
 
   // Refresh KPIs from server (hours + leave balance) — single interval to reduce load
   useEffect(() => {
-    if (!user?.id) return;
+    if (!authUid) return;
     void syncWeeklyHours();
     void refreshLeaveBalance();
     const interval = setInterval(() => {
@@ -1052,11 +1053,11 @@ export default function EmployeeDashboard() {
       unsubAlloc();
       unsubAttendance();
     };
-  }, [user?.id, syncWeeklyHours, refreshLeaveBalance]);
+  }, [authUid, syncWeeklyHours, refreshLeaveBalance]);
 
   // Refresh stale KPIs once when user returns to the tab
   useEffect(() => {
-    if (!user?.id) return;
+    if (!authUid) return;
     return onPageVisible(() => {
       void syncWeeklyHours();
       void refreshLeaveBalance();
@@ -1064,7 +1065,7 @@ export default function EmployeeDashboard() {
         void safeRefresh(true);
       }
     });
-  }, [user?.id, todayAttendance.isCheckedIn, disableRefresh, syncWeeklyHours, refreshLeaveBalance, safeRefresh]);
+  }, [authUid, todayAttendance.isCheckedIn, disableRefresh, syncWeeklyHours, refreshLeaveBalance, safeRefresh]);
 
   // ============================================================================
   // TIMER SYSTEM - Track working hours, breaks, and meetings in real-time
@@ -1146,7 +1147,7 @@ export default function EmployeeDashboard() {
 
       const resolvedEmployeeId = await ensureEmployeeId();
       const day = localDayKey();
-      const idempotencyKey = `break-start-${resolvedEmployeeId || user?.id || 'me'}-${day}-${Date.now()}`;
+      const idempotencyKey = `break-start-${resolvedEmployeeId || authUid || 'me'}-${day}-${Date.now()}`;
       
       const requestPayload: {
         breakType: string;
@@ -1265,7 +1266,7 @@ export default function EmployeeDashboard() {
       lastActionTimeRef.current = Date.now();
       
       const resolvedEmployeeId = await ensureEmployeeId();
-      const idempotencyKey = `break-end-${resolvedEmployeeId || user?.id || 'me'}-${localDayKey()}-${Date.now()}`;
+      const idempotencyKey = `break-end-${resolvedEmployeeId || authUid || 'me'}-${localDayKey()}-${Date.now()}`;
       
       const payload: { notes: string; idempotencyKey: string; employeeId?: string | null } = {
         notes: 'Break ended',
@@ -1331,7 +1332,7 @@ export default function EmployeeDashboard() {
           void syncWeeklyHours();
         }
 
-        const uid = user?.id ? String(user.id) : null;
+        const uid = authUid;
         writePersistedAttendance(uid, {
           checkedIn: true,
           isCheckedIn: true,
@@ -1377,7 +1378,7 @@ export default function EmployeeDashboard() {
       setAttendanceBusy('check-in');
       lastActionTimeRef.current = Date.now();
 
-      const idempotencyKey = `check-in-${user?.id || 'me'}-${localDayKey()}-${Date.now()}`;
+      const idempotencyKey = `check-in-${authUid || 'me'}-${localDayKey()}-${Date.now()}`;
       const payload: { notes: string; idempotencyKey: string } = {
         notes: 'Checked in',
         idempotencyKey
@@ -1424,7 +1425,7 @@ export default function EmployeeDashboard() {
           currentBreakDuration: 0,
         }, 'action');
 
-        const uid = user?.id ? String(user.id) : null;
+        const uid = authUid;
         writePersistedAttendance(uid, {
           checkedIn: true,
           isCheckedIn: true,
@@ -1472,7 +1473,7 @@ export default function EmployeeDashboard() {
       lastActionTimeRef.current = Date.now();
 
       const resolvedEmployeeId = await ensureEmployeeId();
-      const idempotencyKey = `check-out-${user?.id || 'me'}-${localDayKey()}-${Date.now()}`;
+      const idempotencyKey = `check-out-${authUid || 'me'}-${localDayKey()}-${Date.now()}`;
       const payload: { notes: string; employeeId?: string | null; idempotencyKey: string } = {
         notes: 'Checked out',
         idempotencyKey
@@ -1522,7 +1523,7 @@ export default function EmployeeDashboard() {
           currentBreakDuration: 0
         }, 'action');
 
-        const uid = user?.id ? String(user.id) : null;
+        const uid = authUid;
         writePersistedAttendance(uid, {
           checkedIn: false,
           isCheckedIn: false,

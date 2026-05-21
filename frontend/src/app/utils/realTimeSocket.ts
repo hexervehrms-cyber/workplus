@@ -1,6 +1,7 @@
 import type { Socket } from 'socket.io-client';
 import { TokenManager } from './api';
 import { socketService } from './socket';
+import { authUserKey } from './safeUi';
 
 class RealTimeSocket {
   private socket: Socket | null = null;
@@ -20,14 +21,27 @@ class RealTimeSocket {
   /**
    * Connect using authenticated user from AuthContext (TokenManager.getUser is not populated).
    */
-  connectFromAuth(user: { id: string; role: string; orgId?: string; tenantId?: string }) {
-    if (!user?.id) return;
-    this.authUser = user;
+  connectFromAuth(user: {
+    id?: string;
+    userId?: string;
+    role: string;
+    orgId?: string;
+    tenantId?: string;
+  }) {
+    const id = authUserKey(user);
+    if (!id) return;
+    const normalized = {
+      id,
+      role: user.role,
+      orgId: user.orgId,
+      tenantId: user.tenantId,
+    };
+    this.authUser = normalized;
 
     const tryAttachShared = (): boolean => {
       const shared = socketService.getSocket();
       if (socketService.isConnected() && shared) {
-        this.attachSharedSocket(shared, user);
+        this.attachSharedSocket(shared, normalized);
         return true;
       }
       return false;
@@ -86,18 +100,34 @@ class RealTimeSocket {
     }
 
     const user = this.authUser || TokenManager.getUser();
-    if (!user?.id) {
+    const id = authUserKey(
+      user as { id?: string; userId?: string } | null | undefined
+    );
+    if (!id) {
       return;
     }
 
     const shared = socketService.getSocket();
     if (socketService.isConnected() && shared) {
-      this.attachSharedSocket(shared, user as { id: string; role: string; orgId?: string; tenantId?: string });
+      this.attachSharedSocket(shared, {
+        id,
+        role: (user as { role: string }).role,
+        orgId: (user as { orgId?: string }).orgId,
+        tenantId: (user as { tenantId?: string }).tenantId,
+      });
       return;
     }
 
     if (!this.authUser) {
-      this.connectFromAuth(user as { id: string; role: string; orgId?: string; tenantId?: string });
+      this.connectFromAuth(
+        user as {
+          id?: string;
+          userId?: string;
+          role: string;
+          orgId?: string;
+          tenantId?: string;
+        }
+      );
     }
   }
 

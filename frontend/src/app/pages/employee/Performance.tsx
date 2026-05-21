@@ -90,7 +90,8 @@ export default function Performance() {
   const [error, setError] = useState<string | null>(null);
 
   const loadPerformanceData = useCallback(async () => {
-    if (!user?.id && !(user as { userId?: string })?.userId) return;
+    const uid = user?.userId || user?.id;
+    if (!uid) return;
     try {
       setError(null);
       const res = await apiGet<PerformancePayload | { data?: PerformancePayload }>(

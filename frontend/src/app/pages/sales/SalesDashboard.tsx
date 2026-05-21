@@ -4,6 +4,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, L
 import { TrendingUp, TrendingDown, Users, Phone, Target, DollarSign, Award, AlertCircle } from 'lucide-react';
 import { apiGet } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
+import { authUserKey } from '../../utils/safeUi';
 
 const SalesDashboard = () => {
   const { user } = useAuth();
@@ -43,9 +44,9 @@ const SalesDashboard = () => {
   }, []);
 
   useEffect(() => {
-    if (!user?.id) return;
+    if (!authUserKey(user)) return;
     void fetchDashboardData();
-  }, [user?.id, fetchDashboardData]);
+  }, [user?.userId, user?.id, fetchDashboardData]);
 
   const KPICard = ({ title, value, icon: Icon, trend, color }) => (
     <div className="bg-white rounded-lg shadow p-6 border-l-4" style={{ borderColor: color }}>

@@ -30,7 +30,14 @@ import { Button } from '../../components/ui/button';
 import { Progress } from '../../components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Input } from '../../components/ui/input';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Textarea } from '../../components/ui/textarea';
 import {
@@ -49,7 +56,7 @@ import { apiGet, apiPatch, apiDelete, appendOrgIdParam, clearApiCache } from '..
 import { ensureAccessToken } from '../../utils/sessionAuth';
 import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
-import { ensureArray, safeCell } from '../../utils/safeUi';
+import { ensureArray, safeCell, authUserKey } from '../../utils/safeUi';
 
 const DASHBOARD_SOCKET_DEBOUNCE_MS = 2500;
 
@@ -278,6 +285,11 @@ export default function AdminDashboard() {
   // Edit leave modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingLeave, setEditingLeave] = useState<EditingLeave | null>(null);
+  const [showRejectLeaveDialog, setShowRejectLeaveDialog] = useState(false);
+  const [showDeleteLeaveDialog, setShowDeleteLeaveDialog] = useState(false);
+  const [pendingLeaveRequestId, setPendingLeaveRequestId] = useState<string | null>(null);
+  const [leaveRejectionReason, setLeaveRejectionReason] = useState('Rejected by admin');
+  const [leaveActionLoading, setLeaveActionLoading] = useState(false);
 
   const refreshDashboardData = useCallback(async () => {
     const gen = nextGeneration();
@@ -501,15 +513,15 @@ export default function AdminDashboard() {
   }, [filterType, customStartDate, customEndDate, refreshDashboardData, mounted]);
 
   useEffect(() => {
-    if (user?.id) {
-      realTimeSocket.connectFromAuth({
-        id: String(user.id),
-        role: user.role,
-        orgId: user.orgId || user.tenantId,
-        tenantId: user.tenantId || user.orgId,
-      });
-    }
-  }, [user?.id, user?.role, user?.orgId, user?.tenantId]);
+    const uid = authUserKey(user);
+    if (!uid) return;
+    realTimeSocket.connectFromAuth({
+      id: uid,
+      role: user!.role,
+      orgId: user!.orgId || user!.tenantId,
+      tenantId: user!.tenantId || user!.orgId,
+    });
+  }, [user?.userId, user?.id, user?.role, user?.orgId, user?.tenantId]);
 
   // Socket.IO real-time updates
   useEffect(() => {
@@ -620,7 +632,7 @@ export default function AdminDashboard() {
     try {
       console.log('✅ Approving leave request:', requestId);
       
-      const userId = user?.id || user?.userId;
+      const userId = authUserKey(user);
       if (!userId) {
         toast.error('Unable to get user information. Please log in again.');
         return;
@@ -643,17 +655,24 @@ export default function AdminDashboard() {
     }
   };
 
-  // Handle leave request rejection
-  const handleRejectLeave = async (requestId: string) => {
-    const reason = window.prompt('Enter rejection reason:', 'Rejected by admin');
+  const openRejectLeaveDialog = (requestId: string) => {
+    setPendingLeaveRequestId(requestId);
+    setLeaveRejectionReason('Rejected by admin');
+    setShowRejectLeaveDialog(true);
+  };
+
+  const confirmRejectLeave = async () => {
+    const requestId = pendingLeaveRequestId;
+    const reason = leaveRejectionReason.trim();
+    if (!requestId) return;
     if (!reason) {
-      return; // User cancelled
+      toast.error('Please provide a rejection reason');
+      return;
     }
-    
+
     try {
-      console.log('❌ Rejecting leave request:', requestId);
-      
-      const userId = user?.id || user?.userId;
+      setLeaveActionLoading(true);
+      const userId = authUserKey(user);
       if (!userId) {
         toast.error('Unable to get user information. Please log in again.');
         return;
@@ -662,28 +681,36 @@ export default function AdminDashboard() {
       await ensureAccessToken();
       const response = await apiPatch<{ success?: boolean }>(`/leave-requests/${requestId}/reject`, {
         rejectedBy: userId,
-        rejectionReason: reason
+        rejectionReason: reason,
       });
 
       if (response?.success !== false) {
         clearApiCache('/dashboard');
         await refreshLeaveList();
         toast.success('Leave request rejected');
+        setShowRejectLeaveDialog(false);
+        setPendingLeaveRequestId(null);
+        setLeaveRejectionReason('Rejected by admin');
       }
     } catch (error) {
       console.error('❌ Error rejecting leave:', error);
       toast.error(`Failed to reject leave request: ${getErrorMessage(error, 'Unknown error')}`);
+    } finally {
+      setLeaveActionLoading(false);
     }
   };
 
-  // Handle leave request deletion
-  const handleDeleteLeave = async (requestId: string) => {
-    if (!window.confirm('Are you sure you want to delete this leave request? This action cannot be undone.')) {
-      return;
-    }
-    
+  const openDeleteLeaveDialog = (requestId: string) => {
+    setPendingLeaveRequestId(requestId);
+    setShowDeleteLeaveDialog(true);
+  };
+
+  const confirmDeleteLeave = async () => {
+    const requestId = pendingLeaveRequestId;
+    if (!requestId) return;
+
     try {
-      console.log('🗑️ Deleting leave request:', requestId);
+      setLeaveActionLoading(true);
       await ensureAccessToken();
       const response = await apiDelete<{ success?: boolean }>(`/leave-requests/${requestId}`);
 
@@ -691,10 +718,14 @@ export default function AdminDashboard() {
         clearApiCache('/dashboard');
         await refreshLeaveList();
         toast.success('Leave request deleted');
+        setShowDeleteLeaveDialog(false);
+        setPendingLeaveRequestId(null);
       }
     } catch (error) {
       console.error('❌ Error deleting leave:', error);
       toast.error(`Failed to delete leave request: ${getErrorMessage(error, 'Unknown error')}`);
+    } finally {
+      setLeaveActionLoading(false);
     }
   };
 
@@ -782,7 +813,7 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
       console.log('✅ Leave request downloaded successfully');
     } catch (error) {
       console.error('❌ Error downloading leave:', error);
-      alert(`Failed to download leave request: ${getErrorMessage(error, 'Unknown error')}`);
+      toast.error(`Failed to download leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
@@ -1093,7 +1124,7 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
                             <Button 
                               variant="destructive" 
                               size="sm"
-                              onClick={() => handleRejectLeave(requestId)}
+                              onClick={() => openRejectLeaveDialog(requestId)}
                               title="Reject leave request"
                             >
                               Reject
@@ -1121,7 +1152,7 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
                           variant="outline" 
                           size="sm"
                           className="text-destructive hover:text-destructive"
-                          onClick={() => handleDeleteLeave(requestId)}
+                          onClick={() => openDeleteLeaveDialog(requestId)}
                           title="Delete leave request"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -1259,6 +1290,68 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
       {/* Chat Widget */}
       <ChatWidget />
       
+      {/* Reject Leave Dialog */}
+      <Dialog open={showRejectLeaveDialog} onOpenChange={setShowRejectLeaveDialog}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Reject Leave Request</DialogTitle>
+            <DialogDescription>Provide a reason for rejecting this request.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="dashboard-reject-reason">Rejection reason</Label>
+            <Textarea
+              id="dashboard-reject-reason"
+              rows={3}
+              value={leaveRejectionReason}
+              onChange={(e) => setLeaveRejectionReason(e.target.value)}
+              placeholder="Enter reason for rejection..."
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowRejectLeaveDialog(false);
+                setPendingLeaveRequestId(null);
+              }}
+              disabled={leaveActionLoading}
+            >
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmRejectLeave} disabled={leaveActionLoading}>
+              {leaveActionLoading ? 'Rejecting…' : 'Reject'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Leave Confirmation */}
+      <Dialog open={showDeleteLeaveDialog} onOpenChange={setShowDeleteLeaveDialog}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Delete Leave Request</DialogTitle>
+            <DialogDescription>
+              This action cannot be undone. The leave request will be permanently removed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowDeleteLeaveDialog(false);
+                setPendingLeaveRequestId(null);
+              }}
+              disabled={leaveActionLoading}
+            >
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDeleteLeave} disabled={leaveActionLoading}>
+              {leaveActionLoading ? 'Deleting…' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Edit Leave Modal */}
       <Dialog open={editModalOpen} onOpenChange={setEditModalOpen}>
         <DialogContent className="sm:max-w-[500px]">

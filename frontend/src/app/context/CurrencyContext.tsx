@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback, ReactNode 
 import { useAuth } from './AuthContext';
 import { userCurrencyKey } from '../utils/userScopedStorage';
 import { apiGet, apiRequest } from '../utils/apiHelper';
+import { authUserKey } from '../utils/safeUi';
 
 interface Currency {
   code: string;
@@ -57,7 +58,7 @@ interface CurrencyProviderProps {
 
 export function CurrencyProvider({ children }: CurrencyProviderProps) {
   const { isAuthenticated, user } = useAuth();
-  const currencyStorageKey = userCurrencyKey(user?.id);
+  const currencyStorageKey = userCurrencyKey(authUserKey(user));
   const [selectedCurrency, setSelectedCurrencyState] = useState<Currency>(defaultInr);
   const [loading, setLoading] = useState(true);
 

@@ -7,6 +7,7 @@ import { Loader, Download, Eye, Calendar, TrendingUp, DollarSign } from 'lucide-
 import { toast } from '../../utils/portalToast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { apiGet } from '../../utils/apiHelper';
+import { authUserKey } from '../../utils/safeUi';
 
 interface KPIData {
   currentAmount: number;
@@ -59,9 +60,9 @@ export default function PayrollDashboard() {
   }, []);
 
   useEffect(() => {
-    if (!user?.id) return;
+    if (!authUserKey(user)) return;
     void fetchPayrollData();
-  }, [user?.id, fetchPayrollData]);
+  }, [user?.userId, user?.id, fetchPayrollData]);
 
   if (loading) {
     return (

@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { apiClient, ApiError } from '../../utils/api';
+import { apiGet } from '../../utils/apiHelper';
 import { OrgRequiredNotice } from '../../components/OrgRequiredNotice';
 import { toast } from '../../utils/portalToast';
+import { authUserKey } from '../../utils/safeUi';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -100,19 +102,22 @@ export default function AdminSettings() {
       }
     };
 
-    if (user?.id) {
+    if (authUserKey(user)) {
       fetchAdminData();
     }
-  }, [user]);
+  }, [user?.userId, user?.id]);
 
   useEffect(() => {
     const loadNotif = async () => {
-      if (!canManageOrgNotifications || !user?.id) return;
+      if (!canManageOrgNotifications || !authUserKey(user)) return;
       try {
         setNotifLoading(true);
-        const res = await apiClient.get<NotificationIntegrationsPayload>('/admin/notification-integrations');
-        if (res.success && res.data) {
-          const d = res.data;
+        const res = await apiGet<{
+          success?: boolean;
+          data?: NotificationIntegrationsPayload;
+        }>('/admin/notification-integrations');
+        const d = res?.data;
+        if (res?.success !== false && d) {
           const loadedIntegrations = d.integrations;
           if (loadedIntegrations) {
             setIntegrations((prev) => ({
@@ -143,9 +148,17 @@ export default function AdminSettings() {
         }
       } catch (e) {
         console.error(e);
-        if (e instanceof ApiError && (e.code === 'MISSING_ORG_CONTEXT' || e.status === 403 || e.status === 400)) {
+        const err = e as { code?: string; status?: number; message?: string };
+        const missingOrg =
+          (e instanceof ApiError &&
+            (e.code === 'MISSING_ORG_CONTEXT' || e.status === 403 || e.status === 400)) ||
+          err.code === 'MISSING_ORG_CONTEXT' ||
+          err.status === 403 ||
+          err.status === 400;
+        if (missingOrg) {
           toast.error(
-            e.getUserMessage() || 'Could not load notification settings. Try signing out and back in.'
+            (e instanceof ApiError ? e.getUserMessage() : err.message) ||
+              'Could not load notification settings. Try signing out and back in.'
           );
         }
       } finally {

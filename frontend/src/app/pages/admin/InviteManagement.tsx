@@ -18,7 +18,7 @@ import { apiClient, ApiError } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
 import { useAuth } from '../../context/AuthContext';
 import { useDepartments } from '../../hooks/useDepartments';
-import { apiPost } from '../../utils/apiHelper';
+import { apiGet, apiPost } from '../../utils/apiHelper';
 
 interface InviteLinkRow {
   id: string;
@@ -73,9 +73,12 @@ export default function InviteManagement() {
       if (user?.role === 'super_admin' && oid && oid !== 'system') {
         url += `&orgId=${encodeURIComponent(String(oid))}`;
       }
-      const res = await apiClient.get<{ links?: ApiInviteLink[] }>(url);
-
-      const rows: ApiInviteLink[] = res.data?.links ?? [];
+      const res = await apiGet<{ success?: boolean; data?: { links?: ApiInviteLink[] }; links?: ApiInviteLink[] }>(url);
+      const payload = res?.data ?? res;
+      const rows: ApiInviteLink[] =
+        (payload && typeof payload === 'object' && 'links' in payload
+          ? (payload as { links?: ApiInviteLink[] }).links
+          : undefined) ?? [];
       setInviteLinks(
         rows.map((link) => ({
           id: link.id,

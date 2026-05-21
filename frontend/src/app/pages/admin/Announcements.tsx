@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Plus, Send, Calendar, Loader2 } from 'lucide-react';
-import { apiClient, ApiError } from '../../utils/api';
+import { apiClient, ApiError, extractApiList } from '../../utils/api';
+import { apiGet } from '../../utils/apiHelper';
 import { toast } from '../../utils/portalToast';
 import { useAuth } from '../../context/AuthContext';
 import { OrgRequiredNotice } from '../../components/OrgRequiredNotice';
@@ -43,13 +44,13 @@ export default function AnnouncementsAdmin() {
     try {
       setLoading(true);
       const [listRes, statsRes] = await Promise.all([
-        apiClient.get<AnnouncementRow[]>('/announcements', { limit: '50', page: '1' }),
-        apiClient.get<typeof stats>('/announcements/dashboard-stats'),
+        apiGet<{ success?: boolean; data?: AnnouncementRow[] }>('/announcements?limit=50&page=1'),
+        apiGet<{ success?: boolean; data?: typeof stats }>('/announcements/dashboard-stats'),
       ]);
-      if (listRes.success && Array.isArray(listRes.data)) {
-        setRows(listRes.data);
+      if (listRes?.success !== false) {
+        setRows(extractApiList<AnnouncementRow>(listRes));
       }
-      if (statsRes.success && statsRes.data) {
+      if (statsRes?.success !== false && statsRes?.data) {
         setStats(statsRes.data as typeof stats);
       }
     } catch (e) {

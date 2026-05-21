@@ -13,7 +13,7 @@ import {
   DialogDescription,
 } from '../../components/ui/dialog';
 import { Badge } from '../../components/ui/badge';
-import { apiClient } from '../../utils/api';
+import { extractApiList } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
 import {
   apiFetch,
@@ -23,7 +23,6 @@ import {
   resolveAuthOrgId,
   resolveOrgIdForApi,
 } from '../../utils/apiHelper';
-import { extractApiList } from '../../utils/api';
 import realTimeSocket from '../../utils/realTimeSocket';
 
 interface AttendanceRecord {
@@ -402,9 +401,12 @@ export default function AttendanceAdmin() {
   const fetchLateEmployees = async () => {
     try {
       setLateEmployeesLoading(true);
-      const response = await apiClient.get<unknown[]>('/attendance/late-today');
-      if (response?.success) {
-        setLateEmployees(response.data ?? []);
+      const response = await apiGet<{ success?: boolean; data?: unknown }>(
+        '/attendance/late-today',
+        false
+      );
+      if (response?.success !== false) {
+        setLateEmployees(extractApiList(response));
       }
     } catch (error) {
       console.error('Error fetching late employees:', error);
@@ -486,8 +488,11 @@ export default function AttendanceAdmin() {
     setViewRecord(record);
     setViewLoading(true);
     try {
-      const res = await apiClient.get<AttendanceRecord>(`/attendance/record/${record._id}`);
-      if (res?.success && res.data) {
+      const res = await apiGet<{ success?: boolean; data?: AttendanceRecord }>(
+        `/attendance/record/${record._id}`,
+        false
+      );
+      if (res?.success !== false && res.data) {
         setViewRecord(mapApiAttendance(res.data as unknown as Record<string, unknown>, record.employeeName));
       }
     } catch (error) {
@@ -515,12 +520,18 @@ export default function AttendanceAdmin() {
         endDate: dateStr,
         limit: '5',
       }).toString();
-      const res = await apiClient.get<AttendanceRecord[]>(`/attendance?${qs}`);
-      const rows = Array.isArray(res.data) ? res.data : [];
+      const res = await apiGet<{ success?: boolean; data?: AttendanceRecord[] }>(
+        `/attendance?${qs}`,
+        false
+      );
+      const rows = extractApiList<AttendanceRecord>(res);
       if (rows.length > 0) {
         const mapped = mapApiAttendance(rows[0] as unknown as Record<string, unknown>, log.employeeName);
-        const detail = await apiClient.get<AttendanceRecord>(`/attendance/record/${mapped._id}`);
-        if (detail?.success && detail.data) {
+        const detail = await apiGet<{ success?: boolean; data?: AttendanceRecord }>(
+          `/attendance/record/${mapped._id}`,
+          false
+        );
+        if (detail?.success !== false && detail.data) {
           setViewRecord(mapApiAttendance(detail.data as unknown as Record<string, unknown>, log.employeeName));
         } else {
           setViewRecord(mapped);

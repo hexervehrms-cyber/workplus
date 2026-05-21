@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Calendar, Loader } from 'lucide-react';
 import { apiGet } from '../../utils/apiHelper';
-import { apiClient } from '../../utils/api';
-import { safeLocaleTime, hasCheckOutValue } from '../../utils/safeUi';
+import { extractApiList } from '../../utils/api';
+import { safeLocaleTime, hasCheckOutValue, safeTitleCase } from '../../utils/safeUi';
 import {
   readPersistedAttendance,
   isPayloadFresh,
@@ -108,11 +108,18 @@ export default function Attendance() {
 
   const fetchEmployeeActivityLogs = useCallback(async () => {
     try {
-      const response = await apiClient.get(
-        `/attendance/activity-logs/me?limit=2000&t=${Date.now()}`
+      const response = await apiGet<{ success?: boolean; data?: unknown }>(
+        `/attendance/activity-logs/me?limit=2000&t=${Date.now()}`,
+        false
       );
-      if (response?.success && Array.isArray(response.data) && response.data.length > 0) {
-        const mapped = response.data
+      const rows = extractApiList<{
+        _id: string;
+        action: string;
+        timestamp: string;
+        details?: { breakType?: string };
+      }>(response);
+      if (response?.success !== false && rows.length > 0) {
+        const mapped = rows
           .map((log: { _id: string; action: string; timestamp: string; details?: { breakType?: string } }) => {
             const ts = new Date(log.timestamp);
             const breakLabel =
@@ -471,7 +478,7 @@ export default function Attendance() {
                             log.status === 'meeting' ? 'outline' :
                             'default'
                           }>
-                            {log.status.charAt(0).toUpperCase() + log.status.slice(1)}
+                            {safeTitleCase(log.status, '—')}
                           </Badge>
                         </td>
                       </tr>
@@ -578,7 +585,7 @@ export default function Attendance() {
                         </td>
                         <td className="px-6 py-4">
                           <Badge variant={record.status === 'present' ? 'default' : 'secondary'}>
-                            {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
+                            {safeTitleCase(record.status, '—')}
                           </Badge>
                         </td>
                       </tr>

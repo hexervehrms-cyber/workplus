@@ -5,8 +5,10 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Calendar, ChevronLeft, ChevronRight, Download } from 'lucide-react';
-import { apiClient } from '../../utils/api';
+import { extractApiList } from '../../utils/api';
+import { apiGet } from '../../utils/apiHelper';
 import { toast } from '../../utils/portalToast';
+import { safeTitleCase } from '../../utils/safeUi';
 
 interface AttendanceRecord {
   _id: string;
@@ -51,12 +53,15 @@ export default function AttendanceCalendar() {
       const startDate = new Date(year, month - 1, 1).toISOString();
       const endDate = new Date(year, month, 0).toISOString();
       
-      const response = await apiClient.get<AttendanceRecord[]>(`/attendance?startDate=${startDate}&endDate=${endDate}&limit=100`);
-      if (response?.success) {
-        setAttendance(response.data ?? []);
+      const response = await apiGet<{ success?: boolean; data?: AttendanceRecord[] }>(
+        `/attendance?startDate=${startDate}&endDate=${endDate}&limit=100`
+      );
+      if (response?.success !== false) {
+        setAttendance(extractApiList<AttendanceRecord>(response));
       }
     } catch (error) {
       console.error('Error loading attendance:', error);
+      toast.error('Could not load attendance for this month');
     } finally {
       setLoading(false);
     }
@@ -64,12 +69,13 @@ export default function AttendanceCalendar() {
 
   const loadEmployees = async () => {
     try {
-      const response = await apiClient.get<unknown[]>('/employees');
-      if (response?.success) {
-        setEmployees(response.data ?? []);
+      const response = await apiGet<{ success?: boolean; data?: unknown[] }>('/employees');
+      if (response?.success !== false) {
+        setEmployees(extractApiList(response));
       }
     } catch (error) {
       console.error('Error loading employees:', error);
+      toast.error('Could not load employees');
     }
   };
 
@@ -263,10 +269,7 @@ export default function AttendanceCalendar() {
                       <td className="p-4">{record.hoursWorked ? record.hoursWorked.toFixed(1) : '0.0'}h</td>
                       <td className="p-4">
                         <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(record.status)}`}>
-                          {(() => {
-                            const s = String(record.status || '—');
-                            return s.charAt(0).toUpperCase() + s.slice(1);
-                          })()}
+                          {safeTitleCase(record.status)}
                         </span>
                       </td>
                     </tr>

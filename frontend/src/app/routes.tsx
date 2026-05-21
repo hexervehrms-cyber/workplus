@@ -458,7 +458,7 @@ const routes = [
       },
       {
         path: 'employee/calendar',
-        element: <Navigate to="/employee/leave" replace />,
+        element: <Navigate to="/employee" replace />,
       },
       {
         path: 'employee/attendance',

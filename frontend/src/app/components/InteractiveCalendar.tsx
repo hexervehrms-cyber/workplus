@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Calendar as CalendarIcon, Plus, CheckCircle, XCircle, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
@@ -20,8 +20,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
-import { LeaveRequestService, ApiError } from '../utils/api';
-import { apiGetSafe } from '../utils/apiHelper';
+import { LeaveRequestService, ApiError, extractApiList } from '../utils/api';
+import {
+  apiGetSafe,
+  appendOrgIdParam,
+  holidaysStorageKey,
+  resolveAuthOrgId,
+} from '../utils/apiHelper';
+import realTimeSocket from '../utils/realTimeSocket';
 import { useAuth } from '../context/AuthContext';
 import { toast } from '../utils/portalToast';
 
@@ -63,61 +69,69 @@ export default function InteractiveCalendar() {
     reason: ''
   });
 
+  const authUserId = user?.userId || user?.id || '';
+
+  const loadHolidays = useCallback(async () => {
+    const year = new Date().getFullYear();
+    const holidayRes = await apiGetSafe<{ success?: boolean; data?: Holiday[] }>(
+      appendOrgIdParam(`holidays?year=${year}&limit=500`, user, resolveAuthOrgId(user)),
+      false
+    );
+    if (holidayRes.ok && holidayRes.data?.success && Array.isArray(holidayRes.data.data)) {
+      setHolidays(holidayRes.data.data);
+      const hKey = holidaysStorageKey(authUserId, user?.orgId || user?.tenantId);
+      try {
+        localStorage.setItem(hKey, JSON.stringify(holidayRes.data.data));
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    const hKey = holidaysStorageKey(authUserId, user?.orgId || user?.tenantId);
+    try {
+      const cached = localStorage.getItem(hKey);
+      if (cached) setHolidays(JSON.parse(cached));
+    } catch {
+      /* ignore */
+    }
+  }, [authUserId, user]);
+
+  const loadLeaveHistory = useCallback(async () => {
+    if (!authUserId) return;
+    const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
+    setLeaveHistory(extractApiList<LeaveRequest>(leaveResponse));
+  }, [authUserId]);
+
   // Fetch leave requests and holidays
   useEffect(() => {
+    if (!authUserId) {
+      setLoading(false);
+      return;
+    }
+
     const fetchData = async () => {
-      if (!user?.id) return;
-      
       try {
         setLoading(true);
-        
-        // Fetch leave requests
-        const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
-        if (leaveResponse.success && leaveResponse.data) {
-          setLeaveHistory(leaveResponse.data);
-        }
-
-        // Fetch holidays
-        const holidayRes = await apiGetSafe<{ success?: boolean; data?: Holiday[] }>('/holidays');
-        if (holidayRes.ok && holidayRes.data?.success && Array.isArray(holidayRes.data.data)) {
-          setHolidays(holidayRes.data.data);
-        }
+        await Promise.all([loadLeaveHistory(), loadHolidays()]);
       } catch (error) {
-        console.error('Error fetching data:', error);
-        // Avoid noisy global toast on dashboard load; keep calendar usable with partial data.
+        console.error('Error fetching calendar data:', error);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchData();
-  }, [user?.id]);
+    void fetchData();
+  }, [authUserId, loadLeaveHistory, loadHolidays]);
 
-  // Listen for real-time holiday updates via Socket.IO
   useEffect(() => {
-    const refreshHolidays = async () => {
-      try {
-        const holidayRes = await apiGetSafe<{ success?: boolean; data?: Holiday[] }>('/holidays');
-        if (holidayRes.ok && holidayRes.data?.success && Array.isArray(holidayRes.data.data)) {
-          setHolidays(holidayRes.data.data);
-        }
-      } catch (error) {
-        console.error('Error refreshing holidays:', error);
-      }
+    const refreshHolidays = () => void loadHolidays();
+    realTimeSocket.on('holiday:update', refreshHolidays);
+    const unsubLeave = realTimeSocket.onLeaveUpdate(() => void loadLeaveHistory());
+    return () => {
+      realTimeSocket.off('holiday:update', refreshHolidays);
+      unsubLeave();
     };
-
-    // Import socket dynamically to avoid circular dependencies
-    import('../utils/realTimeSocket').then((module) => {
-      const socket = module.default;
-      if (socket) {
-        socket.on('holiday:update', refreshHolidays);
-        
-        return () => {
-          socket.off('holiday:update', refreshHolidays);
-        };
-      }
-    });
-  }, []);
+  }, [loadHolidays, loadLeaveHistory]);
 
   // Get days in month
   const getDaysInMonth = (date: Date) => {
@@ -281,11 +295,7 @@ export default function InteractiveCalendar() {
         setShowLeaveForm(false);
         setFormData({ type: '', startDate: '', endDate: '', startTime: '09:00', endTime: '10:00', isHourlyLeave: false, reason: '' });
         
-        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
-        if (updatedLeaves.success && updatedLeaves.data) {
-          const raw = updatedLeaves.data as LeaveRequest[] | { data?: LeaveRequest[] };
-          setLeaveHistory(Array.isArray(raw) ? raw : raw.data ?? []);
-        }
+        await loadLeaveHistory();
       } else {
         toast.error(response?.message || 'Failed to submit leave request');
       }
@@ -305,6 +315,16 @@ export default function InteractiveCalendar() {
       setSubmittingLeave(false);
     }
   };
+
+  if (loading) {
+    return (
+      <Card className="p-6 rounded-2xl">
+        <div className="flex items-center justify-center py-16">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <>

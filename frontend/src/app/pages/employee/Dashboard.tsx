@@ -68,6 +68,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
+import InteractiveCalendar from '../../components/InteractiveCalendar';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import {
@@ -1718,6 +1719,9 @@ export default function EmployeeDashboard() {
             color="secondary"
           />
         </div>
+
+        {/* Apply leave — click a day on the calendar */}
+        <InteractiveCalendar />
 
         {/* Holidays */}
         <div className="grid grid-cols-1 gap-6">

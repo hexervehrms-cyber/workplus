@@ -20,7 +20,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../../components/ui/select';
-import { LeaveRequestService, LeaveAllocationService, EmployeeService, LeaveTypeSettingsService } from '../../utils/api';
+import {
+  LeaveRequestService,
+  LeaveAllocationService,
+  EmployeeService,
+  LeaveTypeSettingsService,
+  extractApiList,
+} from '../../utils/api';
+import { clearApiCache } from '../../utils/apiHelper';
 import { resolveAuthOrgId } from '../../utils/apiHelper';
 import { resolveEmployeeMongoId } from '../../utils/resolveEmployeeId';
 import { useAuth } from '../../context/AuthContext';
@@ -131,14 +138,8 @@ export default function Leave() {
         
         // Fetch leave requests
         const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
-        console.log('📊 [LEAVE] Leave requests response:', leaveResponse);
-        
-        if (leaveResponse.success && leaveResponse.data) {
-          // Handle both array and paginated response
-          const leaveData = Array.isArray(leaveResponse.data) ? leaveResponse.data : leaveResponse.data.data || [];
-          setLeaveHistory(leaveData);
-          console.log('✅ [LEAVE] Loaded', leaveData.length, 'leave requests');
-        }
+        const leaveData = extractApiList(leaveResponse);
+        setLeaveHistory(leaveData as LeaveRequest[]);
 
         // Fetch leave balance from allocation
         let employeeId = user.employeeId;
@@ -451,7 +452,8 @@ export default function Leave() {
         response = await LeaveRequestService.createLeaveRequest(leaveData);
       }
 
-      if (response?.success) {
+      if (response?.success !== false) {
+        clearApiCache();
         if (editingLeaveId) {
           toast.success('Leave request updated successfully');
         } else if (isHourly) {
@@ -472,11 +474,7 @@ export default function Leave() {
         });
         
         const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
-        if (updatedLeaves.success && updatedLeaves.data) {
-          // Handle both array and paginated response
-          const leaveData = Array.isArray(updatedLeaves.data) ? updatedLeaves.data : updatedLeaves.data.data || [];
-          setLeaveHistory(leaveData);
-        }
+        setLeaveHistory(extractApiList(updatedLeaves) as LeaveRequest[]);
 
         // Refresh balance
         let refreshEmployeeId = user.employeeId;
@@ -750,10 +748,6 @@ Reason: ${leave.reason}
                       if (confirm('Are you sure you want to delete this leave request?')) {
                         try {
                           // Calculate days to restore
-                          const startDate = new Date(leave.startDate);
-                          const endDate = new Date(leave.endDate);
-                          const daysToRestore = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-                          
                           // Get employeeId
                           let employeeId = user.employeeId;
                           if (!employeeId) {
@@ -763,22 +757,12 @@ Reason: ${leave.reason}
                             }
                           }
                           
-                          // Delete the leave request
                           await LeaveRequestService.deleteLeaveRequest(leave._id);
+                          clearApiCache();
+                          toast.success('Leave request deleted');
                           
-                          // Restore leaves to allocation (only if pending)
-                          if (leave.status === 'pending' && employeeId) {
-                            await LeaveAllocationService.restoreLeaves(employeeId, leave.leaveType || leave.type, daysToRestore, leave._id);
-                          }
-                          
-                          // toast.success('Leave request deleted and leaves restored');
-                          
-                          // Refresh leave history
                           const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
-                          if (updatedLeaves.success && updatedLeaves.data) {
-                            const leaveData = Array.isArray(updatedLeaves.data) ? updatedLeaves.data : updatedLeaves.data.data || [];
-                            setLeaveHistory(leaveData);
-                          }
+                          setLeaveHistory(extractApiList(updatedLeaves) as LeaveRequest[]);
                           
                           // Refresh balance
                           if (employeeId) {
@@ -795,7 +779,9 @@ Reason: ${leave.reason}
                           }
                         } catch (error) {
                           console.error('Error deleting leave request:', error);
-                          // toast.error('Failed to delete leave request');
+                          toast.error(
+                            error instanceof Error ? error.message : 'Failed to delete leave request'
+                          );
                         }
                       }
                     }}

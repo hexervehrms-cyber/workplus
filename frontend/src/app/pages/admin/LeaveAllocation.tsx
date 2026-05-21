@@ -108,7 +108,7 @@ export default function LeaveAllocation() {
   const [showForm, setShowForm] = useState(false);
   const [selectedAllocation, setSelectedAllocation] = useState<LeaveAllocationRecord | null>(null);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [selectedMonth, setSelectedMonth] = useState(0);
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [selectedEmployee, setSelectedEmployee] = useState('');
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
@@ -262,6 +262,11 @@ export default function LeaveAllocation() {
       return;
     }
 
+    const allocationMonth =
+      selectedMonth > 0 && selectedMonth <= 12
+        ? selectedMonth
+        : new Date().getMonth() + 1;
+
     try {
       setActionLoading(true);
       
@@ -270,16 +275,6 @@ export default function LeaveAllocation() {
         toast.error('Organization context is required.');
         return;
       }
-      
-      console.log('Saving allocation:', {
-        employeeId: selectedEmployee,
-        selectedEmployees,
-        userId: user?.userId || user?.id,
-        orgId: orgId,
-        year: selectedYear,
-        month: selectedMonth,
-        allocations: formData
-      });
 
       if (selectedAllocation) {
         // Update existing (single employee only)
@@ -293,24 +288,26 @@ export default function LeaveAllocation() {
         const response = await LeaveAllocationService.bulkAllocate(
           orgId,
           selectedYear,
-          selectedMonth,
+          allocationMonth,
           selectedEmployees,
           formData,
           user?.userId || user?.id || ''
         );
-        console.log('Bulk allocate response:', response);
+        if (response && (response as { success?: boolean }).success === false) {
+          throw new Error((response as { message?: string }).message || 'Bulk allocation failed');
+        }
         toast.success(`Leave allocation created for ${selectedEmployees.length} employees`);
       } else if (selectedEmployee) {
-        // Create new for single employee
         const response = await LeaveAllocationService.createAllocation({
           employeeId: selectedEmployee,
-          userId: user?.userId || user?.id,
           orgId: orgId,
           year: selectedYear,
-          month: selectedMonth,
+          month: allocationMonth,
           allocations: formData
         });
-        console.log('Create response:', response);
+        if (response && (response as { success?: boolean }).success === false) {
+          throw new Error((response as { message?: string }).message || 'Allocation failed');
+        }
         toast.success('Leave allocation created successfully');
       }
 

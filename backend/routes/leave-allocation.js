@@ -198,28 +198,32 @@ router.post('/', authorize('super_admin', 'admin', 'hr'), idempotencyMiddleware,
     });
   }
 
-  // Validate required fields
-  if (!employeeId || !userId || !orgId || !year || !month || !allocations) {
+  const monthNum = parseInt(String(month), 10);
+  const yearNum = parseInt(String(year), 10);
+  if (!employeeId || !orgId || !yearNum || !monthNum || monthNum < 1 || monthNum > 12 || !allocations) {
     return res.status(400).json({
       success: false,
-      message: 'All fields are required',
-      received: {
-        employeeId: !!employeeId,
-        userId: !!userId,
-        orgId: !!orgId,
-        year: !!year,
-        month: !!month,
-        allocations: !!allocations
-      }
+      message: 'employeeId, orgId, year, month (1-12), and allocations are required',
     });
   }
+
+  const employee = await Employee.findById(employeeId).select('userId orgId').lean();
+  if (!employee?.userId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Employee not found or missing user account',
+    });
+  }
+
+  const employeeUserId = employee.userId;
+  const allocatorId = req.user.userId || req.user.id;
 
   // Check if allocation already exists
   let allocation = await LeaveAllocation.findOne({
     employeeId,
     orgId: String(tenantOrg),
-    year,
-    month
+    year: yearNum,
+    month: monthNum,
   });
 
   if (allocation) {
@@ -227,7 +231,7 @@ router.post('/', authorize('super_admin', 'admin', 'hr'), idempotencyMiddleware,
     allocation.allocations = allocations;
     allocation.notes = notes;
     allocation.status = 'allocated';
-    allocation.allocatedBy = userId;
+    allocation.allocatedBy = allocatorId;
     allocation.allocatedDate = new Date();
     await allocation.save();
 
@@ -248,14 +252,14 @@ router.post('/', authorize('super_admin', 'admin', 'hr'), idempotencyMiddleware,
   // Create new allocation
   allocation = await LeaveAllocation.create({
     employeeId,
-    userId,
-    orgId,
-    year,
-    month,
+    userId: employeeUserId,
+    orgId: String(tenantOrg),
+    year: yearNum,
+    month: monthNum,
     allocations,
     notes,
     status: 'allocated',
-    allocatedBy: userId,
+    allocatedBy: allocatorId,
     allocatedDate: new Date()
   });
 
@@ -618,15 +622,25 @@ router.post('/yearly-allocate', authorize('super_admin', 'admin', 'hr'), idempot
   const results = [];
   const errors = [];
 
+  const yearNum = parseInt(String(year), 10);
+  const allocatorId = allocatedBy || req.user.userId || req.user.id;
+
   for (const employeeId of employees) {
     try {
       // For yearly allocation, we allocate to January (month 1)
       const month = 1;
       
+      const employee = await Employee.findById(employeeId).select('userId').lean();
+      if (!employee?.userId) {
+        errors.push({ employeeId, success: false, error: 'Employee user not found' });
+        continue;
+      }
+
       let allocation = await LeaveAllocation.findOne({
         employeeId,
-        year,
-        month
+        orgId: String(tenantOrg),
+        year: yearNum,
+        month,
       });
 
       if (allocation) {
@@ -643,15 +657,16 @@ router.post('/yearly-allocate', authorize('super_admin', 'admin', 'hr'), idempot
         allocation.allocations.medicalLeave = (allocation.allocations.medicalLeave || 0) + (medicalLeave || 0);
         
         allocation.status = 'allocated';
-        allocation.allocatedBy = allocatedBy;
+        allocation.allocatedBy = allocatorId;
         allocation.allocatedDate = new Date();
         await allocation.save();
       } else {
         // Create new allocation
         allocation = await LeaveAllocation.create({
           employeeId,
-          orgId,
-          year,
+          userId: employee.userId,
+          orgId: String(tenantOrg),
+          year: yearNum,
           month,
           allocations: {
             vacation: 0,
@@ -673,7 +688,7 @@ router.post('/yearly-allocate', authorize('super_admin', 'admin', 'hr'), idempot
             medicalLeave: medicalLeave || 0
           },
           status: 'allocated',
-          allocatedBy,
+          allocatedBy: allocatorId,
           allocatedDate: new Date()
         });
       }
@@ -730,39 +745,50 @@ router.post('/bulk-allocate', authorize('super_admin', 'admin', 'hr'), idempoten
     });
   }
 
-  if (!orgId || !year || !month || !employees || !allocations || !allocatedBy) {
+  const monthNum = parseInt(String(month), 10);
+  const yearNum = parseInt(String(year), 10);
+  if (!orgId || !yearNum || !monthNum || monthNum < 1 || monthNum > 12 || !employees || !allocations) {
     return res.status(400).json({
       success: false,
-      message: 'All fields are required'
+      message: 'orgId, year, month (1-12), employees, and allocations are required'
     });
   }
 
+  const allocatorId = allocatedBy || req.user.userId || req.user.id;
   const results = [];
   const errors = [];
 
   for (const employeeId of employees) {
     try {
+      const employee = await Employee.findById(employeeId).select('userId').lean();
+      if (!employee?.userId) {
+        errors.push({ employeeId, success: false, error: 'Employee user not found' });
+        continue;
+      }
+
       let allocation = await LeaveAllocation.findOne({
         employeeId,
-        year,
-        month
+        orgId: String(tenantOrg),
+        year: yearNum,
+        month: monthNum,
       });
 
       if (allocation) {
         allocation.allocations = allocations;
         allocation.status = 'allocated';
-        allocation.allocatedBy = allocatedBy;
+        allocation.allocatedBy = allocatorId;
         allocation.allocatedDate = new Date();
         await allocation.save();
       } else {
         allocation = await LeaveAllocation.create({
           employeeId,
-          orgId,
-          year,
-          month,
+          userId: employee.userId,
+          orgId: String(tenantOrg),
+          year: yearNum,
+          month: monthNum,
           allocations,
           status: 'allocated',
-          allocatedBy,
+          allocatedBy: allocatorId,
           allocatedDate: new Date()
         });
       }

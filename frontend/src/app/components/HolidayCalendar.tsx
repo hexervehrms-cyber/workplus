@@ -33,6 +33,8 @@ import {
   apiPost,
   apiPut,
   clearApiCache,
+  resolveAuthOrgId,
+  resolveOrgIdForApi,
 } from '../utils/apiHelper';
 import { useAuth } from '../context/AuthContext';
 import { toast } from '../utils/portalToast';
@@ -186,7 +188,9 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
   };
 
   const handleSaveHoliday = async () => {
-    if (!organizationId) {
+    const tenantOrg =
+      organizationId || resolveAuthOrgId(user) || (await resolveOrgIdForApi(user));
+    if (!tenantOrg) {
       toast.error('Organization context is required to save holidays');
       return;
     }
@@ -203,9 +207,9 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       if (editingHoliday) {
         const holidayId = editingHoliday._id || editingHoliday.id;
         const updatedHoliday = await apiPut<{ data?: Holiday & { _id?: string } }>(
-          appendOrgIdParam(`holidays/${holidayId}`, user, organizationId),
+          appendOrgIdParam(`holidays/${holidayId}`, user, tenantOrg),
           {
-            orgId: organizationId,
+            orgId: tenantOrg,
             name: holidayFormData.name,
             date: holidayFormData.date,
             type: holidayFormData.type,
@@ -223,9 +227,9 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         alert('Holiday updated successfully!');
       } else {
         const newHolidayData = await apiPost<{ data?: Holiday & { _id?: string } }>(
-          appendOrgIdParam('holidays', user, organizationId),
+          appendOrgIdParam('holidays', user, tenantOrg),
           {
-            orgId: organizationId,
+            orgId: tenantOrg,
             name: holidayFormData.name,
             date: holidayFormData.date,
             type: holidayFormData.type,
@@ -243,7 +247,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
             type: newHolidayData.data.type,
             description: newHolidayData.data.description,
             isRecurring: newHolidayData.data.isRecurring,
-            organizationId,
+            organizationId: tenantOrg,
             createdBy: 'admin',
             createdAt: new Date().toISOString()
           };

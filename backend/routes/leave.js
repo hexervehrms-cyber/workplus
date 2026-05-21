@@ -29,6 +29,12 @@ import {
   getLeaveFieldName,
   getAllocatedTotal,
 } from '../utils/leaveBalanceHelpers.js';
+import {
+  syncLeaveAllocationPending,
+  syncLeaveAllocationOnApprove,
+  syncLeaveAllocationReleasePending,
+  computeLeaveDaysFromRequest,
+} from '../utils/leaveAllocationSync.js';
 import { authorize } from '../middleware/auth.js';
 import {
   resolveQueryOrgId,
@@ -166,6 +172,11 @@ router.delete('/:id', asyncHandler(async (req, res) => {
     }
   }
 
+  if (leaveRequest.status === 'pending') {
+    const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
+    await syncLeaveAllocationReleasePending(LeaveAllocation, leaveRequest);
+  }
+
   await LeaveRequest.findByIdAndDelete(id);
 
   // Emit real-time updates
@@ -294,10 +305,11 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   }
 
   const version = leaveRequest.__v;
+  const recordOrg = String(tenantOrg || leaveRequest.orgId || '');
   const updated = await LeaveRequest.findOneAndUpdate(
     {
       _id: id,
-      orgId: req.user.orgId,
+      ...(recordOrg ? { orgId: recordOrg } : {}),
       status: 'pending',
       __v: version,
     },
@@ -316,10 +328,29 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     });
   }
 
+  const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
+  const oldDays = computeLeaveDaysFromRequest(leaveRequest);
+  const newDays = computeLeaveDaysFromRequest(updated);
+  const oldType = leaveRequest.type;
+  const newType = updated.type;
+  if (oldDays > 0) {
+    await syncLeaveAllocationReleasePending(LeaveAllocation, leaveRequest);
+  }
+  if (newDays > 0) {
+    await syncLeaveAllocationPending(LeaveAllocation, {
+      employeeId: updated.employeeId,
+      orgId: updated.orgId,
+      leaveType: newType,
+      days: newDays,
+      when: updated.startDate,
+      action: 'add',
+    });
+  }
+
   logger.info('Leave request updated', {
     leaveRequestId: id,
     employeeId: updated.employeeId,
-    orgId: req.user.orgId,
+    orgId: recordOrg,
     userId: req.user.userId
   });
 
@@ -484,6 +515,8 @@ router.patch('/:id/approve', leaveApprovers, idempotencyMiddleware, asyncHandler
       code: 'VERSION_CONFLICT'
     });
   }
+
+  await syncLeaveAllocationOnApprove(LeaveAllocation, updated);
 
   // Emit business event for approved leave
   if (global.eventSystem) {
@@ -716,6 +749,9 @@ router.patch('/:id/reject', leaveApprovers, idempotencyMiddleware, asyncHandler(
     });
   }
 
+  const LeaveAllocationReject = (await import('../models/LeaveAllocation.js')).default;
+  await syncLeaveAllocationReleasePending(LeaveAllocationReject, leaveRequest);
+
   // Emit business event for rejected leave
   if (global.eventSystem) {
     await global.eventSystem.emit('leave.rejected', {
@@ -816,7 +852,13 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
   const { status } = req.query;
 
   // Enforce tenant/user isolation for leave data
-  const tenantOrg = scopedOrgId(req);
+  let tenantOrg = scopedOrgId(req);
+  if (!tenantOrg) {
+    const emp = await findEmployeeForSelfService(req.user.userId, null, {
+      allowCrossOrgFallback: true,
+    });
+    if (emp?.orgId) tenantOrg = String(emp.orgId);
+  }
   if (!tenantOrg) {
     return res.status(400).json({
       success: false,
@@ -1191,7 +1233,7 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   // Check for overlapping leave requests - FIXED for half-day leaves
   let overlapQuery = {
     employeeId,
-    orgId,
+    orgId: allocationOrgId,
     status: { $in: ['pending', 'approved'] }
   };
 
@@ -1282,6 +1324,17 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     startTime: resolvedHourly ? startTime : undefined,
     endTime: resolvedHourly ? endTime : undefined
   });
+
+  if (allocation && leaveField) {
+    await syncLeaveAllocationPending(LeaveAllocation, {
+      employeeId: employeeObjectId,
+      orgId: allocationOrgId,
+      leaveType,
+      days,
+      when: start,
+      action: 'add',
+    });
+  }
 
   // Emit business event for workflow automation
   if (global.eventSystem) {
@@ -1401,6 +1454,16 @@ router.post('/bulk-approve', leaveApprovers, idempotencyMiddleware, asyncHandler
     }
   );
 
+  const LeaveAllocationBulk = (await import('../models/LeaveAllocation.js')).default;
+  const approvedLeaves = await LeaveRequest.find({
+    _id: { $in: requestIds },
+    status: 'approved',
+    ...bulkOrgFilter(req),
+  }).lean();
+  for (const lr of approvedLeaves) {
+    await syncLeaveAllocationOnApprove(LeaveAllocationBulk, lr);
+  }
+
   logger.info('Leave requests bulk approved', { count: result.modifiedCount, approvedBy });
 
   res.json({
@@ -1434,6 +1497,13 @@ router.post('/bulk-reject', leaveApprovers, idempotencyMiddleware, asyncHandler(
     });
   }
 
+  const LeaveAllocationBulkReject = (await import('../models/LeaveAllocation.js')).default;
+  const pendingBeforeReject = await LeaveRequest.find({
+    _id: { $in: requestIds },
+    status: 'pending',
+    ...bulkOrgFilter(req),
+  }).lean();
+
   // Update all pending requests
   const result = await LeaveRequest.updateMany(
     {
@@ -1451,6 +1521,10 @@ router.post('/bulk-reject', leaveApprovers, idempotencyMiddleware, asyncHandler(
       $inc: { __v: 1 }
     }
   );
+
+  for (const lr of pendingBeforeReject) {
+    await syncLeaveAllocationReleasePending(LeaveAllocationBulkReject, lr);
+  }
 
   logger.info('Leave requests bulk rejected', { count: result.modifiedCount, rejectedBy });
 

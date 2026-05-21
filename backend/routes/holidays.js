@@ -21,7 +21,8 @@ const UPCOMING_CACHE_KEY = (orgId, days) => `upcoming:${orgId}:${days}`;
 
 function requireHolidayOrgId(req, res) {
   const orgId = resolveHolidayOrgIdForRequest(req);
-  if (!orgId) {
+  const scoped = orgId != null ? String(orgId).trim() : "";
+  if (!scoped) {
     res.status(400).json({
       success: false,
       message:
@@ -30,7 +31,7 @@ function requireHolidayOrgId(req, res) {
     });
     return null;
   }
-  return orgId;
+  return scoped;
 }
 
 async function findHolidayForOrg(id, orgId) {
@@ -319,16 +320,36 @@ router.post("/", authenticate, authorize("super_admin", "admin", "hr"), asyncHan
   }
 
   const scopedOrgId = String(orgId).trim();
-  const holiday = await Holiday.create({
-    name: name.trim(),
-    date: parsedDate,
-    type,
-    description: description?.trim(),
-    isRecurring,
-    orgId: scopedOrgId,
-    organizationId: scopedOrgId,
-    createdBy: userId
-  });
+  if (!scopedOrgId) {
+    return res.status(400).json({
+      success: false,
+      message: "orgId is required",
+      code: "MISSING_ORG_CONTEXT",
+    });
+  }
+
+  let holiday;
+  try {
+    holiday = await Holiday.create({
+      name: name.trim(),
+      date: parsedDate,
+      type,
+      description: description?.trim(),
+      isRecurring: Boolean(isRecurring),
+      orgId: scopedOrgId,
+      organizationId: scopedOrgId,
+      createdBy: userId,
+    });
+  } catch (err) {
+    if (err?.name === "ValidationError") {
+      return res.status(400).json({
+        success: false,
+        message: err.message || "Holiday validation failed",
+        code: "VALIDATION_ERROR",
+      });
+    }
+    throw err;
+  }
 
   logger.info("Holiday created", { holidayId: holiday._id, orgId: scopedOrgId, name });
 
@@ -385,6 +406,13 @@ router.post("/bulk-import", authenticate, authorize("super_admin", "admin", "hr"
   const templates = holidayTemplates[country] || holidayTemplates.US;
   const holidaysToCreate = [];
   const scopedOrgId = String(orgId).trim();
+  if (!scopedOrgId) {
+    return res.status(400).json({
+      success: false,
+      message: "orgId is required",
+      code: "MISSING_ORG_CONTEXT",
+    });
+  }
 
   for (const template of templates) {
     if (!includeOptional && template.type === "optional") {

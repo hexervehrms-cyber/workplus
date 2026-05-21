@@ -51,7 +51,9 @@ const pickHolidayOrg = (v) => {
  */
 export function resolveHolidayOrgIdForRequest(req) {
   const fromValidated = pickHolidayOrg(req.validatedOrgId);
-  const fromUser = pickHolidayOrg(userOrgIdFromReq(req));
+  const fromUser = pickHolidayOrg(
+    userOrgIdFromReq(req) || req.user?.orgId || req.user?.tenantId
+  );
   const fromQuery = pickHolidayOrg(req.query?.orgId);
   const fromBody = pickHolidayOrg(req.body?.orgId);
   const fromLegacyBody = pickHolidayOrg(req.body?.organizationId);
@@ -67,9 +69,8 @@ export function resolveHolidayOrgIdForRequest(req) {
     );
   }
 
-  const tenant = fromValidated || fromUser;
-  if (tenant) return tenant;
-  return fromBody || fromLegacyBody || null;
+  const tenant = fromValidated || fromUser || fromBody || fromLegacyBody || fromQuery;
+  return tenant || null;
 }
 
 /** Match users belonging to a tenant (orgId / legacy tenantId / organizationId). */

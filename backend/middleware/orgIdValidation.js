@@ -51,33 +51,51 @@ export const validateOrgId = (req, res, next) => {
 
 export const enforceOrgIdInQuery = (req, res, next) => {
   try {
+    if (!req.user) {
+      return next();
+    }
+
     const userOrgId = req.validatedOrgId || userOrgIdFromReq(req);
     const userRole = req.user?.role;
-    const queryOrgId = req.query.orgId || req.body?.orgId;
+    const explicitOrgId = req.query?.orgId || req.body?.orgId || req.body?.organizationId;
+    const explicitTrimmed =
+      explicitOrgId != null && String(explicitOrgId).trim() !== '' && String(explicitOrgId) !== 'system'
+        ? String(explicitOrgId).trim()
+        : null;
 
     if (userRole === 'super_admin') {
-      if (queryOrgId && String(queryOrgId) !== 'system') {
-        req.validatedOrgId = String(queryOrgId);
+      if (explicitTrimmed) {
+        req.validatedOrgId = explicitTrimmed;
       }
       return next();
     }
 
-    if (queryOrgId && String(queryOrgId) !== String(userOrgId)) {
+    const tenantOrg = userOrgId || explicitTrimmed;
+    if (!tenantOrg) {
+      return res.status(403).json({
+        success: false,
+        message: 'Organization context required. Please log in again.',
+        code: 'MISSING_ORG_CONTEXT',
+      });
+    }
+
+    if (explicitTrimmed && userOrgId && String(explicitTrimmed) !== String(userOrgId)) {
       logger.warn('Request rejected: orgId mismatch', {
         userId: req.user?.userId,
         role: userRole,
         userOrgId,
-        queryOrgId,
-        path: req.path
+        queryOrgId: explicitTrimmed,
+        path: req.path,
       });
       return res.status(403).json({
         success: false,
         message: 'Cannot access data from other organizations',
-        code: 'ORG_MISMATCH'
+        code: 'ORG_MISMATCH',
       });
     }
 
-    req.validatedOrgId = userOrgId;
+    req.validatedOrgId = tenantOrg;
+    req.user.orgId = tenantOrg;
     next();
   } catch (error) {
     logger.error('OrgId enforcement middleware error:', error);

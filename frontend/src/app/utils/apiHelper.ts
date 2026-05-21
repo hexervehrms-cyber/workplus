@@ -309,6 +309,27 @@ export function resolveAuthOrgId(
   return String(id);
 }
 
+/** Resolve tenant org from user state, optionally refreshing from /auth/me. */
+export async function resolveOrgIdForApi(
+  user: { role?: string; orgId?: string; tenantId?: string; userId?: string; id?: string } | null | undefined
+): Promise<string | null> {
+  const fromUser = resolveAuthOrgId(user);
+  if (fromUser) return fromUser;
+  try {
+    const me = await apiGet<{
+      success?: boolean;
+      data?: { orgId?: string; tenantId?: string };
+      user?: { orgId?: string; tenantId?: string };
+    }>('auth/me', false);
+    const d = me?.data || me?.user;
+    const oid = d?.orgId || d?.tenantId;
+    if (oid && oid !== 'system') return String(oid);
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 /** Append orgId query param when tenant scope must be explicit (super admin or fallback). */
 export function appendOrgIdParam(
   url: string,

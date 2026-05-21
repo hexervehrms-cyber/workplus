@@ -29,6 +29,7 @@ import {
   getBearerToken,
   holidaysStorageKey,
   resolveAuthOrgId,
+  resolveOrgIdForApi,
 } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
@@ -331,13 +332,15 @@ export default function Calendar() {
     }
 
     try {
-      const orgId = resolveAuthOrgId(user);
+      const orgId =
+        resolveAuthOrgId(user) || (await resolveOrgIdForApi(user));
       if (!orgId) {
         toast.error('Organization context is required to add holidays');
         return;
       }
       await apiPost(appendOrgIdParam('holidays', user, orgId), {
         orgId,
+        organizationId: orgId,
         date: holidayForm.date,
         name: holidayForm.name,
         description: holidayForm.description,

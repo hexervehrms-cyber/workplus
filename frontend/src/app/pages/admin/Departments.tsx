@@ -29,6 +29,7 @@ import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiHelper';
 import { ensureAccessToken } from '../../utils/sessionAuth';
 import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
+import { authUserKey } from '../../utils/safeUi';
 
 type Department = DepartmentRecord;
 
@@ -199,9 +200,10 @@ export default function AdminDepartments() {
   }, [loadDepartments, searchTerm, filterStatus]);
 
   useEffect(() => {
-    if (!user?.id) return;
+    const uid = authUserKey(user);
+    if (!uid) return;
     realTimeSocket.connectFromAuth({
-      id: user.id,
+      id: uid,
       role: user.role || 'admin',
       orgId: user.orgId,
       tenantId: user.tenantId,

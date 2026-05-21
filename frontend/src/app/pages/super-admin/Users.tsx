@@ -4,6 +4,8 @@ import { Button } from '../../components/ui/button';
 import { Users, Plus, Search, Filter, Edit, Trash2, X, Eye, AlertCircle } from 'lucide-react';
 import UserInfoModal from '../../components/UserInfoModal';
 import { apiClient } from '../../utils/api';
+import { safeInitials } from '../../utils/safeUi';
+import { toast } from '../../utils/portalToast';
 import { PasswordInput } from '../../components/PasswordInput';
 
 interface GlobalUser {
@@ -64,7 +66,7 @@ export default function GlobalUsers() {
           role: user.role,
           organization: user.organization || 'WorkPlus Inc.',
           status: user.isActive ? 'Active' : 'Inactive',
-          avatar: user.name.split(' ').map((n: string) => n[0]).join('').toUpperCase(),
+          avatar: safeInitials(user.name, 'U'),
           isActive: user.isActive
         }));
         setUsers(formattedUsers);
@@ -119,7 +121,7 @@ export default function GlobalUsers() {
           role: userData.role,
           organization: userData.organization || 'WorkPlus Inc.',
           status: 'Active',
-          avatar: formData.name.split(' ').map((n: string) => n[0]).join('').toUpperCase(),
+          avatar: safeInitials(formData.name, 'U'),
           isActive: true
         };
         
@@ -132,7 +134,7 @@ export default function GlobalUsers() {
           role: 'employee',
           organization: ''
         });
-        alert('User created successfully!');
+        toast.success('User created successfully');
       }
     } catch (err: any) {
       console.error('Error creating user:', err);
@@ -214,7 +216,7 @@ export default function GlobalUsers() {
                 email: updatedData.email,
                 role: updatedData.role,
                 organization: updatedData.organization,
-                avatar: updatedData.name.split(' ').map((n: string) => n[0]).join('').toUpperCase()
+                avatar: safeInitials(updatedData.name, 'U')
               }
             : user
         ));

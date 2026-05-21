@@ -20,6 +20,7 @@ import realTimeSocket from '../../utils/realTimeSocket';
 import { useCurrency } from '../../context/CurrencyContext';
 import OnboardingLinkGenerator from '../../components/OnboardingLinkGenerator';
 import { apiPost } from '../../utils/apiHelper';
+import { safeInitials } from '../../utils/safeUi';
 
 interface Employee {
   _id: string;
@@ -567,7 +568,7 @@ export default function Employees() {
                   <strong>Employee:</strong> {passwordResetEmployee.userId?.name || 'Unknown'}
                 </p>
                 <p className="text-sm text-blue-900">
-                  <strong>Email:</strong> {passwordResetEmployee.userId.email}
+                  <strong>Email:</strong> {passwordResetEmployee.userId?.email || '—'}
                 </p>
               </div>
               <div>
@@ -1023,12 +1024,7 @@ export default function Employees() {
             <div className="flex items-start justify-between mb-4">
               <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center">
                 <span className="text-lg font-medium text-primary">
-                  {(employee.userId?.name || 'U')
-                    .split(/\s+/)
-                    .filter(Boolean)
-                    .map((n) => n[0])
-                    .join('')
-                    .toUpperCase() || 'U'}
+                  {safeInitials(employee.userId?.name, 'U')}
                 </span>
               </div>
               <div className="flex gap-2 flex-wrap justify-end">
@@ -1038,8 +1034,8 @@ export default function Employees() {
                     Onboarding
                   </Badge>
                 )}
-                <Badge variant={employee.userId.isActive ? 'default' : 'secondary'}>
-                  {employee.userId.isActive ? 'Active' : 'Inactive'}
+                <Badge variant={employee.userId?.isActive ? 'default' : 'secondary'}>
+                  {employee.userId?.isActive ? 'Active' : 'Inactive'}
                 </Badge>
               </div>
             </div>
@@ -1059,7 +1055,7 @@ export default function Employees() {
               </div>
               <div className="flex items-center gap-2">
                 <Mail className="w-4 h-4" />
-                <span>{employee.userId.email}</span>
+                <span>{employee.userId?.email || '—'}</span>
               </div>
               <div className="flex items-center gap-2">
                 <Phone className="w-4 h-4" />

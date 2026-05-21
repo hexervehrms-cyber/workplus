@@ -250,11 +250,11 @@ export default function Leave() {
 
   useEffect(() => {
     const refreshBalances = async () => {
-      if (!user?.id || document.visibilityState !== 'visible') return;
+      if (!authUserId || document.visibilityState !== 'visible') return;
       let employeeId = user.employeeId;
       if (!employeeId) {
         try {
-          const emp = await EmployeeService.getEmployeeByUserId(user.id);
+          const emp = await EmployeeService.getEmployeeByUserId(authUserId);
           employeeId = emp?._id;
         } catch {
           return;

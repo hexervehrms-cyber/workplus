@@ -180,13 +180,14 @@ export default function Onboarding() {
            setEmployeeData(data.data);
            
            // Pre-fill form with employee data
-           const nameParts = data.data.employeeName.split(' ');
+           const fullName = String(data.data?.employeeName || '').trim();
+           const nameParts = fullName ? fullName.split(/\s+/).filter(Boolean) : [];
            setFormData(prev => ({
              ...prev,
              firstName: nameParts[0] || '',
              lastName: nameParts.slice(1).join(' ') || '',
-             email: data.data.employeeEmail,
-             department: data.data.department
+             email: String(data.data?.employeeEmail || ''),
+             department: String(data.data?.department || '')
            }));
          } else {
            console.log('Validation failed:', data.message || rawText);

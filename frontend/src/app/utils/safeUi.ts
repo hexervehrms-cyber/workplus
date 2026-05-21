@@ -87,6 +87,14 @@ export function assigneeDisplayName(assignedTo: unknown): string {
   return '—';
 }
 
+/** Stable auth subject id from context user (supports `userId` or `id`). */
+export function authUserKey(
+  user: { id?: string; userId?: string } | null | undefined
+): string | null {
+  const key = user?.userId || user?.id;
+  return key != null && String(key) !== '' ? String(key) : null;
+}
+
 /** Run async work without bubbling rejections to the error boundary. */
 export function runSafe(
   label: string,

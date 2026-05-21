@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
 import { apiGet, apiPut, apiPost, apiDelete, buildFileUrl, getBearerToken } from '../../utils/apiHelper';
+import { safeTitleCase } from '../../utils/safeUi';
 
 interface Employee {
   _id: string;
@@ -352,7 +353,7 @@ export default function EmployeeCorrespondence() {
     return (
       <Badge className={config.color}>
         <Icon className="w-3 h-3 mr-1" />
-        {status.charAt(0).toUpperCase() + status.slice(1)}
+        {safeTitleCase(status, 'Pending')}
       </Badge>
     );
   };

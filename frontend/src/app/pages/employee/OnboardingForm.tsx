@@ -1,6 +1,7 @@
 import React from 'react';
 import OnboardingForm from '../../components/OnboardingForm';
 import { apiPost } from '../../utils/apiHelper';
+import { toast } from '../../utils/portalToast';
 
 const EmployeeOnboarding: React.FC = () => {
   const handleFormSubmit = async (formData: FormData) => {
@@ -9,15 +10,14 @@ const EmployeeOnboarding: React.FC = () => {
       const data = await apiPost('/onboarding/submit', formData);
 
       if (data.success) {
-        alert('Form submitted successfully!');
-        // Redirect to profile or success page
+        toast.success('Form submitted successfully');
         window.location.href = '/employee/profile';
       } else {
-        alert(data.message || 'Error submitting form. Please try again.');
+        toast.error(data.message || 'Error submitting form. Please try again.');
       }
     } catch (error) {
       console.error('Error submitting form:', error);
-      alert('Error submitting form. Please try again.');
+      toast.error('Error submitting form. Please try again.');
     }
   };
 

@@ -3,6 +3,7 @@ import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { apiClient } from '../utils/api';
+import { toast } from '../utils/portalToast';
 import { 
   X, 
   User, 
@@ -148,7 +149,7 @@ const UserInfoModal: React.FC<UserInfoModalProps> = ({ user, isOpen, onClose }) 
   const handleDownload = (document: Document) => {
     // In production, download actual file
     console.log('Downloading document:', document);
-    alert(`Downloading ${document.fileName}`);
+    toast.info(`Downloading ${document.fileName}`);
   };
 
   const formatDate = (dateString: string) => {

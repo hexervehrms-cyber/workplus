@@ -11,6 +11,7 @@ import { Progress } from './ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Textarea } from './ui/textarea';
 import { Checkbox } from './ui/checkbox';
+import { toast } from '../utils/portalToast';
 
 interface FormData {
   // Personal Information
@@ -124,12 +125,12 @@ const OnboardingForm: React.FC<{
     const maxSize = 5 * 1024 * 1024; // 5MB
 
     if (!allowedTypes.includes(file.type)) {
-      alert('Please upload a valid image file (JPEG, PNG, or GIF)');
+      toast.error('Please upload a valid image file (JPEG, PNG, or GIF)');
       return;
     }
 
     if (file.size > maxSize) {
-      alert('Image size should be less than 5MB');
+      toast.error('Image size should be less than 5MB');
       return;
     }
 
@@ -185,7 +186,7 @@ const OnboardingForm: React.FC<{
     // Password required for self-service onboarding only
     if (!isHRMode) {
       if (!formData.password) {
-        alert('Password is required');
+        toast.error('Password is required');
         return;
       }
       formDataToSend.append('password', formData.password);

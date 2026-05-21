@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { toast } from '../utils/portalToast';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -95,14 +96,14 @@ const EmployeeDocuments: React.FC<{ employeeId?: string }> = ({ employeeId = 'EM
   const handleDownload = (document: Document) => {
     // In a real implementation, this would download the actual file
     // For demo purposes, we'll show an alert
-    alert(`Downloading ${document.fileName}`);
+    toast.info(`Downloading ${document.fileName}`);
     console.log('Download document:', document);
   };
 
   const handleView = (document: Document) => {
     // In a real implementation, this would open the document in a new tab
     // For demo purposes, we'll show an alert
-    alert(`Viewing ${document.fileName}`);
+    toast.info(`Opening ${document.fileName}`);
     console.log('View document:', document);
   };
 

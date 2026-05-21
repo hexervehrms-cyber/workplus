@@ -16,6 +16,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { apiFetchBlob, apiGet, appendOrgIdParam } from '../utils/apiHelper';
+import { toast } from '../utils/portalToast';
 
 interface Holiday {
   id: string;
@@ -98,7 +99,7 @@ const EmployeeHolidayCalendar: React.FC<{ organizationId?: string }> = ({
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Error downloading calendar:', error);
-      alert('Failed to download calendar');
+      toast.error('Failed to download calendar');
     }
   };
 

@@ -180,10 +180,12 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
     try {
       await apiDelete(appendOrgIdParam(`holidays/${holidayId}`, user, organizationId));
       setHolidays((prev) => prev.filter((h) => (h._id || h.id) !== holidayId));
-      alert('Holiday deleted successfully!');
+      toast.success('Holiday deleted successfully');
     } catch (error) {
       console.error('Error deleting holiday:', error);
-      alert('Failed to delete holiday: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      toast.error(
+        'Failed to delete holiday: ' + (error instanceof Error ? error.message : 'Unknown error')
+      );
     }
   };
 
@@ -195,11 +197,11 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       return;
     }
     if (!holidayFormData.name.trim()) {
-      alert('Please enter holiday name');
+      toast.error('Please enter holiday name');
       return;
     }
     if (!holidayFormData.date) {
-      alert('Please select a date');
+      toast.error('Please select a date');
       return;
     }
 
@@ -224,7 +226,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
               : h
           )
         );
-        alert('Holiday updated successfully!');
+        toast.success('Holiday updated successfully');
       } else {
         const newHolidayData = await apiPost<{ data?: Holiday & { _id?: string } }>(
           appendOrgIdParam('holidays', user, tenantOrg),
@@ -252,9 +254,9 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
             createdAt: new Date().toISOString()
           };
           setHolidays(prev => [...prev, newHoliday]);
-          alert('Holiday added successfully!');
+          toast.success('Holiday added successfully');
         } else {
-          alert('Failed to add holiday');
+          toast.error('Failed to add holiday');
         }
       }
       

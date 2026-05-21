@@ -51,7 +51,7 @@ function resolveAuthUserId(user: { id?: string; userId?: string } | null | undef
 
 function chatPathForRole(role?: string): string {
   if (role === 'super_admin') return '/super-admin/chat';
-  if (role === 'admin' || role === 'hr' || role === 'manager') return '/admin/chat';
+  if (role === 'admin' || role === 'hr') return '/admin/chat';
   return '/employee/chat';
 }
 

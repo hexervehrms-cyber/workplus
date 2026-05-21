@@ -140,7 +140,8 @@ export default function Attendance() {
   }, [todayData]);
   const fetchEmployeeId = async () => {
     try {
-      if (!user?.id) return;
+      const authUserId = user?.userId || user?.id;
+      if (!authUserId) return null;
       if ((user as any)?.employeeId) {
         const eid = String((user as any).employeeId);
         if (isLikelyMongoObjectId(eid)) {
@@ -148,24 +149,20 @@ export default function Attendance() {
           return eid;
         }
       }
-      try {
-        const data = await apiGet<{ data?: { _id?: string } }>(
-          `employees/user/${user.id}`,
-          false
-        );
-        if (data?.data?._id && isLikelyMongoObjectId(data.data._id)) {
-          setEmployeeId(data.data._id);
-          return data.data._id;
-        }
-      } catch {
-        /* fall through */
+      const data = await apiGet<{ data?: { _id?: string } }>(
+        `employees/user/${authUserId}`,
+        false
+      );
+      if (data?.data?._id && isLikelyMongoObjectId(data.data._id)) {
+        setEmployeeId(data.data._id);
+        return data.data._id;
       }
-      setEmployeeId(user.id);
-      return user.id;
+      setEmployeeId(null);
+      return null;
     } catch (error) {
       console.error('Error fetching employee:', error);
-      setEmployeeId(user?.id || null);
-      return user?.id || null;
+      setEmployeeId(null);
+      return null;
     }
   };
 

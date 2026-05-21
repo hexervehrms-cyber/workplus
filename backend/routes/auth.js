@@ -23,6 +23,7 @@ import {
 } from "../utils/httpAuth.js";
 import { normalizeAuthOrgId } from "../utils/orgScopeHelpers.js";
 import { handleAuthRefresh } from "../handlers/authRefreshHandler.js";
+import { findEmployeeForSelfService } from "../utils/employeeSelfService.js";
 
 const router = express.Router();
 
@@ -252,16 +253,12 @@ router.get("/me",
         });
       }
 
-      // Get employee profile if exists
-      let employee = await Employee.findOne({ userId, orgId: userOrgId }).lean();
-
-      // If no employee record exists, create one
-      if (!employee) {
-        employee = await Employee.create({
-          userId,
-          orgId: userOrgId,
-          status: 'active'
-        });
+      const scopedOrg = userOrgId || normalizeAuthOrgId(user);
+      let employee = await findEmployeeForSelfService(userId, scopedOrg || '', {
+        createIfMissing: true,
+        allowCrossOrgFallback: true,
+      });
+      if (employee?.toObject) {
         employee = employee.toObject();
       }
       

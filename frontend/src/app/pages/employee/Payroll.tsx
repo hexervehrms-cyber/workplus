@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Download, Loader, FileText, Calendar, RefreshCw, Eye } from 'lucide-react';
+import { useRef } from 'react';
+import { Download, Loader, FileText, Calendar, RefreshCw, Eye, Upload, FileSpreadsheet } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -13,7 +14,7 @@ import {
   DialogFooter,
 } from '../../components/ui/dialog';
 import { toast } from '../../utils/portalToast';
-import { apiFetchBlob, apiGet } from '../../utils/apiHelper';
+import { apiFetchBlob, apiGet, apiUpload } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 
 interface SalarySlip {
@@ -21,6 +22,8 @@ interface SalarySlip {
   month: number;
   year: number;
   status: string;
+  source?: string;
+  uploadFileName?: string;
   grossEarnings: number;
   totalDeductions: number;
   netSalary: number;
@@ -60,6 +63,9 @@ async function fetchSalarySlipBlob(slipId: string): Promise<Blob> {
 
 export default function Payroll() {
   const { user } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [employeeMongoId, setEmployeeMongoId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [salarySlips, setSalarySlips] = useState<SalarySlip[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
@@ -91,6 +97,7 @@ export default function Payroll() {
       }
 
       const empId = employeeData.data._id;
+      setEmployeeMongoId(empId);
 
       await fetchSalarySlips(empId);
     } catch (error) {
@@ -178,6 +185,72 @@ export default function Payroll() {
     };
   }, [previewUrl]);
 
+  const handleDownloadTemplate = async () => {
+    try {
+      const blob = await apiFetchBlob('salary/slip/upload/template');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'payslip-upload-template.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success('Template downloaded');
+    } catch {
+      toast.error('Failed to download template');
+    }
+  };
+
+  const handleExportSlips = async () => {
+    if (!employeeMongoId) {
+      toast.error('Employee profile not loaded');
+      return;
+    }
+    try {
+      const blob = await apiFetchBlob(`salary/slip/export/${employeeMongoId}`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `my-salary-slips-${selectedYear}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success('Salary slips exported');
+    } catch {
+      toast.error('Failed to export salary slips');
+    }
+  };
+
+  const handleUploadPayslip = async (file: File) => {
+    if (!employeeMongoId) {
+      toast.error('Employee profile not loaded');
+      return;
+    }
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('month', String(selectedMonth));
+      form.append('year', String(selectedYear));
+      const res = await apiUpload<{ success?: boolean; message?: string }>(
+        'salary/slip/employee-upload',
+        form
+      );
+      if (res?.success === false) {
+        throw new Error(res.message || 'Upload failed');
+      }
+      toast.success(res?.message || 'Payslip uploaded — waiting for admin approval');
+      await fetchSalarySlips(employeeMongoId);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to upload payslip');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   const currentSlip = salarySlips.find(
     (slip) => slip.month === selectedMonth && slip.year === selectedYear
   );
@@ -231,15 +304,48 @@ export default function Payroll() {
         </DialogContent>
       </Dialog>
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">My Salary Slips</h1>
-          <p className="text-muted-foreground">View and download your salary slips</p>
+          <p className="text-muted-foreground">View, upload, and download your salary slips</p>
         </div>
-        <Button onClick={() => fetchEmployeeAndSlips()} variant="outline" className="rounded-lg">
-          <RefreshCw className="w-4 h-4 mr-2" />
-          Refresh
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" className="rounded-lg" onClick={() => void handleDownloadTemplate()}>
+            <FileSpreadsheet className="w-4 h-4 mr-2" />
+            Template
+          </Button>
+          <Button type="button" variant="outline" className="rounded-lg" onClick={() => void handleExportSlips()}>
+            <Download className="w-4 h-4 mr-2" />
+            Export
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.csv"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleUploadPayslip(f);
+            }}
+          />
+          <Button
+            type="button"
+            className="rounded-lg"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {uploading ? (
+              <Loader className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <Upload className="w-4 h-4 mr-2" />
+            )}
+            Import / Upload
+          </Button>
+          <Button onClick={() => fetchEmployeeAndSlips()} variant="outline" className="rounded-lg">
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <Card className="p-6">
@@ -280,6 +386,12 @@ export default function Payroll() {
 
       {currentSlip ? (
         <Card className="p-6 bg-gradient-to-br from-primary/10 to-accent/10 border-primary/20">
+          {currentSlip.status === 'pending_approval' && (
+            <p className="text-sm text-amber-700 dark:text-amber-400 mb-4 rounded-lg bg-amber-500/10 px-3 py-2">
+              Uploaded payslip is pending admin approval
+              {currentSlip.uploadFileName ? ` (${currentSlip.uploadFileName})` : ''}.
+            </p>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
               <p className="text-sm text-muted-foreground">Gross Earnings</p>

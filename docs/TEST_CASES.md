@@ -2,6 +2,8 @@
 
 Use after deploying backend fixes to staging/production.
 
+**Full runbook (May 2026 fixes):** see [QA_RUNBOOK.md](./QA_RUNBOOK.md) — test on **https://hexerve.online** (API: Render `workplus-backend-sg3a`), not localhost.
+
 **Run automated tests:** `npm test` (from repo root)
 
 ---

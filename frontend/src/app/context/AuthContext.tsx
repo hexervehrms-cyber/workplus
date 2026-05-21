@@ -509,10 +509,10 @@ export function useRoleRedirect(): string {
       path = '/super-admin';
       break;
     case 'admin':
+    case 'hr':
       path = '/admin';
       break;
     case 'employee':
-    case 'hr':
     case 'manager':
     case 'accountant':
       path = '/employee';

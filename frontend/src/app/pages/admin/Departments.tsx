@@ -103,18 +103,34 @@ export default function AdminDepartments() {
     try {
       setLoading(true);
       await ensureAccessToken();
+      let resolvedOrgId = tenantOrgId ? String(tenantOrgId) : undefined;
+      if (!resolvedOrgId && user?.role !== 'super_admin') {
+        try {
+          const me = await apiGet<{ success?: boolean; data?: { orgId?: string; tenantId?: string } }>(
+            '/auth/me',
+            false
+          );
+          resolvedOrgId = me?.data?.orgId || me?.data?.tenantId;
+        } catch {
+          /* use JWT context only */
+        }
+      }
       const list = await DepartmentService.getAll({
         search: searchTerm.trim() || undefined,
         status: filterStatus,
         orgId:
-          user?.role === 'super_admin' && tenantOrgId
-            ? String(tenantOrgId)
+          user?.role === 'super_admin' && resolvedOrgId
+            ? String(resolvedOrgId)
             : undefined,
       });
       setDepartments(list);
     } catch (err) {
       console.error('Error loading departments:', err);
-      toast.error('Failed to load departments');
+      const msg =
+        err instanceof ApiError && err.code === 'MISSING_ORG_CONTEXT'
+          ? 'Organization not set on your account. Sign out and sign in again.'
+          : 'Failed to load departments';
+      toast.error(msg);
       setDepartments([]);
     } finally {
       setLoading(false);

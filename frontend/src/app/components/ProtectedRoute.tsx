@@ -43,17 +43,16 @@ export function ProtectedRoute({
     const roleArray = Array.isArray(requiredRole) ? requiredRole : [requiredRole];
     const hasRequiredRole = roleArray.includes(user.role);
     
-    console.log('🔐 ProtectedRoute - Role check:', {
-      userRole: user.role,
-      requiredRoles: roleArray,
-      hasAccess: hasRequiredRole,
-      path: location.pathname
-    });
-    
     if (!hasRequiredRole) {
-      // Redirect to appropriate dashboard based on user role
       const targetPath = fallbackPath || roleRedirect;
-      console.log('❌ Access denied - Redirecting to:', targetPath);
+      if (import.meta.env.DEV) {
+        console.log('ProtectedRoute denied:', {
+          userRole: user.role,
+          requiredRoles: roleArray,
+          path: location.pathname,
+          targetPath,
+        });
+      }
       return <Navigate to={targetPath} replace />;
     }
   }

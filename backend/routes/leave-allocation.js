@@ -16,8 +16,21 @@ import {
   allocationHasBalance,
   resolveLeaveAllocation,
 } from '../utils/leaveBalanceHelpers.js';
+import { authorize } from '../middleware/auth.js';
+import { assertEmployeeSelfOrPrivileged } from '../utils/employeeAccessHelpers.js';
+import { scopedOrgId } from '../utils/leaveAccessHelpers.js';
+import { isSuperAdmin } from '../utils/orgScopeHelpers.js';
 
 const router = express.Router();
+
+async function requireAllocationAccess(req, res, employeeId) {
+  const access = await assertEmployeeSelfOrPrivileged(req, employeeId);
+  if (!access.ok) {
+    res.status(access.status).json({ success: false, message: access.message });
+    return false;
+  }
+  return true;
+}
 
 // Apply pagination middleware
 router.use(paginationMiddleware);
@@ -47,6 +60,7 @@ const getLeaveFieldName = (leaveType) => {
  */
 router.get('/employee/:employeeId', asyncHandler(async (req, res) => {
   const { employeeId } = req.params;
+  if (!(await requireAllocationAccess(req, res, employeeId))) return;
   const { year, month } = req.query;
 
   const query = { employeeId };
@@ -95,8 +109,28 @@ router.get('/employee/:employeeId', asyncHandler(async (req, res) => {
  * GET /api/leave-allocation/organization/:orgId
  * Get all leave allocations for organization
  */
-router.get('/organization/:orgId', asyncHandler(async (req, res) => {
-  const { orgId } = req.params;
+router.get('/organization/:orgId', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+  const { orgId: orgIdParam } = req.params;
+  const tenantOrg = scopedOrgId(req);
+  if (!tenantOrg && !isSuperAdmin(req)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
+    });
+  }
+  const orgId =
+    isSuperAdmin(req) && orgIdParam ? String(orgIdParam) : String(tenantOrg || orgIdParam);
+  if (
+    !isSuperAdmin(req) &&
+    tenantOrg &&
+    String(orgIdParam) !== String(tenantOrg)
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot access leave allocations for another organization',
+    });
+  }
   const { page, limit, skip } = req.pagination;
   const { year, month, status } = req.query;
 
@@ -135,7 +169,7 @@ router.get('/organization/:orgId', asyncHandler(async (req, res) => {
  * POST /api/leave-allocation
  * Create or update leave allocation for employee
  */
-router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/', authorize('super_admin', 'admin', 'hr'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const {
     employeeId,
     userId,
@@ -145,6 +179,24 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     allocations,
     notes
   } = req.body;
+
+  const tenantOrg = scopedOrgId(req);
+  if (!tenantOrg) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
+    });
+  }
+  if (
+    req.user.role !== 'super_admin' &&
+    String(orgId) !== String(tenantOrg)
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot create leave allocation for another organization',
+    });
+  }
 
   // Validate required fields
   if (!employeeId || !userId || !orgId || !year || !month || !allocations) {
@@ -165,6 +217,7 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   // Check if allocation already exists
   let allocation = await LeaveAllocation.findOne({
     employeeId,
+    orgId: String(tenantOrg),
     year,
     month
   });
@@ -229,8 +282,12 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
  * GET /api/leave-allocation/:id
  * Get single leave allocation
  */
-router.get('/:id', asyncHandler(async (req, res) => {
-  const allocation = await LeaveAllocation.findById(req.params.id)
+router.get('/:id', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+  const tenantOrg = scopedOrgId(req);
+  const allocation = await LeaveAllocation.findOne({
+    _id: req.params.id,
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
+  })
     .populate({
       path: 'employeeId',
       select: 'employeeCode name department designation userId',
@@ -259,11 +316,15 @@ router.get('/:id', asyncHandler(async (req, res) => {
  * PATCH /api/leave-allocation/:id
  * Update leave allocation
  */
-router.patch('/:id', asyncHandler(async (req, res) => {
+router.patch('/:id', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { allocations, notes, status } = req.body;
+  const tenantOrg = scopedOrgId(req);
 
-  const allocation = await LeaveAllocation.findById(id);
+  const allocation = await LeaveAllocation.findOne({
+    _id: id,
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
+  });
 
   if (!allocation) {
     return res.status(404).json({
@@ -305,10 +366,14 @@ router.patch('/:id', asyncHandler(async (req, res) => {
  * DELETE /api/leave-allocation/:id
  * Delete leave allocation
  */
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const tenantOrg = scopedOrgId(req);
 
-  const allocation = await LeaveAllocation.findByIdAndDelete(id);
+  const allocation = await LeaveAllocation.findOneAndDelete({
+    _id: id,
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
+  });
 
   if (!allocation) {
     return res.status(404).json({
@@ -335,6 +400,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
  */
 router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
   const { employeeId } = req.params;
+  if (!(await requireAllocationAccess(req, res, employeeId))) return;
   const { year, month } = req.query;
 
   const now = new Date();
@@ -403,6 +469,8 @@ router.post('/deduct', asyncHandler(async (req, res) => {
       message: 'employeeId, leaveType, and days are required'
     });
   }
+
+  if (!(await requireAllocationAccess(req, res, employeeId))) return;
 
   const fieldName = getLeaveFieldName(leaveType);
   if (!fieldName) {
@@ -474,6 +542,8 @@ router.post('/restore', asyncHandler(async (req, res) => {
     });
   }
 
+  if (!(await requireAllocationAccess(req, res, employeeId))) return;
+
   const fieldName = getLeaveFieldName(leaveType);
   if (!fieldName) {
     return res.status(400).json({
@@ -521,8 +591,22 @@ router.post('/restore', asyncHandler(async (req, res) => {
  * POST /api/leave-allocation/yearly-allocate
  * Allocate yearly leaves (Casual, Earned, Medical) to employees
  */
-router.post('/yearly-allocate', idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/yearly-allocate', authorize('super_admin', 'admin', 'hr'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { orgId, year, employees, casualLeave, earnedLeave, medicalLeave, allocatedBy } = req.body;
+  const tenantOrg = scopedOrgId(req);
+  if (!tenantOrg) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
+    });
+  }
+  if (req.user.role !== 'super_admin' && String(orgId) !== String(tenantOrg)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot yearly-allocate for another organization',
+    });
+  }
 
   if (!orgId || !year || !employees || !allocatedBy) {
     return res.status(400).json({
@@ -629,8 +713,22 @@ router.post('/yearly-allocate', idempotencyMiddleware, asyncHandler(async (req, 
  * POST /api/leave-allocation/bulk-allocate
  * Bulk allocate leaves to multiple employees
  */
-router.post('/bulk-allocate', idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/bulk-allocate', authorize('super_admin', 'admin', 'hr'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { orgId, year, month, employees, allocations, allocatedBy } = req.body;
+  const tenantOrg = scopedOrgId(req);
+  if (!tenantOrg) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
+    });
+  }
+  if (req.user.role !== 'super_admin' && String(orgId) !== String(tenantOrg)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot bulk-allocate for another organization',
+    });
+  }
 
   if (!orgId || !year || !month || !employees || !allocations || !allocatedBy) {
     return res.status(400).json({

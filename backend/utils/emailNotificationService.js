@@ -334,7 +334,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Duration:</span><span class="value">${days} day(s)</span></div>
 <div class="info-row"><span class="label">Reason:</span><span class="value">${leaveRequest.reason}</span></div>
 <div class="info-row"><span class="label">Status:</span><span class="value" style="color:#ffc107">⏳ Pending</span></div></div>
-<div style="text-align:center"><a href="${getFrontendUrl()}/admin/leave-requests" class="button">📋 Review Leave</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/leaves" class="button">📋 Review Leave</a></div>`;
     
     await this.sendEmail({
       to: hrEmail,
@@ -397,7 +397,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">From:</span><span class="value">${start}</span></div>
 <div class="info-row"><span class="label">To:</span><span class="value">${end}</span></div>
 <div class="info-row"><span class="label">Approved By:</span><span class="value">${approver.name}</span></div></div>
-<div style="text-align:center"><a href="${getFrontendUrl()}/admin/leave-requests" class="button">📋 View All Leaves</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/leaves" class="button">📋 View All Leaves</a></div>`;
     
     await this.sendEmail({
       to: hrEmail,
@@ -866,7 +866,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
 <div class="info-row"><span class="label">Uploaded By:</span><span class="value">${document.uploadedBy}</span></div>
 <div class="info-row"><span class="label">Date:</span><span class="value">${new Date(document.uploadDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
 ${document.description ? `<div class="info-row"><span class="label">Description:</span><span class="value">${document.description}</span></div>` : ''}</div>
-<div style="text-align:center"><a href="${getFrontendUrl()}/employee/documents" class="button">📥 View Document</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/profile" class="button">📥 View Document</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -876,7 +876,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       priority: 'medium',
       recipientId: toRecipientUserId(employee),
       orgId: employee.orgId,
-      actionUrl: '/employee/documents',
+      actionUrl: '/employee/profile',
       actionText: 'View Document',
       relatedEntity: {
         entityType: 'document',
@@ -903,7 +903,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
 <div class="info-row"><span class="label">Submitted By:</span><span class="value">${document.submittedBy}</span></div>
 <div class="info-row"><span class="label">Date:</span><span class="value">${new Date(document.submissionDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
 ${document.description ? `<div class="info-row"><span class="label">Description:</span><span class="value">${document.description}</span></div>` : ''}</div>
-<div style="text-align:center"><a href="${getFrontendUrl()}/admin/documents" class="button">✓ Review & Approve</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/company-docs" class="button">✓ Review & Approve</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -913,7 +913,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       priority: 'high',
       recipientId: toRecipientUserId(employee),
       orgId: employee.orgId,
-      actionUrl: '/admin/documents',
+      actionUrl: '/admin/company-docs',
       actionText: 'Review Document',
       relatedEntity: {
         entityType: 'document',
@@ -939,7 +939,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
 <div class="info-row"><span class="label">Type:</span><span class="value">${document.type}</span></div>
 <div class="info-row"><span class="label">Approved By:</span><span class="value">${approver.name}</span></div>
 <div class="info-row"><span class="label">Date:</span><span class="value">${new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div></div>
-<div style="text-align:center"><a href="${getFrontendUrl()}/employee/documents" class="button">📥 View Document</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/profile" class="button">📥 View Document</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -950,7 +950,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       recipientId: toRecipientUserId(employee),
       senderId: approver._id,
       orgId: employee.orgId,
-      actionUrl: '/employee/documents',
+      actionUrl: '/employee/profile',
       actionText: 'View Document',
       relatedEntity: {
         entityType: 'document',

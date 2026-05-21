@@ -866,14 +866,14 @@ export default function Payroll() {
                   </div>
 
                   <div className="flex gap-2">
-                    {slip.status === 'draft' && (
+                    {(slip.status === 'draft' || slip.status === 'pending_approval') && (
                       <Button
                         size="sm"
                         onClick={() => handleApproveSalarySlip(slip._id)}
                         className="rounded-lg"
                       >
                         <Check className="w-4 h-4 mr-2" />
-                        Approve
+                        {slip.status === 'pending_approval' ? 'Approve upload' : 'Approve'}
                       </Button>
                     )}
                     <Button

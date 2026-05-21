@@ -10,11 +10,18 @@ export default function AuditLogs() {
           <h1 className="text-3xl font-bold">Audit Logs</h1>
           <p className="text-muted-foreground">System audit trail and security logs</p>
         </div>
-        <Button className="rounded-xl">
+        <Button className="rounded-xl" disabled title="Available when audit API is connected">
           <Download className="w-4 h-4 mr-2" />
           Export Logs
         </Button>
       </div>
+
+      <Card className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10">
+        <p className="text-sm text-amber-900 dark:text-amber-100">
+          <span className="font-semibold">Coming soon.</span> Real audit log search and export
+          are not connected yet. The table below shows sample rows for UI preview only.
+        </p>
+      </Card>
 
       <div className="flex gap-4">
         <div className="relative flex-1 max-w-md">
@@ -23,9 +30,11 @@ export default function AuditLogs() {
             type="text"
             placeholder="Search audit logs..."
             className="w-full pl-10 pr-4 py-2 border rounded-xl bg-background"
+            disabled
+            aria-disabled
           />
         </div>
-        <Button variant="outline" className="rounded-xl">
+        <Button variant="outline" className="rounded-xl" disabled title="Coming soon">
           <Filter className="w-4 h-4 mr-2" />
           Filter
         </Button>

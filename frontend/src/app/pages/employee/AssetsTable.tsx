@@ -138,19 +138,17 @@ export default function EmployeeAssetsTable() {
       setLoading(true);
 
       // Get current user's employee ID
-      const userData = await apiGet<{ data?: { id?: string } }>('auth/me', false);
-      const userId = userData?.data?.id;
-      if (!userId) throw new Error('Failed to get user info');
+      const userData = await apiGet<{ data?: { id?: string; userId?: string } }>('auth/me', false);
+      const authUserId = userData?.data?.userId || userData?.data?.id;
+      if (!authUserId) throw new Error('Failed to get user info');
 
-      let employeeId = userId;
-      try {
-        const employeeData = await apiGet<{ data?: Array<{ _id?: string }> }>(
-          `employees?userId=${userId}`,
-          false
-        );
-        employeeId = employeeData?.data?.[0]?._id || userId;
-      } catch {
-        /* use userId */
+      const employeeData = await apiGet<{ data?: { _id?: string } }>(
+        `employees/user/${authUserId}`,
+        false
+      );
+      const employeeId = employeeData?.data?._id;
+      if (!employeeId) {
+        throw new Error('Employee profile not found');
       }
 
       const data = await apiGet<{

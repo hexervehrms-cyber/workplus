@@ -439,8 +439,13 @@ export default function Profile() {
 
   // Fetch educational documents
   const fetchEducationalDocuments = async () => {
+    const userId = authUser?.userId || authUser?.id;
+    if (!userId) return;
     try {
-      const data = await apiGet('/employee-dashboard/documents?type=education');
+      const data = await apiGet<{
+        success?: boolean;
+        data?: unknown[];
+      }>(`/documents/employee/${userId}?limit=200&scope=education`, false);
       
       const docList = Array.isArray(data?.data)
         ? data.data

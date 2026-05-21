@@ -247,7 +247,7 @@ router.post('/groups', authenticate, asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'Too many members (max 99 besides you)' });
   }
 
-  const allIdStrings = [String(creatorId), ...otherIds];
+  const allIdStrings = [...new Set([String(creatorId), ...otherIds])];
   const memberObjectIdsForLookup = allIdStrings
     .filter((id) => mongoose.Types.ObjectId.isValid(id))
     .map((id) => new mongoose.Types.ObjectId(id));
@@ -261,10 +261,13 @@ router.post('/groups', authenticate, asyncHandler(async (req, res) => {
     .select('_id')
     .lean();
 
-  if (usersFound.length !== allIdStrings.length) {
+  const foundIdSet = new Set(usersFound.map((u) => String(u._id)));
+  const missing = allIdStrings.filter((id) => !foundIdSet.has(String(id)));
+  if (missing.length > 0) {
     return res.status(400).json({
       success: false,
       message: 'Some users are not in your organization or are inactive',
+      data: { missingUserIds: missing },
     });
   }
 
@@ -299,7 +302,7 @@ router.post('/groups', authenticate, asyncHandler(async (req, res) => {
   await seed.save();
 
   if (global.io) {
-    for (const mid of memberObjectIds) {
+    for (const mid of allIdStrings) {
       global.io.to(`user_${mid}`).emit('chat:group_created', {
         conversationId,
         name: groupName,

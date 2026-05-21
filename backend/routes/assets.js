@@ -10,12 +10,15 @@
  */
 
 import express from 'express';
+import mongoose from 'mongoose';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { authenticate, authorize } from '../middleware/auth.js';
 import AssetAssigned from '../models/AssetAssigned.js';
 import Employee from '../models/Employee.js';
 import User from '../models/User.js';
 import logger from '../utils/logger.js';
+import { userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
+import { assertEmployeeSelfOrPrivileged } from '../utils/employeeAccessHelpers.js';
 
 const router = express.Router();
 
@@ -26,6 +29,7 @@ const router = express.Router();
  */
 router.post('/',
   authenticate,
+  authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
     const {
       assetName,
@@ -95,12 +99,21 @@ router.post('/',
  */
 router.get('/',
   authenticate,
+  authorize('super_admin', 'admin', 'hr', 'manager'),
   asyncHandler(async (req, res) => {
     const { status, assignedTo, search, page = 1, limit = 20 } = req.query;
-    const orgId = req.user.orgId;
+    const orgId = userOrgIdFromReq(req) || req.validatedOrgId || req.user.orgId;
+
+    if (!orgId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Organization context required',
+        code: 'MISSING_ORG_CONTEXT',
+      });
+    }
 
     try {
-      const query = { orgId, isActive: true };
+      const query = { orgId: String(orgId), isActive: true };
 
       if (status) {
         query.status = status;
@@ -158,6 +171,119 @@ router.get('/',
 );
 
 /**
+ * GET /api/assets/employee/:employeeId/total-value
+ * (Registered before /:id so paths are not swallowed.)
+ */
+router.get('/employee/:employeeId/total-value',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { employeeId } = req.params;
+
+    try {
+      const tenantOrg = userOrgIdFromReq(req) || req.user.orgId;
+      const assets = await AssetAssigned.find({
+        'assignment.assignedTo': employeeId,
+        status: { $in: ['assigned', 'in_use'] },
+        isActive: true,
+        ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
+      }).lean();
+
+      const totalValue = assets.reduce((sum, asset) => {
+        return sum + (asset.financial?.currentValue || asset.financial?.purchasePrice || 0);
+      }, 0);
+
+      res.json({
+        success: true,
+        data: {
+          totalAssets: assets.length,
+          totalValue,
+          assets: assets.map(a => ({
+            _id: a._id,
+            assetName: a.assetName,
+            currentValue: a.financial?.currentValue || a.financial?.purchasePrice || 0,
+            purchasePrice: a.financial?.purchasePrice,
+            serialNumber: a.specifications?.serialNumber
+          }))
+        }
+      });
+
+    } catch (error) {
+      logger.error('Get employee asset value error', {
+        error: error.message,
+        employeeId: req.params.employeeId
+      });
+      res.status(500).json({
+        success: false,
+        message: 'Failed to calculate asset value'
+      });
+    }
+  })
+);
+
+/**
+ * GET /api/assets/employee/:employeeId
+ */
+router.get('/employee/:employeeId',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { employeeId } = req.params;
+
+    try {
+      const access = await assertEmployeeSelfOrPrivileged(req, employeeId);
+      if (!access.ok) {
+        return res.status(access.status).json({
+          success: false,
+          message: access.message,
+        });
+      }
+
+      const tenantOrg = userOrgIdFromReq(req) || req.user.orgId;
+      const employee = await Employee.findById(employeeId).select('userId orgId');
+      const userId = employee?.userId;
+
+      const query = {
+        isActive: true,
+        ...(tenantOrg ? { orgId: String(tenantOrg) } : employee?.orgId ? { orgId: String(employee.orgId) } : {}),
+        $or: [
+          {
+            'assignment.assignedTo': employeeId,
+            status: { $in: ['assigned', 'in_use'] }
+          },
+          {
+            'assignment.assignedBy': userId,
+            status: 'available'
+          }
+        ]
+      };
+
+      const assets = await AssetAssigned.find(query)
+        .populate('assignment.assignedBy', 'name email')
+        .sort({ 'assignment.assignmentDate': -1 })
+        .lean();
+
+      res.json({
+        success: true,
+        data: {
+          assets,
+          totalAssets: assets.length,
+          totalValue: assets.reduce((sum, asset) => sum + (asset.financial?.currentValue || 0), 0)
+        }
+      });
+
+    } catch (error) {
+      logger.error('Get employee assets error', {
+        error: error.message,
+        employeeId: req.params.employeeId
+      });
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch employee assets'
+      });
+    }
+  })
+);
+
+/**
  * GET /api/assets/:id
  * Get asset details
  */
@@ -165,6 +291,13 @@ router.get('/:id',
   authenticate,
   asyncHandler(async (req, res) => {
     const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Asset not found'
+      });
+    }
 
     try {
       const asset = await AssetAssigned.findById(id)
@@ -352,112 +485,6 @@ router.put('/:id/return',
       res.status(500).json({
         success: false,
         message: 'Failed to return asset'
-      });
-    }
-  })
-);
-
-/**
- * GET /api/assets/employee/:employeeId
- * Get all assets assigned to an employee or created by them
- */
-router.get('/employee/:employeeId',
-  authenticate,
-  asyncHandler(async (req, res) => {
-    const { employeeId } = req.params;
-
-    try {
-      // Get employee record to find userId
-      const employee = await Employee.findById(employeeId).select('userId');
-      const userId = employee?.userId;
-
-      // Find assets assigned to this employee OR created by this user
-      const query = {
-        isActive: true,
-        orgId: req.user.orgId,
-        $or: [
-          {
-            'assignment.assignedTo': employeeId,
-            status: { $in: ['assigned', 'in_use'] }
-          },
-          {
-            'assignment.assignedBy': userId,
-            status: 'available'
-          }
-        ]
-      };
-
-      const assets = await AssetAssigned.find(query)
-        .populate('assignment.assignedBy', 'name email')
-        .sort({ 'assignment.assignmentDate': -1 })
-        .lean();
-
-      res.json({
-        success: true,
-        data: {
-          assets,
-          totalAssets: assets.length,
-          totalValue: assets.reduce((sum, asset) => sum + (asset.financial?.currentValue || 0), 0)
-        }
-      });
-
-    } catch (error) {
-      logger.error('Get employee assets error', {
-        error: error.message,
-        employeeId: req.params.employeeId
-      });
-      res.status(500).json({
-        success: false,
-        message: 'Failed to fetch employee assets'
-      });
-    }
-  })
-);
-
-/**
- * GET /api/assets/employee/:employeeId/total-value
- * Get total asset value for FNF deduction
- */
-router.get('/employee/:employeeId/total-value',
-  authenticate,
-  asyncHandler(async (req, res) => {
-    const { employeeId } = req.params;
-
-    try {
-      const assets = await AssetAssigned.find({
-        'assignment.assignedTo': employeeId,
-        status: { $in: ['assigned', 'in_use'] },
-        isActive: true,
-        orgId: req.user.orgId
-      }).lean();
-
-      const totalValue = assets.reduce((sum, asset) => {
-        return sum + (asset.financial?.currentValue || asset.financial?.purchasePrice || 0);
-      }, 0);
-
-      res.json({
-        success: true,
-        data: {
-          totalAssets: assets.length,
-          totalValue,
-          assets: assets.map(a => ({
-            _id: a._id,
-            assetName: a.assetName,
-            currentValue: a.financial?.currentValue || a.financial?.purchasePrice || 0,
-            purchasePrice: a.financial?.purchasePrice,
-            serialNumber: a.specifications?.serialNumber
-          }))
-        }
-      });
-
-    } catch (error) {
-      logger.error('Get employee asset value error', {
-        error: error.message,
-        employeeId: req.params.employeeId
-      });
-      res.status(500).json({
-        success: false,
-        message: 'Failed to calculate asset value'
       });
     }
   })
@@ -831,7 +858,7 @@ router.get('/export/csv',
   authenticate,
   authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user.orgId;
+    const orgId = userOrgIdFromReq(req) || req.validatedOrgId || req.user.orgId;
 
     try {
       const assets = await AssetAssigned.find({ orgId, isActive: true })
@@ -925,7 +952,7 @@ router.post('/import/csv',
   authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
     const { csvData } = req.body;
-    const orgId = req.user.orgId;
+    const orgId = userOrgIdFromReq(req) || req.validatedOrgId || req.user.orgId;
     const userId = req.user.userId;
 
     try {
@@ -1061,7 +1088,7 @@ router.get('/export/json',
   authenticate,
   authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user.orgId;
+    const orgId = userOrgIdFromReq(req) || req.validatedOrgId || req.user.orgId;
 
     try {
       const assets = await AssetAssigned.find({ orgId, isActive: true })
@@ -1129,7 +1156,7 @@ router.post('/import/json',
   authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
     const { assets } = req.body;
-    const orgId = req.user.orgId;
+    const orgId = userOrgIdFromReq(req) || req.validatedOrgId || req.user.orgId;
     const userId = req.user.userId;
 
     try {

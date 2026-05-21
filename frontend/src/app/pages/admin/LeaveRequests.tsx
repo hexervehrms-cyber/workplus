@@ -58,7 +58,7 @@ export default function LeaveRequests() {
       setLoading(true);
       setError(null);
       const requestsData = await LeaveRequestService.getAllLeaveRequests();
-      const list = extractApiList(requestsData);
+      const list = extractApiList(requestsData as { data?: unknown });
 
       if (list.length > 0) {
         const formattedRequests = list.map((req: any) => ({

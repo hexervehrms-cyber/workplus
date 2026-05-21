@@ -1,4 +1,4 @@
-import { createBrowserRouter, Outlet } from 'react-router';
+import { createBrowserRouter, Navigate, Outlet } from 'react-router';
 import { lazy, Suspense, type ComponentType } from 'react';
 
 /** Retry dynamic import once (handles stale CDN chunks after deploy). */
@@ -81,9 +81,20 @@ const Chat = lazy(() => import('./pages/employee/Chat'));
 const EmployeeOnboarding = lazy(() => import('./pages/employee/OnboardingForm'));
 const EmployeeCompanyDocs = lazy(() => import('./pages/employee/CompanyDocs'));
 const EmployeeSettings = lazy(() => import('./pages/employee/Settings'));
+const EmployeeAssets = lazy(() => import('./pages/employee/Assets'));
 
 // Public Pages
 import OnboardingPage from './pages/public/OnboardingPage';
+import { RoleHomeRedirect, SettingsRoleRedirect } from './components/RoleHomeRedirect';
+
+/** HR users share most admin HR screens; sales/roles stay admin-only. */
+const HR_ADMIN = ['admin', 'hr'] as const;
+const ADMIN_ONLY = ['admin'] as const;
+
+const AdminSalaryStructure = lazy(() => import('./pages/admin/SalaryStructure'));
+const AdminSalaryCycle = lazy(() => import('./pages/admin/SalaryCycle'));
+const AdminBulkOperations = lazy(() => import('./pages/admin/BulkOperations'));
+const AdminAssets = lazy(() => import('./pages/admin/Assets'));
 
 const routes = [
   {
@@ -185,7 +196,7 @@ const routes = [
       {
         path: 'admin',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminDashboard />
           </ProtectedRoute>
         ),
@@ -193,7 +204,7 @@ const routes = [
       {
         path: 'admin/employees',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <Employees />
           </ProtectedRoute>
         ),
@@ -201,7 +212,7 @@ const routes = [
       {
         path: 'admin/employees/:employeeId/correspondence',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <EmployeeCorrespondence />
           </ProtectedRoute>
         ),
@@ -209,7 +220,7 @@ const routes = [
       {
         path: 'admin/company-docs',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminCompanyDocs />
           </ProtectedRoute>
         ),
@@ -217,7 +228,7 @@ const routes = [
       {
         path: 'admin/invites',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <InviteManagement />
           </ProtectedRoute>
         ),
@@ -233,7 +244,7 @@ const routes = [
       {
         path: 'admin/roles',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <AdminRoles />
           </ProtectedRoute>
         ),
@@ -241,7 +252,7 @@ const routes = [
       {
         path: 'admin/leaves',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <LeaveRequests />
           </ProtectedRoute>
         ),
@@ -249,7 +260,7 @@ const routes = [
       {
         path: 'admin/leave-allocation',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <LeaveAllocation />
           </ProtectedRoute>
         ),
@@ -257,7 +268,7 @@ const routes = [
       {
         path: 'admin/leave-settings',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <LeaveSettings />
           </ProtectedRoute>
         ),
@@ -265,7 +276,7 @@ const routes = [
       {
         path: 'admin/holiday-calendar',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminHolidayCalendar />
           </ProtectedRoute>
         ),
@@ -273,7 +284,7 @@ const routes = [
       {
         path: 'admin/attendance',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AttendanceAdmin />
           </ProtectedRoute>
         ),
@@ -281,7 +292,7 @@ const routes = [
       {
         path: 'admin/attendance-calendar',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AttendanceCalendar />
           </ProtectedRoute>
         ),
@@ -289,7 +300,7 @@ const routes = [
       {
         path: 'admin/attendance-history',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AttendanceHistory />
           </ProtectedRoute>
         ),
@@ -297,7 +308,7 @@ const routes = [
       {
         path: 'admin/expenses',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <ExpensesAdmin />
           </ProtectedRoute>
         ),
@@ -305,7 +316,7 @@ const routes = [
       {
         path: 'admin/payroll',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminPayroll />
           </ProtectedRoute>
         ),
@@ -313,15 +324,55 @@ const routes = [
       {
         path: 'admin/payroll-runs',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminPayrollRuns />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/salary-structure',
+        element: (
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
+            <Suspense fallback={<LazyLoader />}>
+              <AdminSalaryStructure />
+            </Suspense>
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/salary-cycle',
+        element: (
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
+            <Suspense fallback={<LazyLoader />}>
+              <AdminSalaryCycle />
+            </Suspense>
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/bulk-operations',
+        element: (
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
+            <Suspense fallback={<LazyLoader />}>
+              <AdminBulkOperations />
+            </Suspense>
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/assets',
+        element: (
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
+            <Suspense fallback={<LazyLoader />}>
+              <AdminAssets />
+            </Suspense>
           </ProtectedRoute>
         ),
       },
       {
         path: 'admin/announcements',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AnnouncementsAdmin />
           </ProtectedRoute>
         ),
@@ -329,7 +380,7 @@ const routes = [
       {
         path: 'admin/chat',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminChat />
           </ProtectedRoute>
         ),
@@ -337,7 +388,7 @@ const routes = [
       {
         path: 'admin/employee-onboarding',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <HREmployeeOnboarding />
           </ProtectedRoute>
         ),
@@ -345,7 +396,7 @@ const routes = [
       {
         path: 'admin/sales',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <SalesDashboard />
           </ProtectedRoute>
         ),
@@ -353,7 +404,7 @@ const routes = [
       {
         path: 'admin/sales/leads',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <Leads />
           </ProtectedRoute>
         ),
@@ -361,7 +412,7 @@ const routes = [
       {
         path: 'admin/sales/deals',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <Deals />
           </ProtectedRoute>
         ),
@@ -369,7 +420,7 @@ const routes = [
       {
         path: 'admin/sales/calls',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <Calls />
           </ProtectedRoute>
         ),
@@ -377,7 +428,7 @@ const routes = [
       {
         path: 'employee',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <EmployeeDashboard />
           </ProtectedRoute>
         ),
@@ -385,7 +436,7 @@ const routes = [
       {
         path: 'employee/profile',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Profile />
           </ProtectedRoute>
         ),
@@ -393,7 +444,7 @@ const routes = [
       {
         path: 'employee/company-docs',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <EmployeeCompanyDocs />
           </ProtectedRoute>
         ),
@@ -401,7 +452,7 @@ const routes = [
       {
         path: 'employee/leave',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Leave />
           </ProtectedRoute>
         ),
@@ -409,7 +460,7 @@ const routes = [
       {
         path: 'employee/calendar',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Calendar />
           </ProtectedRoute>
         ),
@@ -417,7 +468,7 @@ const routes = [
       {
         path: 'employee/attendance',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Attendance />
           </ProtectedRoute>
         ),
@@ -425,7 +476,7 @@ const routes = [
       {
         path: 'employee/performance',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Performance />
           </ProtectedRoute>
         ),
@@ -433,7 +484,7 @@ const routes = [
       {
         path: 'employee/payroll',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Payroll />
           </ProtectedRoute>
         ),
@@ -441,7 +492,7 @@ const routes = [
       {
         path: 'employee/expenses',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Expenses />
           </ProtectedRoute>
         ),
@@ -449,15 +500,25 @@ const routes = [
       {
         path: 'employee/chat',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Chat />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'employee/assets',
+        element: (
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
+            <Suspense fallback={<LazyLoader />}>
+              <EmployeeAssets />
+            </Suspense>
           </ProtectedRoute>
         ),
       },
       {
         path: 'employee/onboarding',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <EmployeeOnboarding />
           </ProtectedRoute>
         ),
@@ -466,15 +527,14 @@ const routes = [
         path: 'settings',
         element: (
           <ProtectedRoute>
-            {/* Route to appropriate settings page based on role */}
-            <EmployeeSettings />
+            <SettingsRoleRedirect />
           </ProtectedRoute>
         ),
       },
       {
         path: 'employee/settings',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <EmployeeSettings />
           </ProtectedRoute>
         ),
@@ -482,7 +542,7 @@ const routes = [
       {
         path: 'admin/settings',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminSettings />
           </ProtectedRoute>
         ),
@@ -490,8 +550,16 @@ const routes = [
       {
         path: 'admin/admin-management',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <AdminManagement />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '*',
+        element: (
+          <ProtectedRoute>
+            <RoleHomeRedirect />
           </ProtectedRoute>
         ),
       },

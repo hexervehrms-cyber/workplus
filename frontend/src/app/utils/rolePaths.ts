@@ -5,9 +5,9 @@ export function getDashboardPathForRole(role: UserRole): string {
     case 'super_admin':
       return '/super-admin';
     case 'admin':
+    case 'hr':
       return '/admin';
     case 'employee':
-    case 'hr':
     case 'manager':
     case 'accountant':
       return '/employee';

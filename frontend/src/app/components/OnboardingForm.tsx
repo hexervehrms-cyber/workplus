@@ -172,17 +172,19 @@ const OnboardingForm: React.FC<{
     // Create FormData for file uploads
     const formDataToSend = new FormData();
     
-    // Add token
-    if (token) {
+    // Add token (public invite flow only)
+    if (token && !isHRMode) {
       formDataToSend.append('token', token);
     }
-    
-    // Add password (required)
-    if (!formData.password) {
-      alert('Password is required');
-      return;
+
+    // Password required for self-service onboarding only
+    if (!isHRMode) {
+      if (!formData.password) {
+        alert('Password is required');
+        return;
+      }
+      formDataToSend.append('password', formData.password);
     }
-    formDataToSend.append('password', formData.password);
     
     // Add personal info fields
     formDataToSend.append('firstName', formData.firstName);

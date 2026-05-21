@@ -91,7 +91,8 @@ export default function EmployeeSalaryBreakdown() {
   const [employeeMissing, setEmployeeMissing] = useState(false);
 
   const fetchSalaryData = useCallback(async () => {
-    if (!user?.id) {
+    const authUserId = user?.userId || user?.id;
+    if (!authUserId) {
       setEmployeeId(null);
       setEmployeeMissing(true);
       setSalaryBreakdown(null);
@@ -109,7 +110,7 @@ export default function EmployeeSalaryBreakdown() {
       setSalaryBreakdown(null);
       setCurrentSlipId(null);
 
-      const employeeData = await apiGet(`/employees/user/${user.id}`);
+      const employeeData = await apiGet(`/employees/user/${authUserId}`);
       if (!employeeData.data?._id) {
         setEmployeeId(null);
         setEmployeeMissing(true);
@@ -137,7 +138,7 @@ export default function EmployeeSalaryBreakdown() {
       }
 
       try {
-        const structRes = await apiGet(`salary/structure/${empId}`, false);
+        const structRes = await apiGet(`/salary/structure/${empId}`, false);
         if (structRes.success && structRes.data) {
           const s = structRes.data as Record<string, unknown>;
           const e = (s.earnings as Record<string, number>) || {};
@@ -166,7 +167,7 @@ export default function EmployeeSalaryBreakdown() {
     } finally {
       setLoading(false);
     }
-  }, [user?.id, selectedMonth, selectedYear]);
+  }, [user?.userId, user?.id, selectedMonth, selectedYear]);
 
   useEffect(() => {
     void fetchSalaryData();

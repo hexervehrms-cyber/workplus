@@ -33,8 +33,8 @@ const Deals = () => {
     try {
       setLoading(true);
       const url = filterStage
-        ? `/api/sales/deals/stage/${filterStage}`
-        : '/api/sales/deals';
+        ? `sales/deals/stage/${filterStage}`
+        : 'sales/deals';
       const res = await salesApi.get<{ data?: unknown[] }>(url);
       setDeals((res as { data?: unknown[] })?.data || []);
     } catch (error) {
@@ -55,7 +55,7 @@ const Deals = () => {
 
   const fetchLeads = async () => {
     try {
-      const res = await salesApi.get<{ data?: unknown[] }>('/api/sales/leads');
+      const res = await salesApi.get<{ data?: unknown[] }>('sales/leads');
       setLeads((res as { data?: unknown[] })?.data || []);
     } catch (error) {
       console.error('Error fetching leads:', error);
@@ -66,9 +66,9 @@ const Deals = () => {
     e.preventDefault();
     try {
       if (editingDeal) {
-        await salesApi.patch(`/api/sales/deals/${editingDeal._id}`, formData);
+        await salesApi.patch(`sales/deals/${editingDeal._id}`, formData);
       } else {
-        await salesApi.post('/api/sales/deals', formData);
+        await salesApi.post('sales/deals', formData);
       }
       fetchDeals();
       setShowModal(false);
@@ -100,7 +100,7 @@ const Deals = () => {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this deal?')) {
       try {
-        await salesApi.delete(`/api/sales/deals/${id}`);
+        await salesApi.delete(`sales/deals/${id}`);
         fetchDeals();
       } catch (error) {
         console.error('Error deleting deal:', error);
@@ -110,7 +110,7 @@ const Deals = () => {
 
   const handleCloseDeal = async (id, stage) => {
     try {
-      await salesApi.patch(`/api/sales/deals/${id}/close`, { stage });
+      await salesApi.patch(`sales/deals/${id}/close`, { stage });
       fetchDeals();
     } catch (error) {
       console.error('Error closing deal:', error);

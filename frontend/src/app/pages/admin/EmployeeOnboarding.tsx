@@ -5,7 +5,7 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Search, UserPlus, Loader2 } from 'lucide-react';
-import { apiPost } from '../../utils/apiHelper';
+import { apiPut } from '../../utils/apiHelper';
 import { EmployeeService } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
 
@@ -57,20 +57,41 @@ const HREmployeeOnboarding: React.FC = () => {
   );
 
   const handleFormSubmit = async (formData: FormData) => {
+    if (!selectedEmployee) {
+      toast.error('Select an employee first');
+      return;
+    }
     try {
-      formData.append('employeeId', selectedEmployee);
-      formData.append('submittedBy', 'hr_admin');
-      const data = await apiPost('/onboarding/submit', formData);
-      if (data.success) {
-        toast.success('Employee onboarding form submitted successfully');
+      const payload: Record<string, string> = {
+        firstName: String(formData.get('firstName') || ''),
+        lastName: String(formData.get('lastName') || ''),
+        phone: String(formData.get('phone') || ''),
+        dateOfBirth: String(formData.get('dateOfBirth') || ''),
+        gender: String(formData.get('gender') || ''),
+        address: String(formData.get('address') || ''),
+        aadharNumber: String(formData.get('aadharNumber') || ''),
+        panNumber: String(formData.get('panNumber') || ''),
+        bankAccount: String(formData.get('bankAccount') || ''),
+        ifscCode: String(formData.get('ifscCode') || ''),
+        emergencyContactName: String(formData.get('emergencyName') || ''),
+        emergencyContactRelation: String(formData.get('emergencyRelation') || ''),
+        emergencyContactPhone: String(formData.get('emergencyPhone') || ''),
+        onboardingStatus: 'completed',
+      };
+      const data = await apiPut<{ success?: boolean; message?: string }>(
+        `/employees/${selectedEmployee}`,
+        payload
+      );
+      if (data?.success !== false) {
+        toast.success('Employee profile updated successfully');
         setShowForm(false);
         setSelectedEmployee('');
       } else {
-        toast.error(data.message || 'Please try again.');
+        toast.error(data?.message || 'Please try again.');
       }
     } catch (error) {
       console.error('Error submitting form:', error);
-      toast.error('Error submitting form. Please try again.');
+      toast.error(error instanceof Error ? error.message : 'Error submitting form. Please try again.');
     }
   };
 

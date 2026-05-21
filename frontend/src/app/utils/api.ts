@@ -574,6 +574,9 @@ export class UserService {
 // ============================================
 export class EmployeeService {
   static async getAllEmployees(orgContext?: { role?: string; orgId?: string; tenantId?: string }) {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
     let url = '/employees?simple=true&limit=1000';
     if (orgContext?.role === 'super_admin') {
       const oid = orgContext.orgId || orgContext.tenantId;
@@ -581,20 +584,8 @@ export class EmployeeService {
         url += `&orgId=${encodeURIComponent(oid)}`;
       }
     }
-    const response = await apiClient.get<any>(url);
-    console.log('getAllEmployees full response:', response);
-    
-    // Handle paginated response structure
-    if (response.data && Array.isArray(response.data)) {
-      return response.data;
-    }
-    
-    // Fallback for direct array response
-    if (Array.isArray(response)) {
-      return response;
-    }
-    
-    return [];
+    const response = await apiGet<unknown>(url, false);
+    return extractApiList(response);
   }
 
   static async getEmployeeById(employeeId: string) {
@@ -744,7 +735,7 @@ export class LeaveRequestService {
       '/leave-requests?limit=500',
       false
     );
-    return extractApiList(response);
+    return response;
   }
 
   static async getLeaveRequestsByUserId(userId: string) {
@@ -869,37 +860,38 @@ export class HolidayService {
 }
 
 // ============================================
-// Payroll Service
+// Payroll Service (legacy — use /api/salary routes via employee Payroll page)
 // ============================================
+/** @deprecated Legacy /payslips API is not mounted; use SalarySlip routes under /api/salary */
 export class PayrollService {
-  static async getAllPayslips() {
-    const response = await apiClient.get<any[]>('/payslips');
-    return response.data || [];
+  private static deprecated(): never {
+    throw new Error(
+      'PayrollService is deprecated. Use employee Payroll (/salary/slips) or admin Payroll pages instead.'
+    );
   }
 
-  static async getEmployeePayslips(employeeId: string) {
-    const response = await apiClient.get<any[]>(`/payslips/employee/${employeeId}`);
-    return response.data || [];
+  static async getAllPayslips() {
+    return PayrollService.deprecated();
+  }
+
+  static async getEmployeePayslips(_employeeId: string) {
+    return PayrollService.deprecated();
   }
 
   static async getMyPayslips() {
-    const response = await apiClient.get<any[]>('/payslips/my-payslips');
-    return response.data || [];
+    return PayrollService.deprecated();
   }
 
-  static async createPayslip(payslipData: any) {
-    const response = await apiClient.post<any>('/payslips', payslipData);
-    return response.data;
+  static async createPayslip(_payslipData: unknown) {
+    return PayrollService.deprecated();
   }
 
-  static async markPayslipAsPaid(payslipId: string) {
-    const response = await apiClient.patch<any>(`/payslips/${payslipId}/pay`, {});
-    return response.data;
+  static async markPayslipAsPaid(_payslipId: string) {
+    return PayrollService.deprecated();
   }
 
-  static async deletePayslip(payslipId: string) {
-    await apiClient.delete(`/payslips/${payslipId}`);
-    return { success: true };
+  static async deletePayslip(_payslipId: string) {
+    return PayrollService.deprecated();
   }
 }
 
@@ -967,12 +959,14 @@ export class TokenRefreshService {
 
 export class LeaveAllocationService {
   static async getEmployeeAllocations(employeeId: string, year?: number, month?: number) {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
     let endpoint = `/leave-allocation/employee/${employeeId}`;
     if (year && month) {
       endpoint += `?year=${year}&month=${month}`;
     }
-    const response = await apiClient.get<any>(endpoint);
-    return response.data;
+    return apiGet(endpoint, false);
   }
 
   static async getOrganizationAllocations(
@@ -981,89 +975,115 @@ export class LeaveAllocationService {
     month?: number | null,
     status?: string
   ) {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
     let endpoint = `/leave-allocation/organization/${orgId}`;
     const params = new URLSearchParams({ limit: '500' });
     if (year) params.append('year', year.toString());
     if (month != null && month > 0) params.append('month', month.toString());
     if (status) params.append('status', status);
     endpoint += `?${params.toString()}`;
-    const response = await apiClient.get<any>(endpoint);
+    const response = await apiGet<unknown>(endpoint, false);
     return extractApiList(response);
   }
 
   static async createAllocation(data: any) {
-    const response = await apiClient.post<any>('/leave-allocation', data);
-    return response;
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; message?: string; data?: unknown }>(
+      '/leave-allocation',
+      data
+    );
   }
 
   static async updateAllocation(allocationId: string, data: any) {
-    const response = await apiClient.patch<any>(`/leave-allocation/${allocationId}`, data);
-    return response.data;
+    const { apiPatch } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPatch<{ success?: boolean; message?: string; data?: unknown }>(
+      `/leave-allocation/${allocationId}`,
+      data
+    );
   }
 
   static async deleteAllocation(allocationId: string) {
-    const response = await apiClient.delete<any>(`/leave-allocation/${allocationId}`);
-    return response.data;
+    const { apiDelete } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiDelete<{ success?: boolean; message?: string }>(
+      `/leave-allocation/${allocationId}`
+    );
   }
 
   static async getEmployeeBalance(employeeId: string, year?: number, month?: number) {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
     let endpoint = `/leave-allocation/balance/${employeeId}`;
     const params = new URLSearchParams();
     if (year) params.append('year', year.toString());
     if (month) params.append('month', month.toString());
-    
+
     if (params.toString()) {
       endpoint += `?${params.toString()}`;
     }
-    
-    const response = await apiClient.get<any>(endpoint);
-    // Return the entire response so frontend can access response.success and response.data
-    return response;
+
+    return apiGet<{ success?: boolean; data?: unknown }>(endpoint, false);
   }
 
   static async deductLeaves(employeeId: string, leaveType: string, days: number, leaveRequestId?: string) {
-    const response = await apiClient.post<any>('/leave-allocation/deduct', {
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; data?: unknown }>('/leave-allocation/deduct', {
       employeeId,
       leaveType,
       days,
-      leaveRequestId
+      leaveRequestId,
     });
-    return response.data;
   }
 
   static async restoreLeaves(employeeId: string, leaveType: string, days: number, leaveRequestId?: string) {
-    const response = await apiClient.post<any>('/leave-allocation/restore', {
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; data?: unknown }>('/leave-allocation/restore', {
       employeeId,
       leaveType,
       days,
-      leaveRequestId
+      leaveRequestId,
     });
-    return response.data;
   }
 
   static async bulkAllocate(orgId: string, year: number, month: number, employees: string[], allocations: any, allocatedBy: string) {
-    const response = await apiClient.post<any>('/leave-allocation/bulk-allocate', {
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; data?: unknown }>('/leave-allocation/bulk-allocate', {
       orgId,
       year,
       month,
       employees,
       allocations,
-      allocatedBy
+      allocatedBy,
     });
-    return response.data;
   }
 
   static async yearlyAllocate(orgId: string, year: number, employees: string[], casualLeave: number, earnedLeave: number, medicalLeave: number, allocatedBy: string) {
-    const response = await apiClient.post<any>('/leave-allocation/yearly-allocate', {
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; data?: unknown }>('/leave-allocation/yearly-allocate', {
       orgId,
       year,
       employees,
       casualLeave,
       earnedLeave,
       medicalLeave,
-      allocatedBy
+      allocatedBy,
     });
-    return response;
   }
 }
 

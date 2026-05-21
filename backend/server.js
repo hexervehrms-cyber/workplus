@@ -112,6 +112,7 @@ import notificationsRoutes from "./routes/notifications.js";
 import tasksRoutes from "./routes/tasks.js";
 import organizationsRoutes from "./routes/organizations.js";
 import assetsRoutes from "./routes/assets.js";
+import employeeDashboardRoutes from "./routes/employee-dashboard.js";
 import authRoutes from "./routes/auth.js";
 import { handleAuthRefresh } from "./handlers/authRefreshHandler.js";
 
@@ -813,6 +814,7 @@ app.post("/api/auth/create-admin", asyncHandler(async (req, res) => {
 app.use("/api/dashboard", ...authedTenant, dashboardRoutes);
 app.use("/api/dashboard", ...authedTenant, dashboardSuperAdminRoutes);
 app.use("/api/dashboard", ...authedTenant, dashboardEmployeeRoutes);
+app.use("/api/employee-dashboard", ...authedTenant, employeeDashboardRoutes);
 
 // ============================================================================
 // PUBLIC CLEANUP ENDPOINTS (for testing/development)

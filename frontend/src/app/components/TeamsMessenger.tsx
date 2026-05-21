@@ -1021,11 +1021,10 @@ export default function TeamsMessenger() {
       toast.error('Select at least one employee');
       return;
     }
-    const invalidIds = [...createGroupMemberIds].filter(
-      (id) => !/^[a-f\d]{24}$/i.test(String(id))
-    );
+    const memberIds = [...createGroupMemberIds].map(String);
+    const invalidIds = memberIds.filter((id) => !/^[a-f\d]{24}$/i.test(id));
     if (invalidIds.length > 0) {
-      toast.error('Invalid contact selected. Refresh the list and try again.');
+      toast.error('Invalid contact selected. Refresh the contact list and try again.');
       return;
     }
     setCreatingGroup(true);
@@ -1038,7 +1037,7 @@ export default function TeamsMessenger() {
           name: string;
           memberIds: string[];
         };
-      }>('/chat/groups', { name, memberIds: [...createGroupMemberIds] });
+      }>('/chat/groups', { name, memberIds });
       if (!res?.success || !res.data) {
         throw new Error(res?.message || 'Could not create group');
       }

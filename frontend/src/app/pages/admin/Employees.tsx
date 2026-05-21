@@ -13,6 +13,7 @@ import {
   FileText, Loader2, Briefcase, Calendar, DollarSign, IndianRupee, Link as LinkIcon, Key
 } from 'lucide-react';
 import { EmployeeService } from '../../utils/api';
+import { useAuth } from '../../context/AuthContext';
 import { useDepartments } from '../../hooks/useDepartments';
 import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
@@ -73,6 +74,7 @@ const PREDEFINED_ROLES = [
 ];
 
 export default function Employees() {
+  const { user } = useAuth();
   const mounted = useIsMounted();
   const navigate = useNavigate();
   const { formatCurrency, selectedCurrency } = useCurrency();
@@ -144,7 +146,15 @@ export default function Employees() {
   const fetchEmployees = async () => {
     try {
       setLoading(true);
-      const data = await EmployeeService.getAllEmployees();
+      const data = await EmployeeService.getAllEmployees(
+        user
+          ? {
+              role: user.role,
+              orgId: user.orgId,
+              tenantId: user.tenantId,
+            }
+          : undefined
+      );
       if (mounted.current) setEmployees(data);
     } catch (err: unknown) {
       if (mounted.current) {

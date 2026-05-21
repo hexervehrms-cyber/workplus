@@ -196,7 +196,7 @@ const queueHrAttendanceEmail = (type, payload) => {
  * Get today's attendance for the current user
  * Returns: { attendance, liveStatus }
  */
-router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), asyncHandler(async (req, res) => {
+router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employee', 'accountant'), asyncHandler(async (req, res) => {
   const userRole = req.user.role;
   const currentUserId = req.user.userId;
   const userOrgId = req.user.orgId;
@@ -366,7 +366,7 @@ router.get('/activity-logs', authorize('super_admin', 'admin', 'hr', 'manager'),
  * GET /api/attendance/activity-logs/me
  * Full attendance activity for the authenticated employee
  */
-router.get('/activity-logs/me', authorize('employee'), asyncHandler(async (req, res) => {
+router.get('/activity-logs/me', authorize('employee', 'manager', 'accountant'), asyncHandler(async (req, res) => {
   const result = await getMergedAttendanceActivityLogs(req, {
     userId: req.user.userId,
   });
@@ -380,7 +380,7 @@ router.get('/activity-logs/me', authorize('employee'), asyncHandler(async (req, 
  * POST /api/attendance/check-in
  * Check in for the day
  */
-router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'employee', 'accountant'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { userId, employeeId, employeeName, orgId, location, notes } = req.body;
   const authUserId = req.user?.userId;
   const authOrgId = req.user?.orgId;
@@ -692,7 +692,7 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
  * POST /api/attendance/check-out
  * Check out for the day
  */
-router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'employee', 'accountant'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { userId, employeeId, employeeName, orgId, location, notes } = req.body;
   const authUserId = req.user?.userId;
   const authOrgId = req.user?.orgId;
@@ -927,7 +927,7 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
  * GET /api/attendance
  * List all attendance records with pagination
  */
-router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), asyncHandler(async (req, res) => {
+router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee', 'accountant'), asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, orgId, userId, startDate, endDate } = req.query;
   const userOrgId = req.user.orgId;
   const currentUserId = req.user.userId;
@@ -1011,7 +1011,7 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
  * Start a break - ATOMIC OPERATION
  * Uses MongoDB atomic operations to prevent race conditions
  */
-router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', 'employee', 'accountant'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, breakType = 'regular', notes, orgId, employeeName, idempotencyKey } = req.body;
   const currentUserId = req.user.userId;
   const authOrgId = req.user.orgId;
@@ -1210,7 +1210,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
  * End a break - ATOMIC OPERATION
  * Uses MongoDB atomic operations to prevent race conditions
  */
-router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'employee', 'accountant'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { employeeId, notes, orgId, employeeName, idempotencyKey } = req.body;
   const currentUserId = req.user.userId;
   const authOrgId = req.user.orgId;

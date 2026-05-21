@@ -64,11 +64,12 @@ export default function EmployeeSettings() {
   });
 
   const fetchEmployeeData = useCallback(async () => {
-    if (!user?.id) return;
+    const authUserId = user?.userId || user?.id;
+    if (!authUserId) return;
 
     try {
       setLoading(true);
-      const response = await apiClient.get<Record<string, unknown>>(`/employees/user/${user.id}`);
+      const response = await apiClient.get<Record<string, unknown>>(`/employees/user/${authUserId}`);
       const payload = response.data;
       if (payload && typeof payload === 'object') {
         const mapped = mapEmployeeRecord(payload, user.email);
@@ -84,7 +85,7 @@ export default function EmployeeSettings() {
     } finally {
       setLoading(false);
     }
-  }, [user?.id, user?.email]);
+  }, [user?.userId, user?.id, user?.email]);
 
   useEffect(() => {
     void fetchEmployeeData();

@@ -11,6 +11,14 @@ export default function Analytics() {
         <p className="text-muted-foreground">System-wide analytics and insights</p>
       </div>
 
+      <Card className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10">
+        <p className="text-sm text-amber-900 dark:text-amber-100">
+          <span className="font-semibold">Coming soon.</span> Live analytics from your
+          organizations are not connected yet. The numbers and charts below are placeholders
+          for layout preview only.
+        </p>
+      </Card>
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <Card className="p-6 rounded-xl">
           <div className="flex items-center gap-4">

@@ -508,8 +508,10 @@ export default function Leave() {
       }
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : 'Failed to submit leave request';
-      toast.error(message);
+        error instanceof Error
+          ? error.message
+          : 'Failed to submit leave request';
+      toast.error(message.includes('Organization') ? message : message || 'Failed to submit leave request');
     } finally {
       setSubmittingLeave(false);
     }

@@ -35,13 +35,14 @@ interface Notification {
 function profilePathForRole(role: string | undefined): string {
   switch (role) {
     case 'admin':
+    case 'hr':
       return '/admin/settings';
     case 'super_admin':
-      return '/settings';
+      return '/super-admin';
     case 'employee':
-    case 'hr':
     case 'manager':
     case 'accountant':
+      return '/employee/profile';
     default:
       return '/employee/profile';
   }
@@ -134,18 +135,34 @@ export function Navbar() {
         case 'leave_request':
         case 'leave_approved':
         case 'leave_rejected':
-          navigate(user?.role === 'employee' ? '/employee/leave' : '/admin/leaves');
+          navigate(
+            user?.role === 'employee' || user?.role === 'manager' || user?.role === 'accountant'
+              ? '/employee/leave'
+              : '/admin/leaves'
+          );
           break;
         case 'expense_submitted':
         case 'expense_approved':
         case 'expense_rejected':
-          navigate(user?.role === 'employee' ? '/employee/expenses' : '/admin/expenses');
+          navigate(
+            user?.role === 'employee' || user?.role === 'manager' || user?.role === 'accountant'
+              ? '/employee/expenses'
+              : '/admin/expenses'
+          );
           break;
         case 'payroll_generated':
-          navigate(user?.role === 'employee' ? '/employee/payroll' : '/admin/payroll');
+          navigate(
+            user?.role === 'employee' || user?.role === 'manager' || user?.role === 'accountant'
+              ? '/employee/payroll'
+              : '/admin/payroll'
+          );
           break;
         case 'attendance_reminder':
-          navigate('/employee/attendance');
+          navigate(
+            user?.role === 'employee' || user?.role === 'manager' || user?.role === 'accountant'
+              ? '/employee/attendance'
+              : '/admin/attendance'
+          );
           break;
         default:
           break;
@@ -330,9 +347,17 @@ export function Navbar() {
                     <Button 
                       variant="ghost" 
                       className="w-full text-sm"
-                      onClick={() => navigate('/notifications')}
+                      onClick={() => {
+                        const home =
+                          user?.role === 'super_admin'
+                            ? '/super-admin'
+                            : user?.role === 'admin' || user?.role === 'hr'
+                              ? '/admin'
+                              : '/employee';
+                        navigate(home);
+                      }}
                     >
-                      View all notifications
+                      Back to dashboard
                     </Button>
                   </div>
                 </>

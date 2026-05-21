@@ -4,6 +4,10 @@
  */
 
 import express from "express";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, authorize } from "../middleware/auth.js";
 import SalaryStructure from "../models/SalaryStructure.js";
@@ -26,6 +30,35 @@ import {
 } from "../utils/orgScopeHelpers.js";
 import { buildSalarySlipHtml } from "../utils/salarySlipHtml.js";
 import Organization from "../models/Organization.js";
+import { findEmployeeForSelfService } from "../utils/employeeSelfService.js";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const payslipUploadDir = path.join(__dirname, "..", "uploads", "payslips");
+const payslipUpload = multer({
+  storage: multer.diskStorage({
+    destination(_req, _file, cb) {
+      if (!fs.existsSync(payslipUploadDir)) {
+        fs.mkdirSync(payslipUploadDir, { recursive: true });
+      }
+      cb(null, payslipUploadDir);
+    },
+    filename(_req, file, cb) {
+      const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+      cb(null, `payslip-${unique}${path.extname(file.originalname) || ".pdf"}`);
+    },
+  }),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter(_req, file, cb) {
+    const allowed = [
+      "application/pdf",
+      "image/jpeg",
+      "image/png",
+      "text/csv",
+      "application/vnd.ms-excel",
+    ];
+    cb(null, allowed.includes(file.mimetype) || file.originalname.endsWith(".csv"));
+  },
+});
 
 const router = express.Router();
 
@@ -947,6 +980,21 @@ router.get(
       if (!orgAccess.ok) {
         return sendError(res, orgAccess.message, orgAccess.status, orgAccess.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
       }
+
+      if (slip.source === "employee_upload" && slip.uploadFilePath && fs.existsSync(slip.uploadFilePath)) {
+        const mime = slip.uploadMimeType || "application/octet-stream";
+        res.setHeader("Content-Type", mime);
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${slip.uploadFileName || `payslip-${slip.month}-${slip.year}`}"`
+        );
+        await SalarySlip.findByIdAndUpdate(slipId, {
+          downloadedAt: new Date(),
+          $inc: { downloadCount: 1 },
+        });
+        return res.sendFile(path.resolve(slip.uploadFilePath));
+      }
+
       let organization = null;
       const orgId = slip.orgId || employeeDoc.orgId;
       if (orgId) {
@@ -1096,6 +1144,148 @@ router.delete(
       });
       return sendError(res, "Failed to delete salary slip", 500, "DELETE_ERROR");
     }
+  })
+);
+
+/**
+ * GET /api/salary/slip/upload/template
+ * CSV template for employee payslip metadata import
+ */
+router.get(
+  "/slip/upload/template",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const csv =
+      "month,year,notes\n" +
+      `${new Date().getMonth() + 1},${new Date().getFullYear()},Optional note for HR\n`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="payslip-upload-template.csv"');
+    res.send(csv);
+  })
+);
+
+/**
+ * GET /api/salary/slip/export/:employeeId
+ * Export employee salary slip list as CSV
+ */
+router.get(
+  "/slip/export/:employeeId",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { employeeId } = req.params;
+    const access = await assertCanAccessEmployeeSalaryData(req, employeeId);
+    if (!access.ok) {
+      return sendError(res, access.message, access.status, "FORBIDDEN");
+    }
+    const slips = await SalarySlip.find({ employeeId })
+      .sort({ year: -1, month: -1 })
+      .lean();
+    const header = "month,year,status,source,grossEarnings,netSalary,uploadFileName\n";
+    const rows = slips
+      .map((s) =>
+        [
+          s.month,
+          s.year,
+          s.status,
+          s.source || "generated",
+          s.grossEarnings ?? 0,
+          s.netSalary ?? 0,
+          s.uploadFileName || "",
+        ].join(",")
+      )
+      .join("\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="salary-slips-${employeeId}.csv"`
+    );
+    res.send(header + rows);
+  })
+);
+
+/**
+ * POST /api/salary/slip/employee-upload
+ * Employee uploads payslip file (PDF/image) for HR approval
+ */
+router.post(
+  "/slip/employee-upload",
+  authenticate,
+  payslipUpload.single("file"),
+  asyncHandler(async (req, res) => {
+    const month = parseInt(req.body?.month, 10);
+    const year = parseInt(req.body?.year, 10);
+    const notes = String(req.body?.notes || "").trim();
+
+    if (!req.file) {
+      return sendError(res, "Payslip file is required", 400, "VALIDATION_ERROR");
+    }
+    if (!month || month < 1 || month > 12 || !year) {
+      return sendError(res, "Valid month and year are required", 400, "VALIDATION_ERROR");
+    }
+
+    const orgId = userOrgIdFromReq(req) || req.validatedOrgId;
+    const emp = await findEmployeeForSelfService(req.user.userId, orgId, {
+      allowCrossOrgFallback: true,
+    });
+    if (!emp) {
+      return sendError(res, "Employee profile not found", 404, "NOT_FOUND");
+    }
+
+    const existing = await SalarySlip.findOne({
+      employeeId: emp._id,
+      month,
+      year,
+    });
+    if (existing && ["approved", "paid", "processed"].includes(existing.status)) {
+      return sendError(
+        res,
+        "A payslip for this period is already approved. Contact HR to replace it.",
+        400,
+        "VALIDATION_ERROR"
+      );
+    }
+
+    const payload = {
+      employeeId: emp._id,
+      userId: req.user.userId,
+      orgId: String(emp.orgId || orgId),
+      month,
+      year,
+      status: "pending_approval",
+      source: "employee_upload",
+      uploadFileName: req.file.originalname,
+      uploadMimeType: req.file.mimetype,
+      uploadFilePath: req.file.path,
+      employeeNotes: notes,
+      grossEarnings: 0,
+      totalDeductions: 0,
+      netSalary: 0,
+      earnings: {},
+      deductions: {},
+      attendanceData: {},
+      createdBy: req.user.userId,
+    };
+
+    let slip;
+    if (existing) {
+      if (existing.uploadFilePath && fs.existsSync(existing.uploadFilePath)) {
+        try {
+          fs.unlinkSync(existing.uploadFilePath);
+        } catch {
+          /* ignore */
+        }
+      }
+      slip = await SalarySlip.findByIdAndUpdate(existing._id, payload, { new: true });
+    } else {
+      slip = await SalarySlip.create(payload);
+    }
+
+    return sendSuccess(
+      res,
+      slip,
+      "Payslip uploaded and sent to admin for approval",
+      existing ? 200 : 201
+    );
   })
 );
 

@@ -39,6 +39,14 @@ import {
 } from '../utils/leaveAccessHelpers.js';
 import { userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
 import { findEmployeeForSelfService } from '../utils/employeeSelfService.js';
+import { assertEmployeeSelfOrPrivileged } from '../utils/employeeAccessHelpers.js';
+import {
+  toObjectIdIfValid,
+  userIdMatchFilter,
+  isSelfServiceUser,
+} from '../utils/mongoIdHelpers.js';
+
+const SELF_SERVICE_LEAVE_ROLES = ['employee', 'manager', 'accountant'];
 
 const router = express.Router();
 const leaveApprovers = authorize(...LEAVE_APPROVER_ROLES);
@@ -65,9 +73,11 @@ router.get('/', asyncHandler(async (req, res) => {
   }
 
   const query = { orgId: String(tenantOrg) };
-  
-  if (userId) {
-    query.userId = userId;
+
+  if (SELF_SERVICE_LEAVE_ROLES.includes(req.user.role)) {
+    Object.assign(query, userIdMatchFilter(req.user.userId));
+  } else if (userId) {
+    Object.assign(query, userIdMatchFilter(userId));
   }
   
   if (status) {
@@ -139,6 +149,23 @@ router.delete('/:id', asyncHandler(async (req, res) => {
     });
   }
 
+  const privileged = LEAVE_APPROVER_ROLES.includes(req.user.role);
+  if (!privileged) {
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    if (
+      !emp ||
+      String(leaveRequest.userId) !== String(req.user.userId) ||
+      String(leaveRequest.employeeId) !== String(emp._id)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only delete your own pending leave requests',
+      });
+    }
+  }
+
   await LeaveRequest.findByIdAndDelete(id);
 
   // Emit real-time updates
@@ -199,6 +226,23 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       success: false,
       message: 'Only pending leave requests can be edited'
     });
+  }
+
+  const privileged = LEAVE_APPROVER_ROLES.includes(req.user.role);
+  if (!privileged) {
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    if (
+      !emp ||
+      !isSelfServiceUser(req, leaveRequest.userId) ||
+      String(leaveRequest.employeeId) !== String(emp._id)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only edit your own pending leave requests',
+      });
+    }
   }
 
   let resolvedHourly =
@@ -782,8 +826,8 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
   }
 
   if (
-    req.user.role === 'employee' &&
-    String(req.user.userId) !== String(userId)
+    ['employee', 'manager', 'accountant'].includes(req.user.role) &&
+    !isSelfServiceUser(req, userId)
   ) {
     return res.status(403).json({
       success: false,
@@ -791,7 +835,7 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
     });
   }
 
-  const query = { userId, orgId: String(tenantOrg) };
+  const query = { ...userIdMatchFilter(userId), orgId: String(tenantOrg) };
   
   if (status) {
     query.status = status;
@@ -815,10 +859,17 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
  * GET /api/leave-requests/stats/summary
  * Get leave request statistics
  */
-router.get('/stats/summary', asyncHandler(async (req, res) => {
+router.get('/stats/summary', leaveApprovers, asyncHandler(async (req, res) => {
   const { orgId, startDate, endDate } = req.query;
+  const scoped = resolveQueryOrgId(req, orgId);
+  if (!scoped) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context is required',
+    });
+  }
 
-  const query = { orgId: resolveQueryOrgId(req, orgId) };
+  const query = { orgId: String(scoped) };
   
   if (startDate && endDate) {
     query.startDate = {
@@ -875,6 +926,23 @@ router.get('/:id', asyncHandler(async (req, res) => {
   }
 
   if (denyIfCrossOrg(req, res, leaveRequest.orgId)) return;
+
+  if (SELF_SERVICE_LEAVE_ROLES.includes(req.user.role)) {
+    const tenantOrg = scopedOrgId(req);
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    if (
+      !emp ||
+      !isSelfServiceUser(req, leaveRequest.userId) ||
+      String(leaveRequest.employeeId) !== String(emp._id)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden',
+      });
+    }
+  }
 
   res.json({
     success: true,
@@ -959,7 +1027,7 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
       });
     }
     if (
-      String(userId) !== String(req.user.userId) ||
+      !isSelfServiceUser(req, userId) ||
       String(employeeId) !== String(emp._id)
     ) {
       return res.status(403).json({
@@ -1194,10 +1262,13 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     });
   }
 
+  const userObjectId = toObjectIdIfValid(userId) || userId;
+  const employeeObjectId = toObjectIdIfValid(employeeId) || employeeId;
+
   // Create leave request
   const leaveRequest = await LeaveRequest.create({
-    userId,
-    employeeId,
+    userId: userObjectId,
+    employeeId: employeeObjectId,
     employeeName: employeeName,
     type: leaveType,
     startDate: start,
@@ -1473,6 +1544,14 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
   const { employeeId } = req.params;
   const { asOfDate } = req.query;
 
+  const balanceAccess = await assertEmployeeSelfOrPrivileged(req, employeeId);
+  if (!balanceAccess.ok) {
+    return res.status(balanceAccess.status).json({
+      success: false,
+      message: balanceAccess.message,
+    });
+  }
+
   if (!global.leavePolicyEngine) {
     return res.status(503).json({
       success: false,
@@ -1496,7 +1575,40 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
  * Validate leave request before submission
  */
 router.post('/validate', asyncHandler(async (req, res) => {
-  const leaveRequestData = req.body;
+  const leaveRequestData = req.body || {};
+  const { employeeId, userId } = leaveRequestData;
+
+  if (SELF_SERVICE_LEAVE_ROLES.includes(req.user.role)) {
+    if (!employeeId) {
+      return res.status(400).json({
+        success: false,
+        message: 'employeeId is required for validation',
+      });
+    }
+    const access = await assertEmployeeSelfOrPrivileged(req, employeeId);
+    if (!access.ok) {
+      return res.status(access.status).json({
+        success: false,
+        message: access.message,
+      });
+    }
+    if (userId && !isSelfServiceUser(req, userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot validate leave for another user',
+      });
+    }
+    const tenantOrg = scopedOrgId(req);
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    if (!emp || String(employeeId) !== String(emp._id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot validate leave for another employee',
+      });
+    }
+  }
 
   if (!global.leavePolicyEngine) {
     return res.status(503).json({
@@ -1519,13 +1631,44 @@ router.post('/validate', asyncHandler(async (req, res) => {
  */
 router.patch('/:id/cancel', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { cancelledBy, reason } = req.body;
+  const { reason } = req.body;
+  const cancelledBy = req.user.userId;
 
-  if (!cancelledBy || !reason) {
+  if (!reason) {
     return res.status(400).json({
       success: false,
-      message: 'cancelledBy and reason are required'
+      message: 'reason is required'
     });
+  }
+
+  const tenantOrg = scopedOrgId(req);
+  const leaveRequest = await LeaveRequest.findOne({
+    _id: id,
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
+  }).lean();
+
+  if (!leaveRequest) {
+    return res.status(404).json({
+      success: false,
+      message: 'Leave request not found',
+    });
+  }
+
+  const privileged = LEAVE_APPROVER_ROLES.includes(req.user.role);
+  if (!privileged) {
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    if (
+      !emp ||
+      !isSelfServiceUser(req, leaveRequest.userId) ||
+      String(leaveRequest.employeeId) !== String(emp._id)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only cancel your own leave requests',
+      });
+    }
   }
 
   if (!global.leavePolicyEngine) {
@@ -1548,15 +1691,18 @@ router.patch('/:id/cancel', asyncHandler(async (req, res) => {
  * GET /api/leave-requests/analytics
  * Get leave analytics
  */
-router.get('/analytics', asyncHandler(async (req, res) => {
-  const { orgId, timeframe = 30 } = req.query;
+router.get('/analytics', leaveApprovers, asyncHandler(async (req, res) => {
+  const { timeframe = 30 } = req.query;
+  const orgId = resolveQueryOrgId(req, req.query.orgId);
 
   if (!orgId) {
     return res.status(400).json({
       success: false,
-      message: 'orgId is required'
+      message: 'Organization context is required'
     });
   }
+
+  if (denyIfCrossOrg(req, res, orgId)) return;
 
   if (!global.leavePolicyEngine) {
     return res.status(503).json({
@@ -1567,7 +1713,7 @@ router.get('/analytics', asyncHandler(async (req, res) => {
 
   const analytics = await global.leavePolicyEngine.getLeaveAnalytics(
     orgId,
-    parseInt(timeframe)
+    parseInt(timeframe, 10)
   );
 
   res.json({
@@ -1580,7 +1726,7 @@ router.get('/analytics', asyncHandler(async (req, res) => {
  * GET /api/leave-requests/system/stats
  * Get leave system statistics
  */
-router.get('/system/stats', asyncHandler(async (req, res) => {
+router.get('/system/stats', leaveApprovers, asyncHandler(async (req, res) => {
   if (!global.leavePolicyEngine) {
     return res.status(503).json({
       success: false,

@@ -77,13 +77,14 @@ export default function Calendar() {
   // Fetch leave requests and holidays
   useEffect(() => {
     const fetchData = async () => {
-      if (!user?.id) return;
+      const authUserId = user?.userId || user?.id;
+      if (!authUserId) return;
       
       try {
         setLoading(true);
         
         // Fetch leave requests
-        const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
+        const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
         if (leaveResponse.success && leaveResponse.data) {
           setLeaveHistory(leaveResponse.data);
         }
@@ -277,9 +278,9 @@ export default function Calendar() {
         toast.error('Employee profile not found. Please contact HR.');
         return;
       }
-      const orgId = user.orgId || user.tenantId;
+      const orgId = resolveAuthOrgId(user);
       if (!orgId) {
-        toast.error('Organization not set on your account.');
+        toast.error('Organization not set on your account. Please sign out and sign in again.');
         return;
       }
 
@@ -347,8 +348,11 @@ export default function Calendar() {
       setShowHolidayForm(false);
       setHolidayForm({ date: '', name: '', description: '' });
 
+      const holidayYear = holidayForm.date
+        ? new Date(holidayForm.date).getFullYear()
+        : new Date().getFullYear();
       const holidayData = await apiGet<{ success?: boolean; data?: unknown[] }>(
-        'holidays',
+        appendOrgIdParam(`holidays?year=${holidayYear}&limit=500`, user, orgId),
         false
       );
       if (holidayData?.success && Array.isArray(holidayData.data)) {

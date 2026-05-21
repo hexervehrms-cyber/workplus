@@ -28,7 +28,8 @@ import {
   ChevronDown,
   Phone,
   Zap,
-  ChevronLeft
+  ChevronLeft,
+  Package
 } from 'lucide-react';
 
 interface NavItem {
@@ -52,25 +53,38 @@ const navigationItems: NavItem[] = [
   { icon: FileText, label: 'Audit Logs', path: '/super-admin/audit', roles: ['super_admin'] },
   { icon: MessageSquare, label: 'Client Chat', path: '/super-admin/chat', roles: ['super_admin'] },
   
-  // Admin
-  { icon: LayoutDashboard, label: 'Dashboard', path: '/admin', roles: ['admin'] },
-  { icon: Users, label: 'Employees', path: '/admin/employees', roles: ['admin'] },
+  // Admin & HR
+  { icon: LayoutDashboard, label: 'Dashboard', path: '/admin', roles: ['admin', 'hr'] },
+  { icon: Users, label: 'Employees', path: '/admin/employees', roles: ['admin', 'hr'] },
+  { icon: Users, label: 'Invites', path: '/admin/invites', roles: ['admin', 'hr'] },
+  { icon: Briefcase, label: 'Onboarding', path: '/admin/employee-onboarding', roles: ['admin', 'hr'] },
+  { icon: Zap, label: 'Bulk Operations', path: '/admin/bulk-operations', roles: ['admin', 'hr'] },
   { icon: Users, label: 'Admin Management', path: '/admin/admin-management', roles: ['admin'] },
-  { icon: FolderOpen, label: 'Company Docs', path: '/admin/company-docs', roles: ['admin'] },
+  { icon: FolderOpen, label: 'Company Docs', path: '/admin/company-docs', roles: ['admin', 'hr'] },
   { icon: Building2, label: 'Departments', path: '/admin/departments', roles: ['admin', 'hr'] },
   { icon: ShieldCheck, label: 'Roles', path: '/admin/roles', roles: ['admin'] },
   { 
     icon: Calendar, 
     label: 'Leave Management', 
     path: '/admin/leaves', 
-    roles: ['admin'],
+    roles: ['admin', 'hr'],
     children: [
-      { icon: CalendarDays, label: 'Holiday Calendar', path: '/admin/holiday-calendar', roles: ['admin'] },
-      { icon: FileText, label: 'Leave Requests', path: '/admin/leaves', roles: ['admin'] },
-      { icon: Zap, label: 'Leave Allocation', path: '/admin/leave-allocation', roles: ['admin'] }
+      { icon: CalendarDays, label: 'Holiday Calendar', path: '/admin/holiday-calendar', roles: ['admin', 'hr'] },
+      { icon: FileText, label: 'Leave Requests', path: '/admin/leaves', roles: ['admin', 'hr'] },
+      { icon: Zap, label: 'Leave Allocation', path: '/admin/leave-allocation', roles: ['admin', 'hr'] },
+      { icon: Settings, label: 'Leave Settings', path: '/admin/leave-settings', roles: ['admin', 'hr'] },
     ]
   },
-  { icon: Clock, label: 'Attendance', path: '/admin/attendance', roles: ['admin'] },
+  { 
+    icon: Clock, 
+    label: 'Attendance', 
+    path: '/admin/attendance', 
+    roles: ['admin', 'hr'],
+    children: [
+      { icon: CalendarDays, label: 'Calendar View', path: '/admin/attendance-calendar', roles: ['admin', 'hr'] },
+      { icon: FileText, label: 'History', path: '/admin/attendance-history', roles: ['admin', 'hr'] },
+    ]
+  },
   { 
     icon: Zap, 
     label: 'Sales', 
@@ -83,26 +97,40 @@ const navigationItems: NavItem[] = [
       { icon: Phone, label: 'Calls', path: '/admin/sales/calls', roles: ['admin'] }
     ]
   },
-  { icon: Receipt, label: 'Expenses', path: '/admin/expenses', roles: ['admin'] },
-  { icon: DollarSign, label: 'Payroll', path: '/admin/payroll', roles: ['admin'] },
-  { icon: Megaphone, label: 'Announcements', path: '/admin/announcements', roles: ['admin'] },
-  { icon: MessageSquare, label: 'Team Chat', path: '/admin/chat', roles: ['admin'] },
+  { icon: Receipt, label: 'Expenses', path: '/admin/expenses', roles: ['admin', 'hr'] },
+  { 
+    icon: DollarSign, 
+    label: 'Payroll', 
+    path: '/admin/payroll', 
+    roles: ['admin', 'hr'],
+    children: [
+      { icon: DollarSign, label: 'Salary & Slips', path: '/admin/payroll', roles: ['admin', 'hr'] },
+      { icon: Zap, label: 'Payroll Runs', path: '/admin/payroll-runs', roles: ['admin', 'hr'] },
+      { icon: Briefcase, label: 'Salary Structure', path: '/admin/salary-structure', roles: ['admin', 'hr'] },
+      { icon: Calendar, label: 'Salary Cycle', path: '/admin/salary-cycle', roles: ['admin', 'hr'] },
+    ]
+  },
+  { icon: Package, label: 'Assets', path: '/admin/assets', roles: ['admin', 'hr'] },
+  { icon: Megaphone, label: 'Announcements', path: '/admin/announcements', roles: ['admin', 'hr'] },
+  { icon: MessageSquare, label: 'Team Chat', path: '/admin/chat', roles: ['admin', 'hr'] },
   
   // Employee
-  { icon: LayoutDashboard, label: 'Dashboard', path: '/employee', roles: ['employee', 'hr', 'manager', 'accountant'] },
-  { icon: UserCircle, label: 'My Profile', path: '/employee/profile', roles: ['employee', 'hr', 'manager', 'accountant'] },
-  { icon: FolderOpen, label: 'Company Docs', path: '/employee/company-docs', roles: ['employee', 'hr', 'manager', 'accountant'] },
+  { icon: LayoutDashboard, label: 'Dashboard', path: '/employee', roles: ['employee', 'manager', 'accountant'] },
+  { icon: UserCircle, label: 'My Profile', path: '/employee/profile', roles: ['employee', 'manager', 'accountant'] },
+  { icon: FolderOpen, label: 'Company Docs', path: '/employee/company-docs', roles: ['employee', 'manager', 'accountant'] },
   { 
     icon: Calendar, 
     label: 'Leave', 
     path: '/employee/leave', 
-    roles: ['employee', 'hr', 'manager', 'accountant']
+    roles: ['employee', 'manager', 'accountant']
   },
-  { icon: Clock, label: 'Attendance', path: '/employee/attendance', roles: ['employee', 'hr', 'manager', 'accountant'] },
-  { icon: TrendingUp, label: 'Performance', path: '/employee/performance', roles: ['employee', 'hr', 'manager', 'accountant'] },
-  { icon: DollarSign, label: 'Payroll', path: '/employee/payroll', roles: ['employee', 'hr', 'manager', 'accountant'] },
-  { icon: Receipt, label: 'Expenses', path: '/employee/expenses', roles: ['employee', 'hr', 'manager', 'accountant'] },
-  { icon: MessageSquare, label: 'Chat', path: '/employee/chat', roles: ['employee', 'hr', 'manager', 'accountant'] },
+  { icon: CalendarDays, label: 'Calendar', path: '/employee/calendar', roles: ['employee', 'manager', 'accountant'] },
+  { icon: Clock, label: 'Attendance', path: '/employee/attendance', roles: ['employee', 'manager', 'accountant'] },
+  { icon: TrendingUp, label: 'Performance', path: '/employee/performance', roles: ['employee', 'manager', 'accountant'] },
+  { icon: DollarSign, label: 'Payroll', path: '/employee/payroll', roles: ['employee', 'manager', 'accountant'] },
+  { icon: Receipt, label: 'Expenses', path: '/employee/expenses', roles: ['employee', 'manager', 'accountant'] },
+  { icon: Package, label: 'My Assets', path: '/employee/assets', roles: ['employee', 'manager', 'accountant'] },
+  { icon: MessageSquare, label: 'Chat', path: '/employee/chat', roles: ['employee', 'manager', 'accountant'] },
 ];
 
 export function Sidebar() {
@@ -139,7 +167,7 @@ export function Sidebar() {
             e.preventDefault();
             if (user?.role === 'super_admin') {
               navigate('/super-admin');
-            } else if (user?.role === 'admin') {
+            } else if (user?.role === 'admin' || user?.role === 'hr') {
               navigate('/admin');
             } else {
               navigate('/employee');
@@ -153,8 +181,13 @@ export function Sidebar() {
             <div>
               <h1 className="text-xl font-bold text-foreground">WorkPlus Pro</h1>
               <p className="text-xs text-muted-foreground">
-                {user?.role === 'super_admin' ? 'Super Admin' : 
-                 user?.role === 'admin' ? 'Admin Panel' : 'Employee Portal'}
+                {user?.role === 'super_admin'
+                  ? 'Super Admin'
+                  : user?.role === 'admin'
+                    ? 'Admin Panel'
+                    : user?.role === 'hr'
+                      ? 'HR Panel'
+                      : 'Employee Portal'}
               </p>
             </div>
           )}
@@ -239,7 +272,7 @@ export function Sidebar() {
       <div className="p-4 border-t border-border space-y-1">
         <button
           onClick={() => {
-            if (user?.role === 'admin') {
+            if (user?.role === 'admin' || user?.role === 'hr') {
               navigate('/admin/settings');
             } else if (user?.role === 'super_admin') {
               navigate('/super-admin');

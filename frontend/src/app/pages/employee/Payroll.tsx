@@ -15,6 +15,7 @@ import {
 } from '../../components/ui/dialog';
 import { toast } from '../../utils/portalToast';
 import { apiFetchBlob, apiGet, apiUpload } from '../../utils/apiHelper';
+import { normalizeSalarySlip } from '../../utils/salarySlip';
 import { useAuth } from '../../context/AuthContext';
 
 interface SalarySlip {
@@ -89,14 +90,21 @@ export default function Payroll() {
         return;
       }
 
-      const employeeData = await apiGet(`/employees/user/${authUserId}`);
+      const employeeData = await apiGet<{
+        success?: boolean;
+        data?: { _id?: string };
+      }>(`/employees/user/${authUserId}`, false);
+      const employeeRecord =
+        (employeeData as { data?: { _id?: string } })?.data?.data ||
+        (employeeData as { data?: { _id?: string } })?.data ||
+        employeeData;
 
-      if (!employeeData.data || !employeeData.data._id) {
+      if (!employeeRecord || !(employeeRecord as { _id?: string })._id) {
         toast.error('Employee record not found');
         return;
       }
 
-      const empId = employeeData.data._id;
+      const empId = (employeeRecord as { _id: string })._id;
       setEmployeeMongoId(empId);
 
       await fetchSalarySlips(empId);
@@ -111,11 +119,12 @@ export default function Payroll() {
     try {
       const data = await apiGet(`/salary/slips/${empId}`, false);
 
-      if (data.data && Array.isArray(data.data)) {
-        setSalarySlips(data.data);
-      } else {
-        setSalarySlips([]);
-      }
+      const rows = Array.isArray(data?.data)
+        ? data.data
+        : Array.isArray(data)
+          ? data
+          : [];
+      setSalarySlips(rows.map((row) => normalizeSalarySlip(row as Record<string, unknown>)) as SalarySlip);
     } catch (error) {
       console.error('Error fetching salary slips:', error);
       setSalarySlips([]);

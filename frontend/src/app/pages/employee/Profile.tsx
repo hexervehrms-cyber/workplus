@@ -208,6 +208,13 @@ export default function Profile() {
       setEducationalDocuments(defaultEducationalDocuments);
     }
   }, [eduDocsStorageKey]);
+
+  useEffect(() => {
+    if (authUser?.userId || authUser?.id) {
+      void fetchEducationalDocuments();
+    }
+  }, [authUser?.userId, authUser?.id]);
+
   const [uploadingEducation, setUploadingEducation] = useState<string | null>(null);
   const [uploadingEducationType, setUploadingEducationType] = useState<'certificate' | 'marksheet' | 'others' | null>(null);
   const [submittingEducation, setSubmittingEducation] = useState(false);
@@ -250,7 +257,11 @@ export default function Profile() {
   const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
   const openDocument = async (doc: Document) => {
-    if (!doc._id) {
+    if (doc._id?.startsWith('temp_') && doc.filePath?.startsWith('data:')) {
+      window.open(doc.filePath, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (!doc._id || doc._id.startsWith('temp_')) {
       toast.error('Document is not available on the server yet');
       return;
     }
@@ -267,7 +278,14 @@ export default function Profile() {
   };
 
   const downloadDocument = async (doc: Document) => {
-    if (!doc._id) {
+    if (doc._id?.startsWith('temp_') && doc.filePath?.startsWith('data:')) {
+      const link = document.createElement('a');
+      link.href = doc.filePath;
+      link.download = doc.fileName || doc.name || 'document';
+      link.click();
+      return;
+    }
+    if (!doc._id || doc._id.startsWith('temp_')) {
       toast.error('Document is not available on the server yet');
       return;
     }
@@ -835,6 +853,24 @@ export default function Profile() {
     return Math.round((filledSlots / totalSlots) * 100);
   };
 
+  const educationLevelToDocType = (
+    educationLevel: string,
+    docType: 'certificate' | 'marksheet' | 'others'
+  ): string => {
+    const levelMap: Record<string, string> = {
+      '10th': '10th',
+      '12th': '12th',
+      Graduation: 'graduation',
+      'Post Graduation': 'post_graduation',
+      Diploma: 'diploma',
+      Certificate: 'certificate',
+      'Drop out': 'drop_out',
+    };
+    const key = levelMap[educationLevel] || educationLevel.toLowerCase().replace(/\s+/g, '_');
+    const suffix = docType === 'others' ? 'certificate' : docType;
+    return `education_${key}_${suffix}`;
+  };
+
   // Handle educational document upload
   const handleEducationDocumentUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
@@ -846,36 +882,58 @@ export default function Profile() {
 
     try {
       setUploadingFile(true);
-      
-      // Convert file to base64 for storage
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      
-      // Simulate upload delay
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Create document object
+      const orgId = resolveAuthOrgId(authUser);
+      if (!orgId) {
+        throw new Error(
+          'Organization context is missing. Please sign out, sign in again, or contact HR.'
+        );
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        throw new Error('File size exceeds 10MB limit');
+      }
+
+      const formData = new FormData();
+      formData.append('document', file);
+      formData.append('name', `${educationLevel} ${docType}`);
+      formData.append('type', educationLevelToDocType(educationLevel, docType));
+      formData.append('orgId', orgId);
+
+      const data = await apiUpload<{
+        success?: boolean;
+        message?: string;
+        data?: Record<string, unknown>;
+      }>('/documents/upload', formData);
+
+      if (data?.success === false) {
+        throw new Error(data.message || 'Upload failed');
+      }
+
+      const uploadedDoc = (data?.data || data) as Record<string, unknown>;
+      const docId = uploadedDoc?._id ? String(uploadedDoc._id) : '';
+      if (!docId) {
+        throw new Error('Invalid response from server - missing document ID');
+      }
+
       const newDoc: Document = {
-        _id: `temp_${Date.now()}`,
-        name: file.name,
-        size: `${(file.size / 1024).toFixed(2)} KB`,
-        uploadedAt: new Date().toLocaleDateString(),
-        status: 'uploaded',
-        filePath: base64 // Store base64 data
+        _id: docId,
+        name: String(uploadedDoc.name || file.name),
+        size: String(uploadedDoc.size || `${(file.size / 1024).toFixed(2)} KB`),
+        uploadedAt: uploadedDoc.uploadedAt
+          ? new Date(String(uploadedDoc.uploadedAt)).toLocaleDateString()
+          : new Date().toLocaleDateString(),
+        status: String(uploadedDoc.status || 'uploaded'),
+        filePath: uploadedDoc.filePath ? String(uploadedDoc.filePath) : undefined,
+        fileName: uploadedDoc.fileName ? String(uploadedDoc.fileName) : file.name,
       };
 
-      // Update state
       setEducationalDocuments((prev) => ({
         ...prev,
         [educationLevel]: {
           ...prev[educationLevel],
-          [docType]: newDoc
-        }
+          [docType]: newDoc,
+        },
       }));
+      void fetchEducationalDocuments();
 
       toast.success(`${educationLevel} ${docType} uploaded successfully`);
       

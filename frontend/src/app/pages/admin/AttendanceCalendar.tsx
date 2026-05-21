@@ -202,7 +202,7 @@ export default function AttendanceCalendar() {
                       key={idx}
                       className={`text-xs px-1 py-0.5 rounded truncate ${getStatusColor(record.status)}`}
                     >
-                      {record.employeeName.split(' ')[0]}: {record.status}
+                      {(record.employeeName || 'Unknown').split(/\s+/)[0]}: {record.status || '—'}
                     </div>
                   ))}
                   {dayAttendance.length > 2 && (
@@ -263,7 +263,10 @@ export default function AttendanceCalendar() {
                       <td className="p-4">{record.hoursWorked ? record.hoursWorked.toFixed(1) : '0.0'}h</td>
                       <td className="p-4">
                         <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(record.status)}`}>
-                          {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
+                          {(() => {
+                            const s = String(record.status || '—');
+                            return s.charAt(0).toUpperCase() + s.slice(1);
+                          })()}
                         </span>
                       </td>
                     </tr>

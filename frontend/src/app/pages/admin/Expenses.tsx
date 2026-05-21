@@ -19,6 +19,7 @@ import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { toast } from '../../utils/portalToast';
+import { extractApiList } from '../../utils/api';
 import { ExpenseLimitSettingsDialog } from '../../components/ExpenseLimitSettingsDialog';
 
 interface Expense {
@@ -135,10 +136,15 @@ export default function ExpensesAdmin() {
   const fetchExpenses = useCallback(async () => {
     try {
       const data = await apiGet(`/expenses?page=${page}&limit=10`);
-      setExpenses(data.data || []);
-      setTotalExpenses(data.pagination?.total || 0);
+      const list = extractApiList<Expense>(data);
+      setExpenses(list);
+      const pagination = (data as { pagination?: { total?: number } })?.pagination;
+      setTotalExpenses(pagination?.total ?? list.length);
     } catch (error) {
       console.error('Error fetching expenses:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to load expenses'
+      );
     }
   }, [page]);
 
@@ -455,14 +461,9 @@ export default function ExpensesAdmin() {
         }
         await fetchExpenses();
       } else if (actionType === 'delete') {
-        if (selectedExpense.status !== 'approved') {
-          toast.error('Hard delete is allowed only for approved expenses');
-          return;
-        }
-        // Delete expense
         await apiDelete(`/expenses/${selectedExpense._id}`);
 
-        toast.success('Approved expense permanently deleted');
+        toast.success('Expense deleted');
         setIsActionDialogOpen(false);
         await fetchExpenses();
       }
@@ -1071,6 +1072,18 @@ export default function ExpensesAdmin() {
               <tbody>
                 {filteredExpenses.map((expense) => {
                   const CategoryIcon = getCategoryIcon(expense.category);
+                  const employeeLabel =
+                    expense.employeeName?.trim() ||
+                    (expense as { employeeEmail?: string }).employeeEmail?.trim() ||
+                    'Unknown';
+                  const employeeInitials =
+                    employeeLabel
+                      .split(/\s+/)
+                      .filter(Boolean)
+                      .map((n) => n[0])
+                      .join('')
+                      .slice(0, 2)
+                      .toUpperCase() || '?';
                   return (
                     <tr key={expense._id} className="border-b hover:bg-accent/50">
                       <td className="p-4 w-12">
@@ -1084,11 +1097,13 @@ export default function ExpensesAdmin() {
                       <td className="p-4">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
-                            <span className="text-sm font-medium">{expense.employeeName.split(' ').map(n => n[0]).join('')}</span>
+                            <span className="text-sm font-medium">{employeeInitials}</span>
                           </div>
                           <div>
-                            <p className="font-medium">{expense.employeeName}</p>
-                            <p className="text-sm text-muted-foreground">{expense.employeeName.toLowerCase().replace(' ', '')}@company.com</p>
+                            <p className="font-medium">{employeeLabel}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {(expense as { employeeEmail?: string }).employeeEmail || '—'}
+                            </p>
                           </div>
                         </div>
                       </td>
@@ -1124,7 +1139,7 @@ export default function ExpensesAdmin() {
                           expense.status === 'approved' ? 'bg-green-100 text-green-800' :
                           'bg-red-100 text-red-800'
                         }`}>
-                          {expense.status.charAt(0).toUpperCase() + expense.status.slice(1)}
+                          {(expense.status || 'pending').charAt(0).toUpperCase() + (expense.status || 'pending').slice(1)}
                         </span>
                       </td>
                       <td className="p-4">
@@ -1158,17 +1173,15 @@ export default function ExpensesAdmin() {
                           <Button variant="ghost" size="sm" onClick={() => handleReject(expense)} disabled={actionLoading || expense.status !== 'pending'}>
                             <XCircle className="w-4 h-4 text-red-600" />
                           </Button>
-                          {expense.status === 'approved' && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDelete(expense)}
-                              disabled={actionLoading}
-                              title="Hard delete approved expense"
-                            >
-                              <Trash2 className="w-4 h-4 text-red-600" />
-                            </Button>
-                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDelete(expense)}
+                            disabled={actionLoading}
+                            title="Delete expense"
+                          >
+                            <Trash2 className="w-4 h-4 text-red-600" />
+                          </Button>
                         </div>
                       </td>
                     </tr>

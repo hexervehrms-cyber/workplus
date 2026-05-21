@@ -76,6 +76,55 @@ const avatarUpload = multer({
   },
 });
 
+const groupAvatarStorage = multer.diskStorage({
+  destination(_req, _file, cb) {
+    if (!fs.existsSync(avatarUploadDir)) {
+      fs.mkdirSync(avatarUploadDir, { recursive: true });
+    }
+    cb(null, avatarUploadDir);
+  },
+  filename(req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const cid = String(req.params.conversationId || 'group').replace(/[^a-zA-Z0-9_-]/g, '_');
+    cb(null, `group-${cid}-${uniqueSuffix}${path.extname(file.originalname)}`);
+  },
+});
+
+const groupAvatarUpload = multer({
+  storage: groupAvatarStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(_req, file, cb) {
+    const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    cb(null, allowed.includes(file.mimetype));
+  },
+});
+
+async function findGroupForMember(orgId, conversationId, userId) {
+  return ChatGroup.findOne({
+    conversationId: String(conversationId),
+    orgId,
+    members: userId,
+  });
+}
+
+function canManageGroup(req, group) {
+  const role = req.user?.role;
+  if (['admin', 'super_admin', 'hr'].includes(role)) return true;
+  return String(group.createdBy) === String(req.user.userId);
+}
+
+async function emitGroupUpdate(orgId, conversationId, payload) {
+  if (!global.io) return;
+  const group = await ChatGroup.findOne({ conversationId, orgId }).lean();
+  if (!group?.members?.length) return;
+  for (const mid of group.members) {
+    global.io.to(`user_${String(mid)}`).emit('chat:group_updated', {
+      conversationId,
+      ...payload,
+    });
+  }
+}
+
 const chatFileUpload = multer({
   storage: chatFileStorage,
   limits: { fileSize: 25 * 1024 * 1024 }
@@ -197,7 +246,7 @@ router.get('/groups', authenticate, asyncHandler(async (req, res) => {
   if (!orgId) return;
 
   const groups = await ChatGroup.find({ orgId, members: userId })
-    .select('conversationId name members createdAt')
+    .select('conversationId name members createdAt avatar createdBy')
     .sort({ updatedAt: -1 })
     .lean();
 
@@ -206,6 +255,8 @@ router.get('/groups', authenticate, asyncHandler(async (req, res) => {
     data: groups.map((g) => ({
       conversationId: g.conversationId,
       name: g.name,
+      avatar: g.avatar || null,
+      createdBy: g.createdBy ? String(g.createdBy) : null,
       members: (g.members || []).map((m) => String(m)),
     })),
   });
@@ -321,6 +372,245 @@ router.post('/groups', authenticate, asyncHandler(async (req, res) => {
     message: 'Group created',
   });
 }));
+
+/**
+ * PATCH /api/chat/groups/:conversationId
+ * Update group name (creator or admin/hr).
+ */
+router.patch(
+  '/groups/:conversationId',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
+    const userId = req.user.userId;
+    const { conversationId } = req.params;
+    const groupName = String(req.body?.name || '').trim();
+
+    if (!groupName) {
+      return res.status(400).json({ success: false, message: 'Group name is required' });
+    }
+
+    const group = await findGroupForMember(orgId, conversationId, userId);
+    if (!group) {
+      return res.status(403).json({ success: false, message: 'Not a member of this group' });
+    }
+    if (!canManageGroup(req, group)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to edit this group' });
+    }
+
+    group.name = groupName;
+    await group.save();
+    await emitGroupUpdate(orgId, conversationId, { name: groupName });
+
+    res.json({
+      success: true,
+      data: {
+        conversationId,
+        name: groupName,
+        avatar: group.avatar || null,
+        memberIds: (group.members || []).map((m) => String(m)),
+      },
+      message: 'Group updated',
+    });
+  })
+);
+
+/**
+ * POST /api/chat/groups/:conversationId/avatar
+ * Upload group avatar (creator or admin/hr).
+ */
+router.post(
+  '/groups/:conversationId/avatar',
+  authenticate,
+  groupAvatarUpload.single('avatar'),
+  asyncHandler(async (req, res) => {
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
+    const userId = req.user.userId;
+    const { conversationId } = req.params;
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No avatar file provided' });
+    }
+
+    const group = await findGroupForMember(orgId, conversationId, userId);
+    if (!group) {
+      return res.status(403).json({ success: false, message: 'Not a member of this group' });
+    }
+    if (!canManageGroup(req, group)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to change group photo' });
+    }
+
+    const avatarPath = `uploads/avatars/${req.file.filename}`;
+    group.avatar = avatarPath;
+    await group.save();
+    await emitGroupUpdate(orgId, conversationId, { avatar: avatarPath });
+
+    res.json({
+      success: true,
+      data: {
+        conversationId,
+        avatar: avatarPath,
+        name: group.name,
+      },
+      message: 'Group photo updated',
+    });
+  })
+);
+
+/**
+ * POST /api/chat/groups/:conversationId/members
+ * Add members to an existing group.
+ */
+router.post(
+  '/groups/:conversationId/members',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
+    const userId = req.user.userId;
+    const { conversationId } = req.params;
+    const rawMembers = Array.isArray(req.body?.memberIds) ? req.body.memberIds : [];
+
+    const group = await findGroupForMember(orgId, conversationId, userId);
+    if (!group) {
+      return res.status(403).json({ success: false, message: 'Not a member of this group' });
+    }
+
+    const existing = new Set((group.members || []).map((m) => String(m)));
+    const toAdd = [
+      ...new Set(
+        rawMembers
+          .map((id) => String(id))
+          .filter(Boolean)
+          .filter((id) => !existing.has(id))
+      ),
+    ];
+
+    if (toAdd.length === 0) {
+      return res.status(400).json({ success: false, message: 'No new members to add' });
+    }
+
+    const memberObjectIdsForLookup = toAdd
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    const usersFound = await User.find({
+      _id: { $in: memberObjectIdsForLookup },
+      ...userOrgMatchFilter(orgId),
+      isActive: true,
+      deletedAt: null,
+    })
+      .select('_id name')
+      .lean();
+
+    const foundIdSet = new Set(usersFound.map((u) => String(u._id)));
+    const missing = toAdd.filter((id) => !foundIdSet.has(String(id)));
+    if (missing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Some users are not in your organization or are inactive',
+        data: { missingUserIds: missing },
+      });
+    }
+
+    for (const id of toAdd) {
+      group.members.push(new mongoose.Types.ObjectId(id));
+    }
+    await group.save();
+
+    const memberIds = (group.members || []).map((m) => String(m));
+    const addedNames = usersFound.map((u) => u.name).filter(Boolean).join(', ');
+
+    const seed = new ChatMessage({
+      senderId: userId,
+      recipientId: null,
+      conversationId,
+      messageType: 'system',
+      content: {
+        text: addedNames
+          ? `${addedNames} joined the group.`
+          : `${toAdd.length} member(s) joined the group.`,
+        system: { action: 'members_added', data: { memberIds: toAdd } },
+      },
+      channelInfo: {
+        channelType: 'group',
+        channelId: conversationId,
+        participants: group.members,
+      },
+      orgId,
+      status: 'delivered',
+    });
+    await seed.save();
+
+    await emitGroupUpdate(orgId, conversationId, {
+      name: group.name,
+      memberIds,
+      avatar: group.avatar || null,
+    });
+
+    if (global.io) {
+      for (const mid of toAdd) {
+        global.io.to(`user_${mid}`).emit('chat:group_created', {
+          conversationId,
+          name: group.name,
+          memberIds,
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        conversationId,
+        name: group.name,
+        memberIds,
+        added: toAdd,
+      },
+      message: 'Members added',
+    });
+  })
+);
+
+/**
+ * DELETE /api/chat/groups/:conversationId
+ * Delete group (creator or admin/super_admin/hr only).
+ */
+router.delete(
+  '/groups/:conversationId',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
+    const userId = req.user.userId;
+    const { conversationId } = req.params;
+
+    const group = await findGroupForMember(orgId, conversationId, userId);
+    if (!group) {
+      return res.status(403).json({ success: false, message: 'Not a member of this group' });
+    }
+    if (!canManageGroup(req, group)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to delete this group' });
+    }
+
+    const memberIds = (group.members || []).map((m) => String(m));
+    await ChatMessage.deleteMany({ conversationId, orgId });
+    await ChatGroup.deleteOne({ _id: group._id });
+
+    if (global.io) {
+      for (const mid of memberIds) {
+        global.io.to(`user_${mid}`).emit('chat:group_deleted', { conversationId });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Group deleted',
+      data: { conversationId },
+    });
+  })
+);
 
 /**
  * POST /api/chat/upload

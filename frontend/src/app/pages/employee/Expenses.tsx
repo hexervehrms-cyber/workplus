@@ -120,6 +120,7 @@ export default function Expenses() {
   const [toDate, setToDate] = useState('');
   const [viewReceiptOpen, setViewReceiptOpen] = useState(false);
   const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
+  const [viewingReceiptPath, setViewingReceiptPath] = useState<string | null>(null);
   const [viewingReceiptBlobUrl, setViewingReceiptBlobUrl] = useState<string | null>(null);
   const [viewingReceiptIsPdf, setViewingReceiptIsPdf] = useState(false);
   const [importingFile, setImportingFile] = useState(false);
@@ -286,6 +287,7 @@ export default function Expenses() {
       setViewingReceiptIsPdf(label.endsWith('.pdf'));
       setViewingReceiptBlobUrl(blobUrl);
       setViewingReceipt(blobUrl);
+      setViewingReceiptPath(receiptPath);
       setViewReceiptOpen(true);
     } catch (error) {
       console.error('View receipt error:', error);
@@ -1100,7 +1102,10 @@ export default function Expenses() {
                       {expense.status === 'approved' && <CheckCircle className="w-3 h-3 mr-1" />}
                       {expense.status === 'pending' && <Clock className="w-3 h-3 mr-1" />}
                       {expense.status === 'rejected' && <XCircle className="w-3 h-3 mr-1" />}
-                      {expense.status.charAt(0).toUpperCase() + expense.status.slice(1)}
+                      {(() => {
+                        const s = String(expense.status || 'pending');
+                        return s.charAt(0).toUpperCase() + s.slice(1);
+                      })()}
                     </Badge>
                     <div className="flex items-center gap-2">
                       {/* View and Download buttons - always show, disable if no receipt */}
@@ -1167,10 +1172,13 @@ export default function Expenses() {
         open={viewReceiptOpen}
         onOpenChange={(open) => {
           setViewReceiptOpen(open);
-          if (!open && viewingReceiptBlobUrl) {
-            URL.revokeObjectURL(viewingReceiptBlobUrl);
+          if (!open) {
+            if (viewingReceiptBlobUrl) {
+              URL.revokeObjectURL(viewingReceiptBlobUrl);
+            }
             setViewingReceiptBlobUrl(null);
             setViewingReceipt(null);
+            setViewingReceiptPath(null);
             setViewingReceiptIsPdf(false);
           }
         }}
@@ -1225,12 +1233,15 @@ export default function Expenses() {
             >
               Close
             </Button>
-            {viewingReceipt && viewingReceipt.trim() && viewingReceipt !== 'undefined' && (
+            {viewingReceiptPath && viewingReceiptPath.trim() && (
               <Button 
+                type="button"
                 className="flex-1 rounded-xl" 
                 onClick={() => {
-                  const fileName = viewingReceipt.substring(viewingReceipt.lastIndexOf('/') + 1);
-                  handleDownloadReceipt(viewingReceipt, fileName);
+                  const fileName =
+                    receiptFilenameFromPath(viewingReceiptPath) ||
+                    viewingReceiptPath.substring(viewingReceiptPath.lastIndexOf('/') + 1);
+                  void handleDownloadReceipt(viewingReceiptPath, fileName);
                 }}
               >
                 <Download className="w-4 h-4 mr-2" />

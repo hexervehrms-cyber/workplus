@@ -124,7 +124,6 @@ const navigationItems: NavItem[] = [
     path: '/employee/leave', 
     roles: ['employee', 'manager', 'accountant']
   },
-  { icon: CalendarDays, label: 'Calendar', path: '/employee/calendar', roles: ['employee', 'manager', 'accountant'] },
   { icon: Clock, label: 'Attendance', path: '/employee/attendance', roles: ['employee', 'manager', 'accountant'] },
   { icon: TrendingUp, label: 'Performance', path: '/employee/performance', roles: ['employee', 'manager', 'accountant'] },
   { icon: DollarSign, label: 'Payroll', path: '/employee/payroll', roles: ['employee', 'manager', 'accountant'] },

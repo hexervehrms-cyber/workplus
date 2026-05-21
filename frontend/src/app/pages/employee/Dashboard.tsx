@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { KPICard } from '../../components/KPICard';
-import InteractiveCalendar from '../../components/InteractiveCalendar';
 import ChatWidget from '../../components/ChatWidget';
 import { useAuth } from '../../context/AuthContext';
 import { TokenManager } from '../../utils/api';
@@ -1720,12 +1719,8 @@ export default function EmployeeDashboard() {
           />
         </div>
 
-        {/* Calendar and Holidays Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2">
-            <InteractiveCalendar />
-          </div>
-
+        {/* Holidays */}
+        <div className="grid grid-cols-1 gap-6">
           <Card className="rounded-2xl overflow-hidden flex flex-col">
             <div className="p-6 border-b border-border flex-shrink-0">
               <div>

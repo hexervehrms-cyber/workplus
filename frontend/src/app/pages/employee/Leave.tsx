@@ -27,8 +27,7 @@ import {
   LeaveTypeSettingsService,
   extractApiList,
 } from '../../utils/api';
-import { clearApiCache } from '../../utils/apiHelper';
-import { resolveAuthOrgId } from '../../utils/apiHelper';
+import { clearApiCache, resolveAuthOrgId, resolveOrgIdForApi } from '../../utils/apiHelper';
 import { resolveEmployeeMongoId } from '../../utils/resolveEmployeeId';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
@@ -93,6 +92,20 @@ const DEFAULT_LEAVE_TYPE_ORDER = [
   'sandwichLeave',
 ];
 
+function normalizeLeaveRow(raw: Record<string, unknown>): LeaveRequest {
+  const id = String(raw._id || raw.id || '');
+  return {
+    _id: id,
+    type: String(raw.type || raw.leaveType || 'Leave'),
+    leaveType: String(raw.leaveType || raw.type || 'Leave'),
+    startDate: String(raw.startDate || ''),
+    endDate: String(raw.endDate || ''),
+    reason: String(raw.reason || ''),
+    status: String(raw.status || 'pending'),
+    days: typeof raw.days === 'number' ? raw.days : undefined,
+  };
+}
+
 function defaultLeaveTypeLabel(enabled: Record<string, boolean> | null): string {
   if (!enabled) return LEAVE_TYPE_LABELS.casualLeave;
   for (const key of DEFAULT_LEAVE_TYPE_ORDER) {
@@ -138,8 +151,10 @@ export default function Leave() {
         
         // Fetch leave requests
         const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
-        const leaveData = extractApiList(leaveResponse);
-        setLeaveHistory(leaveData as LeaveRequest[]);
+        const leaveData = extractApiList(leaveResponse).map((row) =>
+          normalizeLeaveRow(row as Record<string, unknown>)
+        );
+        setLeaveHistory(leaveData);
 
         // Fetch leave balance from allocation
         let employeeId = user.employeeId;
@@ -223,13 +238,11 @@ export default function Leave() {
     const refetchLeaves = () => {
       if (!authUserId) return;
       void LeaveRequestService.getLeaveRequestsByUserId(authUserId).then((leaveResponse) => {
-        if (leaveResponse?.success && leaveResponse.data) {
-          const leaveData = Array.isArray(leaveResponse.data)
-            ? leaveResponse.data
-            : (leaveResponse.data as { data?: LeaveRequest[] }).data || [];
-          setLeaveHistory(leaveData);
-        }
-      });
+        const list = extractApiList(leaveResponse).map((row) =>
+          normalizeLeaveRow(row as Record<string, unknown>)
+        );
+        setLeaveHistory(list);
+      }).catch(() => {});
     };
     const unsub = realTimeSocket.onLeaveUpdate(refetchLeaves);
     return () => unsub();
@@ -340,21 +353,13 @@ export default function Leave() {
         return;
       }
 
-      let orgId = resolveAuthOrgId(user);
-      if (!orgId) {
-        try {
-          const employeeResponse = await EmployeeService.getEmployeeByUserId(authUserId);
-          if (employeeResponse?.orgId) {
-            orgId = String(employeeResponse.orgId);
-          }
-        } catch {
-          /* fall through */
-        }
-      }
+      const orgId = await resolveOrgIdForApi(user);
       if (!orgId) {
         toast.error('Organization not set on your account. Please sign out and sign in again, or contact HR.');
         return;
       }
+
+      const submitUserId = String(user?.userId || user?.id || authUserId);
 
       const startDate = new Date(formData.startDate);
       const endDate =
@@ -420,7 +425,7 @@ export default function Leave() {
 
       // Prepare leave data with time information
       const leaveData: any = {
-        userId: authUserId,
+        userId: submitUserId,
         employeeId: employeeId,
         leaveType: formData.type,
         startDate: startDate.toISOString(),
@@ -452,6 +457,10 @@ export default function Leave() {
         response = await LeaveRequestService.createLeaveRequest(leaveData);
       }
 
+      const createdRaw =
+        (response as { data?: { leaveRequest?: Record<string, unknown> } })?.data?.leaveRequest ||
+        (response as { data?: Record<string, unknown> })?.data;
+
       if (response?.success !== false) {
         clearApiCache();
         if (editingLeaveId) {
@@ -472,9 +481,22 @@ export default function Leave() {
           reason: '',
           leaveDuration: 'full'
         });
-        
-        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
-        setLeaveHistory(extractApiList(updatedLeaves) as LeaveRequest[]);
+
+        if (!editingLeaveId && createdRaw && (createdRaw._id || createdRaw.id)) {
+          setLeaveHistory((prev) => [normalizeLeaveRow(createdRaw), ...prev]);
+        }
+
+        try {
+          const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(submitUserId);
+          const list = extractApiList(updatedLeaves).map((row) =>
+            normalizeLeaveRow(row as Record<string, unknown>)
+          );
+          if (list.length > 0) {
+            setLeaveHistory(list);
+          }
+        } catch (refreshErr) {
+          console.warn('[LEAVE] List refresh after submit failed:', refreshErr);
+        }
 
         // Refresh balance
         let refreshEmployeeId = user.employeeId;
@@ -683,6 +705,7 @@ export default function Leave() {
                     View
                   </Button>
                   <Button
+                    type="button"
                     size="sm"
                     variant="outline"
                     className="rounded-lg flex-1 text-xs sm:text-sm"
@@ -711,6 +734,7 @@ export default function Leave() {
                     Edit
                   </Button>
                   <Button
+                    type="button"
                     size="sm"
                     variant="outline"
                     className="rounded-lg flex-1 text-xs sm:text-sm"
@@ -740,6 +764,7 @@ Reason: ${leave.reason}
                     Download
                   </Button>
                   <Button
+                    type="button"
                     size="sm"
                     variant="destructive"
                     className="rounded-lg flex-1 text-xs sm:text-sm"
@@ -762,7 +787,10 @@ Reason: ${leave.reason}
                           toast.success('Leave request deleted');
                           
                           const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
-                          setLeaveHistory(extractApiList(updatedLeaves) as LeaveRequest[]);
+                          const list = extractApiList(updatedLeaves).map((row) =>
+                            normalizeLeaveRow(row as Record<string, unknown>)
+                          );
+                          setLeaveHistory(list);
                           
                           // Refresh balance
                           if (employeeId) {
@@ -804,7 +832,13 @@ Reason: ${leave.reason}
       </Card>
 
       {/* Leave Form Dialog - Mobile optimized */}
-      <Dialog open={showLeaveForm} onOpenChange={setShowLeaveForm}>
+      <Dialog
+        open={showLeaveForm}
+        onOpenChange={(open) => {
+          setShowLeaveForm(open);
+          if (!open) setEditingLeaveId(null);
+        }}
+      >
         <DialogContent className="max-w-md sm:max-w-lg rounded-2xl border-0 shadow-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader className="pb-3 sm:pb-4">
             <DialogTitle className="text-lg sm:text-xl font-bold">Request Leave</DialogTitle>

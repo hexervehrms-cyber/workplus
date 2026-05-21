@@ -44,7 +44,10 @@ import {
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useIsMounted } from '../../hooks/useIsMounted';
 import { useFetchGeneration } from '../../hooks/useFetchGeneration';
-import { apiClient } from '../../utils/api';
+import { extractApiList } from '../../utils/api';
+import { apiGet, apiPatch, apiDelete, appendOrgIdParam, clearApiCache } from '../../utils/apiHelper';
+import { ensureAccessToken } from '../../utils/sessionAuth';
+import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { ensureArray, safeCell } from '../../utils/safeUi';
 
@@ -287,42 +290,90 @@ export default function AdminDashboard() {
 
     console.log('⚡ [ADMIN-DASHBOARD] Fetching all data in parallel...');
     
+    await ensureAccessToken();
+
     // Fetch all data in parallel using Promise.allSettled for resilience
     const [statsResponse, quickStatsResponse, expenseTrendsResponse, leaveResponse, attendanceResponse, todayBreaksResponse] =
       await Promise.allSettled([
-        apiClient.get<DashboardStats>(`/dashboard/stats?${params.toString()}`),
-        apiClient.get<QuickStats>(`/dashboard/quick-stats?${params.toString()}&_t=${Date.now()}`),
-        apiClient.get<ExpenseTrendRow[]>('/dashboard/expense-trends'),
-        apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests'),
-        apiClient.get<AttendanceRow[]>('/dashboard/todays-attendance'),
-        apiClient.get<BreakRow[]>(`/attendance/today-breaks?_t=${Date.now()}`)
+        apiGet<{ success?: boolean; data?: DashboardStats }>(`/dashboard/stats?${params.toString()}`, false),
+        apiGet<{ success?: boolean; data?: QuickStats }>(
+          `/dashboard/quick-stats?${params.toString()}&_t=${Date.now()}`,
+          false
+        ),
+        apiGet<{ success?: boolean; data?: ExpenseTrendRow[] }>('/dashboard/expense-trends', false),
+        apiGet<{ success?: boolean; data?: unknown }>('/dashboard/recent-leave-requests', false),
+        apiGet<{ success?: boolean; data?: AttendanceRow[] }>('/dashboard/todays-attendance', false),
+        apiGet<{ success?: boolean; data?: BreakRow[] }>(`/attendance/today-breaks?_t=${Date.now()}`, false),
       ]);
 
     console.log('✅ [ADMIN-DASHBOARD] All requests completed');
 
     if (!mounted.current || isStale(gen)) return;
 
-    // Process results with fallbacks
-    if (statsResponse.status === 'fulfilled' && statsResponse.value.success) {
-      setDashboardStats(normalizeDashboardStats(statsResponse.value.data));
+    const unwrap = <T,>(r: PromiseSettledResult<{ success?: boolean; data?: T; message?: string }>) =>
+      r.status === 'fulfilled' ? r.value : null;
+
+    const statsPayload = unwrap(statsResponse);
+    const quickPayload = unwrap(quickStatsResponse);
+
+    if (statsPayload?.success !== false && statsPayload?.data) {
+      setDashboardStats(normalizeDashboardStats(statsPayload.data));
     }
-    if (quickStatsResponse.status === 'fulfilled' && quickStatsResponse.value.success) {
-      setQuickStats(normalizeQuickStats(quickStatsResponse.value.data));
+    if (quickPayload?.success !== false && quickPayload?.data) {
+      setQuickStats(normalizeQuickStats(quickPayload.data));
       setLastUpdate(Date.now());
     }
-    if (expenseTrendsResponse.status === 'fulfilled' && expenseTrendsResponse.value.success) {
-      setExpenseData(ensureArray<ExpenseTrendRow>(expenseTrendsResponse.value.data));
+
+    const trendsPayload = unwrap(expenseTrendsResponse);
+    if (trendsPayload?.success !== false) {
+      setExpenseData(extractApiList<ExpenseTrendRow>(trendsPayload));
     }
-    if (leaveResponse.status === 'fulfilled' && leaveResponse.value.success) {
-      setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.value.data));
+
+    const leavePayload = unwrap(leaveResponse);
+    if (leavePayload?.success !== false) {
+      setLeaveRequests(extractApiList<LeaveRequestRow>(leavePayload));
     }
-    if (attendanceResponse.status === 'fulfilled' && attendanceResponse.value.success) {
-      setTodaysAttendance(ensureArray<AttendanceRow>(attendanceResponse.value.data));
+
+    const attPayload = unwrap(attendanceResponse);
+    if (attPayload?.success !== false) {
+      setTodaysAttendance(extractApiList<AttendanceRow>(attPayload));
     }
-    if (todayBreaksResponse.status === 'fulfilled' && todayBreaksResponse.value.success) {
-      setTodayBreakLog(ensureArray<BreakRow>(todayBreaksResponse.value.data));
+
+    const breaksPayload = unwrap(todayBreaksResponse);
+    if (breaksPayload?.success !== false) {
+      setTodayBreakLog(extractApiList<BreakRow>(breaksPayload));
     }
-  }, [filterType, customStartDate, customEndDate, mounted, nextGeneration, isStale]);
+
+    const statsEmpCount = safeNum(statsPayload?.data?.totalEmployees, 0);
+    const quickEmpCount = safeNum(quickPayload?.data?.totalEmployees, 0);
+    if (statsEmpCount === 0 && quickEmpCount === 0) {
+      try {
+        const empRes = await apiGet<{
+          success?: boolean;
+          data?: unknown;
+          pagination?: { total?: number };
+        }>(appendOrgIdParam('/employees?simple=true&limit=1', user), false);
+        const fallbackTotal =
+          empRes?.pagination?.total ??
+          extractApiList(empRes).length;
+        if (fallbackTotal > 0) {
+          setDashboardStats((prev) => ({ ...prev, totalEmployees: fallbackTotal }));
+          setQuickStats((prev) => ({ ...prev, totalEmployees: fallbackTotal }));
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }
+
+    if (statsResponse.status === 'rejected') {
+      toast.error('Dashboard stats could not be loaded');
+    } else if (statsPayload?.success === false) {
+      toast.error(statsPayload.message || 'Dashboard stats unavailable');
+    }
+    if (quickStatsResponse.status === 'rejected') {
+      toast.error('Quick stats could not be loaded');
+    }
+  }, [filterType, customStartDate, customEndDate, mounted, nextGeneration, isStale, user]);
 
   const dashboardSocketDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -347,18 +398,35 @@ export default function AdminDashboard() {
     };
   }, []);
 
+  const refreshLeaveList = useCallback(async () => {
+    const leaveResponse = await apiGet<{ success?: boolean; data?: unknown }>(
+      '/dashboard/recent-leave-requests',
+      false
+    );
+    if (leaveResponse?.success !== false) {
+      setLeaveRequests(extractApiList<LeaveRequestRow>(leaveResponse));
+    }
+  }, []);
+
   const refreshBreakSections = useCallback(async () => {
     try {
+      await ensureAccessToken();
       const [todayBreaksResponse, attendanceResponse] = await Promise.all([
-        apiClient.get<BreakRow[]>(`/attendance/today-breaks?_t=${Date.now()}`),
-        apiClient.get<AttendanceRow[]>('/dashboard/todays-attendance'),
+        apiGet<{ success?: boolean; data?: BreakRow[] }>(
+          `/attendance/today-breaks?_t=${Date.now()}`,
+          false
+        ),
+        apiGet<{ success?: boolean; data?: AttendanceRow[] }>(
+          '/dashboard/todays-attendance',
+          false
+        ),
       ]);
       if (!mounted.current) return;
-      if (todayBreaksResponse.success) {
-        setTodayBreakLog(ensureArray<BreakRow>(todayBreaksResponse.data));
+      if (todayBreaksResponse?.success !== false) {
+        setTodayBreakLog(extractApiList<BreakRow>(todayBreaksResponse));
       }
-      if (attendanceResponse.success) {
-        setTodaysAttendance(ensureArray<AttendanceRow>(attendanceResponse.data));
+      if (attendanceResponse?.success !== false) {
+        setTodaysAttendance(extractApiList<AttendanceRow>(attendanceResponse));
       }
       setLastUpdate(Date.now());
     } catch (error) {
@@ -554,32 +622,24 @@ export default function AdminDashboard() {
       
       const userId = user?.id || user?.userId;
       if (!userId) {
-        alert('Unable to get user information. Please log in again.');
+        toast.error('Unable to get user information. Please log in again.');
         return;
       }
 
-      const { apiPatch, apiGet } = await import('../../utils/apiHelper');
-      const { ensureAccessToken } = await import('../../utils/sessionAuth');
       await ensureAccessToken();
       const response = await apiPatch<{ success?: boolean }>(`/leave-requests/${requestId}/approve`, {
         approvedBy: userId
       });
       console.log('✅ Approve response:', response);
       
-      if (response.success) {
-        console.log('✅ Leave request approved successfully');
-        // Refresh leave requests
-        const leaveResponse = await apiGet<{ success?: boolean; data?: unknown }>(
-          '/dashboard/recent-leave-requests'
-        );
-        if (leaveResponse?.success) {
-          setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.data));
-        }
-        alert('Leave request approved successfully');
+      if (response?.success !== false) {
+        clearApiCache('/dashboard');
+        await refreshLeaveList();
+        toast.success('Leave request approved');
       }
     } catch (error) {
       console.error('❌ Error approving leave:', error);
-      alert(`Failed to approve leave request: ${getErrorMessage(error, 'Unknown error')}`);
+      toast.error(`Failed to approve leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
@@ -595,32 +655,24 @@ export default function AdminDashboard() {
       
       const userId = user?.id || user?.userId;
       if (!userId) {
-        alert('Unable to get user information. Please log in again.');
+        toast.error('Unable to get user information. Please log in again.');
         return;
       }
 
-      const { apiPatch, apiGet } = await import('../../utils/apiHelper');
-      const { ensureAccessToken } = await import('../../utils/sessionAuth');
       await ensureAccessToken();
       const response = await apiPatch<{ success?: boolean }>(`/leave-requests/${requestId}/reject`, {
         rejectedBy: userId,
         rejectionReason: reason
       });
-      console.log('❌ Reject response:', response);
-      
+
       if (response?.success !== false) {
-        console.log('✅ Leave request rejected successfully');
-        const leaveResponse = await apiGet<{ success?: boolean; data?: unknown }>(
-          '/dashboard/recent-leave-requests'
-        );
-        if (leaveResponse?.success) {
-          setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.data));
-        }
-        alert('Leave request rejected successfully');
+        clearApiCache('/dashboard');
+        await refreshLeaveList();
+        toast.success('Leave request rejected');
       }
     } catch (error) {
       console.error('❌ Error rejecting leave:', error);
-      alert(`Failed to reject leave request: ${getErrorMessage(error, 'Unknown error')}`);
+      toast.error(`Failed to reject leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
@@ -632,21 +684,17 @@ export default function AdminDashboard() {
     
     try {
       console.log('🗑️ Deleting leave request:', requestId);
-      const response = await apiClient.delete(`/leave-requests/${requestId}`);
-      console.log('🗑️ Delete response:', response);
-      
-      if (response.success) {
-        console.log('✅ Leave request deleted successfully');
-        // Refresh leave requests
-        const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
-        if (leaveResponse.success) {
-          setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.data));
-        }
-        alert('Leave request deleted successfully');
+      await ensureAccessToken();
+      const response = await apiDelete<{ success?: boolean }>(`/leave-requests/${requestId}`);
+
+      if (response?.success !== false) {
+        clearApiCache('/dashboard');
+        await refreshLeaveList();
+        toast.success('Leave request deleted');
       }
     } catch (error) {
       console.error('❌ Error deleting leave:', error);
-      alert(`Failed to delete leave request: ${getErrorMessage(error, 'Unknown error')}`);
+      toast.error(`Failed to delete leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
@@ -671,29 +719,24 @@ export default function AdminDashboard() {
     
     try {
       console.log('💾 Saving edited leave:', editingLeave);
-      const response = await apiClient.patch(`/leave-requests/${editingLeave.id}`, {
+      await ensureAccessToken();
+      const response = await apiPatch<{ success?: boolean }>(`/leave-requests/${editingLeave.id}`, {
         leaveType: editingLeave.type,
         startDate: editingLeave.startDate,
         endDate: editingLeave.endDate,
         reason: editingLeave.reason
       });
-      console.log('💾 Save response:', response);
-      
-      if (response.success) {
-        console.log('✅ Leave request updated successfully');
+
+      if (response?.success !== false) {
         setEditModalOpen(false);
         setEditingLeave(null);
-        
-        // Refresh leave requests
-        const leaveResponse = await apiClient.get<LeaveRequestRow[]>('/dashboard/recent-leave-requests');
-        if (leaveResponse.success) {
-          setLeaveRequests(ensureArray<LeaveRequestRow>(leaveResponse.data));
-        }
-        alert('Leave request updated successfully');
+        clearApiCache('/dashboard');
+        await refreshLeaveList();
+        toast.success('Leave request updated');
       }
     } catch (error) {
       console.error('❌ Error updating leave:', error);
-      alert(`Failed to update leave request: ${getErrorMessage(error, 'Unknown error')}`);
+      toast.error(`Failed to update leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 

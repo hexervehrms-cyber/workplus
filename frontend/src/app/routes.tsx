@@ -72,7 +72,6 @@ const Calls = lazy(() => import('./pages/sales/Calls'));
 const EmployeeDashboard = lazy(() => import('./pages/employee/Dashboard'));
 const Profile = lazy(() => import('./pages/employee/Profile'));
 const Leave = lazy(() => import('./pages/employee/Leave'));
-const Calendar = lazy(() => import('./pages/employee/Calendar'));
 const Attendance = lazy(() => import('./pages/employee/Attendance'));
 const Performance = lazy(() => import('./pages/employee/Performance'));
 const Payroll = lazy(() => import('./pages/employee/Payroll'));
@@ -459,11 +458,7 @@ const routes = [
       },
       {
         path: 'employee/calendar',
-        element: (
-          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
-            <Calendar />
-          </ProtectedRoute>
-        ),
+        element: <Navigate to="/employee/leave" replace />,
       },
       {
         path: 'employee/attendance',

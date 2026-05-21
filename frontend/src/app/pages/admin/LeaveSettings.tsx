@@ -94,6 +94,9 @@ export default function LeaveSettings() {
       }
     } catch (error) {
       console.error('Error fetching leave settings:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to load leave settings'
+      );
     } finally {
       setLoading(false);
     }

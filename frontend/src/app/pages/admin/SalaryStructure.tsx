@@ -278,7 +278,7 @@ export default function AdminSalaryStructure() {
           <SelectContent>
             {employees.map((emp) => (
               <SelectItem key={emp._id} value={emp._id}>
-                {emp.employeeCode} - {emp.userId.name} ({emp.department})
+                {emp.employeeCode} - {emp.userId?.name || 'Unknown'} ({emp.department || '—'})
               </SelectItem>
             ))}
           </SelectContent>

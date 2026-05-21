@@ -398,11 +398,12 @@ export default function Employees() {
     navigate(`/admin/employees/${employeeId}/correspondence`);
   };
 
-  const filteredEmployees = employees.filter(emp => {
-    if (!emp.userId) return false;
-    return emp.userId.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    emp.userId.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    emp.department?.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredEmployees = employees.filter((emp) => {
+    const q = searchTerm.toLowerCase();
+    const name = (emp.userId?.name || '').toLowerCase();
+    const email = (emp.userId?.email || '').toLowerCase();
+    const dept = (emp.department || '').toLowerCase();
+    return name.includes(q) || email.includes(q) || dept.includes(q);
   });
 
   if (loading) {
@@ -563,7 +564,7 @@ export default function Employees() {
             <div className="space-y-4">
               <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
                 <p className="text-sm text-blue-900">
-                  <strong>Employee:</strong> {passwordResetEmployee.userId.name}
+                  <strong>Employee:</strong> {passwordResetEmployee.userId?.name || 'Unknown'}
                 </p>
                 <p className="text-sm text-blue-900">
                   <strong>Email:</strong> {passwordResetEmployee.userId.email}
@@ -1022,7 +1023,12 @@ export default function Employees() {
             <div className="flex items-start justify-between mb-4">
               <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center">
                 <span className="text-lg font-medium text-primary">
-                  {employee.userId.name.split(' ').map(n => n[0]).join('').toUpperCase()}
+                  {(employee.userId?.name || 'U')
+                    .split(/\s+/)
+                    .filter(Boolean)
+                    .map((n) => n[0])
+                    .join('')
+                    .toUpperCase() || 'U'}
                 </span>
               </div>
               <div className="flex gap-2 flex-wrap justify-end">
@@ -1039,7 +1045,7 @@ export default function Employees() {
             </div>
             
             <h3 className="font-semibold text-lg mb-1 group-hover:text-primary transition-colors">
-              {employee.userId.name}
+              {employee.userId?.name || employee.userId?.email || 'Unknown'}
               <span className="ml-2 text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
                 Click to view correspondence →
               </span>

@@ -23,6 +23,7 @@ import {
   UserMinus,
   Camera,
   UsersRound,
+  Pencil,
 } from 'lucide-react';
 import { Checkbox } from './ui/checkbox';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
@@ -61,7 +62,9 @@ import { ensureArray } from '../utils/safeUi';
 import {
   apiGet,
   apiPost,
+  apiPatch,
   apiDelete,
+  apiUpload,
   buildFileUrl,
   resolveAuthOrgId,
 } from '../utils/apiHelper';
@@ -83,6 +86,7 @@ interface ChatUser {
   chatKind?: 'direct' | 'group';
   conversationId?: string;
   memberIds?: string[];
+  createdBy?: string;
 }
 
 interface Message {
@@ -172,7 +176,13 @@ export default function TeamsMessenger() {
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [sidebarError, setSidebarError] = useState<string | null>(null);
+  const [showEditGroupDialog, setShowEditGroupDialog] = useState(false);
+  const [editGroupName, setEditGroupName] = useState('');
+  const [showAddGroupMembersDialog, setShowAddGroupMembersDialog] = useState(false);
+  const [addGroupMemberIds, setAddGroupMemberIds] = useState<Set<string>>(() => new Set());
+  const [savingGroup, setSavingGroup] = useState(false);
   const profileAvatarInputRef = useRef<HTMLInputElement>(null);
+  const groupAvatarInputRef = useRef<HTMLInputElement>(null);
 
   const hiddenStorageKey = myAuthId ? `workplus-chat-hidden-${myAuthId}` : null;
 
@@ -310,12 +320,13 @@ export default function TeamsMessenger() {
           name: g.name || 'Group',
           email: `${(g.members || []).length} members`,
           role: 'employee',
-          avatar: undefined,
+          avatar: resolveAvatarUrl(g.avatar),
           isOnline: true,
           unreadCount: 0,
           chatKind: 'group' as const,
           conversationId: cid,
           memberIds: (g.members || []).map(String),
+          createdBy: g.createdBy ? String(g.createdBy) : undefined,
           lastMessage: preview?.text || '',
           lastMessageTime: preview?.time || '',
         };
@@ -369,9 +380,62 @@ export default function TeamsMessenger() {
 
     let cancelled = false;
 
-    const onGroupCreated = () => {
+    const onGroupSidebarRefresh = () => {
       if (cancelled) return;
       void fetchSidebarRef.current();
+    };
+
+    const onGroupUpdated = (data: {
+      conversationId?: string;
+      name?: string;
+      avatar?: string;
+      memberIds?: string[];
+    }) => {
+      if (cancelled || !data?.conversationId) return;
+      const cid = String(data.conversationId);
+      const avatarUrl = data.avatar ? resolveAvatarUrl(data.avatar) : undefined;
+      setGroupChats((prev) =>
+        prev.map((g) =>
+          g.conversationId === cid
+            ? {
+                ...g,
+                name: data.name ?? g.name,
+                avatar: avatarUrl !== undefined ? avatarUrl : g.avatar,
+                memberIds: data.memberIds ?? g.memberIds,
+                email: data.memberIds
+                  ? `${data.memberIds.length} members`
+                  : g.email,
+              }
+            : g
+        )
+      );
+      setSelectedUser((prev) =>
+        prev && prev.conversationId === cid
+          ? {
+              ...prev,
+              name: data.name ?? prev.name,
+              avatar: avatarUrl !== undefined ? avatarUrl : prev.avatar,
+              memberIds: data.memberIds ?? prev.memberIds,
+              email: data.memberIds
+                ? `${data.memberIds.length} members`
+                : prev.email,
+            }
+          : prev
+      );
+    };
+
+    const onGroupDeleted = (data: { conversationId?: string }) => {
+      if (cancelled || !data?.conversationId) return;
+      const cid = String(data.conversationId);
+      setGroupChats((prev) => prev.filter((g) => g.conversationId !== cid));
+      setSelectedUser((prev) => {
+        if (prev?.conversationId === cid) {
+          setMessages([]);
+          return null;
+        }
+        return prev;
+      });
+      toast.info('Group was deleted');
     };
 
     const initSocket = async () => {
@@ -391,7 +455,9 @@ export default function TeamsMessenger() {
           appSocket.on(event, handler);
         };
 
-        appSocket.on('chat:group_created', onGroupCreated);
+        appSocket.on('chat:group_created', onGroupSidebarRefresh);
+        appSocket.on('chat:group_updated', onGroupUpdated);
+        appSocket.on('chat:group_deleted', onGroupDeleted);
 
         reg('chat:error', (data: { message?: string }) => {
           if (cancelled) return;
@@ -581,7 +647,9 @@ export default function TeamsMessenger() {
         appSocket.off(event, handler);
       }
       socketListenersRef.current = [];
-      appSocket.off('chat:group_created', onGroupCreated);
+      appSocket.off('chat:group_created', onGroupSidebarRefresh);
+      appSocket.off('chat:group_updated', onGroupUpdated);
+      appSocket.off('chat:group_deleted', onGroupDeleted);
     };
   }, [myAuthId, user?.role, user?.orgId, user?.tenantId, fetchSidebar]);
 
@@ -1011,6 +1079,162 @@ export default function TeamsMessenger() {
     setAddContactSearch('');
   };
 
+  const canManageSelectedGroup =
+    selectedUser?.chatKind === 'group' &&
+    (user?.role === 'admin' ||
+      user?.role === 'super_admin' ||
+      user?.role === 'hr' ||
+      selectedUser.createdBy === myAuthId);
+
+  const addGroupMemberCandidates = visibleUsers.filter(
+    (u) =>
+      selectedUser?.chatKind === 'group' &&
+      !(selectedUser.memberIds || []).includes(u.id)
+  );
+
+  const handleUpdateGroupName = async () => {
+    if (!selectedUser?.conversationId) return;
+    const name = editGroupName.trim();
+    if (!name) {
+      toast.error('Enter a group name');
+      return;
+    }
+    setSavingGroup(true);
+    try {
+      const res = await apiPatch<{
+        success?: boolean;
+        message?: string;
+        data?: { name: string; memberIds: string[] };
+      }>(`/chat/groups/${encodeURIComponent(selectedUser.conversationId)}`, { name });
+      if (res?.success === false) {
+        throw new Error(res?.message || 'Could not update group');
+      }
+      toast.success('Group name updated');
+      setShowEditGroupDialog(false);
+      await fetchSidebar();
+      setSelectedUser((prev) =>
+        prev && prev.conversationId === selectedUser.conversationId
+          ? { ...prev, name }
+          : prev
+      );
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Failed to update group');
+    } finally {
+      setSavingGroup(false);
+    }
+  };
+
+  const handleAddGroupMembers = async () => {
+    if (!selectedUser?.conversationId) return;
+    if (addGroupMemberIds.size === 0) {
+      toast.error('Select at least one person to add');
+      return;
+    }
+    setSavingGroup(true);
+    try {
+      const res = await apiPost<{
+        success?: boolean;
+        message?: string;
+        data?: { memberIds: string[]; name: string };
+      }>(`/chat/groups/${encodeURIComponent(selectedUser.conversationId)}/members`, {
+        memberIds: [...addGroupMemberIds],
+      });
+      if (res?.success === false) {
+        throw new Error(res?.message || 'Could not add members');
+      }
+      toast.success('Members added');
+      setShowAddGroupMembersDialog(false);
+      setAddGroupMemberIds(new Set());
+      await fetchSidebar();
+      if (res?.data?.memberIds) {
+        setSelectedUser((prev) =>
+          prev && prev.conversationId === selectedUser.conversationId
+            ? {
+                ...prev,
+                memberIds: res.data!.memberIds,
+                email: `${res.data!.memberIds.length} members`,
+              }
+            : prev
+        );
+      }
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Failed to add members');
+    } finally {
+      setSavingGroup(false);
+    }
+  };
+
+  const handleGroupAvatarUpload = async (file: File) => {
+    if (!selectedUser?.conversationId || selectedUser.chatKind !== 'group') return;
+    if (!canManageSelectedGroup) {
+      toast.error('You cannot change this group photo');
+      return;
+    }
+    setAvatarUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('avatar', file);
+      const res = await apiUpload<{
+        success?: boolean;
+        message?: string;
+        data?: { avatar?: string };
+      }>(`/chat/groups/${encodeURIComponent(selectedUser.conversationId)}/avatar`, formData);
+      if (res?.success === false) {
+        throw new Error(res?.message || 'Upload failed');
+      }
+      const url = resolveAvatarUrl(res?.data?.avatar);
+      setGroupChats((prev) =>
+        prev.map((g) =>
+          g.conversationId === selectedUser.conversationId ? { ...g, avatar: url } : g
+        )
+      );
+      setSelectedUser((prev) =>
+        prev && prev.conversationId === selectedUser.conversationId
+          ? { ...prev, avatar: url }
+          : prev
+      );
+      toast.success('Group photo updated');
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Failed to upload group photo');
+    } finally {
+      setAvatarUploading(false);
+      if (groupAvatarInputRef.current) groupAvatarInputRef.current.value = '';
+    }
+  };
+
+  const handleDeleteGroup = async () => {
+    if (!selectedUser?.conversationId || selectedUser.chatKind !== 'group') return;
+    if (!canManageSelectedGroup) {
+      toast.error('You cannot delete this group');
+      return;
+    }
+    if (
+      !window.confirm(
+        `Delete group "${selectedUser.name}"? This removes the chat for all members.`
+      )
+    ) {
+      return;
+    }
+    setSavingGroup(true);
+    try {
+      const res = await apiDelete<{ success?: boolean; message?: string }>(
+        `/chat/groups/${encodeURIComponent(selectedUser.conversationId)}`
+      );
+      if (res?.success === false) {
+        throw new Error(res?.message || 'Could not delete group');
+      }
+      toast.success('Group deleted');
+      setShowProfileDialog(false);
+      setSelectedUser(null);
+      setMessages([]);
+      await fetchSidebar();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Failed to delete group');
+    } finally {
+      setSavingGroup(false);
+    }
+  };
+
   const handleCreateGroupSubmit = async () => {
     const name = newGroupName.trim();
     if (!name) {
@@ -1328,37 +1552,85 @@ export default function TeamsMessenger() {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-56">
-                    <DropdownMenuItem onClick={() => setShowProfileDialog(true)}>
+                    <DropdownMenuItem
+                      type="button"
+                      onClick={() => setShowProfileDialog(true)}
+                    >
                       <User className="w-4 h-4 mr-2" />
                       {selectedUser.chatKind === 'group' ? 'Group details' : 'View profile'}
                     </DropdownMenuItem>
-                    {selectedUser.chatKind !== 'group' ? (
-                      <DropdownMenuItem onClick={() => profileAvatarInputRef.current?.click()}>
-                        <Camera className="w-4 h-4 mr-2" />
-                        Change photo
-                      </DropdownMenuItem>
-                    ) : null}
-                    {selectedUser.chatKind !== 'group' ? <DropdownMenuSeparator /> : null}
-                    {selectedUser.chatKind !== 'group' ? (
-                      <DropdownMenuItem
-                        className="text-destructive focus:text-destructive"
-                        onClick={handleRemoveContact}
-                      >
-                        <UserMinus className="w-4 h-4 mr-2" />
-                        Remove contact
-                      </DropdownMenuItem>
-                    ) : null}
-                    {selectedUser.chatKind !== 'group' ? (
-                      <DropdownMenuItem
-                        onClick={() =>
-                          toast.info(
-                            'Calls use Microsoft Teams meetings inside WorkPlus. Your org must have Teams Graph permissions configured.'
-                          )
-                        }
-                      >
-                        About Teams calls
-                      </DropdownMenuItem>
-                    ) : null}
+                    {selectedUser.chatKind === 'group' ? (
+                      <>
+                        <DropdownMenuItem
+                          type="button"
+                          onClick={() => {
+                            setEditGroupName(selectedUser.name);
+                            setShowEditGroupDialog(true);
+                          }}
+                          disabled={!canManageSelectedGroup}
+                        >
+                          <Pencil className="w-4 h-4 mr-2" />
+                          Edit group name
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          type="button"
+                          onClick={() => {
+                            setAddGroupMemberIds(new Set());
+                            setShowAddGroupMembersDialog(true);
+                          }}
+                        >
+                          <UserPlus className="w-4 h-4 mr-2" />
+                          Add members
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          type="button"
+                          onClick={() => groupAvatarInputRef.current?.click()}
+                          disabled={!canManageSelectedGroup || avatarUploading}
+                        >
+                          <Camera className="w-4 h-4 mr-2" />
+                          Change group photo
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          type="button"
+                          className="text-destructive focus:text-destructive"
+                          onClick={() => void handleDeleteGroup()}
+                          disabled={!canManageSelectedGroup || savingGroup}
+                        >
+                          <Trash2 className="w-4 h-4 mr-2" />
+                          Delete group
+                        </DropdownMenuItem>
+                      </>
+                    ) : (
+                      <>
+                        <DropdownMenuItem
+                          type="button"
+                          onClick={() => profileAvatarInputRef.current?.click()}
+                        >
+                          <Camera className="w-4 h-4 mr-2" />
+                          Change photo
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          type="button"
+                          className="text-destructive focus:text-destructive"
+                          onClick={handleRemoveContact}
+                        >
+                          <UserMinus className="w-4 h-4 mr-2" />
+                          Remove contact
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          type="button"
+                          onClick={() =>
+                            toast.info(
+                              'Calls use Microsoft Teams meetings inside WorkPlus. Your org must have Teams Graph permissions configured.'
+                            )
+                          }
+                        >
+                          About Teams calls
+                        </DropdownMenuItem>
+                      </>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -1577,6 +1849,16 @@ export default function TeamsMessenger() {
         if (file) handleAvatarUpload(file);
       }}
     />
+    <input
+      ref={groupAvatarInputRef}
+      type="file"
+      accept="image/jpeg,image/png,image/gif,image/webp"
+      className="hidden"
+      onChange={(e) => {
+        const file = e.target.files?.[0];
+        if (file) void handleGroupAvatarUpload(file);
+      }}
+    />
 
     <Dialog open={showProfileDialog} onOpenChange={setShowProfileDialog}>
       <DialogContent className="max-w-sm rounded-2xl">
@@ -1588,9 +1870,20 @@ export default function TeamsMessenger() {
         </DialogHeader>
         {selectedUser && selectedUser.chatKind === 'group' ? (
           <div className="space-y-3 text-sm">
-            <p className="text-muted-foreground">
-              {(selectedUser.memberIds || []).length} members
-            </p>
+            <div className="flex items-center gap-3">
+              <Avatar className="h-14 w-14">
+                <AvatarImage src={selectedUser.avatar} />
+                <AvatarFallback>
+                  <UsersRound className="w-6 h-6" />
+                </AvatarFallback>
+              </Avatar>
+              <div>
+                <p className="font-semibold">{selectedUser.name}</p>
+                <p className="text-muted-foreground text-xs">
+                  {(selectedUser.memberIds || []).length} members
+                </p>
+              </div>
+            </div>
             <ul className="list-disc pl-5 space-y-1 max-h-52 overflow-y-auto">
               {(selectedUser.memberIds || []).map((mid) => (
                 <li key={mid}>
@@ -1600,6 +1893,36 @@ export default function TeamsMessenger() {
                 </li>
               ))}
             </ul>
+            {canManageSelectedGroup && (
+              <div className="flex flex-col gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setEditGroupName(selectedUser.name);
+                    setShowEditGroupDialog(true);
+                    setShowProfileDialog(false);
+                  }}
+                >
+                  <Pencil className="w-4 h-4 mr-1" />
+                  Edit name
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setAddGroupMemberIds(new Set());
+                    setShowAddGroupMembersDialog(true);
+                    setShowProfileDialog(false);
+                  }}
+                >
+                  <UserPlus className="w-4 h-4 mr-1" />
+                  Add members
+                </Button>
+              </div>
+            )}
           </div>
         ) : selectedUser ? (
           <div className="space-y-4">
@@ -1641,6 +1964,96 @@ export default function TeamsMessenger() {
             </Button>
           </div>
         ) : null}
+      </DialogContent>
+    </Dialog>
+
+    <Dialog open={showEditGroupDialog} onOpenChange={setShowEditGroupDialog}>
+      <DialogContent className="z-[200] max-w-sm rounded-2xl">
+        <DialogHeader>
+          <DialogTitle>Edit group name</DialogTitle>
+          <DialogDescription>Update the name for everyone in this group.</DialogDescription>
+        </DialogHeader>
+        <Input
+          placeholder="Group name"
+          value={editGroupName}
+          onChange={(e) => setEditGroupName(e.target.value)}
+        />
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button type="button" variant="outline" onClick={() => setShowEditGroupDialog(false)}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={savingGroup}
+            onClick={() => void handleUpdateGroupName()}
+          >
+            {savingGroup ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog open={showAddGroupMembersDialog} onOpenChange={setShowAddGroupMembersDialog}>
+      <DialogContent className="z-[200] max-w-md rounded-2xl max-h-[90vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Add members</DialogTitle>
+          <DialogDescription>
+            Choose employees to add to {selectedUser?.name || 'this group'}.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto border rounded-lg p-2 space-y-1 max-h-64">
+          {addGroupMemberCandidates.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              Everyone in your org is already in this group.
+            </p>
+          ) : (
+            addGroupMemberCandidates.map((c) => (
+              <label
+                key={c.id}
+                className="flex items-center gap-3 p-2 rounded-md hover:bg-accent cursor-pointer"
+              >
+                <Checkbox
+                  checked={addGroupMemberIds.has(c.id)}
+                  onCheckedChange={(checked) => {
+                    setAddGroupMemberIds((prev) => {
+                      const next = new Set(prev);
+                      if (checked === true) next.add(c.id);
+                      else next.delete(c.id);
+                      return next;
+                    });
+                  }}
+                />
+                <Avatar className="h-8 w-8 shrink-0">
+                  <AvatarImage src={c.avatar} />
+                  <AvatarFallback>{c.name.charAt(0)}</AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{c.name}</p>
+                  <p className="text-xs text-muted-foreground truncate">{c.email}</p>
+                </div>
+              </label>
+            ))
+          )}
+        </div>
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setShowAddGroupMembersDialog(false);
+              setAddGroupMemberIds(new Set());
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={savingGroup}
+            onClick={() => void handleAddGroupMembers()}
+          >
+            {savingGroup ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Add members'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
 

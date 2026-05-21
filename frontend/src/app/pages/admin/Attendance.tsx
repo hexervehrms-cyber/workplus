@@ -903,10 +903,12 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
                       <td className="p-4">
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
-                            <span className="text-xs font-medium">{log.employeeName.charAt(0)}</span>
+                            <span className="text-xs font-medium">
+                              {(log.employeeName || '?').charAt(0).toUpperCase()}
+                            </span>
                           </div>
                           <div>
-                            <p className="font-medium text-sm">{log.employeeName}</p>
+                            <p className="font-medium text-sm">{log.employeeName || 'Unknown'}</p>
                           </div>
                         </div>
                       </td>

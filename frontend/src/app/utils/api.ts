@@ -720,6 +720,10 @@ export function extractApiList<T = unknown>(response: unknown): T[] {
   if (!response || typeof response !== 'object') return [];
   const body = response as { data?: unknown };
   if (Array.isArray(body.data)) return body.data as T[];
+  if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
+    const nested = (body.data as { data?: unknown }).data;
+    if (Array.isArray(nested)) return nested as T[];
+  }
   return [];
 }
 
@@ -801,12 +805,25 @@ export class LeaveRequestService {
   }
 
   static async deleteLeaveRequest(requestId: string) {
-    const response = await apiClient.delete<any>(`/leave-requests/${requestId}`);
+    const { apiDelete, clearApiCache } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    const response = await apiDelete<{ success?: boolean; message?: string }>(
+      `/leave-requests/${requestId}`
+    );
+    clearApiCache('/leave-requests');
     return response;
   }
 
   static async updateLeaveRequest(requestId: string, data: any) {
-    const response = await apiClient.patch<any>(`/leave-requests/${requestId}`, data);
+    const { apiPatch, clearApiCache } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    const response = await apiPatch<{ success?: boolean; message?: string; data?: unknown }>(
+      `/leave-requests/${requestId}`,
+      data
+    );
+    clearApiCache('/leave-requests');
     return response;
   }
 

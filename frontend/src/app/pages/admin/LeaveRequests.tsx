@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { Calendar, Loader2, CheckCircle, XCircle } from 'lucide-react';
+import { Calendar, Loader2, CheckCircle, XCircle, Eye } from 'lucide-react';
 import { LeaveRequestService, extractApiList } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
@@ -42,6 +42,7 @@ export default function LeaveRequests() {
   const [selectedRequest, setSelectedRequest] = useState<LeaveRequest | null>(null);
   const [showApproveDialog, setShowApproveDialog] = useState(false);
   const [showRejectDialog, setShowRejectDialog] = useState(false);
+  const [showViewDialog, setShowViewDialog] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -261,42 +262,58 @@ export default function LeaveRequests() {
                     <td className="p-4 text-sm text-muted-foreground max-w-xs truncate">{request.reason}</td>
                     <td className="p-4">
                       <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusColor(request.status)}`}>
-                        {request.status.charAt(0).toUpperCase() + request.status.slice(1)}
+                        {(() => {
+                          const s = String(request.status || 'pending');
+                          return s.charAt(0).toUpperCase() + s.slice(1);
+                        })()}
                       </span>
                     </td>
                     <td className="p-4">
-                      {isPending(request.status) ? (
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="default"
-                            className="rounded-lg bg-green-600 hover:bg-green-700"
-                            onClick={() => {
-                              setSelectedRequest(request);
-                              setShowApproveDialog(true);
-                            }}
-                          >
-                            <CheckCircle className="w-4 h-4 mr-1" />
-                            Approve
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            className="rounded-lg"
-                            onClick={() => {
-                              setSelectedRequest(request);
-                              setShowRejectDialog(true);
-                            }}
-                          >
-                            <XCircle className="w-4 h-4 mr-1" />
-                            Reject
-                          </Button>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">
-                          {request.status === 'approved' ? 'Approved' : 'Rejected'}
-                        </span>
-                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="rounded-lg"
+                          onClick={() => {
+                            setSelectedRequest(request);
+                            setShowViewDialog(true);
+                          }}
+                        >
+                          <Eye className="w-4 h-4 mr-1" />
+                          View
+                        </Button>
+                        {isPending(request.status) && (
+                          <>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="default"
+                              className="rounded-lg bg-green-600 hover:bg-green-700"
+                              onClick={() => {
+                                setSelectedRequest(request);
+                                setShowApproveDialog(true);
+                              }}
+                            >
+                              <CheckCircle className="w-4 h-4 mr-1" />
+                              Approve
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              className="rounded-lg"
+                              onClick={() => {
+                                setSelectedRequest(request);
+                                setShowRejectDialog(true);
+                              }}
+                            >
+                              <XCircle className="w-4 h-4 mr-1" />
+                              Reject
+                            </Button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -426,6 +443,48 @@ export default function LeaveRequests() {
               )}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showViewDialog} onOpenChange={setShowViewDialog}>
+        <DialogContent className="max-w-md rounded-2xl border-0 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold">Leave Request Details</DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Full request information
+            </DialogDescription>
+          </DialogHeader>
+          {selectedRequest && (
+            <div className="space-y-2 py-2 text-sm">
+              <p>
+                <span className="font-medium">Employee:</span> {selectedRequest.employeeName}
+              </p>
+              <p>
+                <span className="font-medium">Type:</span>{' '}
+                {selectedRequest.type || selectedRequest.leaveType}
+              </p>
+              <p>
+                <span className="font-medium">Period:</span>{' '}
+                {new Date(selectedRequest.startDate).toLocaleDateString()} –{' '}
+                {new Date(selectedRequest.endDate).toLocaleDateString()}
+              </p>
+              <p>
+                <span className="font-medium">Status:</span>{' '}
+                {String(selectedRequest.status || 'pending')}
+              </p>
+              <p>
+                <span className="font-medium">Reason:</span> {selectedRequest.reason || '—'}
+              </p>
+            </div>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full rounded-xl"
+            onClick={() => setShowViewDialog(false)}
+          >
+            Close
+          </Button>
         </DialogContent>
       </Dialog>
     </div>

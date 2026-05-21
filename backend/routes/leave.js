@@ -877,7 +877,27 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
     });
   }
 
-  const query = { ...userIdMatchFilter(userId), orgId: String(tenantOrg) };
+  const query = { orgId: String(tenantOrg) };
+
+  if (
+    ['employee', 'manager', 'accountant'].includes(req.user.role) &&
+    isSelfServiceUser(req, userId)
+  ) {
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    const userFilters = userIdMatchFilter(req.user.userId);
+    if (emp?._id) {
+      query.$or = [
+        ...(userFilters.$or ? userFilters.$or : [userFilters]),
+        { employeeId: emp._id },
+      ];
+    } else {
+      Object.assign(query, userFilters);
+    }
+  } else {
+    Object.assign(query, userIdMatchFilter(userId));
+  }
   
   if (status) {
     query.status = status;
@@ -1057,6 +1077,10 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     });
   }
   const isPrivilegedCreator = ['admin', 'hr', 'manager', 'super_admin'].includes(req.user.role);
+  let effectiveUserId = userId;
+  let effectiveEmployeeId = employeeId;
+  let effectiveOrgId = resolvedOrgId;
+
   if (!isPrivilegedCreator) {
     const emp = await findEmployeeForSelfService(req.user.userId, resolvedOrgId, {
       allowCrossOrgFallback: true,
@@ -1068,15 +1092,9 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
         message: 'Employee profile not found for your account',
       });
     }
-    if (
-      !isSelfServiceUser(req, userId) ||
-      String(employeeId) !== String(emp._id)
-    ) {
-      return res.status(403).json({
-        success: false,
-        message: 'Cannot submit leave on behalf of another user',
-      });
-    }
+    effectiveUserId = req.user.userId;
+    effectiveEmployeeId = emp._id;
+    effectiveOrgId = String(emp.orgId || resolvedOrgId);
   } else if (
     req.user.role !== 'super_admin' &&
     tenantOrg &&
@@ -1231,8 +1249,10 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   }
 
   // Check for overlapping leave requests - FIXED for half-day leaves
+  const allocationOrgId = String(effectiveOrgId || tenantOrg || orgId || '').trim();
+
   let overlapQuery = {
-    employeeId,
+    employeeId: effectiveEmployeeId,
     orgId: allocationOrgId,
     status: { $in: ['pending', 'approved'] }
   };
@@ -1273,10 +1293,9 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
 
   // CRITICAL: Check leave balance before creating request
   const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
-  const allocationOrgId = String(resolvedOrgId || tenantOrg || orgId);
   const allocation = await findCurrentLeaveAllocation(
     LeaveAllocation,
-    employeeId,
+    effectiveEmployeeId,
     allocationOrgId,
     start
   );
@@ -1304,8 +1323,8 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     });
   }
 
-  const userObjectId = toObjectIdIfValid(userId) || userId;
-  const employeeObjectId = toObjectIdIfValid(employeeId) || employeeId;
+  const userObjectId = toObjectIdIfValid(effectiveUserId) || effectiveUserId;
+  const employeeObjectId = toObjectIdIfValid(effectiveEmployeeId) || effectiveEmployeeId;
 
   // Create leave request
   const leaveRequest = await LeaveRequest.create({

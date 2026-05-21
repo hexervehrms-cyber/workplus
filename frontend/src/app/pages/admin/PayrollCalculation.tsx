@@ -225,11 +225,13 @@ export default function PayrollCalculation() {
   };
 
   const filteredPayrolls = payrolls.filter((payroll) => {
+    const code =
+      typeof payroll.employeeId === 'object' && payroll.employeeId
+        ? payroll.employeeId.employeeCode || ''
+        : '';
     const matchesSearch =
       (payroll.userId?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (payroll.employeeId?.employeeCode || '')
-        .toLowerCase()
-        .includes(searchTerm.toLowerCase());
+      code.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || payroll.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
@@ -340,7 +342,11 @@ export default function PayrollCalculation() {
                     <td className="px-6 py-4 text-sm">
                       <div>
                         <p className="font-medium">{payroll.userId?.name ?? '—'}</p>
-                        <p className="text-xs text-muted-foreground">{payroll.employeeId.employeeCode}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {typeof payroll.employeeId === 'object'
+                            ? payroll.employeeId?.employeeCode
+                            : '—'}
+                        </p>
                       </div>
                     </td>
                     <td className="px-6 py-4 text-sm">
@@ -350,13 +356,13 @@ export default function PayrollCalculation() {
                       {payroll.workingDays}
                     </td>
                     <td className="px-6 py-4 text-sm">
-                      ₹{payroll.totalEarnings.toLocaleString()}
+                      ₹{Number(payroll.totalEarnings ?? 0).toLocaleString('en-IN')}
                     </td>
                     <td className="px-6 py-4 text-sm">
-                      ₹{payroll.totalDeductions.toLocaleString()}
+                      ₹{Number(payroll.totalDeductions ?? 0).toLocaleString('en-IN')}
                     </td>
                     <td className="px-6 py-4 text-sm font-semibold">
-                      ₹{payroll.netSalary.toLocaleString()}
+                      ₹{Number(payroll.netSalary ?? 0).toLocaleString('en-IN')}
                     </td>
                     <td className="px-6 py-4 text-sm">
                       <Badge className={`${getStatusColor(payroll.status)} border-0`}>
@@ -365,7 +371,16 @@ export default function PayrollCalculation() {
                     </td>
                     <td className="px-6 py-4 text-sm">
                       <div className="flex gap-2">
-                        <button className="p-1 hover:bg-muted rounded" title="View">
+                        <button
+                          type="button"
+                          className="p-1 hover:bg-muted rounded"
+                          title="View"
+                          onClick={() => {
+                            toast.info(
+                              `${payroll.userId?.name || 'Employee'} · ${new Date(payroll.fromDate).toLocaleDateString()}–${new Date(payroll.toDate).toLocaleDateString()} · Net ₹${Number(payroll.netSalary ?? 0).toLocaleString('en-IN')} (${payroll.status})`
+                            );
+                          }}
+                        >
                           <Eye className="w-4 h-4 text-muted-foreground" />
                         </button>
                         {payroll.status === 'calculated' && (
@@ -416,7 +431,7 @@ export default function PayrollCalculation() {
                     setFormData({
                       ...formData,
                       employeeId: value,
-                      baseSalary: emp?.baseSalary.toString() || ''
+                      baseSalary: emp?.baseSalary != null ? String(emp.baseSalary) : ''
                     });
                   }}>
                     <SelectTrigger className="mt-1 rounded-lg">
@@ -425,7 +440,7 @@ export default function PayrollCalculation() {
                     <SelectContent>
                       {employees.map((emp) => (
                         <SelectItem key={emp._id} value={emp._id}>
-                          {emp.userId.name} - {emp.employeeCode}
+                          {emp.userId?.name || 'Unknown'} - {emp.employeeCode}
                         </SelectItem>
                       ))}
                     </SelectContent>

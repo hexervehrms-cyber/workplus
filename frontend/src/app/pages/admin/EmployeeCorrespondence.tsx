@@ -424,12 +424,16 @@ export default function EmployeeCorrespondence() {
         <div className="flex items-start gap-6">
           <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
             <span className="text-xl font-medium text-primary">
-              {employee.userId?.name ? 
-                employee.userId.name.split(' ').map((n: string) => n[0]).join('').toUpperCase() :
-                employee.name ? 
-                employee.name.split(' ').map((n: string) => n[0]).join('').toUpperCase() :
-                'N/A'
-              }
+              {(() => {
+                const label =
+                  employee.userId?.name || employee.name || 'N/A';
+                return label
+                  .split(/\s+/)
+                  .filter(Boolean)
+                  .map((n: string) => n[0])
+                  .join('')
+                  .toUpperCase() || 'N/A';
+              })()}
             </span>
           </div>
           <div className="flex-1">

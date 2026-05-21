@@ -14,6 +14,28 @@ import {
 } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
 import { apiGet, apiPost, apiPut, apiDelete, apiFetchBlob } from '../../utils/apiHelper';
+import { assigneeDisplayName, safeFormatInr } from '../../utils/safeUi';
+import { useAuth } from '../../context/AuthContext';
+import { EmployeeService } from '../../utils/api';
+
+type AssignEmployeeOption = {
+  _id: string;
+  employeeCode?: string;
+  designation?: string;
+  department?: string;
+  name?: string;
+  userId?: { name?: string; email?: string } | string;
+};
+
+function employeeAssignLabel(emp: AssignEmployeeOption): string {
+  const name =
+    (typeof emp.userId === 'object' && emp.userId?.name) ||
+    emp.name ||
+    emp.employeeCode ||
+    'Unknown';
+  const extra = emp.designation || emp.department || '';
+  return extra ? `${name} · ${extra}` : name;
+}
 
 interface Asset {
   _id: string;
@@ -48,6 +70,7 @@ interface Asset {
 }
 
 export default function Assets() {
+  const { user } = useAuth();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -58,7 +81,8 @@ export default function Assets() {
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
-  const [employees, setEmployees] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<AssignEmployeeOption[]>([]);
+  const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [uploadedPhotos, setUploadedPhotos] = useState<any[]>([]);
   const [assetPhotos, setAssetPhotos] = useState<any[]>([]);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
@@ -287,6 +311,9 @@ export default function Assets() {
       setAssets(data?.data?.assets || []);
     } catch (error) {
       console.error('Error fetching assets:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to load assets'
+      );
     } finally {
       setLoading(false);
     }
@@ -294,10 +321,41 @@ export default function Assets() {
 
   const fetchEmployees = async () => {
     try {
-      const data = await apiGet<{ data?: { employees?: unknown[] } }>('employees', false);
-      setEmployees((data?.data?.employees || []) as typeof employees);
+      setLoadingEmployees(true);
+      const list = await EmployeeService.getAllEmployees(
+        user
+          ? { role: user.role, orgId: user.orgId, tenantId: user.tenantId }
+          : undefined
+      );
+      const normalized = (Array.isArray(list) ? list : []).map((emp: AssignEmployeeOption) => ({
+        _id: String(emp._id || ''),
+        employeeCode: emp.employeeCode,
+        designation: emp.designation,
+        department: emp.department,
+        name: emp.name,
+        userId: emp.userId,
+      })).filter((emp) => emp._id);
+      setEmployees(normalized);
+      return normalized;
     } catch (error) {
       console.error('Error fetching employees:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to load employees for assignment'
+      );
+      setEmployees([]);
+      return [];
+    } finally {
+      setLoadingEmployees(false);
+    }
+  };
+
+  const openAssignModal = async (asset: Asset) => {
+    setSelectedAsset(asset);
+    setAssignData({ assignedToId: '', location: '', reason: 'assignment' });
+    setShowAssignForm(true);
+    const list = await fetchEmployees();
+    if (list.length === 0) {
+      toast.error('No employees found for your organization. Add employees first.');
     }
   };
 
@@ -377,17 +435,21 @@ export default function Assets() {
     try {
       setSubmitting(true);
 
-      const data = await apiPut<{ data?: Asset }>(`assets/${selectedAsset._id}/assign`, {
+      const locationPayload = assignData.location?.trim()
+        ? { desk: assignData.location.trim() }
+        : undefined;
+
+      await apiPut<{ data?: Asset }>(`assets/${selectedAsset._id}/assign`, {
         assignedToId: assignData.assignedToId,
-        location: assignData.location,
+        location: locationPayload,
         reason: assignData.reason,
       });
 
-      setAssets(assets.map((a) => (a._id === selectedAsset._id ? (data?.data ?? a) : a)));
+      await fetchAssets();
       setShowAssignForm(false);
       setSelectedAsset(null);
       setAssignData({ assignedToId: '', location: '', reason: 'assignment' });
-      toast.success('Asset assigned successfully');
+      toast.success('Asset assigned — employee will see it under My Assets');
     } catch (error) {
       console.error('Error assigning asset:', error);
       toast.error('Failed to assign asset');
@@ -552,7 +614,7 @@ export default function Assets() {
                   <div className="flex items-center gap-2">
                     <User className="w-4 h-4 text-muted-foreground" />
                     <span className="text-muted-foreground">Assigned to:</span>
-                    <span className="font-medium">{asset.assignment.assignedTo.userId.name}</span>
+                    <span className="font-medium">{assigneeDisplayName(asset.assignment.assignedTo)}</span>
                   </div>
                 )}
 
@@ -560,7 +622,7 @@ export default function Assets() {
                   <div className="flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-muted-foreground" />
                     <span className="text-muted-foreground">Current Value:</span>
-                    <span className="font-medium">₹{asset.financial.currentValue.toLocaleString()}</span>
+                    <span className="font-medium">₹{safeFormatInr(asset.financial?.currentValue)}</span>
                   </div>
                 )}
 
@@ -592,10 +654,7 @@ export default function Assets() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => {
-                      setSelectedAsset(asset);
-                      setShowAssignForm(true);
-                    }}
+                    onClick={() => void openAssignModal(asset)}
                     className="flex-1 rounded-lg"
                   >
                     <ArrowRight className="w-4 h-4 mr-1" />
@@ -829,18 +888,37 @@ export default function Assets() {
 
                 <div>
                   <Label>Assign To *</Label>
-                  <Select value={assignData.assignedToId} onValueChange={(value) => setAssignData({ ...assignData, assignedToId: value })}>
+                  <Select
+                    value={assignData.assignedToId}
+                    onValueChange={(value) =>
+                      setAssignData({ ...assignData, assignedToId: value })
+                    }
+                    disabled={loadingEmployees || employees.length === 0}
+                  >
                     <SelectTrigger className="mt-1 rounded-lg">
-                      <SelectValue placeholder="Select employee" />
+                      <SelectValue
+                        placeholder={
+                          loadingEmployees
+                            ? 'Loading employees...'
+                            : employees.length === 0
+                              ? 'No employees available'
+                              : 'Select employee'
+                        }
+                      />
                     </SelectTrigger>
                     <SelectContent>
                       {employees.map((emp) => (
                         <SelectItem key={emp._id} value={emp._id}>
-                          {emp.userId?.name} - {emp.designation}
+                          {employeeAssignLabel(emp)}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  {!loadingEmployees && employees.length === 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      No active employees in this org. Add employees under Admin → Employees, then try again.
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -909,7 +987,7 @@ export default function Assets() {
                 <div>
                   <Label>Asset: {selectedAsset.assetName}</Label>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Assigned to: {selectedAsset.assignment?.assignedTo?.userId.name}
+                    Assigned to: {assigneeDisplayName(selectedAsset.assignment?.assignedTo)}
                   </p>
                 </div>
 

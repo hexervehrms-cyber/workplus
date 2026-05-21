@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
-import { Loader2, Package, Laptop, DollarSign, Calendar, MapPin, User, Image as ImageIcon, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Loader2, Package, Laptop, DollarSign, Calendar, MapPin, User, Image as ImageIcon, X, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
 import { apiGet } from '../../utils/apiHelper';
 
@@ -60,21 +60,46 @@ export default function EmployeeAssets() {
         success?: boolean;
         data?: { employeeId?: string; userId?: string; id?: string };
       }>('auth/me', false);
-      const employeeId =
-        userData?.data?.employeeId ||
-        (await apiGet<{ data?: { _id?: string } }>(
-          `employees/user/${userData?.data?.userId || userData?.data?.id || ''}`,
-          false
-        ))?.data?._id;
+      const me = userData?.data || userData;
+      let employeeId = me?.employeeId as string | undefined;
+
+      if (!employeeId) {
+        const authUserId = me?.userId || me?.id;
+        if (!authUserId) {
+          throw new Error('Employee profile not found');
+        }
+        const empRes = await apiGet<{
+          success?: boolean;
+          data?: { _id?: string };
+        }>(`employees/user/${authUserId}`, false);
+        const empRecord =
+          (empRes as { data?: { _id?: string } })?.data?.data ||
+          (empRes as { data?: { _id?: string } })?.data ||
+          empRes;
+        employeeId = (empRecord as { _id?: string })?._id;
+      }
+
       if (!employeeId) {
         throw new Error('Employee profile not found');
       }
 
       const data = await apiGet<{
-        data?: { assets?: Asset[]; totalValue?: number };
+        success?: boolean;
+        data?: { assets?: Asset[]; totalValue?: number; totalAssets?: number };
       }>(`assets/employee/${employeeId}`, false);
-      setAssets(data?.data?.assets || []);
-      setTotalValue(data?.data?.totalValue || 0);
+      const payload = data?.data || data;
+      setAssets(payload?.assets || []);
+      const tv = payload?.totalValue;
+      if (typeof tv === 'number') {
+        setTotalValue(tv);
+      } else {
+        setTotalValue(
+          (payload?.assets || []).reduce(
+            (sum, a) => sum + (a.financial?.currentValue || a.financial?.purchasePrice || 0),
+            0
+          )
+        );
+      }
     } catch (error) {
       console.error('Error fetching assets:', error);
       toast.error(
@@ -116,9 +141,15 @@ export default function EmployeeAssets() {
           <h1 className="text-3xl font-bold text-foreground">My Assets</h1>
           <p className="text-muted-foreground mt-1">Assets assigned to you</p>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Contact HR to request new asset assignments
-        </p>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => void fetchAssets()}>
+            <RefreshCw className="w-4 h-4 mr-1" />
+            Refresh
+          </Button>
+          <p className="text-sm text-muted-foreground">
+            Contact HR to request new asset assignments
+          </p>
+        </div>
       </div>
 
       {/* Summary Card */}

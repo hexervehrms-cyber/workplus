@@ -273,6 +273,10 @@ export default function Payroll() {
       setStructures(ensureArray<SalaryStructure>(data?.data));
     } catch (error) {
       console.error('Error fetching structures:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to load salary structures'
+      );
+      setStructures([]);
     } finally {
       setLoading(false);
     }
@@ -296,6 +300,10 @@ export default function Payroll() {
       setSalarySlips(ensureArray<SalarySlip>(data?.data));
     } catch (error) {
       console.error('Error fetching salary slips:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to load salary slips'
+      );
+      setSalarySlips([]);
     } finally {
       setLoading(false);
     }
@@ -455,6 +463,17 @@ export default function Payroll() {
     }
   };
 
+  const handleRejectStructure = async (structureId: string) => {
+    try {
+      await apiPut(`/salary/structure/${structureId}/reject`, {});
+      toast.success('Salary structure rejected');
+      fetchStructures();
+    } catch (error) {
+      console.error('Error rejecting structure:', error);
+      toast.error('Failed to reject salary structure');
+    }
+  };
+
   // Handle edit structure
   const handleEditStructure = async (structure: SalaryStructure) => {
     try {
@@ -477,36 +496,38 @@ export default function Payroll() {
         : new Date().toISOString().split('T')[0];
       setEffectiveFrom(eff);
 
-      setEarnings(
-        fullStructure.earnings || {
-          basic: 0,
-          hra: 0,
-          medicalExpenses: 0,
-          travel: 0,
-          internetCharges: 0,
-          nightShiftAllowance: 0,
-          incentives: 0,
-          bonus: 0,
-          commission: 0,
-          otherEarnings: []
-        }
-      );
+      const earn = fullStructure.earnings || {};
+      setEarnings({
+        basic: earn.basic ?? 0,
+        hra: earn.hra ?? 0,
+        medicalExpenses: earn.medicalExpenses ?? 0,
+        travel: earn.travel ?? 0,
+        internetCharges: earn.internetCharges ?? 0,
+        nightShiftAllowance: earn.nightShiftAllowance ?? 0,
+        incentives: earn.incentives ?? 0,
+        bonus: earn.bonus ?? 0,
+        commission: earn.commission ?? 0,
+        otherEarnings: Array.isArray(earn.otherEarnings) ? earn.otherEarnings : [],
+      });
 
-      setDeductions(
-        fullStructure.deductions || {
-          providentFund: 0,
-          employeeStateInsurance: 0,
-          professionalTax: 0,
-          incomeTax: 0,
-          otherDeductions: []
-        }
-      );
+      const ded = fullStructure.deductions || {};
+      setDeductions({
+        providentFund: ded.providentFund ?? 0,
+        employeeStateInsurance: ded.employeeStateInsurance ?? 0,
+        professionalTax: ded.professionalTax ?? 0,
+        incomeTax: ded.incomeTax ?? 0,
+        leaveDeduction: ded.leaveDeduction ?? 0,
+        otherDeductions: Array.isArray(ded.otherDeductions) ? ded.otherDeductions : [],
+      });
 
       setCtc(0);
       setAutoCalculateEnabled(false);
       setShowStructureDialog(true);
     } catch (error) {
       console.error('Error opening edit dialog:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to open salary structure'
+      );
       setEditingStructureId(null);
     }
   };
@@ -656,7 +677,10 @@ export default function Payroll() {
   const addOtherEarning = () => {
     setEarnings({
       ...earnings,
-      otherEarnings: [...earnings.otherEarnings, { name: '', amount: 0, description: '' }]
+      otherEarnings: [
+        ...(Array.isArray(earnings.otherEarnings) ? earnings.otherEarnings : []),
+        { name: '', amount: 0, description: '' },
+      ],
     });
   };
 
@@ -664,7 +688,10 @@ export default function Payroll() {
   const addOtherDeduction = () => {
     setDeductions({
       ...deductions,
-      otherDeductions: [...deductions.otherDeductions, { name: '', amount: 0, description: '' }]
+      otherDeductions: [
+        ...(Array.isArray(deductions.otherDeductions) ? deductions.otherDeductions : []),
+        { name: '', amount: 0, description: '' },
+      ],
     });
   };
 
@@ -784,6 +811,7 @@ export default function Payroll() {
                           size="sm"
                           variant="outline"
                           className="rounded-lg"
+                          onClick={() => void handleRejectStructure(structure._id)}
                         >
                           <X className="w-4 h-4 mr-2" />
                           Reject

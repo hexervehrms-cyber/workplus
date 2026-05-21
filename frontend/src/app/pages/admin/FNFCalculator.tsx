@@ -178,7 +178,7 @@ export default function AdminFNFCalculator() {
               <SelectContent>
                 {employees.map((emp) => (
                   <SelectItem key={emp._id} value={emp._id}>
-                    {emp.employeeCode} - {emp.userId.name}
+                    {emp.employeeCode} - {emp.userId?.name || 'Unknown'}
                   </SelectItem>
                 ))}
               </SelectContent>

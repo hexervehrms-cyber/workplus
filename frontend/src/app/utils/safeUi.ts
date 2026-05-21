@@ -52,6 +52,41 @@ export function safeCell(value: unknown): string {
   return '—';
 }
 
+/** Initials from a display name — never throws. */
+export function safeInitials(name: unknown, fallback = '?'): string {
+  const raw = typeof name === 'string' ? name.trim() : '';
+  if (!raw) return fallback;
+  const parts = raw.split(/\s+/).filter(Boolean);
+  if (!parts.length) return fallback;
+  return parts
+    .map((p) => p[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+/** Capitalize status/type strings safely. */
+export function safeTitleCase(value: unknown, fallback = '—'): string {
+  const s = String(value ?? '').trim();
+  if (!s) return fallback;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Name on nested assignment.userId (object or missing). */
+export function assigneeDisplayName(assignedTo: unknown): string {
+  if (!assignedTo || typeof assignedTo !== 'object') return '—';
+  const a = assignedTo as {
+    userId?: { name?: string } | string;
+    name?: string;
+  };
+  if (a.userId && typeof a.userId === 'object' && a.userId.name) {
+    return a.userId.name;
+  }
+  if (typeof a.userId === 'string' && a.userId) return a.userId;
+  if (a.name) return a.name;
+  return '—';
+}
+
 /** Run async work without bubbling rejections to the error boundary. */
 export function runSafe(
   label: string,

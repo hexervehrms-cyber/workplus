@@ -1249,7 +1249,12 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   }
 
   // Check for overlapping leave requests - FIXED for half-day leaves
-  const allocationOrgId = String(effectiveOrgId || tenantOrg || orgId || '').trim();
+  // Store under JWT tenant org for employees so admin leave list (scoped by org) always matches
+  const allocationOrgId = String(
+    !isPrivilegedCreator && tenantOrg
+      ? tenantOrg
+      : effectiveOrgId || tenantOrg || orgId || ''
+  ).trim();
 
   let overlapQuery = {
     employeeId: effectiveEmployeeId,

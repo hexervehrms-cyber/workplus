@@ -8,6 +8,7 @@ import express from 'express';
 import Attendance from '../models/Attendance.js';
 import AttendanceHistory from '../models/AttendanceHistory.js';
 import Employee from '../models/Employee.js';
+import User from '../models/User.js';
 import ActivityLog from '../models/ActivityLog.js';
 import { authorize, authenticate } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
@@ -252,8 +253,30 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
  * Build complete attendance activity feed (DB logs + reconstructed Attendance events).
  */
 async function getMergedAttendanceActivityLogs(req, options = {}) {
-  const authOrgId =
+  let authOrgId =
     userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId || req.user?.tenantId;
+
+  // Admin/HR JWT sometimes lacks orgId while employee rows use Employee.orgId — resolve from profile
+  if ((!authOrgId || authOrgId === 'system') && req.user?.userId && req.user?.role !== 'super_admin') {
+    try {
+      const emp = await findEmployeeForSelfService(req.user.userId, authOrgId || '', {
+        allowCrossOrgFallback: true,
+      });
+      if (emp?.orgId && String(emp.orgId) !== 'system') {
+        authOrgId = String(emp.orgId);
+      }
+    } catch {
+      /* ignore */
+    }
+    if (!authOrgId || authOrgId === 'system') {
+      const u = await User.findById(req.user.userId)
+        .select('orgId tenantId organization')
+        .lean();
+      const fromUser = u?.orgId || u?.tenantId || u?.organization;
+      if (fromUser && String(fromUser) !== 'system') authOrgId = String(fromUser);
+    }
+  }
+
   const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
   const skip = Math.max(parseInt(req.query.skip, 10) || 0, 0);
   const userIdFilter = options.userId || null;
@@ -280,7 +303,7 @@ async function getMergedAttendanceActivityLogs(req, options = {}) {
     }
   }
 
-  const orgMatch = buildOrgIdFlexible(authOrgId);
+  const orgMatch = authOrgId ? buildOrgIdFlexible(authOrgId) : {};
   const logQuery = {
     ...orgMatch,
     action: { $in: ATTENDANCE_ACTIVITY_ACTIONS },

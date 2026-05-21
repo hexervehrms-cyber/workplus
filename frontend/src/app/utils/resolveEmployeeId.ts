@@ -25,12 +25,14 @@ export async function resolveEmployeeMongoId(user: {
     const employeeResponse = await apiGet<{
       success?: boolean;
       data?: { _id?: string; id?: string };
+      _id?: string;
     }>(`/employees/user/${userId}`, false);
-    const payload = employeeResponse as { _id?: string; data?: { _id?: string; id?: string } };
-    const empId =
-      payload?._id ||
-      payload?.data?._id ||
-      payload?.data?.id;
+    const payload = employeeResponse as {
+      _id?: string;
+      data?: { _id?: string; id?: string };
+    };
+    const emp = payload?.data ?? payload;
+    const empId = emp?._id || emp?.id;
     if (empId && isLikelyMongoObjectId(String(empId))) {
       return String(empId);
     }

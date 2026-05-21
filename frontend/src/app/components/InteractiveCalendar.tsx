@@ -20,7 +20,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
-import { LeaveRequestService, ApiError, extractApiList } from '../utils/api';
+import { LeaveRequestService, extractApiList } from '../utils/api';
+import {
+  buildAndSubmitLeaveRequest,
+  formatLocalDateString,
+  isLeaveApiSuccess,
+} from '../utils/leaveSubmit';
 import {
   apiGetSafe,
   appendOrgIdParam,
@@ -226,7 +231,7 @@ export default function InteractiveCalendar() {
 
   // Open leave form
   const openLeaveForm = (day: Date) => {
-    const dateStr = day.toISOString().split('T')[0];
+    const dateStr = formatLocalDateString(day);
     setSelectedDate(dateStr);
     setFormData({
       type: '',
@@ -242,75 +247,58 @@ export default function InteractiveCalendar() {
 
   // Submit leave request
   const handleSubmitLeave = async () => {
-    const authUserId = user?.userId || user?.id;
-    if (!authUserId || !formData.type || !formData.startDate || !formData.endDate || !formData.reason) {
-      toast.error('Please fill in all required fields');
-      return;
-    }
-
-    if (formData.isHourlyLeave && (!formData.startTime || !formData.endTime)) {
-      toast.error('Please select start and end time for hourly leave');
-      return;
-    }
-
     try {
       setSubmittingLeave(true);
-      const { resolveEmployeeMongoId } = await import('../utils/resolveEmployeeId');
-      const employeeId = await resolveEmployeeMongoId(user);
-      if (!employeeId) {
-        toast.error('Employee profile not found. Please contact HR.');
-        return;
-      }
-      const orgId = user?.orgId || user?.tenantId;
-      if (!orgId || orgId === 'system') {
-        toast.error('Organization not set on your account. Please sign out and sign in again.');
-        return;
-      }
-
-      const startDate = new Date(formData.startDate);
-      const endDate = new Date(formData.endDate);
-
-      const leaveData = {
-        userId: authUserId,
-        employeeId: employeeId,
-        leaveType: formData.type,
-        startDate: startDate.toISOString(),
-        endDate: endDate.toISOString(),
+      const result = await buildAndSubmitLeaveRequest(user, {
+        type: formData.type,
+        startDate: formData.startDate,
+        endDate: formData.endDate,
         reason: formData.reason,
-        orgId: orgId,
         isHourlyLeave: formData.isHourlyLeave,
-        startTime: formData.isHourlyLeave ? formData.startTime : undefined,
-        endTime: formData.isHourlyLeave ? formData.endTime : undefined
-      };
+        leaveDuration: formData.isHourlyLeave ? 'hourly' : 'full',
+        startTime: formData.startTime,
+        endTime: formData.endTime,
+      });
 
-      const response = await LeaveRequestService.createLeaveRequest(leaveData);
-      
-      if (response?.success) {
-        const autoApproved = !!(response.data as { autoApproved?: boolean })?.autoApproved;
-        toast.success(
-          autoApproved
-            ? 'Leave request was auto-approved by policy'
-            : 'Leave request submitted — pending admin approval'
-        );
-        setShowLeaveForm(false);
-        setFormData({ type: '', startDate: '', endDate: '', startTime: '09:00', endTime: '10:00', isHourlyLeave: false, reason: '' });
-        
-        await loadLeaveHistory();
-      } else {
-        toast.error(response?.message || 'Failed to submit leave request');
+      if (!result.ok) {
+        let msg = result.error || 'Failed to submit leave request';
+        if (msg.toLowerCase().includes('route not found')) {
+          msg = 'Leave API unavailable — redeploy backend or sign in again.';
+        }
+        toast.error(msg);
+        return;
       }
+
+      const response = result.response;
+      const autoApproved =
+        isLeaveApiSuccess(response) &&
+        !!(
+          (response as { data?: { autoApproved?: boolean; leaveRequest?: { autoApproved?: boolean } } })
+            ?.data?.autoApproved ||
+          (response as { data?: { leaveRequest?: { autoApproved?: boolean } } })?.data?.leaveRequest
+            ?.autoApproved
+        );
+      toast.success(
+        autoApproved
+          ? 'Leave request was auto-approved by policy'
+          : 'Leave request submitted — pending admin approval'
+      );
+      setShowLeaveForm(false);
+      setFormData({
+        type: '',
+        startDate: '',
+        endDate: '',
+        startTime: '09:00',
+        endTime: '10:00',
+        isHourlyLeave: false,
+        reason: '',
+      });
+      await loadLeaveHistory();
     } catch (error) {
       console.error('Error submitting leave request:', error);
-      let msg =
-        error instanceof ApiError
-          ? error.getUserMessage()
-          : error instanceof Error
-            ? error.message
-            : 'Failed to submit leave request';
-      if (msg.toLowerCase().includes('route not found')) {
-        msg = 'Leave API unavailable — redeploy backend or sign in again.';
-      }
-      toast.error(msg);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to submit leave request'
+      );
     } finally {
       setSubmittingLeave(false);
     }

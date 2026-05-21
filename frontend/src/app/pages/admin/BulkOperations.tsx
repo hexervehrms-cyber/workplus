@@ -9,7 +9,7 @@ import {
   Users, DollarSign, Package
 } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
-import { apiFetch, apiPost } from '../../utils/apiHelper';
+import { apiFetch, apiPost, getBearerToken } from '../../utils/apiHelper';
 
 interface ExportStats {
   totalRecords: number;
@@ -102,8 +102,7 @@ export default function BulkOperations() {
       return;
     }
 
-    const token = getBearer();
-    if (!token) {
+    if (!getBearerToken()) {
       toast.error('Authentication token not found. Please log in again.');
       return;
     }

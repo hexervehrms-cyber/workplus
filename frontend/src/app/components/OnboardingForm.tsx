@@ -146,8 +146,13 @@ const OnboardingForm: React.FC<{
     let filledFields = 0;
     const totalFields = Object.keys(formData).length;
     
-    Object.values(formData).forEach(value => {
-      if (value.trim() !== '') filledFields++;
+    Object.values(formData).forEach((value) => {
+      if (value == null) return;
+      if (typeof value === 'string') {
+        if (value.trim() !== '') filledFields++;
+        return;
+      }
+      if (value instanceof File) filledFields++;
     });
 
     const uploadedFiles = documents.filter(doc => doc.file !== null).length;

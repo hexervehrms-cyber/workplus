@@ -15,7 +15,15 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { apiClient } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
-import { apiFetch, apiGet, apiPost } from '../../utils/apiHelper';
+import {
+  apiFetch,
+  apiGet,
+  apiPost,
+  appendOrgIdParam,
+  resolveAuthOrgId,
+  resolveOrgIdForApi,
+} from '../../utils/apiHelper';
+import { extractApiList } from '../../utils/api';
 import realTimeSocket from '../../utils/realTimeSocket';
 
 interface AttendanceRecord {
@@ -110,10 +118,11 @@ export default function AttendanceAdmin() {
   const [viewTitle, setViewTitle] = useState('Attendance details');
 
   useEffect(() => {
-    if (authLoading || !user?.id) return;
+    const authUserKey = user?.userId || user?.id;
+    if (authLoading || !authUserKey) return;
 
     realTimeSocket.connectFromAuth({
-      id: String(user.id),
+      id: String(authUserKey),
       role: user.role,
       orgId: user.orgId || user.tenantId,
       tenantId: user.tenantId || user.orgId,
@@ -156,6 +165,7 @@ export default function AttendanceAdmin() {
     };
   }, [
     authLoading,
+    user?.userId,
     user?.id,
     user?.role,
     user?.orgId,
@@ -172,10 +182,18 @@ export default function AttendanceAdmin() {
     try {
       setLoading(true);
       await ensureAccessToken();
-      const response = await apiClient.get<AttendanceRecord[]>(`/dashboard/todays-attendance?t=${Date.now()}`);
+      const orgId = resolveAuthOrgId(user) || (await resolveOrgIdForApi(user));
+      let url = `/dashboard/todays-attendance?t=${Date.now()}`;
+      if (orgId) {
+        url = appendOrgIdParam(url, user, orgId);
+      }
+      const response = await apiGet<{ success?: boolean; data?: AttendanceRecord[]; message?: string }>(
+        url,
+        false
+      );
       if (gen !== fetchGenRef.current) return;
-      if (response?.success) {
-        const records = response.data ?? [];
+      if (response?.success !== false) {
+        const records = extractApiList<AttendanceRecord>(response);
         setAttendance(records);
         const present = records.filter((r: AttendanceRecord) => r.status === 'present').length;
         const late = records.filter((r: AttendanceRecord) => r.status === 'late').length;
@@ -196,7 +214,7 @@ export default function AttendanceAdmin() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user]);
 
   const fetchActivityLogs = useCallback(async (
     startDate?: string,
@@ -214,23 +232,19 @@ export default function AttendanceAdmin() {
       };
       if (startDate) params.startDate = startDate;
       if (endDate) params.endDate = endDate;
-      if (!startDate && !endDate) {
-        const end = new Date();
-        const start = new Date();
-        start.setDate(start.getDate() - 7);
-        params.startDate = start.toISOString().slice(0, 10);
-        params.endDate = end.toISOString().slice(0, 10);
+      const orgId = resolveAuthOrgId(user) || (await resolveOrgIdForApi(user));
+      let endpoint = `/attendance/activity-logs?${new URLSearchParams(params).toString()}`;
+      if (orgId) {
+        endpoint = appendOrgIdParam(endpoint, user, orgId);
       }
-      const qs = new URLSearchParams(params).toString();
-      const response = await apiGet<ActivityLogsResponse>(
-        `/attendance/activity-logs?${qs}`,
-        false
-      );
-      if (response?.success) {
-        const rows = response.data ?? [];
+      const response = await apiGet<ActivityLogsResponse>(endpoint, false);
+      if (response?.success !== false) {
+        const rows = extractApiList<ActivityLog>(response);
         setActivityLogs((prev) => (append ? [...prev, ...rows] : rows));
-        setActivityLogTotal(Number(response.total) || rows.length);
-        setActivityLogsHasMore(Boolean(response.hasMore));
+        setActivityLogTotal(
+          Number((response as ActivityLogsResponse).total) || rows.length
+        );
+        setActivityLogsHasMore(Boolean((response as ActivityLogsResponse).hasMore));
         setActivityLogsSkip(skip);
       } else if (!append) {
         toast.error(response?.message || 'Could not load activity log');
@@ -243,7 +257,7 @@ export default function AttendanceAdmin() {
     } finally {
       setLogsLoading(false);
     }
-  }, []);
+  }, [user]);
 
   // Export attendance data
   const handleExport = async () => {

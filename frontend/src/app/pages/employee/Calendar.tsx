@@ -33,6 +33,7 @@ import {
 } from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from '../../utils/portalToast';
+import { buildAndSubmitLeaveRequest, formatLocalDateString } from '../../utils/leaveSubmit';
 import realTimeSocket from '../../utils/realTimeSocket';
 
 interface LeaveRequest {
@@ -253,7 +254,7 @@ export default function Calendar() {
 
   // Open leave form
   const openLeaveForm = (day: Date) => {
-    const dateStr = day.toISOString().split('T')[0];
+    const dateStr = formatLocalDateString(day);
     setSelectedDate(dateStr);
     setFormData({
       type: '',
@@ -267,60 +268,35 @@ export default function Calendar() {
   // Submit leave request
   const handleSubmitLeave = async () => {
     const authUserId = String(user?.userId || user?.id || '');
-    if (!authUserId || !formData.type || !formData.startDate || !formData.endDate || !formData.reason) {
-      toast.error('Please fill in all required fields');
+    const result = await buildAndSubmitLeaveRequest(user, {
+      type: formData.type,
+      startDate: formData.startDate,
+      endDate: formData.endDate,
+      reason: formData.reason,
+    });
+
+    if (!result.ok) {
+      let msg = result.error || 'Failed to submit leave request';
+      if (msg.toLowerCase().includes('route not found')) {
+        msg = 'Leave API unavailable — redeploy backend or sign in again.';
+      }
+      toast.error(msg);
       return;
     }
 
-    try {
-      const { resolveEmployeeMongoId } = await import('../../utils/resolveEmployeeId');
-      const employeeId = await resolveEmployeeMongoId(user);
-      if (!employeeId) {
-        toast.error('Employee profile not found. Please contact HR.');
-        return;
-      }
-      const orgId = resolveAuthOrgId(user);
-      if (!orgId) {
-        toast.error('Organization not set on your account. Please sign out and sign in again.');
-        return;
-      }
+    toast.success('Leave request submitted — pending admin approval');
+    setShowLeaveForm(false);
+    setFormData({ type: '', startDate: '', endDate: '', reason: '' });
 
-      const startDate = new Date(formData.startDate);
-      const endDate = new Date(formData.endDate);
-
-      const leaveData = {
-        userId: authUserId,
-        employeeId: employeeId,
-        leaveType: formData.type,
-        startDate: startDate.toISOString(),
-        endDate: endDate.toISOString(),
-        reason: formData.reason,
-        orgId: orgId,
-      };
-
-      const response = await LeaveRequestService.createLeaveRequest(leaveData);
-
-      if (response?.success) {
-        toast.success('Leave request submitted successfully');
-        setShowLeaveForm(false);
-        setFormData({ type: '', startDate: '', endDate: '', reason: '' });
-        
-        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
-        if (updatedLeaves.success && updatedLeaves.data) {
-          const raw = updatedLeaves.data as LeaveRequest[] | { data?: LeaveRequest[] };
-          setLeaveHistory(Array.isArray(raw) ? raw : raw.data ?? []);
-        }
-      } else {
-        toast.error(response?.message || 'Failed to submit leave request');
-      }
-    } catch (error) {
-      console.error('Error submitting leave request:', error);
-      const msg = error instanceof Error ? error.message : 'Failed to submit leave request';
-      toast.error(
-        msg.toLowerCase().includes('route not found')
-          ? 'Leave API unavailable — redeploy backend or sign in again.'
-          : msg
-      );
+    if (authUserId) {
+      const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
+      const raw = updatedLeaves as { success?: boolean; data?: LeaveRequest[] | { data?: LeaveRequest[] } };
+      const list = Array.isArray(raw?.data)
+        ? raw.data
+        : Array.isArray((raw?.data as { data?: LeaveRequest[] })?.data)
+          ? (raw.data as { data: LeaveRequest[] }).data
+          : [];
+      if (list.length > 0) setLeaveHistory(list);
     }
   };
 

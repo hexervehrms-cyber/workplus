@@ -388,7 +388,9 @@ const routes = [
         path: 'admin/employee-onboarding',
         element: (
           <ProtectedRoute requiredRole={[...HR_ADMIN]}>
-            <HREmployeeOnboarding />
+            <Suspense fallback={<LazyLoader />}>
+              <HREmployeeOnboarding />
+            </Suspense>
           </ProtectedRoute>
         ),
       },

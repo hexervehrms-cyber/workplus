@@ -69,10 +69,16 @@ export default function InviteManagement() {
     try {
       setLoading(true);
       const oid = user?.orgId || user?.tenantId;
-      let url = '/onboarding/links?limit=100';
-      if (user?.role === 'super_admin' && oid && oid !== 'system') {
-        url += `&orgId=${encodeURIComponent(String(oid))}`;
+      
+      // FIX #2: Always pass orgId to ensure correct filtering
+      if (!oid || oid === 'system') {
+        toast.error('Organization context is required');
+        setInviteLinks([]);
+        return;
       }
+
+      let url = `/onboarding/links?limit=100&orgId=${encodeURIComponent(String(oid))}`;
+      
       const res = await apiGet<{ success?: boolean; data?: { links?: ApiInviteLink[] }; links?: ApiInviteLink[] }>(url);
       const payload = res?.data ?? res;
       const rows: ApiInviteLink[] =

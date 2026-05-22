@@ -16,7 +16,7 @@ import {
   holidaysStorageKey,
   resolveAuthOrgId,
 } from '../../utils/apiHelper';
-import { safeLocaleTime, safeFormatTime, runSafe, authUserKey } from '../../utils/safeUi';
+import { safeLocaleTime, safeFormatTime, runSafe, authUserKey, safeArrayAccess, safePropertyAccess } from '../../utils/safeUi';
 import { postAttendanceAction } from '../../utils/attendanceApi';
 import {
   formatWeekHours,
@@ -587,8 +587,13 @@ export default function EmployeeDashboard() {
               }
             }
           }
-          const lastBreak = attendance.breaks[attendance.breaks.length - 1] as BreakRecord;
-          if (lastBreak.startTime && !lastBreak.endTime) {
+          // FIX: Use safeArrayAccess to safely get last break without throwing
+          const lastBreak = safeArrayAccess(
+            attendance.breaks,
+            attendance.breaks.length - 1,
+            {} as BreakRecord
+          );
+          if (lastBreak?.startTime && !lastBreak?.endTime) {
             calculatedIsOnBreak = true;
             const breakStart = new Date(lastBreak.startTime).getTime();
             openBreakSegmentSeconds = Math.max(0, Math.floor((Date.now() - breakStart) / 1000));

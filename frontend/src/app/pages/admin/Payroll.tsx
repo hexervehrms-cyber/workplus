@@ -454,23 +454,35 @@ export default function Payroll() {
   // Handle approve structure
   const handleApproveStructure = async (structureId: string) => {
     try {
+      // FIX #6: Add proper error handling for structure approval
+      if (!structureId) {
+        toast.error('Invalid structure ID');
+        return;
+      }
       await apiPut(`/salary/structure/${structureId}/approve`, {});
       toast.success('Salary structure approved');
-      fetchStructures();
+      await fetchStructures();
     } catch (error) {
       console.error('Error approving structure:', error);
-      toast.error('Failed to approve salary structure');
+      const message = error instanceof Error ? error.message : 'Failed to approve salary structure';
+      toast.error(message);
     }
   };
 
   const handleRejectStructure = async (structureId: string) => {
     try {
+      // FIX #6: Add proper error handling for structure rejection
+      if (!structureId) {
+        toast.error('Invalid structure ID');
+        return;
+      }
       await apiPut(`/salary/structure/${structureId}/reject`, {});
       toast.success('Salary structure rejected');
-      fetchStructures();
+      await fetchStructures();
     } catch (error) {
       console.error('Error rejecting structure:', error);
-      toast.error('Failed to reject salary structure');
+      const message = error instanceof Error ? error.message : 'Failed to reject salary structure';
+      toast.error(message);
     }
   };
 
@@ -573,12 +585,18 @@ export default function Payroll() {
   // Handle approve salary slip
   const handleApproveSalarySlip = async (slipId: string) => {
     try {
+      // FIX #6: Add proper error handling for salary slip approval
+      if (!slipId) {
+        toast.error('Invalid salary slip ID');
+        return;
+      }
       await apiPut(`/salary/slip/${slipId}/approve`, {});
       toast.success('Salary slip approved');
-      fetchSalarySlips();
+      await fetchSalarySlips();
     } catch (error) {
       console.error('Error approving salary slip:', error);
-      toast.error('Failed to approve salary slip');
+      const message = error instanceof Error ? error.message : 'Failed to approve salary slip';
+      toast.error(message);
     }
   };
 
@@ -1411,7 +1429,7 @@ export default function Payroll() {
           <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
             <DialogTitle>Salary payslip</DialogTitle>
             <DialogDescription>
-              {viewingSlip && `${viewingSlip.employeeName} - ${new Date(viewingSlip.year, viewingSlip.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`}
+              {viewingSlip && `${viewingSlip.employeeName || 'Employee'} - ${new Date(viewingSlip.year, viewingSlip.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`}
             </DialogDescription>
           </DialogHeader>
 
@@ -1423,10 +1441,10 @@ export default function Payroll() {
             <>
               <div className="px-6 pb-2 flex flex-wrap items-center gap-3 text-sm shrink-0">
                 <Badge variant={viewingSlip.status === 'approved' ? 'default' : 'secondary'}>
-                  {viewingSlip.status}
+                  {viewingSlip.status || 'pending'}
                 </Badge>
                 <span className="text-muted-foreground">
-                  Net: <span className="font-semibold text-foreground">₹{safeFormatInr(viewingSlip.netSalary)}</span>
+                  Net: <span className="font-semibold text-foreground">₹{safeFormatInr(viewingSlip.netSalary ?? 0)}</span>
                 </span>
               </div>
               {previewUrl ? (

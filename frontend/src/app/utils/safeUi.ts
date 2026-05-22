@@ -106,3 +106,45 @@ export function runSafe(
       console.warn(`[${label}]`, err);
     });
 }
+
+/** Safe array indexing — never throw on out-of-bounds or non-array. */
+export function safeArrayAccess<T>(
+  arr: unknown,
+  index: number,
+  fallback: T
+): T {
+  if (!Array.isArray(arr)) return fallback;
+  if (index < 0 || index >= arr.length) return fallback;
+  const item = arr[index];
+  return item != null ? (item as T) : fallback;
+}
+
+/** Safe nested property access using dot notation — never throw. */
+export function safePropertyAccess<T>(
+  obj: unknown,
+  path: string,
+  fallback: T
+): T {
+  if (!obj || typeof obj !== 'object') return fallback;
+  const parts = path.split('.');
+  let current: any = obj;
+  for (const part of parts) {
+    if (current == null || typeof current !== 'object') return fallback;
+    current = current[part];
+  }
+  return current != null ? (current as T) : fallback;
+}
+
+/** Safe string split operation — never throw on non-string. */
+export function safeStringSplit(
+  value: unknown,
+  separator: string,
+  fallback: string[] = []
+): string[] {
+  if (typeof value !== 'string') return fallback;
+  try {
+    return value.split(separator);
+  } catch {
+    return fallback;
+  }
+}

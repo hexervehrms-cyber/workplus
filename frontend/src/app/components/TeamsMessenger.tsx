@@ -973,11 +973,30 @@ export default function TeamsMessenger() {
       setMessages((prev) => prev.filter((m) => m.messageId !== messageId));
       return;
     }
+    
+    // FIX #8: Store the message before deletion for rollback on error
+    const messageToDelete = messages.find((m) => m.messageId === messageId);
+    if (!messageToDelete) {
+      toast.error('Message not found');
+      return;
+    }
+
     try {
-      await apiDelete(`/chat/messages/${messageId}`);
+      // Remove optimistically
       setMessages((prev) => prev.filter((m) => m.messageId !== messageId));
+      
+      // Call API
+      await apiDelete(`/chat/messages/${messageId}`);
       toast.success('Message deleted');
-    } catch {
+    } catch (error) {
+      // Rollback: restore the message on error
+      setMessages((prev) => {
+        // Check if message is already there (in case of race condition)
+        if (prev.some((m) => m.messageId === messageId)) {
+          return prev;
+        }
+        return [...prev, messageToDelete];
+      });
       toast.error('Failed to delete message');
     }
   };

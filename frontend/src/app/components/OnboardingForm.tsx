@@ -163,6 +163,47 @@ const OnboardingForm: React.FC<{
   };
 
   const handleNext = () => {
+    // FIX #1: Validate current section before allowing navigation
+    const errors: string[] = [];
+
+    switch (currentSection) {
+      case 0: // Personal Information
+        if (!formData.firstName.trim()) errors.push('First name is required');
+        if (!formData.lastName.trim()) errors.push('Last name is required');
+        if (!formData.email.trim()) errors.push('Email is required');
+        if (!formData.phone.trim()) errors.push('Phone number is required');
+        if (!formData.dateOfBirth) errors.push('Date of birth is required');
+        if (!formData.gender) errors.push('Gender is required');
+        if (!formData.address.trim()) errors.push('Address is required');
+        if (!isHRMode && !formData.password) errors.push('Password is required');
+        break;
+      case 1: // Official Information
+        if (!formData.employeeId.trim()) errors.push('Employee ID is required');
+        break;
+      case 2: // Emergency Contact
+        if (!formData.emergencyName.trim()) errors.push('Emergency contact name is required');
+        if (!formData.emergencyRelation.trim()) errors.push('Relationship is required');
+        if (!formData.emergencyPhone.trim()) errors.push('Emergency contact number is required');
+        break;
+      case 3: // Banking Information
+        if (!formData.aadharNumber.trim()) errors.push('Aadhar number is required');
+        if (!formData.panNumber.trim()) errors.push('PAN number is required');
+        if (!formData.bankAccount.trim()) errors.push('Bank account number is required');
+        if (!formData.ifscCode.trim()) errors.push('IFSC code is required');
+        break;
+      case 4: // Documents Upload
+        const requiredDocs = documents.filter(doc => doc.required && !doc.file);
+        if (requiredDocs.length > 0) {
+          errors.push(`Please upload required documents: ${requiredDocs.map(d => d.name).join(', ')}`);
+        }
+        break;
+    }
+
+    if (errors.length > 0) {
+      toast.error(errors[0]);
+      return;
+    }
+
     if (currentSection < sections.length - 1) {
       setCurrentSection(currentSection + 1);
     }
@@ -175,6 +216,44 @@ const OnboardingForm: React.FC<{
   };
 
   const handleSubmit = async () => {
+    // FIX #1: Validate all required fields before submission
+    const errors: string[] = [];
+
+    // Personal Information validation
+    if (!formData.firstName.trim()) errors.push('First name is required');
+    if (!formData.lastName.trim()) errors.push('Last name is required');
+    if (!formData.email.trim()) errors.push('Email is required');
+    if (!formData.phone.trim()) errors.push('Phone number is required');
+    if (!formData.dateOfBirth) errors.push('Date of birth is required');
+    if (!formData.gender) errors.push('Gender is required');
+    if (!formData.address.trim()) errors.push('Address is required');
+    if (!isHRMode && !formData.password) errors.push('Password is required');
+
+    // Official Information validation
+    if (!formData.employeeId.trim()) errors.push('Employee ID is required');
+
+    // Emergency Contact validation
+    if (!formData.emergencyName.trim()) errors.push('Emergency contact name is required');
+    if (!formData.emergencyRelation.trim()) errors.push('Relationship is required');
+    if (!formData.emergencyPhone.trim()) errors.push('Emergency contact number is required');
+
+    // Banking Information validation
+    if (!formData.aadharNumber.trim()) errors.push('Aadhar number is required');
+    if (!formData.panNumber.trim()) errors.push('PAN number is required');
+    if (!formData.bankAccount.trim()) errors.push('Bank account number is required');
+    if (!formData.ifscCode.trim()) errors.push('IFSC code is required');
+
+    // Documents validation
+    const requiredDocs = documents.filter(doc => doc.required && !doc.file);
+    if (requiredDocs.length > 0) {
+      errors.push(`Please upload required documents: ${requiredDocs.map(d => d.name).join(', ')}`);
+    }
+
+    if (errors.length > 0) {
+      toast.error(errors[0]);
+      return;
+    }
+
     // Create FormData for file uploads
     const formDataToSend = new FormData();
     

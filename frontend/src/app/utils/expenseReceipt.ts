@@ -4,8 +4,21 @@ export function receiptFilenameFromPath(receiptPath: string): string | null {
   if (!receiptPath || typeof receiptPath !== 'string') return null;
   const trimmed = receiptPath.trim();
   if (!trimmed || trimmed === 'undefined') return null;
-  const base = trimmed.split('/').pop();
-  return base && !base.includes('..') ? base : null;
+  
+  // FIX #4: Handle both full paths and filenames safely
+  // Extract the filename from the path (last component after /)
+  const parts = trimmed.split('/').filter(Boolean);
+  if (parts.length === 0) return null;
+  
+  const filename = parts[parts.length - 1];
+  
+  // Validate filename is not empty and doesn't contain path traversal attempts
+  if (!filename || filename === '.' || filename === '..') return null;
+  
+  // Reject if filename contains path separators (security check)
+  if (filename.includes('/') || filename.includes('\\')) return null;
+  
+  return filename;
 }
 
 export async function fetchExpenseReceiptBlob(

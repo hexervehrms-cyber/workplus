@@ -462,14 +462,19 @@ export default function Profile() {
     try {
       const data = await apiGet<{
         success?: boolean;
-        data?: unknown[];
+        data?: unknown[] | { documents?: unknown[] };
       }>(`/documents/employee/${userId}?limit=200&scope=education`, false);
       
-      const docList = Array.isArray(data?.data)
-        ? data.data
-        : Array.isArray(data?.data?.documents)
-          ? data.data.documents
-          : [];
+      // Safely normalize the response to always get an array
+      let docList: unknown[] = [];
+      if (Array.isArray(data?.data)) {
+        docList = data.data;
+      } else if (data?.data && typeof data.data === 'object' && 'documents' in data.data) {
+        const dataObj = data.data as { documents?: unknown[] };
+        if (Array.isArray(dataObj.documents)) {
+          docList = dataObj.documents;
+        }
+      }
 
       if (data.success && docList.length >= 0) {
         // Parse and organize documents by education level and type

@@ -473,7 +473,7 @@ const OnboardingPage: React.FC = () => {
   const addPreviousJob = () => {
     setPreviousEmployment((prev) => [
       ...prev,
-      { companyName: '', role: '', startDate: '', endDate: '', location: '' },
+      emptyPreviousJob(),
     ]);
   };
 
@@ -481,6 +481,13 @@ const OnboardingPage: React.FC = () => {
     setPreviousEmployment((prev) =>
       prev.map((row, i) => (i === index ? { ...row, [field]: value } : row))
     );
+  };
+
+  const updateEducationLevel = (level: 'tenth' | 'twelfth', field: keyof EducationLevelDetails, value: string) => {
+    setEducationDetails((prev) => ({
+      ...prev,
+      [level]: { ...prev[level], [field]: value },
+    }));
   };
 
   const removePreviousJob = (index: number) => {

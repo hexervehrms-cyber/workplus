@@ -1,4 +1,4 @@
-import { EmployeeService } from './api';
+import { apiGet } from './apiHelper';
 
 export function isLikelyMongoObjectId(id: string | null | undefined): boolean {
   return typeof id === 'string' && /^[a-f\d]{24}$/i.test(id);
@@ -19,7 +19,6 @@ export async function resolveEmployeeMongoId(user: {
   if (!userId) return null;
 
   try {
-    const { apiGet } = await import('./apiHelper');
     const { ensureAccessToken } = await import('./sessionAuth');
     await ensureAccessToken();
     const employeeResponse = await apiGet<{
@@ -27,12 +26,21 @@ export async function resolveEmployeeMongoId(user: {
       data?: { _id?: string; id?: string };
       _id?: string;
     }>(`/employees/user/${userId}`, false);
-    const payload = employeeResponse as {
-      _id?: string;
-      data?: { _id?: string; id?: string };
-    };
-    const emp = payload?.data ?? payload;
-    const empId = emp?._id || emp?.id;
+    
+    // Safely narrow the union type
+    let empId: string | undefined;
+    if (employeeResponse && typeof employeeResponse === 'object') {
+      // Check if response has data property (nested structure)
+      if ('data' in employeeResponse && employeeResponse.data) {
+        const data = employeeResponse.data as { _id?: string; id?: string };
+        empId = data._id || data.id;
+      } else {
+        // Direct structure
+        const direct = employeeResponse as { _id?: string; id?: string };
+        empId = direct._id || direct.id;
+      }
+    }
+    
     if (empId && isLikelyMongoObjectId(String(empId))) {
       return String(empId);
     }

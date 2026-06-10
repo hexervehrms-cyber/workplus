@@ -209,7 +209,8 @@ export default function PayrollCalculation() {
       toast.success('Payroll approved');
     } catch (error: unknown) {
       console.error('Error approving payroll:', error);
-      toast.error('Failed to approve payroll');
+      const msg = error instanceof Error ? error.message : 'Failed to approve payroll';
+      toast.error(msg);
     }
   };
 
@@ -220,7 +221,8 @@ export default function PayrollCalculation() {
       toast.success('Payroll marked as paid');
     } catch (error: unknown) {
       console.error('Error marking as paid:', error);
-      toast.error('Failed to mark as paid');
+      const msg = error instanceof Error ? error.message : 'Failed to mark as paid';
+      toast.error(msg);
     }
   };
 

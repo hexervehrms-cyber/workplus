@@ -20,8 +20,6 @@ router.get("/",
   authorize('super_admin', 'admin', 'hr'),
   auditLog('view_users', 'users'),
   asyncHandler(async (req, res) => {
-    const orgId = assertScopedOrgId(req, res);
-    if (!orgId) return;
     const userRole = req.user?.role;
     
     const {
@@ -34,7 +32,13 @@ router.get("/",
 
     const isActiveParam = req.query.isActive;
     
-    let filter = { orgId, deletedAt: null };
+    // Build base filter: super_admin sees all organizations, others see only their own
+    let filter = { deletedAt: null };
+    if (userRole !== 'super_admin') {
+      const orgId = assertScopedOrgId(req, res);
+      if (!orgId) return;
+      filter.orgId = orgId;
+    }
     
     // Role-based filtering
     if (userRole !== 'super_admin') {

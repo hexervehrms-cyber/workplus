@@ -3,6 +3,7 @@ import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, authorize } from "../middleware/auth.js";
 import SalaryStructure from "../models/SalaryStructure.js";
 import SalaryRevision from "../models/SalaryRevision.js";
+import SalaryCycle from "../models/SalaryCycle.js";
 import PayrollCycle from "../models/PayrollCycle.js";
 import PayrollRun from "../models/PayrollRun.js";
 import Employee from "../models/Employee.js";
@@ -31,8 +32,181 @@ function resolvePayrollOrgId(req) {
 }
 
 /**
- * Find or create a stored payroll cycle for the engine cycle that contains `fromDate`.
+ * GET /api/payroll/employee/cycle-summary
+ * Employee-safe endpoint for viewing current payroll cycle dates
+ * Returns cycle start, end, payment date, hold period
+ * 
+ * WorkPlus Payroll Rules:
+ * - Cycle: cycleStartDay to cycleEndDay
+ * - Hold Period: starts after cycleEndDate, lasts holdDays (typically 10 days)
+ * - Payment Date: 1st of month after hold period ends
+ * 
+ * - Employee: sees own org cycle (orgId from JWT)
+ * - Admin/HR: sees own org cycle
+ * - Super_admin: sees own org cycle
  */
+router.get(
+  "/employee/cycle-summary",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const orgIdResult = resolvePayrollOrgId(req);
+      if (orgIdResult.error) {
+        return sendError(res, orgIdResult.error, 400, "MISSING_ORG_CONTEXT");
+      }
+      const orgId = orgIdResult.orgId;
+
+      // Try to get active SalaryCycle configuration
+      const salaryCycle = await SalaryCycle.findOne({
+        orgId,
+        isActive: true
+      }).lean();
+
+      let cycleData;
+      if (salaryCycle) {
+        // Use configured salary cycle dates
+        const today = new Date();
+        const year = today.getFullYear();
+        const month = today.getMonth() + 1;
+        const dateOfMonth = today.getDate();
+
+        // Calculate current cycle month (21-20 based or configured based)
+        let cycleMonth = month;
+        if (dateOfMonth < salaryCycle.cycleStartDate) {
+          cycleMonth = month - 1;
+          if (cycleMonth === 0) {
+            cycleMonth = 12;
+          }
+        }
+
+        // Generate cycle dates based on SalaryCycle configuration
+        const cycleStartDay = salaryCycle.cycleStartDate;
+        const cycleEndDay = salaryCycle.cycleEndDate;
+        const paymentDay = salaryCycle.salaryPaymentDate;
+        const holdDays = salaryCycle.holdDays || 10; // Default 10 days
+
+        let cycleStartDate = new Date(year, cycleMonth - 1, cycleStartDay);
+        let cycleEndMonth = cycleMonth;
+        let cycleEndYear = year;
+        if (cycleStartDay > cycleEndDay) {
+          cycleEndMonth = cycleMonth + 1;
+          if (cycleEndMonth > 12) {
+            cycleEndMonth = 1;
+            cycleEndYear = year + 1;
+          }
+        }
+        const cycleEndDate = new Date(cycleEndYear, cycleEndMonth - 1, cycleEndDay);
+
+        // Hold period starts after cycleEndDate and lasts holdDays
+        const holdStartDate = new Date(cycleEndDate);
+        holdStartDate.setDate(holdStartDate.getDate() + 1);
+        const salaryHoldUntil = new Date(holdStartDate);
+        salaryHoldUntil.setDate(salaryHoldUntil.getDate() + (holdDays - 1)); // -1 because start date counts as day 1
+
+        // Payment date is 1st of month after hold period
+        let paymentMonth = cycleEndMonth;
+        let paymentYear = cycleEndYear;
+        if (paymentDay < cycleEndDay || cycleStartDay > cycleEndDay) {
+          paymentMonth = cycleEndMonth + 1;
+          if (paymentMonth > 12) {
+            paymentMonth = 1;
+            paymentYear = cycleEndYear + 1;
+          }
+        }
+        const salaryReleaseDate = new Date(paymentYear, paymentMonth - 1, paymentDay);
+
+        cycleData = {
+          cycleStartDate,
+          cycleEndDate,
+          holdStartDate,
+          salaryHoldUntil,
+          salaryReleaseDate,
+          paymentDate: salaryReleaseDate,
+          holdDays,
+          cycleLabel: `${cycleStartDate.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric"
+          })} - ${cycleEndDate.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric"
+          })}`,
+          currency: "INR"
+        };
+      } else {
+        // Fallback to WorkPlus default: 21-20, payment 1st, hold 10 days
+        const today = new Date();
+        const year = today.getFullYear();
+        const month = today.getMonth() + 1;
+        const dateOfMonth = today.getDate();
+
+        // Default: cycle 21-20, hold 10 days starting 21st, payment 1st
+        let cycleMonth = month;
+        if (dateOfMonth < 21) {
+          cycleMonth = month - 1;
+          if (cycleMonth === 0) {
+            cycleMonth = 12;
+          }
+        }
+
+        const cycleStartDate = new Date(year, cycleMonth - 1, 21);
+        let cycleEndMonth = cycleMonth;
+        let cycleEndYear = year;
+        if (cycleMonth === 12) {
+          cycleEndMonth = 1;
+          cycleEndYear = year + 1;
+        } else {
+          cycleEndMonth = cycleMonth + 1;
+        }
+        const cycleEndDate = new Date(cycleEndYear, cycleEndMonth - 1, 20);
+
+        // Hold starts day after cycle ends (21st) and lasts 10 days (21-30)
+        const holdStartDate = new Date(cycleEndDate);
+        holdStartDate.setDate(holdStartDate.getDate() + 1);
+        const salaryHoldUntil = new Date(holdStartDate);
+        salaryHoldUntil.setDate(salaryHoldUntil.getDate() + 9); // Days 21-30 = 10 days total
+
+        // Payment on 1st of month after cycle end
+        let paymentMonth = cycleEndMonth;
+        let paymentYear = cycleEndYear;
+        if (cycleEndMonth === 12) {
+          paymentMonth = 1;
+          paymentYear = cycleEndYear + 1;
+        } else {
+          paymentMonth = cycleEndMonth + 1;
+        }
+        const salaryReleaseDate = new Date(paymentYear, paymentMonth - 1, 1);
+
+        cycleData = {
+          cycleStartDate,
+          cycleEndDate,
+          holdStartDate,
+          salaryHoldUntil,
+          salaryReleaseDate,
+          paymentDate: salaryReleaseDate,
+          holdDays: 10,
+          cycleLabel: `${cycleStartDate.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric"
+          })} - ${cycleEndDate.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric"
+          })}`,
+          currency: "INR"
+        };
+      }
+
+      return sendSuccess(res, cycleData, "Payroll cycle summary fetched successfully");
+    } catch (error) {
+      logger.error("Get payroll cycle summary error", {
+        error: error.message,
+        userId: req.user.userId,
+        orgId: req.user.orgId
+      });
+      return sendError(res, "Failed to fetch payroll cycle summary", 500, "FETCH_ERROR");
+    }
+  })
+);
+
 async function findOrCreatePayrollCycleForFromDate(orgId, fromDate, userId) {
   const fd = new Date(fromDate);
   const cycleMeta = PayrollCycleEngine.getPayrollCycleForDate(fd);
@@ -104,14 +278,37 @@ async function calculatePayrollRunForEmployee({
     return { error: "FORBIDDEN", message: "Employee does not belong to this organization" };
   }
 
+  // Check if payroll run is already approved or released (block recalculation)
+  const existingPayrollRun = await PayrollRun.findOne({
+    payrollCycleId,
+    employeeId,
+    orgId: String(orgId)
+  }).select("status").lean();
+
+  if (existingPayrollRun && (existingPayrollRun.status === "approved" || existingPayrollRun.status === "released")) {
+    return {
+      error: "INVALID_STATE",
+      message: `Cannot recalculate payroll run with status "${existingPayrollRun.status}". Reset the payroll run to "calculated" status first if changes are needed.`
+    };
+  }
+
+  // Fetch salary structure with effective date validation
+  // Must use approved structure where:
+  // - effectiveFrom <= cycleEndDate
+  // - effectiveTo is null OR effectiveTo >= cycleStartDate
   const salaryStructure = await SalaryStructure.findOne({
     employeeId,
     orgId: String(orgId),
-    status: "approved"
+    status: "approved",
+    effectiveFrom: { $lte: payrollCycle.cycleEndDate },
+    $or: [
+      { effectiveTo: null },
+      { effectiveTo: { $gte: payrollCycle.cycleStartDate } }
+    ]
   }).sort({ effectiveFrom: -1 });
 
   if (!salaryStructure) {
-    return { error: "NOT_FOUND", message: "No approved salary structure found" };
+    return { error: "NOT_FOUND", message: "No approved salary structure found for this payroll cycle" };
   }
 
   const attendanceData = await buildPayrollAttendanceData({
@@ -523,8 +720,10 @@ router.post(
 
       if (result.error) {
         const code = result.error;
-        const status =
-          code === "NOT_FOUND" ? 404 : code === "FORBIDDEN" ? 403 : 500;
+        let status = 500;
+        if (code === "NOT_FOUND") status = 404;
+        else if (code === "FORBIDDEN") status = 403;
+        else if (code === "INVALID_STATE") status = 409;
         return sendError(res, result.message, status, code);
       }
 
@@ -600,8 +799,10 @@ router.post(
 
       if (result.error) {
         const code = result.error;
-        const status =
-          code === "NOT_FOUND" ? 404 : code === "FORBIDDEN" ? 403 : 500;
+        let status = 500;
+        if (code === "NOT_FOUND") status = 404;
+        else if (code === "FORBIDDEN") status = 403;
+        else if (code === "INVALID_STATE") status = 409;
         return sendError(res, result.message, status, code);
       }
 

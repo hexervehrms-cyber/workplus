@@ -25,8 +25,7 @@ import {
   calendarWeekKey,
 } from '../../utils/weekHours';
 import {
-  clearPersistedAttendance,
-  writePersistedAttendance,
+    writePersistedAttendance,
   readPersistedAttendance,
   isPayloadFresh,
   localDayKey,
@@ -375,6 +374,16 @@ export default function EmployeeDashboard() {
   }, [authUid]);
 
   const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [payrollCycleSummary, setPayrollCycleSummary] = useState<{
+    cycleStartDate: string;
+    cycleEndDate: string;
+    salaryReleaseDate: string;
+    salaryHoldUntil: string;
+    holdDays: number;
+    cycleLabel: string;
+    currency: string;
+  } | null>(null);
+  const [payrollCycleLoading, setPayrollCycleLoading] = useState(false);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
   const [breakHistory, setBreakHistory] = useState<BreakRecord[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
@@ -470,9 +479,10 @@ export default function EmployeeDashboard() {
         tenantOrgId
       );
 
-      const [attendanceResult, holidaysResult] = await Promise.allSettled([
+      const [attendanceResult, holidaysResult, payrollResult] = await Promise.allSettled([
         apiGetSafe('/attendance/today', false),
         apiGetSafe(holidaysUrl, false),
+        apiGetSafe('/payroll/employee/cycle-summary', false),
       ]);
 
       const holidayKey = holidaysStorageKey(authUid, user?.orgId || user?.tenantId);
@@ -511,6 +521,23 @@ export default function EmployeeDashboard() {
         } catch (e) {
           console.warn('Failed to parse cached holidays');
         }
+      }
+
+      // Handle payroll cycle summary
+      if (
+        payrollResult.status === 'fulfilled' &&
+        payrollResult.value.ok &&
+        payrollResult.value.data &&
+        (payrollResult.value.data as { success?: boolean }).success !== false
+      ) {
+        const payrollPayload = payrollResult.value.data as { data?: Record<string, unknown> };
+        const cycleData = payrollPayload.data;
+        if (cycleData && typeof cycleData === 'object') {
+          console.log('✅ Loaded payroll cycle summary');
+          if (mountedRef.current) setPayrollCycleSummary(cycleData as typeof payrollCycleSummary);
+        }
+      } else {
+        console.warn('Payroll cycle summary unavailable');
       }
 
       const attendanceResolved =
@@ -1725,6 +1752,62 @@ export default function EmployeeDashboard() {
             color="secondary"
           />
         </div>
+
+        {/* Payroll Cycle Summary */}
+        {payrollCycleSummary && (
+          <Card className="rounded-2xl overflow-hidden">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                    <Calendar className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-lg">Payroll Cycle</h3>
+                    <p className="text-sm text-muted-foreground">Current cycle dates</p>
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Cycle</p>
+                  <p className="text-sm font-medium">{payrollCycleSummary.cycleLabel}</p>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Hold Period</p>
+                  <p className="text-sm font-medium">
+                    {payrollCycleSummary.holdStartDate ? 
+                      `${new Date(payrollCycleSummary.holdStartDate).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric'
+                      })} - ${new Date(payrollCycleSummary.salaryHoldUntil).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric'
+                      })}`
+                      : 'N/A'
+                    }
+                  </p>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Payment Date</p>
+                  <p className="text-sm font-medium">
+                    {payrollCycleSummary.paymentDate ?
+                      new Date(payrollCycleSummary.paymentDate).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric'
+                      })
+                      : 'N/A'
+                    }
+                  </p>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Currency</p>
+                  <p className="text-sm font-medium">₹ {payrollCycleSummary.currency}</p>
+                </div>
+              </div>
+            </div>
+          </Card>
+        )}
 
         {/* Apply leave — click a day on the calendar */}
         <InteractiveCalendar />

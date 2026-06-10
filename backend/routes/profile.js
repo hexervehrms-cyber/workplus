@@ -278,7 +278,11 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
     }
     
     if (employeeDetails.bankDetails) {
-      if (employeeDetails.bankDetails.accountNumber) employeeUpdateData['bankDetails.accountNumber'] = employeeDetails.bankDetails.accountNumber.trim();
+      if (employeeDetails.bankDetails.accountNumber) {
+        const accountNum = employeeDetails.bankDetails.accountNumber.trim();
+        employeeUpdateData['bankDetails.accountNumber'] = accountNum;
+        employeeUpdateData.bankAccount = accountNum; // Keep legacy field in sync
+      }
       if (employeeDetails.bankDetails.bankName) employeeUpdateData['bankDetails.bankName'] = employeeDetails.bankDetails.bankName.trim();
       if (employeeDetails.bankDetails.ifscCode) employeeUpdateData['bankDetails.ifscCode'] = employeeDetails.bankDetails.ifscCode.trim();
       if (employeeDetails.bankDetails.accountHolderName) employeeUpdateData['bankDetails.accountHolderName'] = employeeDetails.bankDetails.accountHolderName.trim();
@@ -293,8 +297,35 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
 
   // Update sensitive information with lock timestamps
   if (Object.keys(sensitiveInfo).length > 0) {
-    const sensitiveUpdateData = {};
+    const existingEmployee = await Employee.findOne({ userId, orgId: userOrgId });
+    
+    // Check if any fields are locked (12-hour restriction)
     const now = Date.now();
+    const LOCK_DURATION = 12 * 60 * 60 * 1000; // 12 hours in milliseconds
+    const lockedFields = [];
+    
+    if (existingEmployee?.sensitiveInfoLocks) {
+      Object.entries(sensitiveInfo).forEach(([field, newValue]) => {
+        if (newValue !== undefined && newValue !== null) {
+          const lockTimestamp = existingEmployee.sensitiveInfoLocks[field];
+          if (lockTimestamp && (now - lockTimestamp) < LOCK_DURATION) {
+            lockedFields.push(field);
+          }
+        }
+      });
+    }
+    
+    // If any fields are locked, reject the update
+    if (lockedFields.length > 0) {
+      return res.status(423).json({
+        success: false,
+        message: `Cannot update locked fields: ${lockedFields.join(', ')}. Please wait 12 hours after last update.`,
+        code: 'FIELD_LOCKED',
+        lockedFields
+      });
+    }
+    
+    const sensitiveUpdateData = {};
     const lockTimestamps = {};
 
     if (sensitiveInfo.aadharNumber !== undefined && sensitiveInfo.aadharNumber !== null) {
@@ -317,7 +348,6 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
     // Update sensitive info locks with timestamps
     if (Object.keys(lockTimestamps).length > 0) {
       // Merge with existing locks
-      const existingEmployee = await Employee.findOne({ userId, orgId: userOrgId });
       const existingLocks = existingEmployee?.sensitiveInfoLocks || {};
       sensitiveUpdateData.sensitiveInfoLocks = {
         ...existingLocks,

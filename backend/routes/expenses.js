@@ -624,6 +624,11 @@ router.put(
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
       }
 
+      // Verify status is pending - enforce backend status transition guard
+      if (expense.status !== "pending") {
+        return sendError(res, `Expense is already ${expense.status}`, 400, "INVALID_STATUS");
+      }
+
       // Verify orgId - prevent cross-tenant access
       if (expense.orgId !== req.user.orgId && req.user.role !== "super_admin") {
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
@@ -743,6 +748,11 @@ router.put(
       const expense = await Expense.findById(expenseId);
       if (!expense) {
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
+      }
+
+      // Verify status is pending - enforce backend status transition guard
+      if (expense.status !== "pending") {
+        return sendError(res, `Expense is already ${expense.status}`, 400, "INVALID_STATUS");
       }
 
       // Verify orgId - prevent cross-tenant access

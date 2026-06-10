@@ -254,7 +254,7 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
  */
 async function getMergedAttendanceActivityLogs(req, options = {}) {
   let authOrgId =
-    userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId || req.user?.tenantId;
+    userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId;
 
   // Admin/HR JWT sometimes lacks orgId while employee rows use Employee.orgId — resolve from profile
   if ((!authOrgId || authOrgId === 'system') && req.user?.userId && req.user?.role !== 'super_admin') {
@@ -409,26 +409,30 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   const authOrgId = req.user?.orgId;
   const authRole = req.user?.role;
   
-  // DEBUG: Log incoming request
-  console.log('🔍 [CHECK-IN] Request received:', {
-    authRole,
-    authUserId,
-    authOrgId,
-    bodyUserId: userId,
-    bodyEmployeeId: employeeId,
-    bodyOrgId: orgId,
-    fullReqUser: req.user
-  });
-  
   // Enforce tenant/user isolation. Employee check-in is always for authenticated user.
   let effectiveUserId = userId;
   let effectiveEmployeeId = employeeId;
   let effectiveOrgId = orgId || authOrgId;
   let effectiveEmployeeName = employeeName;
 
+  // CRITICAL: Reject if req.body.orgId differs from authenticated user's org
+  if (orgId && String(orgId) !== String(authOrgId) && authRole !== 'super_admin') {
+    logger.warn('Organization scope violation attempted on check-in', {
+      requestOrgId: orgId,
+      authOrgId,
+      role: authRole,
+      userId: authUserId
+    });
+    return res.status(403).json({
+      success: false,
+      message: 'Organization mismatch. Cannot check in for different organization.',
+      code: 'ORG_MISMATCH'
+    });
+  }
+
   if (authRole === 'employee') {
     const employee = await findEmployeeForSelfService(authUserId, authOrgId, {
-      allowCrossOrgFallback: true,
+      allowCrossOrgFallback: false,
       createIfMissing: true
     });
     if (!employee) {
@@ -446,9 +450,8 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
       employeeName ||
       'Employee';
   } else {
-    console.log('❌ [CHECK-IN] Non-employee role detected:', authRole);
     if (!effectiveUserId || !effectiveEmployeeId || !effectiveOrgId) {
-      console.log('❌ [CHECK-IN] Missing required fields for non-employee:', {
+      logger.warn('Missing required fields for non-employee check-in', {
         effectiveUserId,
         effectiveEmployeeId,
         effectiveOrgId,
@@ -728,7 +731,7 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
   if (authRole === 'employee') {
     const employee = await findEmployeeForSelfService(authUserId, authOrgId, {
-      allowCrossOrgFallback: true,
+      allowCrossOrgFallback: false,
       createIfMissing: true
     });
     if (!employee) {
@@ -1046,7 +1049,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
 
   if (authRole === 'employee') {
     const employee = await findEmployeeForSelfService(currentUserId, authOrgId, {
-      allowCrossOrgFallback: true,
+      allowCrossOrgFallback: false,
       createIfMissing: true
     });
     if (!employee) {
@@ -1245,7 +1248,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
   if (authRole === 'employee') {
     const employee = await findEmployeeForSelfService(currentUserId, authOrgId, {
-      allowCrossOrgFallback: true,
+      allowCrossOrgFallback: false,
       createIfMissing: true
     });
     if (!employee) {

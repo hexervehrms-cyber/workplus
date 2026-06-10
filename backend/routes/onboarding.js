@@ -37,11 +37,21 @@ const router = express.Router();
 /**
  * GET /api/onboarding/debug/check-employee
  * Debug endpoint to check if employee was created with correct orgId
+ * GATED: Only available in development environment
  */
 router.get('/debug/check-employee',
   authenticate,
   authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
+    // Gate: Only available in development
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(404).json({
+        success: false,
+        message: 'Not found',
+        code: 'NOT_FOUND'
+      });
+    }
+
     const { email } = req.query;
 
     if (!email) {

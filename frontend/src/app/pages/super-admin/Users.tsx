@@ -29,7 +29,12 @@ interface ApiUser {
   isActive?: boolean;
 }
 
-type UsersListResponse = ApiUser[] | { users?: ApiUser[] };
+// Support multiple response formats from backend:
+// 1. Direct array: ApiUser[]
+// 2. Wrapped with users key: { users?: ApiUser[] }
+// 3. Wrapped with data key: { data: ApiUser[] }
+// 4. Full API response: { success, data: ApiUser[], pagination }
+type UsersListResponse = ApiUser[] | { users?: ApiUser[] } | { data?: ApiUser[] };
 
 export default function GlobalUsers() {
   const [showAddForm, setShowAddForm] = useState(false);
@@ -58,7 +63,23 @@ export default function GlobalUsers() {
     try {
       const response = await apiClient.get<UsersListResponse>('/api/users');
       if (response.success && response.data) {
-        const userList = Array.isArray(response.data) ? response.data : response.data.users ?? [];
+        // Handle multiple response formats:
+        // 1. Direct array from response.data
+        // 2. Wrapped with users key: response.data.users
+        // 3. Wrapped with data key: response.data.data
+        let userList: ApiUser[] = [];
+        
+        if (Array.isArray(response.data)) {
+          // Format 1: response.data is already an array
+          userList = response.data;
+        } else if (response.data.users) {
+          // Format 2: response.data = { users: [...] }
+          userList = response.data.users;
+        } else if ((response.data as any).data && Array.isArray((response.data as any).data)) {
+          // Format 3: response.data = { data: [...] }
+          userList = (response.data as any).data;
+        }
+        
         const formattedUsers = userList.map((user) => ({
           _id: user._id,
           name: user.name,

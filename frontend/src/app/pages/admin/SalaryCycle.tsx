@@ -33,10 +33,10 @@ export default function AdminSalaryCycle() {
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    cycleStartDate: '1',
-    cycleEndDate: '30',
+    cycleStartDate: '21',
+    cycleEndDate: '20',
     salaryPaymentDate: '1',
-    holdDays: '0',
+    holdDays: '10',
     workingDaysPerWeek: '5',
     workingDaysPerMonth: '22',
     leavePolicy: {
@@ -84,7 +84,24 @@ export default function AdminSalaryCycle() {
 
   useEffect(() => {
     fetchCycles();
-  }, [fetchCycles]);
+    // Check if there's an active cycle and prefill the form for editing
+    const loadActiveCycle = async () => {
+      try {
+        const oid = user?.orgId || user?.tenantId;
+        if (!oid || oid === 'system') return;
+        
+        const res = await apiGet(`salary-cycle/org/${oid}/active`, false);
+        if (res?.data && !editingId) {
+          // Active cycle exists - auto-populate for editing
+          handleEdit(res.data);
+          toast.info('An active salary cycle already exists. You can edit it below.');
+        }
+      } catch (err: unknown) {
+        // No active cycle exists yet, which is fine
+      }
+    };
+    loadActiveCycle();
+  }, [fetchCycles, user?.orgId, user?.tenantId, editingId]);
 
   const handleSaveCycle = async () => {
     if (!formData.name || !formData.cycleStartDate || !formData.cycleEndDate || !formData.salaryPaymentDate) {
@@ -97,6 +114,19 @@ export default function AdminSalaryCycle() {
       if (!orgId || orgId === 'system') {
         toast.error('Organization context is required.');
         return;
+      }
+
+      // Check if attempting to create when active cycle exists
+      if (!editingId) {
+        try {
+          const activeCheck = await apiGet(`salary-cycle/org/${orgId}/active`, false);
+          if (activeCheck?.data) {
+            toast.error('An active salary cycle already exists. Please edit the existing one instead of creating a new one.');
+            return;
+          }
+        } catch (err) {
+          // No active cycle, safe to proceed
+        }
       }
 
       const leavePolicy = {
@@ -141,13 +171,13 @@ export default function AdminSalaryCycle() {
         await apiPost('salary-cycle', payload);
         toast.success('Salary cycle created successfully');
       }
-      setFormData({
+      const resetForm = () => ({
         name: '',
         description: '',
-        cycleStartDate: '1',
-        cycleEndDate: '30',
+        cycleStartDate: '21',
+        cycleEndDate: '20',
         salaryPaymentDate: '1',
-        holdDays: '0',
+        holdDays: '10',
         workingDaysPerWeek: '5',
         workingDaysPerMonth: '22',
         leavePolicy: {
@@ -168,6 +198,7 @@ export default function AdminSalaryCycle() {
           fnfCalculationDays: '2'
         }
       });
+      setFormData(resetForm());
       setShowForm(false);
       setEditingId(null);
       fetchCycles();

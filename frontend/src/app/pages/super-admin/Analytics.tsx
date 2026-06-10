@@ -1,23 +1,71 @@
 import { Card } from '../../components/ui/card';
-import { BarChart3, TrendingUp, Users, Building2, Activity, DollarSign } from 'lucide-react';
+import { BarChart3, TrendingUp, Users, Building2, Activity, DollarSign, Loader2 } from 'lucide-react';
 import { useCurrency } from '../../context/CurrencyContext';
+import { useState, useEffect } from 'react';
+import { apiGet } from '../../utils/apiHelper';
+import { Loader } from 'lucide-react';
+
+interface DashboardData {
+  totalOrganizations: number;
+  totalAdmins: number;
+  totalEmployees: number;
+  activeUsersToday: number;
+  monthlyRevenue: number;
+}
+
+interface Organization {
+  name: string;
+  _id: string;
+  employeeCount: number;
+  monthlyRevenue: number;
+}
 
 export default function Analytics() {
   const { formatCurrency } = useCurrency();
+  const [loading, setLoading] = useState(true);
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      try {
+        setLoading(true);
+        const [dashboardRes, orgsRes] = await Promise.all([
+          apiGet<{ success?: boolean; data?: DashboardData }>('/dashboard/superadmin', false),
+          apiGet<{ success?: boolean; data?: Organization[] }>('/dashboard/superadmin/organizations', false),
+        ]);
+
+        if (dashboardRes?.success !== false && dashboardRes?.data) {
+          setDashboardData(dashboardRes.data);
+        }
+        
+        if (orgsRes?.success !== false && Array.isArray(orgsRes?.data)) {
+          setOrganizations(orgsRes.data.slice(0, 5));
+        }
+      } catch (error) {
+        console.error('Error fetching analytics:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAnalytics();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Analytics</h1>
         <p className="text-muted-foreground">System-wide analytics and insights</p>
       </div>
-
-      <Card className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10">
-        <p className="text-sm text-amber-900 dark:text-amber-100">
-          <span className="font-semibold">Coming soon.</span> Live analytics from your
-          organizations are not connected yet. The numbers and charts below are placeholders
-          for layout preview only.
-        </p>
-      </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <Card className="p-6 rounded-xl">
@@ -26,8 +74,8 @@ export default function Analytics() {
               <Users className="w-6 h-6 text-blue-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold">12,345</p>
-              <p className="text-sm text-muted-foreground">Total Users</p>
+              <p className="text-2xl font-bold">{dashboardData?.totalAdmins ?? 0}</p>
+              <p className="text-sm text-muted-foreground">Total Admins</p>
             </div>
           </div>
         </Card>
@@ -38,7 +86,7 @@ export default function Analytics() {
               <Building2 className="w-6 h-6 text-green-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold">456</p>
+              <p className="text-2xl font-bold">{dashboardData?.totalOrganizations ?? 0}</p>
               <p className="text-sm text-muted-foreground">Organizations</p>
             </div>
           </div>
@@ -50,8 +98,8 @@ export default function Analytics() {
               <Activity className="w-6 h-6 text-purple-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold">89,012</p>
-              <p className="text-sm text-muted-foreground">Total Actions</p>
+              <p className="text-2xl font-bold">{dashboardData?.totalEmployees ?? 0}</p>
+              <p className="text-sm text-muted-foreground">Total Employees</p>
             </div>
           </div>
         </Card>
@@ -62,31 +110,9 @@ export default function Analytics() {
               <DollarSign className="w-6 h-6 text-gray-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold">{formatCurrency(2400000)}</p>
-              <p className="text-sm text-muted-foreground">Revenue</p>
+              <p className="text-2xl font-bold">{formatCurrency(dashboardData?.monthlyRevenue ?? 0)}</p>
+              <p className="text-sm text-muted-foreground">Monthly Revenue</p>
             </div>
-          </div>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card className="p-6 rounded-xl">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold">User Growth</h2>
-            <BarChart3 className="w-5 h-5 text-muted-foreground" />
-          </div>
-          <div className="h-64 bg-accent/20 rounded-xl flex items-center justify-center">
-            <p className="text-muted-foreground">Chart visualization here</p>
-          </div>
-        </Card>
-
-        <Card className="p-6 rounded-xl">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold">Revenue Trend</h2>
-            <TrendingUp className="w-5 h-5 text-muted-foreground" />
-          </div>
-          <div className="h-64 bg-accent/20 rounded-xl flex items-center justify-center">
-            <p className="text-muted-foreground">Chart visualization here</p>
           </div>
         </Card>
       </div>
@@ -98,24 +124,26 @@ export default function Analytics() {
             <thead>
               <tr className="border-b">
                 <th className="text-left p-4">Organization</th>
-                <th className="text-left p-4">Users</th>
-                <th className="text-left p-4">Actions</th>
+                <th className="text-left p-4">Employees</th>
                 <th className="text-left p-4">Revenue</th>
-                <th className="text-left p-4">Growth</th>
               </tr>
             </thead>
             <tbody>
-              {[1, 2, 3, 4, 5].map((i) => (
-                <tr key={i} className="border-b hover:bg-accent/50">
-                  <td className="p-4 font-medium">Organization {i}</td>
-                  <td className="p-4">{100 + i * 50}</td>
-                  <td className="p-4">{1000 + i * 200}</td>
-                  <td className="p-4">{formatCurrency(i * 10000)}</td>
-                  <td className="p-4">
-                    <span className="text-green-600">+{i * 5}%</span>
+              {organizations.length > 0 ? (
+                organizations.map((org) => (
+                  <tr key={org._id} className="border-b hover:bg-accent/50">
+                    <td className="p-4 font-medium">{org.name}</td>
+                    <td className="p-4">{org.employeeCount ?? 0}</td>
+                    <td className="p-4">{formatCurrency(org.monthlyRevenue ?? 0)}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={3} className="p-4 text-center text-muted-foreground">
+                    No organizations found
                   </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>

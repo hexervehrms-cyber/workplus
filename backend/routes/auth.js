@@ -72,13 +72,7 @@ router.post("/login",
         });
       }
 
-      // Log user role for debugging
-      console.log('🔍 LOGIN DEBUG:', {
-        email: user.email,
-        role: user.role,
-        roleType: typeof user.role,
-        userId: user._id
-      });
+      // Log user login attempt
       logger.info('User login attempt', {
         email: user.email,
         role: user.role,
@@ -210,10 +204,10 @@ router.post("/login",
         }
       });
 
-      console.log('✅ LOGIN RESPONSE:', {
+      logger.info('User login successful', {
         email: user.email,
         role: user.role,
-        token: token.substring(0, 20) + '...'
+        userId: user._id
       });
     } catch (error) {
       logger.error('Login error', { 

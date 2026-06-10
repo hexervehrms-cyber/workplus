@@ -1083,7 +1083,7 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
 
   if (!isPrivilegedCreator) {
     const emp = await findEmployeeForSelfService(req.user.userId, resolvedOrgId, {
-      allowCrossOrgFallback: true,
+      allowCrossOrgFallback: false,
       createIfMissing: true,
     });
     if (!emp) {

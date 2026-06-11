@@ -21,6 +21,15 @@ frontend/.env.*
 !frontend/.env.example
 !backend/.env.teams.example
 
+# ============================================================================
+# DEPLOYMENT CONFIGURATION - CRITICAL: NEVER COMMIT PRODUCTION SECRETS
+# ============================================================================
+# Store deployment configs in Render/Vercel dashboard, not in git
+render.yaml
+render.*.yaml
+docker-compose.yml.local
+.vercel/env*.json
+
 # ============================================
 # BUILD OUTPUT
 # ============================================

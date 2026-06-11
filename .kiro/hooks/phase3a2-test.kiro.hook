@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Phase 3A.2 Runtime Test",
+  "description": "Phase 3A.2 test hook",
+  "version": "1",
+  "when": {
+    "type": "userTriggered"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Run a comprehensive Phase 3A.2 runtime E2E test that:\n1. Logs in as super admin\n2. Finds an active organization and admin user\n3. Creates a test admin user if needed\n4. Creates a test employee\n5. Tests attendance (check-in, check-out)\n6. Tests leave requests\n7. Tests expenses\n8. Tests profile\n9. Tests dashboard/stats endpoint\n10. Tests currency/org-default endpoint\n11. Cleans up test data\n\nUse http://localhost:5000 as API base. Use timestamps to create unique test data. Mask all sensitive values in output.\n\nReturn a detailed Phase 3A.2 report with:\n- A. Corrected Runtime Summary Table\n- B. Endpoint Discovery Result\n- C. Organization/Admin Context Result\n- D. Employee Lifecycle Result\n- E. Attendance Result\n- F. Leave Result\n- G. Expense Result\n- H. Profile/Documents Result\n- I. Dashboard/Currency Result\n- J. True Conflict Result\n- K. Bugs Found\n- L. Blocked Items\n- M. Test Data Created/Cleanup\n- N. Final Status"
+  }
+}

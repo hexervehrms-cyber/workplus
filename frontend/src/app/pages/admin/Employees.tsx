@@ -156,7 +156,7 @@ export default function Employees() {
             }
           : undefined
       );
-      if (mounted.current) setEmployees(data);
+      if (mounted.current) setEmployees(data as Employee[]);
     } catch (err: unknown) {
       if (mounted.current) {
         toast.error('Failed to load employees');

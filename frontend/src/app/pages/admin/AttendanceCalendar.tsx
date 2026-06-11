@@ -33,16 +33,6 @@ export default function AttendanceCalendar() {
     loadEmployees();
   }, [currentDate]);
 
-  // Debug logging
-  useEffect(() => {
-    console.log('Attendance Calendar - Current data:', {
-      attendance: attendance.length,
-      employees: employees.length,
-      selectedEmployee,
-      currentMonth: currentDate.toISOString().split('T')[0]
-    });
-  }, [attendance, employees, selectedEmployee, currentDate]);
-
   const loadAttendanceData = async () => {
     try {
       setLoading(true);

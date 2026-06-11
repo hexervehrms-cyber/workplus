@@ -204,9 +204,9 @@ export default function AdminDepartments() {
     if (!uid) return;
     realTimeSocket.connectFromAuth({
       id: uid,
-      role: user.role || 'admin',
-      orgId: user.orgId,
-      tenantId: user.tenantId,
+      role: user?.role || 'admin',
+      orgId: user?.orgId,
+      tenantId: user?.tenantId,
     });
     const unsub = realTimeSocket.onEmployeeUpdate(() => {
       scheduleRefresh();

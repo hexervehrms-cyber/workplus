@@ -1,21 +1,32 @@
+# ============================================================================
+# WORKPLUS BACKEND - RENDER DEPLOYMENT CONFIGURATION TEMPLATE
+# ============================================================================
+# This file is a TEMPLATE showing the structure of render.yaml
+# 
+# DO NOT use this in production. Instead:
+# 1. Configure deployment in Render dashboard UI
+# 2. Or set environment variables directly in Render > Settings > Environment
+# 3. DO NOT commit render.yaml to git with real secrets
+#
+# For development, create render.yaml locally (gitignored) with real values
+# ============================================================================
+
 services:
   - type: web
     name: workplus-backend
-    # Redeploy to apply rate limiter fix - 2025-05-10
     env: node
     plan: standard
     buildCommand: npm install
     startCommand: node backend/server.js
     rootDir: .
     envVars:
+      # ============================================================================
+      # NON-SENSITIVE SERVER CONFIGURATION (safe to commit)
+      # ============================================================================
       - key: PORT
         value: 5000
       - key: NODE_ENV
         value: production
-      - key: MONGODB_URI
-        value: mongodb+srv://atulcse08_db_user:Jadu%40123@workplus.tcf4qho.mongodb.net/workpluspro?retryWrites=true&w=majority
-      - key: JWT_SECRET
-        value: workplus-pro-production-jwt-secret-key-minimum-32-characters-long-secure-2024-v1-hexerve-hrms-workplus-prod
       - key: JWT_EXPIRES_IN
         value: 24h
       - key: CORS_ORIGIN
@@ -24,8 +35,6 @@ services:
         value: https://hexerve.online
       - key: SUPER_ADMIN_EMAIL
         value: atul@hexerve.com
-      - key: SUPER_ADMIN_PASSWORD
-        value: Jadu@123
       - key: SUPER_ADMIN_NAME
         value: Atul
       - key: SMTP_HOST
@@ -34,24 +43,12 @@ services:
         value: 587
       - key: SMTP_USER
         value: hr@hexerve.com
-      - key: SMTP_PASS
-        value: Jadu@333
       - key: FROM_EMAIL
         value: hr@hexerve.com
       - key: HR_EMAIL
         value: hr@hexerve.com
-      - key: TWILIO_ACCOUNT_SID
-        value: your-twilio-account-sid
-      - key: TWILIO_AUTH_TOKEN
-        value: your-twilio-auth-token
       - key: TWILIO_PHONE_NUMBER
         value: +1234567890
-      - key: FIREBASE_PROJECT_ID
-        value: your-firebase-project-id
-      - key: FIREBASE_PRIVATE_KEY
-        value: your-firebase-private-key
-      - key: FIREBASE_CLIENT_EMAIL
-        value: your-firebase-client-email
       - key: VITE_API_URL
         value: https://workplus-backend-sg3a.onrender.com
       - key: VITE_SOCKET_URL
@@ -66,16 +63,6 @@ services:
         value: false
       - key: VITE_ENABLE_ANALYTICS
         value: true
-      - key: TEAMS_APP_ID
-        value: 7b85498f-d7ec-4f0d-a60b-fa6baf6391d2
-      - key: TEAMS_APP_PASSWORD
-        value: 5Wy8Q~ERfF~2WSBaoK2PmCnH1EaTMq67.d0NOaPB
-      - key: TEAMS_TENANT_ID
-        value: 4d3f5d68-c721-43c9-8f42-a05555c64d4a
-      - key: TEAMS_BOT_ID
-        value: 7b85498f-d7ec-4f0d-a60b-fa6baf6391d2
-      - key: TEAMS_BOT_PASSWORD
-        value: 10f5016e-64d9-4211-b9d5-ab0a45ccd6fb
       - key: TEAMS_WEBHOOK_URL
         value: https://workplus-backend-sg3a.onrender.com/api/chat/teams/webhook
       - key: TEAMS_INTEGRATION_ENABLED
@@ -96,6 +83,29 @@ services:
         value: info
       - key: TEAMS_LOG_MESSAGES
         value: true
+
+      # ============================================================================
+      # SENSITIVE VALUES - SET IN RENDER DASHBOARD ONLY
+      # ============================================================================
+      # Use Render Dashboard > Settings > Environment to set these:
+      #
+      # MONGODB_URI=<your_mongodb_atlas_uri>
+      # JWT_SECRET=<generate_new_64_byte_hex_key>
+      # SUPER_ADMIN_PASSWORD=<secure_password>
+      # SMTP_PASS=<microsoft_365_app_password>
+      # REDIS_URL=<optional_redis_url>
+      # TWILIO_ACCOUNT_SID=<your_account_sid>
+      # TWILIO_AUTH_TOKEN=<your_auth_token>
+      # FIREBASE_PROJECT_ID=<your_project_id>
+      # FIREBASE_PRIVATE_KEY=<your_private_key>
+      # FIREBASE_CLIENT_EMAIL=<your_client_email>
+      # TEAMS_APP_ID=<your_app_id>
+      # TEAMS_APP_PASSWORD=<your_app_password>
+      # TEAMS_TENANT_ID=<your_tenant_id>
+      # TEAMS_BOT_ID=<your_bot_id>
+      # TEAMS_BOT_PASSWORD=<your_bot_password>
+      #
+      # ============================================================================
 
 databases:
   - name: workplus-db

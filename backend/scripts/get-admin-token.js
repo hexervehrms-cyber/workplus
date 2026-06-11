@@ -44,9 +44,16 @@ const getAdminToken = async () => {
         orgId: admin.orgId || 'default',
         role: admin.role
       },
-      process.env.JWT_SECRET || 'your-secret-key',
+      process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
+
+    // Validate JWT_SECRET exists
+    if (!process.env.JWT_SECRET) {
+      console.error('❌ ERROR: JWT_SECRET not set in environment');
+      console.error('   Set JWT_SECRET in .env file');
+      process.exit(1);
+    }
 
     console.log('Generated Token:');
     console.log(token);

@@ -16,9 +16,15 @@ async function seedAdmin() {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ Connected to MongoDB');
 
-    const email = process.env.SUPER_ADMIN_EMAIL || 'atul@hexerve.com';
-    const password = process.env.SUPER_ADMIN_PASSWORD || 'Jadu@123';
-    const name = process.env.SUPER_ADMIN_NAME || 'Atul';
+    const email = process.env.SUPER_ADMIN_EMAIL;
+    const password = process.env.SUPER_ADMIN_PASSWORD;
+    const name = process.env.SUPER_ADMIN_NAME;
+    
+    if (!email || !password || !name) {
+      console.error('❌ ERROR: Missing required super admin environment variables');
+      console.error('   Set SUPER_ADMIN_EMAIL, SUPER_ADMIN_PASSWORD, SUPER_ADMIN_NAME in .env');
+      process.exit(1);
+    }
 
     console.log(`\n📝 Creating super admin with:`);
     console.log(`   Email: ${email}`);

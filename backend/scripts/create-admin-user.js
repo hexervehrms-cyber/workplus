@@ -30,10 +30,16 @@ async function createAdminUser() {
 
     const db = mongoose.connection.db;
     
-    // Admin credentials
-    const adminEmail = 'admin@company.com';
-    const adminPassword = 'Jadu@123';
+    // Admin credentials from environment or defaults for demo
+    const adminEmail = process.env.ADMIN_EMAIL || 'admin@company.com';
+    const adminPassword = process.env.ADMIN_PASSWORD;
     const adminName = 'Admin User';
+    
+    if (!adminPassword) {
+      console.error('❌ ERROR: ADMIN_PASSWORD not set');
+      console.error('   Set ADMIN_PASSWORD in .env file for admin creation');
+      throw new Error('Missing ADMIN_PASSWORD');
+    }
     
     // Hash password
     const hashedPassword = await bcrypt.hash(adminPassword, 10);
@@ -87,10 +93,16 @@ async function createAdminUser() {
       });
     }
     
-    // Also create an HR user
-    const hrEmail = 'hr@company.com';
-    const hrPassword = 'Jadu@123';
+    // HR credentials from environment or defaults for demo
+    const hrEmail = process.env.HR_EMAIL || 'hr@company.com';
+    const hrPassword = process.env.HR_PASSWORD;
     const hrName = 'HR Manager';
+    
+    if (!hrPassword) {
+      console.error('❌ ERROR: HR_PASSWORD not set');
+      console.error('   Set HR_PASSWORD in .env file for HR user creation');
+      throw new Error('Missing HR_PASSWORD');
+    }
     
     const hashedHRPassword = await bcrypt.hash(hrPassword, 10);
     
@@ -146,16 +158,16 @@ async function createAdminUser() {
     console.log('LOGIN CREDENTIALS');
     console.log('================================================================================');
     console.log('\nAdmin Dashboard:');
-    console.log('  Email: admin@company.com');
-    console.log('  Password: Jadu@123');
+    console.log('  Email: ' + adminEmail);
+    console.log('  Password: <use ADMIN_PASSWORD from .env>');
     console.log('  Role: Admin');
     console.log('\nHR Dashboard:');
-    console.log('  Email: hr@company.com');
-    console.log('  Password: Jadu@123');
+    console.log('  Email: ' + hrEmail);
+    console.log('  Password: <use HR_PASSWORD from .env>');
     console.log('  Role: HR');
     console.log('\nEmployee Dashboard:');
     console.log('  Email: harsh.gupta@hexerve.com');
-    console.log('  Password: Jadu@123');
+    console.log('  Password: <set in Employee credentials>');
     console.log('  Role: Employee');
     console.log('================================================================================\n');
 

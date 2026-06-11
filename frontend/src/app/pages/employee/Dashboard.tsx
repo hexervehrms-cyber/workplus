@@ -2,21 +2,19 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { KPICard } from '../../components/KPICard';
 import ChatWidget from '../../components/ChatWidget';
 import { useAuth } from '../../context/AuthContext';
-import { TokenManager } from '../../utils/api';
 import {
   fetchLeaveBalanceKpiSummary,
   formatLeaveBalanceKpi,
 } from '../../utils/leaveBalance';
 import { resolveEmployeeMongoId } from '../../utils/resolveEmployeeId';
 import {
-  apiGet,
   apiGetSafe,
   appendOrgIdParam,
   clearApiCache,
   holidaysStorageKey,
   resolveAuthOrgId,
 } from '../../utils/apiHelper';
-import { safeLocaleTime, safeFormatTime, runSafe, authUserKey, safeArrayAccess, safePropertyAccess } from '../../utils/safeUi';
+import { safeLocaleTime, safeFormatTime, runSafe, authUserKey, safeArrayAccess } from '../../utils/safeUi';
 import { postAttendanceAction } from '../../utils/attendanceApi';
 import {
   formatWeekHours,
@@ -27,6 +25,7 @@ import {
 import {
     writePersistedAttendance,
   readPersistedAttendance,
+  clearPersistedAttendance,
   isPayloadFresh,
   localDayKey,
 } from '../../utils/attendancePersistence';
@@ -252,6 +251,7 @@ export default function EmployeeDashboard() {
   const fetchDashboardDataRef = useRef<((_force?: boolean) => Promise<void>) | null>(null);
   const safeRefreshRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
   const lastWeekSyncRef = useRef(0);
+  const lastWeekKeyRef = useRef<string | null>(null); // FIX #2: Track week boundaries
   /** Completed break seconds today (closed breaks only). */
   const completedBreakSecondsRef = useRef(0);
   /** Total break seconds = completed + current open segment (for working-hours math). */
@@ -320,7 +320,19 @@ export default function EmployeeDashboard() {
 
   const ingestWeekHoursFromServer = useCallback(
     (hoursThisWeek: number, weekKey?: string, todayLiveHours = 0) => {
-      weekHoursExclTodayRef.current = Math.max(0, hoursThisWeek - todayLiveHours);
+      // FIX #2: Only update baseline if:
+      // 1. Week boundary changed (new weekKey), OR
+      // 2. We have credible today live hours (> 0), OR
+      // 3. Baseline is empty (first sync)
+      const currentWeekKey = weekKey || calendarWeekKey();
+      const isNewWeek = lastWeekKeyRef.current !== currentWeekKey;
+      const hasCreditableTodayData = todayLiveHours > 0;
+      const needsInit = weekHoursExclTodayRef.current === 0;
+
+      if (isNewWeek || hasCreditableTodayData || needsInit) {
+        weekHoursExclTodayRef.current = Math.max(0, hoursThisWeek - todayLiveHours);
+        lastWeekKeyRef.current = currentWeekKey;
+      }
       applyWeekHours(hoursThisWeek, weekKey, true);
     },
     [applyWeekHours]
@@ -383,11 +395,9 @@ export default function EmployeeDashboard() {
     cycleLabel: string;
     currency: string;
   } | null>(null);
-  const [payrollCycleLoading, setPayrollCycleLoading] = useState(false);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
   const [breakHistory, setBreakHistory] = useState<BreakRecord[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
-  const [currentBreakDuration, setCurrentBreakDuration] = useState(0);
   const [workingHours, setWorkingHours] = useState(0);
   // ============================================================================
   // DERIVED UI STATE - Computed from attendance state
@@ -654,9 +664,7 @@ export default function EmployeeDashboard() {
           }
         }
 
-        if (!calculatedIsOnBreak) {
-          setCurrentBreakDuration(calculatedBreakDuration);
-        }
+        // Break duration now tracked via state only, not separate useState
 
         const totalBreakMin =
           typeof (ls as { totalBreakTime?: number })?.totalBreakTime === 'number'
@@ -862,7 +870,12 @@ export default function EmployeeDashboard() {
 
   // Fetch data on mount — cache hydrates via AttendanceContext when user is ready
   useEffect(() => {
-    if (!authUid) return;
+    if (!authUid) {
+      // FIX #2: Reset week hours tracking on logout
+      lastWeekKeyRef.current = null;
+      weekHoursExclTodayRef.current = 0;
+      return;
+    }
     loadFromLocalStorage();
     const timeoutId = setTimeout(() => {
       void fetchDashboardDataRef.current?.(true);
@@ -981,7 +994,6 @@ export default function EmployeeDashboard() {
   const resetCurrentBreakSegment = useCallback(() => {
     currentBreakSegmentSecondsRef.current = 0;
     setBreakDisplaySeconds(0);
-    setCurrentBreakDuration(0);
   }, []);
 
   const resetAllBreakTracking = useCallback(() => {
@@ -989,7 +1001,6 @@ export default function EmployeeDashboard() {
     breakSecondsRef.current = 0;
     currentBreakSegmentSecondsRef.current = 0;
     setBreakDisplaySeconds(0);
-    setCurrentBreakDuration(0);
   }, []);
 
   const fetchAttendanceHistory = useCallback(async () => {
@@ -1110,6 +1121,9 @@ export default function EmployeeDashboard() {
     }
 
     const interval = setInterval(() => {
+      // FIX #1: Pause timer when tab is hidden to prevent drift
+      if (document.visibilityState !== 'visible') return;
+      
       if (!todayAttendance.checkInTime) return;
       const checkInTime = parseTodayCheckInTime(todayAttendance.checkInTime);
       if (!checkInTime) return;
@@ -1121,7 +1135,6 @@ export default function EmployeeDashboard() {
         const seg = currentBreakSegmentSecondsRef.current;
         breakSecondsRef.current = completedBreakSecondsRef.current + seg;
         setBreakDisplaySeconds(seg);
-        setCurrentBreakDuration(seg / 60);
       } else {
         setBreakDisplaySeconds(0);
         breakSecondsRef.current = completedBreakSecondsRef.current;
@@ -1384,9 +1397,10 @@ export default function EmployeeDashboard() {
         setLastSocketEventTime(Date.now());
         disableRefreshRef.current = true;
         toast.success('Break ended');
+        // FIX: Use consistent BREAK_ACTION_GUARD_MS instead of hardcoded 4000
         setTimeout(() => {
           disableRefreshRef.current = false;
-        }, 4000);
+        }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
     } catch (error) {
       debug.error('❌ [BREAK END] Error:', error);
       toast.error(error instanceof Error ? error.message : 'Could not end break');
@@ -1776,8 +1790,8 @@ export default function EmployeeDashboard() {
                 <div className="p-3 bg-muted/50 rounded-lg">
                   <p className="text-xs text-muted-foreground mb-1">Hold Period</p>
                   <p className="text-sm font-medium">
-                    {payrollCycleSummary.holdStartDate ? 
-                      `${new Date(payrollCycleSummary.holdStartDate).toLocaleDateString('en-US', {
+                    {payrollCycleSummary.cycleStartDate ? 
+                      `${new Date(payrollCycleSummary.cycleStartDate).toLocaleDateString('en-US', {
                         month: 'short',
                         day: 'numeric'
                       })} - ${new Date(payrollCycleSummary.salaryHoldUntil).toLocaleDateString('en-US', {
@@ -1791,8 +1805,8 @@ export default function EmployeeDashboard() {
                 <div className="p-3 bg-muted/50 rounded-lg">
                   <p className="text-xs text-muted-foreground mb-1">Payment Date</p>
                   <p className="text-sm font-medium">
-                    {payrollCycleSummary.paymentDate ?
-                      new Date(payrollCycleSummary.paymentDate).toLocaleDateString('en-US', {
+                    {payrollCycleSummary.salaryReleaseDate ?
+                      new Date(payrollCycleSummary.salaryReleaseDate).toLocaleDateString('en-US', {
                         month: 'short',
                         day: 'numeric'
                       })

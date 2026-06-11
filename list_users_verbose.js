@@ -1,7 +1,27 @@
+/**
+ * List all users from database (verbose output)
+ * Usage: node list_users_verbose.js
+ * 
+ * Requires environment variables:
+ * - MONGODB_URI: MongoDB connection string (from .env)
+ */
 
 import mongoose from 'mongoose';
+import dotenv from 'dotenv';
 
-const MONGODB_URI = 'mongodb+srv://atulcse08_db_user:Jadu%40123@workplus.tcf4qho.mongodb.net/workpluspro?retryWrites=true&w=majority';
+// Load environment variables from .env
+dotenv.config();
+
+// Get MongoDB URI from environment
+const MONGODB_URI = process.env.MONGODB_URI;
+
+// Validate environment
+if (!MONGODB_URI) {
+  console.error('❌ ERROR: MONGODB_URI environment variable is not set');
+  console.error('   Please set MONGODB_URI in your .env file');
+  console.error('   Example: MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/db');
+  process.exit(1);
+}
 
 async function listUsersVerbose() {
   try {
@@ -20,7 +40,8 @@ async function listUsersVerbose() {
     
     await mongoose.disconnect();
   } catch (error) {
-    console.error(error);
+    console.error('❌ Error:', error.message);
+    process.exit(1);
   }
 }
 

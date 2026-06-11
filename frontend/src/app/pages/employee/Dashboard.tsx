@@ -1251,13 +1251,23 @@ export default function EmployeeDashboard() {
           attendance?: { breaks?: BreakRecord[] };
         };
         const liveStatus = payload?.liveStatus;
+        
+        console.log('🔍 [BREAK START] API Response:', {
+          liveStatusIsOnBreak: liveStatus?.isOnBreak,
+          liveStatusStatus: liveStatus?.status,
+          breaksLength: payload?.attendance?.breaks?.length,
+        });
+        
+        const resolvedIsOnBreak = resolveOnBreakFromServer(
+          liveStatus,
+          payload?.attendance?.breaks,
+          true  // fallback for break-start is true
+        );
+        console.log('✅ [BREAK START] resolveOnBreakFromServer returned:', resolvedIsOnBreak);
+        
         updateAttendance(
           {
-            isOnBreak: resolveOnBreakFromServer(
-              liveStatus,
-              payload?.attendance?.breaks,
-              true
-            ),
+            isOnBreak: resolvedIsOnBreak,
             breakType: (liveStatus?.breakType as string) || breakType,
             currentBreakDuration:
               typeof liveStatus?.currentBreakDuration === 'number'
@@ -1364,13 +1374,30 @@ export default function EmployeeDashboard() {
           attendance?: { breaks?: BreakRecord[] };
         };
         const liveStatus = breakPayload?.liveStatus;
+        
+        // CRITICAL DEBUG: Log what we're receiving from the API
+        console.log('🔍 [BREAK END] API Response:', {
+          hasResult: !!result,
+          resultOk: result.ok,
+          hasData: !!breakPayload,
+          liveStatusKeys: liveStatus ? Object.keys(liveStatus) : 'undefined',
+          liveStatusIsOnBreak: liveStatus?.isOnBreak,
+          liveStatusStatus: liveStatus?.status,
+          breaksArray: breakPayload?.attendance?.breaks,
+          breaksLength: breakPayload?.attendance?.breaks?.length,
+          lastBreakEndTime: breakPayload?.attendance?.breaks?.[breakPayload.attendance.breaks.length - 1]?.endTime,
+        });
+        
+        const resolvedIsOnBreak = resolveOnBreakFromServer(
+          liveStatus,
+          breakPayload?.attendance?.breaks,
+          false
+        );
+        console.log('✅ [BREAK END] resolveOnBreakFromServer returned:', resolvedIsOnBreak);
+        
         updateAttendance(
           {
-            isOnBreak: resolveOnBreakFromServer(
-              liveStatus,
-              breakPayload?.attendance?.breaks,
-              false
-            ),
+            isOnBreak: resolvedIsOnBreak,
             breakType: (liveStatus?.breakType as string) || 'regular',
             currentBreakDuration: 0,
             isCheckedIn: true,

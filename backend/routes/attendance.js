@@ -1283,21 +1283,41 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       authOrgId
     );
 
+    logger.info('Break-end: Finding attendance record', {
+      userId: currentUserId,
+      employeeId: effectiveEmployeeId,
+      orgId: effectiveOrgId
+    });
+
     // Find today's attendance record
     let attendance = await Attendance.findOne(dayQuery).sort({ _id: -1 });
 
     if (!attendance) {
+      logger.warn('Break-end: No attendance record found', {
+        userId: currentUserId,
+        employeeId: effectiveEmployeeId,
+        orgId: effectiveOrgId
+      });
       return res.status(400).json({
         success: false,
         message: 'No attendance record found for today.',
       });
     }
 
+    logger.debug('Break-end: Found attendance record', {
+      attendanceId: attendance._id,
+      breaksCount: attendance.breaks?.length || 0
+    });
+
     // Check if there's an open break
     const openBreakIndex = attendance.breaks?.findIndex(b => isOpenBreak(b)) ?? -1;
     
     if (openBreakIndex < 0) {
       // No open break to end
+      logger.info('Break-end: No open break found', {
+        attendanceId: attendance._id,
+        breaksCount: attendance.breaks?.length || 0
+      });
       const liveStatus = buildLiveStatus(attendance);
       return res.status(200).json({
         success: true,
@@ -1306,6 +1326,12 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       });
     }
 
+    logger.info('Break-end: Found open break', {
+      attendanceId: attendance._id,
+      breakIndex: openBreakIndex,
+      breakStartTime: attendance.breaks[openBreakIndex].startTime
+    });
+
     // Close the open break
     attendance.breaks[openBreakIndex].endTime = endTime;
     const breakDurationMins = Math.round(
@@ -1313,9 +1339,20 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     );
     attendance.breaks[openBreakIndex].duration = Math.max(0, breakDurationMins);
     
+    logger.debug('Break-end: Updated break object', {
+      duration: breakDurationMins,
+      endTime: endTime.toISOString()
+    });
+
     // Save the document
     attendance.markModified('breaks');
+    logger.debug('Break-end: Marked breaks as modified, calling save()');
+    
     const updatedAttendance = await attendance.save();
+
+    logger.info('Break-end: Attendance saved successfully', {
+      attendanceId: updatedAttendance._id
+    });
 
     // Re-fetch with populated fields for response
     const attendanceForResponse = await Attendance.findById(updatedAttendance._id)
@@ -1323,6 +1360,9 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       .populate('employeeId', 'employeeCode department');
 
     if (!attendanceForResponse) {
+      logger.error('Break-end: Failed to fetch updated attendance after save', {
+        attendanceId: updatedAttendance._id
+      });
       return res.status(500).json({
         success: false,
         message: 'Failed to retrieve updated attendance record.',
@@ -1417,10 +1457,17 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     });
 
   } catch (err) {
-    logger.error('Break end operation failed', { error: err.message, employeeId: effectiveEmployeeId });
+    logger.error('Break end operation failed', { 
+      error: err.message,
+      errorName: err.name,
+      errorStack: err.stack?.split('\n')[0],
+      employeeId: effectiveEmployeeId,
+      orgId: effectiveOrgId
+    });
     return res.status(500).json({
       success: false,
-      message: 'Failed to end break. Please try again.'
+      message: 'Failed to end break. Please try again.',
+      error: err.message
     });
   }
 }));

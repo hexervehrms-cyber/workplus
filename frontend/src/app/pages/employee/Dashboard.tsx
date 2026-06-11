@@ -36,19 +36,24 @@ function resolveOnBreakFromServer(
   breaks: BreakRecord[] | undefined,
   fallback: boolean
 ): boolean {
-  // Server says explicitly on break or status is on_break
-  if (liveStatus?.isOnBreak === true || liveStatus?.status === 'on_break') return true;
+  // Server says explicitly on break
+  if (liveStatus?.isOnBreak === true || liveStatus?.status === 'on_break') {
+    return true;
+  }
   
-  // Server says explicitly NOT on break - trust immediately (ignore status field)
+  // Server says explicitly NOT on break
   if (liveStatus?.isOnBreak === false) {
     return false;
   }
   
-  // No explicit isOnBreak from server - use breaks array or fallback
+  // Check breaks array if server didn't provide explicit state
   if (Array.isArray(breaks) && breaks.length > 0) {
     const last = breaks[breaks.length - 1];
-    if (last?.startTime && !last?.endTime) return true;
+    if (last?.startTime && !last?.endTime) {
+      return true;
+    }
   }
+  
   return fallback;
 }
 import realTimeSocket from '../../utils/realTimeSocket';
@@ -1274,12 +1279,15 @@ export default function EmployeeDashboard() {
 
         clearApiCache('/attendance/today');
         disableRefreshRef.current = true;
-        void fetchAttendanceHistory();
-        setTimeout(() => {
-          disableRefreshRef.current = false;
-        }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
+        // CRITICAL FIX: Do NOT call fetchAttendanceHistory immediately - let state update first
         toast.success('Break started');
         setLastSocketEventTime(Date.now());
+        
+        // Refresh history after guard period
+        setTimeout(() => {
+          disableRefreshRef.current = false;
+          void fetchAttendanceHistory();
+        }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
     } catch (error) {
       debug.error('❌ [BREAK START] Error:', error);
       toast.error(error instanceof Error ? error.message : 'Could not start break');
@@ -1394,13 +1402,16 @@ export default function EmployeeDashboard() {
         });
 
         clearApiCache('/attendance/today');
-        void fetchAttendanceHistory();
+        // CRITICAL FIX: Do NOT call fetchAttendanceHistory here - it will re-fetch and potentially overwrite state
+        // Instead, wait for socket event to confirm, and refresh history separately
         setLastSocketEventTime(Date.now());
         disableRefreshRef.current = true;
         toast.success('Break ended');
-        // FIX: Use consistent BREAK_ACTION_GUARD_MS instead of hardcoded 4000
+        
+        // Refresh history after guard period to get updated data
         setTimeout(() => {
           disableRefreshRef.current = false;
+          void fetchAttendanceHistory();
         }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
     } catch (error) {
       debug.error('❌ [BREAK END] Error:', error);

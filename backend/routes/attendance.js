@@ -1271,8 +1271,8 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   effectiveOrgId = String(effectiveOrgId);
 
   try {
-    // ATOMIC OPERATION: Use $pull with condition to end the active break
-    // This ensures only the active break is ended, preventing race conditions
+    // SAFE BREAK-END LOGIC: Use JavaScript to safely close the open break
+    // Avoids fragile arrayFilters syntax that can cause query errors
     const endTime = new Date();
 
     const dayQuery = buildTodayAttendanceQuery(
@@ -1283,97 +1283,69 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       authOrgId
     );
 
-    const endMatch = { ...dayQuery, ...hasOpenBreakFilter() };
+    // Find today's attendance record
+    let attendance = await Attendance.findOne(dayQuery).sort({ _id: -1 });
 
-    let updatedAttendance = await Attendance.findOneAndUpdate(
-      endMatch,
-      {
-        $set: {
-          'breaks.$[activeBreak].endTime': endTime,
-          'breaks.$[activeBreak].endNotes': notes || 'Break ended',
-        },
-      },
-      {
-        arrayFilters: [
-          {
-            'activeBreak.startTime': { $exists: true, $ne: null },
-            $or: [
-              { 'activeBreak.endTime': { $exists: false } },
-              { 'activeBreak.endTime': null },
-            ],
-          },
-        ],
-        new: true,
-        runValidators: false,
-      }
-    )
+    if (!attendance) {
+      return res.status(400).json({
+        success: false,
+        message: 'No attendance record found for today.',
+      });
+    }
+
+    // Check if there's an open break
+    const openBreakIndex = attendance.breaks?.findIndex(b => isOpenBreak(b)) ?? -1;
+    
+    if (openBreakIndex < 0) {
+      // No open break to end
+      const liveStatus = buildLiveStatus(attendance);
+      return res.status(200).json({
+        success: true,
+        message: 'No active break found to end.',
+        data: { attendance, liveStatus },
+      });
+    }
+
+    // Close the open break
+    attendance.breaks[openBreakIndex].endTime = endTime;
+    const breakDurationMins = Math.round(
+      (endTime.getTime() - new Date(attendance.breaks[openBreakIndex].startTime).getTime()) / (1000 * 60)
+    );
+    attendance.breaks[openBreakIndex].duration = Math.max(0, breakDurationMins);
+    
+    // Save the document
+    attendance.markModified('breaks');
+    const updatedAttendance = await attendance.save();
+
+    // Re-fetch with populated fields for response
+    const attendanceForResponse = await Attendance.findById(updatedAttendance._id)
       .populate('userId', 'name email avatar')
       .populate('employeeId', 'employeeCode department');
 
-    if (!updatedAttendance) {
-      const attendance = await Attendance.findOne(dayQuery).sort({ _id: -1 });
-
-      if (!attendance) {
-        return res.status(400).json({
-          success: false,
-          message: 'No attendance record found for today.',
-        });
-      }
-
-      if (!attendance.breaks?.some((b) => isOpenBreak(b))) {
-        const liveStatus = buildLiveStatus(attendance);
-        return res.status(200).json({
-          success: true,
-          message: 'No active break found to end.',
-          data: { attendance, liveStatus },
-        });
-      }
-
-      updatedAttendance = await endOpenBreakOnDocument(attendance, endTime, notes);
-      if (updatedAttendance) {
-        updatedAttendance = await Attendance.findById(updatedAttendance._id)
-          .populate('userId', 'name email avatar')
-          .populate('employeeId', 'employeeCode department');
-      }
-
-      if (!updatedAttendance) {
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to end break. Please try again.',
-        });
-      }
+    if (!attendanceForResponse) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to retrieve updated attendance record.',
+      });
     }
 
-    const latestBreakEntry = findLatestCompletedBreak(updatedAttendance.breaks);
-    const activeBreak = latestBreakEntry?.breakItem || null;
-    const breakDuration = activeBreak
-      ? Math.round((new Date(activeBreak.endTime).getTime() - new Date(activeBreak.startTime).getTime()) / (1000 * 60))
-      : 0;
+    const liveStatus = buildLiveStatus(attendanceForResponse);
 
-    if (activeBreak && latestBreakEntry.index !== undefined && activeBreak.duration !== breakDuration) {
-      await Attendance.updateOne(
-        { _id: updatedAttendance._id },
-        { $set: { [`breaks.${latestBreakEntry.index}.duration`]: breakDuration } }
-      );
-      if (updatedAttendance.breaks && updatedAttendance.breaks[latestBreakEntry.index]) {
-        updatedAttendance.breaks[latestBreakEntry.index].duration = breakDuration;
-      }
-    }
+    // Get the closed break info
+    const closedBreak = attendanceForResponse.breaks[openBreakIndex];
+    const breakDurationMins2 = closedBreak?.duration || 0;
 
-    const liveStatus = buildLiveStatus(updatedAttendance);
-
-    await syncAttendanceHistoryFromRecord(updatedAttendance, {
+    await syncAttendanceHistoryFromRecord(attendanceForResponse, {
       userId: currentUserId,
       orgId: effectiveOrgId,
       employeeId: effectiveEmployeeId,
       updatedBy: currentUserId,
     });
 
-    const breakEndTs = activeBreak?.endTime
-      ? new Date(activeBreak.endTime).getTime()
+    const breakEndTs = closedBreak?.endTime
+      ? new Date(closedBreak.endTime).getTime()
       : endTime.getTime();
-    const breakEndIdx = latestBreakEntry?.index ?? 0;
-    const breakEndSourceKey = `${updatedAttendance._id}-break-end-${breakEndIdx}-${breakEndTs}`;
+    const breakEndSourceKey = `${attendanceForResponse._id}-break-end-${openBreakIndex}-${breakEndTs}`;
 
     try {
       const breakEndLog = await ActivityLog.logActivity({
@@ -1382,15 +1354,15 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
         action: 'attendance_break_end',
         entity: {
           entityType: 'attendance',
-          entityId: updatedAttendance._id,
-          entityName: `Break Ended - ${breakDuration} minutes`,
+          entityId: attendanceForResponse._id,
+          entityName: `Break Ended - ${breakDurationMins2} minutes`,
         },
         details: {
-          duration: breakDuration,
+          duration: breakDurationMins2,
           notes,
           idempotencyKey,
           employeeName: effectiveEmployeeName,
-          attendanceId: String(updatedAttendance._id),
+          attendanceId: String(attendanceForResponse._id),
           sourceKey: breakEndSourceKey,
         },
         ipAddress: req.ip,
@@ -1404,7 +1376,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     }
 
     if (req.emitAttendanceUpdate) {
-      req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
+      req.emitAttendanceUpdate(attendanceForResponse, effectiveOrgId);
     }
 
     if (global.io) {
@@ -1412,12 +1384,12 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
         employeeId: effectiveEmployeeId,
         userId: currentUserId,
         employeeName: effectiveEmployeeName,
-        breakType: activeBreak?.breakType || 'regular',
-        breakStartTime: activeBreak?.startTime,
-        breakEndTime: activeBreak?.endTime || endTime,
+        breakType: closedBreak?.breakType || 'regular',
+        breakStartTime: closedBreak?.startTime,
+        breakEndTime: closedBreak?.endTime || endTime,
         timestamp: new Date().toISOString(),
-        breakDuration,
-        attendance: updatedAttendance,
+        breakDuration: breakDurationMins2,
+        attendance: attendanceForResponse,
         liveStatus,
       });
       emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
@@ -1437,7 +1409,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       success: true,
       message: 'Break ended successfully',
       data: {
-        attendance: updatedAttendance,
+        attendance: attendanceForResponse,
         liveStatus,
         hoursThisWeek: hoursThisWeekAfterBreak,
         weekKey: calendarWeekKey(),

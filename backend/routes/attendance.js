@@ -254,7 +254,7 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
  */
 async function getMergedAttendanceActivityLogs(req, options = {}) {
   let authOrgId =
-    userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId || req.user?.tenantId;
+    userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId;
 
   // Admin/HR JWT sometimes lacks orgId while employee rows use Employee.orgId — resolve from profile
   if ((!authOrgId || authOrgId === 'system') && req.user?.userId && req.user?.role !== 'super_admin') {
@@ -409,26 +409,30 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   const authOrgId = req.user?.orgId;
   const authRole = req.user?.role;
   
-  // DEBUG: Log incoming request
-  console.log('🔍 [CHECK-IN] Request received:', {
-    authRole,
-    authUserId,
-    authOrgId,
-    bodyUserId: userId,
-    bodyEmployeeId: employeeId,
-    bodyOrgId: orgId,
-    fullReqUser: req.user
-  });
-  
   // Enforce tenant/user isolation. Employee check-in is always for authenticated user.
   let effectiveUserId = userId;
   let effectiveEmployeeId = employeeId;
   let effectiveOrgId = orgId || authOrgId;
   let effectiveEmployeeName = employeeName;
 
+  // CRITICAL: Reject if req.body.orgId differs from authenticated user's org
+  if (orgId && String(orgId) !== String(authOrgId) && authRole !== 'super_admin') {
+    logger.warn('Organization scope violation attempted on check-in', {
+      requestOrgId: orgId,
+      authOrgId,
+      role: authRole,
+      userId: authUserId
+    });
+    return res.status(403).json({
+      success: false,
+      message: 'Organization mismatch. Cannot check in for different organization.',
+      code: 'ORG_MISMATCH'
+    });
+  }
+
   if (authRole === 'employee') {
     const employee = await findEmployeeForSelfService(authUserId, authOrgId, {
-      allowCrossOrgFallback: true,
+      allowCrossOrgFallback: false,
       createIfMissing: true
     });
     if (!employee) {
@@ -446,9 +450,8 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
       employeeName ||
       'Employee';
   } else {
-    console.log('❌ [CHECK-IN] Non-employee role detected:', authRole);
     if (!effectiveUserId || !effectiveEmployeeId || !effectiveOrgId) {
-      console.log('❌ [CHECK-IN] Missing required fields for non-employee:', {
+      logger.warn('Missing required fields for non-employee check-in', {
         effectiveUserId,
         effectiveEmployeeId,
         effectiveOrgId,
@@ -728,7 +731,7 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
   if (authRole === 'employee') {
     const employee = await findEmployeeForSelfService(authUserId, authOrgId, {
-      allowCrossOrgFallback: true,
+      allowCrossOrgFallback: false,
       createIfMissing: true
     });
     if (!employee) {
@@ -1046,7 +1049,7 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
 
   if (authRole === 'employee') {
     const employee = await findEmployeeForSelfService(currentUserId, authOrgId, {
-      allowCrossOrgFallback: true,
+      allowCrossOrgFallback: false,
       createIfMissing: true
     });
     if (!employee) {
@@ -1245,7 +1248,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
 
   if (authRole === 'employee') {
     const employee = await findEmployeeForSelfService(currentUserId, authOrgId, {
-      allowCrossOrgFallback: true,
+      allowCrossOrgFallback: false,
       createIfMissing: true
     });
     if (!employee) {
@@ -1268,8 +1271,8 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   effectiveOrgId = String(effectiveOrgId);
 
   try {
-    // ATOMIC OPERATION: Use $pull with condition to end the active break
-    // This ensures only the active break is ended, preventing race conditions
+    // SAFE BREAK-END LOGIC: Use JavaScript to safely close the open break
+    // Avoids fragile arrayFilters syntax that can cause query errors
     const endTime = new Date();
 
     const dayQuery = buildTodayAttendanceQuery(
@@ -1280,97 +1283,109 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       authOrgId
     );
 
-    const endMatch = { ...dayQuery, ...hasOpenBreakFilter() };
+    logger.info('Break-end: Finding attendance record', {
+      userId: currentUserId,
+      employeeId: effectiveEmployeeId,
+      orgId: effectiveOrgId
+    });
 
-    let updatedAttendance = await Attendance.findOneAndUpdate(
-      endMatch,
-      {
-        $set: {
-          'breaks.$[activeBreak].endTime': endTime,
-          'breaks.$[activeBreak].endNotes': notes || 'Break ended',
-        },
-      },
-      {
-        arrayFilters: [
-          {
-            'activeBreak.startTime': { $exists: true, $ne: null },
-            $or: [
-              { 'activeBreak.endTime': { $exists: false } },
-              { 'activeBreak.endTime': null },
-            ],
-          },
-        ],
-        new: true,
-        runValidators: false,
-      }
-    )
+    // Find today's attendance record
+    let attendance = await Attendance.findOne(dayQuery).sort({ _id: -1 });
+
+    if (!attendance) {
+      logger.warn('Break-end: No attendance record found', {
+        userId: currentUserId,
+        employeeId: effectiveEmployeeId,
+        orgId: effectiveOrgId
+      });
+      return res.status(400).json({
+        success: false,
+        message: 'No attendance record found for today.',
+      });
+    }
+
+    logger.debug('Break-end: Found attendance record', {
+      attendanceId: attendance._id,
+      breaksCount: attendance.breaks?.length || 0
+    });
+
+    // Check if there's an open break
+    const openBreakIndex = attendance.breaks?.findIndex(b => isOpenBreak(b)) ?? -1;
+    
+    if (openBreakIndex < 0) {
+      // No open break to end
+      logger.info('Break-end: No open break found', {
+        attendanceId: attendance._id,
+        breaksCount: attendance.breaks?.length || 0
+      });
+      const liveStatus = buildLiveStatus(attendance);
+      return res.status(200).json({
+        success: true,
+        message: 'No active break found to end.',
+        data: { attendance, liveStatus },
+      });
+    }
+
+    logger.info('Break-end: Found open break', {
+      attendanceId: attendance._id,
+      breakIndex: openBreakIndex,
+      breakStartTime: attendance.breaks[openBreakIndex].startTime
+    });
+
+    // Close the open break
+    attendance.breaks[openBreakIndex].endTime = endTime;
+    const breakDurationMins = Math.round(
+      (endTime.getTime() - new Date(attendance.breaks[openBreakIndex].startTime).getTime()) / (1000 * 60)
+    );
+    attendance.breaks[openBreakIndex].duration = Math.max(0, breakDurationMins);
+    
+    logger.debug('Break-end: Updated break object', {
+      duration: breakDurationMins,
+      endTime: endTime.toISOString()
+    });
+
+    // Save the document
+    attendance.markModified('breaks');
+    logger.debug('Break-end: Marked breaks as modified, calling save()');
+    
+    const updatedAttendance = await attendance.save();
+
+    logger.info('Break-end: Attendance saved successfully', {
+      attendanceId: updatedAttendance._id
+    });
+
+    // Re-fetch with populated fields for response
+    const attendanceForResponse = await Attendance.findById(updatedAttendance._id)
       .populate('userId', 'name email avatar')
       .populate('employeeId', 'employeeCode department');
 
-    if (!updatedAttendance) {
-      const attendance = await Attendance.findOne(dayQuery).sort({ _id: -1 });
-
-      if (!attendance) {
-        return res.status(400).json({
-          success: false,
-          message: 'No attendance record found for today.',
-        });
-      }
-
-      if (!attendance.breaks?.some((b) => isOpenBreak(b))) {
-        const liveStatus = buildLiveStatus(attendance);
-        return res.status(200).json({
-          success: true,
-          message: 'No active break found to end.',
-          data: { attendance, liveStatus },
-        });
-      }
-
-      updatedAttendance = await endOpenBreakOnDocument(attendance, endTime, notes);
-      if (updatedAttendance) {
-        updatedAttendance = await Attendance.findById(updatedAttendance._id)
-          .populate('userId', 'name email avatar')
-          .populate('employeeId', 'employeeCode department');
-      }
-
-      if (!updatedAttendance) {
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to end break. Please try again.',
-        });
-      }
+    if (!attendanceForResponse) {
+      logger.error('Break-end: Failed to fetch updated attendance after save', {
+        attendanceId: updatedAttendance._id
+      });
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to retrieve updated attendance record.',
+      });
     }
 
-    const latestBreakEntry = findLatestCompletedBreak(updatedAttendance.breaks);
-    const activeBreak = latestBreakEntry?.breakItem || null;
-    const breakDuration = activeBreak
-      ? Math.round((new Date(activeBreak.endTime).getTime() - new Date(activeBreak.startTime).getTime()) / (1000 * 60))
-      : 0;
+    const liveStatus = buildLiveStatus(attendanceForResponse);
 
-    if (activeBreak && latestBreakEntry.index !== undefined && activeBreak.duration !== breakDuration) {
-      await Attendance.updateOne(
-        { _id: updatedAttendance._id },
-        { $set: { [`breaks.${latestBreakEntry.index}.duration`]: breakDuration } }
-      );
-      if (updatedAttendance.breaks && updatedAttendance.breaks[latestBreakEntry.index]) {
-        updatedAttendance.breaks[latestBreakEntry.index].duration = breakDuration;
-      }
-    }
+    // Get the closed break info
+    const closedBreak = attendanceForResponse.breaks[openBreakIndex];
+    const breakDurationMins2 = closedBreak?.duration || 0;
 
-    const liveStatus = buildLiveStatus(updatedAttendance);
-
-    await syncAttendanceHistoryFromRecord(updatedAttendance, {
+    await syncAttendanceHistoryFromRecord(attendanceForResponse, {
       userId: currentUserId,
       orgId: effectiveOrgId,
       employeeId: effectiveEmployeeId,
       updatedBy: currentUserId,
     });
 
-    const breakEndTs = activeBreak?.endTime
-      ? new Date(activeBreak.endTime).getTime()
+    const breakEndTs = closedBreak?.endTime
+      ? new Date(closedBreak.endTime).getTime()
       : endTime.getTime();
-    const breakEndIdx = latestBreakEntry?.index ?? 0;
-    const breakEndSourceKey = `${updatedAttendance._id}-break-end-${breakEndIdx}-${breakEndTs}`;
+    const breakEndSourceKey = `${attendanceForResponse._id}-break-end-${openBreakIndex}-${breakEndTs}`;
 
     try {
       const breakEndLog = await ActivityLog.logActivity({
@@ -1379,15 +1394,15 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
         action: 'attendance_break_end',
         entity: {
           entityType: 'attendance',
-          entityId: updatedAttendance._id,
-          entityName: `Break Ended - ${breakDuration} minutes`,
+          entityId: attendanceForResponse._id,
+          entityName: `Break Ended - ${breakDurationMins2} minutes`,
         },
         details: {
-          duration: breakDuration,
+          duration: breakDurationMins2,
           notes,
           idempotencyKey,
           employeeName: effectiveEmployeeName,
-          attendanceId: String(updatedAttendance._id),
+          attendanceId: String(attendanceForResponse._id),
           sourceKey: breakEndSourceKey,
         },
         ipAddress: req.ip,
@@ -1401,7 +1416,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     }
 
     if (req.emitAttendanceUpdate) {
-      req.emitAttendanceUpdate(updatedAttendance, effectiveOrgId);
+      req.emitAttendanceUpdate(attendanceForResponse, effectiveOrgId);
     }
 
     if (global.io) {
@@ -1409,12 +1424,12 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
         employeeId: effectiveEmployeeId,
         userId: currentUserId,
         employeeName: effectiveEmployeeName,
-        breakType: activeBreak?.breakType || 'regular',
-        breakStartTime: activeBreak?.startTime,
-        breakEndTime: activeBreak?.endTime || endTime,
+        breakType: closedBreak?.breakType || 'regular',
+        breakStartTime: closedBreak?.startTime,
+        breakEndTime: closedBreak?.endTime || endTime,
         timestamp: new Date().toISOString(),
-        breakDuration,
-        attendance: updatedAttendance,
+        breakDuration: breakDurationMins2,
+        attendance: attendanceForResponse,
         liveStatus,
       });
       emitAttendanceKPIUpdate(global.io, effectiveOrgId, {
@@ -1434,7 +1449,7 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
       success: true,
       message: 'Break ended successfully',
       data: {
-        attendance: updatedAttendance,
+        attendance: attendanceForResponse,
         liveStatus,
         hoursThisWeek: hoursThisWeekAfterBreak,
         weekKey: calendarWeekKey(),
@@ -1442,10 +1457,17 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     });
 
   } catch (err) {
-    logger.error('Break end operation failed', { error: err.message, employeeId: effectiveEmployeeId });
+    logger.error('Break end operation failed', { 
+      error: err.message,
+      errorName: err.name,
+      errorStack: err.stack?.split('\n')[0],
+      employeeId: effectiveEmployeeId,
+      orgId: effectiveOrgId
+    });
     return res.status(500).json({
       success: false,
-      message: 'Failed to end break. Please try again.'
+      message: 'Failed to end break. Please try again.',
+      error: err.message
     });
   }
 }));

@@ -155,14 +155,40 @@ const validateEnvironment = () => {
     'secret',
     'your-secret-key',
     'your-secure-jwt-secret-key-minimum-32-characters-long-change-this',
-    'workplus-pro-production-jwt-secret-key-32-chars-minimum-2024'
+    'workplus-pro-production-jwt-secret-key-32-chars-minimum-2024',
+    'change-me',
+    'change_me',
+    'default',
+    'password',
+    'test',
+    'demo',
+    'your_random_64_char_hex_string'
   ];
   
-  if (defaultSecrets.includes(jwtSecret) || jwtSecret.length < 32) {
-    console.error('❌ CRITICAL SECURITY ERROR: JWT_SECRET must be set to a secure value (minimum 32 characters)');
-    console.error('   Current JWT_SECRET length:', jwtSecret.length);
-    console.error('   Please set a strong, unique JWT_SECRET in your environment variables');
+  // Check length
+  if (!jwtSecret || jwtSecret.length < 32) {
+    console.error('❌ CRITICAL SECURITY ERROR: JWT_SECRET is missing or too short (minimum 32 characters)');
+    console.error('   Current JWT_SECRET:', jwtSecret ? `${jwtSecret.length} chars` : 'NOT SET');
+    console.error('   ➜ Generate a new secret: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    console.error('   ➜ Add to .env: JWT_SECRET=<generated_secret>');
     process.exit(1);
+  }
+  
+  // Check for obvious default patterns (case-insensitive)
+  const secretLower = jwtSecret.toLowerCase();
+  const hasObviousDefault = defaultSecrets.some(s => secretLower.includes(s.toLowerCase()));
+  
+  if (hasObviousDefault || jwtSecret.includes('workplus') || jwtSecret.includes('-') || /^[a-z-]+$/.test(jwtSecret)) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('❌ CRITICAL SECURITY ERROR IN PRODUCTION: JWT_SECRET appears to use a default or weak pattern');
+      console.error('   Do NOT use dictionary words, hyphens, or obvious patterns');
+      console.error('   ➜ Generate a new secret: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+      console.error('   ➜ Deploy with new secret to production immediately');
+      process.exit(1);
+    } else {
+      console.warn('⚠️  WARNING (Development): JWT_SECRET appears to use a default pattern');
+      console.warn('   ➜ For production, generate: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    }
   }
 
   console.log('✅ Environment validation passed');
@@ -810,11 +836,14 @@ app.post("/api/auth/create-admin", asyncHandler(async (req, res) => {
   });
 }));
 
-// Dashboard routes (with authentication)
-app.use("/api/dashboard", ...authedTenant, dashboardRoutes);
-app.use("/api/dashboard", ...authedTenant, dashboardSuperAdminRoutes);
-app.use("/api/dashboard", ...authedTenant, dashboardEmployeeRoutes);
-app.use("/api/employee-dashboard", ...authedTenant, employeeDashboardRoutes);
+// Dashboard routes (with authentication and role-based authorization)
+// Admin/HR dashboard - organization-specific metrics
+app.use("/api/dashboard", ...authedTenant, authorize('admin', 'hr'), dashboardRoutes);
+// Super Admin dashboard - platform-wide metrics
+app.use("/api/dashboard", ...authedTenant, authorize('super_admin'), dashboardSuperAdminRoutes);
+// Employee dashboard - self-service employee data only
+app.use("/api/dashboard", ...authedTenant, authorize('employee', 'manager', 'accountant'), dashboardEmployeeRoutes);
+app.use("/api/employee-dashboard", ...authedTenant, authorize('employee', 'manager', 'accountant'), employeeDashboardRoutes);
 
 // ============================================================================
 // PUBLIC CLEANUP ENDPOINTS (for testing/development)

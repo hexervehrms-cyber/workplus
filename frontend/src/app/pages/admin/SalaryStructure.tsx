@@ -118,7 +118,7 @@ export default function AdminSalaryStructure() {
     try {
       setLoading(true);
       const data = await EmployeeService.getAllEmployees(user ?? undefined);
-      setEmployees(data);
+      setEmployees(data as Employee[]);
     } catch {
       /* load errors surfaced via toast */
     } finally {

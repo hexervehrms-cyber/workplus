@@ -1217,11 +1217,6 @@ export default function Expenses() {
                 <p className="text-muted-foreground mb-2 font-semibold">No Receipt Available</p>
                 <p className="text-sm text-gray-500 mb-6">This expense does not have a receipt attached yet.</p>
                 <p className="text-xs text-gray-400 mb-4">To add a receipt, edit this expense and upload a file.</p>
-                {viewingReceipt && (
-                  <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
-                    <p className="text-xs text-red-600 break-all">Debug - URL: {viewingReceipt}</p>
-                  </div>
-                )}
               </div>
             )}
           </div>

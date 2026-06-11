@@ -13,8 +13,14 @@ dotenv.config();
 const API_URL = process.env.VITE_API_URL || 'https://workplus-backend-sg3a.onrender.com';
 const API_BASE = `${API_URL}/api`;
 
-const TEST_EMAIL = 'atul@hexerve.com';
-const TEST_PASSWORD = 'Jadu@123';
+const TEST_EMAIL = process.env.TEST_EMAIL || 'atul@hexerve.com';
+const TEST_PASSWORD = process.env.TEST_PASSWORD;
+
+if (!TEST_PASSWORD) {
+  console.error('❌ ERROR: TEST_PASSWORD environment variable is required');
+  console.error('   Set TEST_PASSWORD in .env file');
+  process.exit(1);
+}
 
 async function debugLogin() {
   console.log('\n🔍 DEBUG: LOGIN RESPONSE\n');

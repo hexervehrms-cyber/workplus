@@ -710,8 +710,18 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
 /**
  * POST /api/dashboard/test-kpi-emit
  * Test endpoint to manually trigger KPI update emission (for debugging)
+ * GATED: Only available in development environment
  */
 router.post("/test-kpi-emit", asyncHandler(async (req, res) => {
+  // Gate: Only available in development
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({
+      success: false,
+      message: 'Not found',
+      code: 'NOT_FOUND'
+    });
+  }
+  
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   

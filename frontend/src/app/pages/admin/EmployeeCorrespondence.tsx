@@ -131,7 +131,6 @@ export default function EmployeeCorrespondence() {
   const fetchEmployeeData = async () => {
     try {
       const data = await apiGet(`/employees/${employeeId}`);
-      console.log('Employee data received:', data); // Debug log
       
       // Handle different response structures
       let employeeData = data.employee || data.data || data;

@@ -93,9 +93,21 @@ async function assertPersonalDocumentAccess(req, document) {
 
 async function assertCanAccessEmployeeDocuments(req, employeeIdParam) {
   const privileged = [...MANAGE_DOC_ROLES, "manager"];
-  const emp = await Employee.findOne(employeeLookupQuery(req, employeeIdParam))
+  const idParam = String(employeeIdParam);
+  
+  // Try to resolve the parameter as either Employee._id or User._id
+  // First try Employee._id lookup (scoped to org for non-super_admin)
+  let emp = await Employee.findOne(employeeLookupQuery(req, employeeIdParam))
     .select("userId orgId")
     .lean();
+  
+  // If not found, try User._id lookup (documents are stored by userId)
+  if (!emp) {
+    const orgId = isSuperAdmin(req) ? {} : { orgId: String(req.user.orgId) };
+    emp = await Employee.findOne({ userId: idParam, ...orgId })
+      .select("userId orgId")
+      .lean();
+  }
 
   if (!emp) {
     return { ok: false, status: 404, message: "Employee not found" };
@@ -189,7 +201,7 @@ const findGeneratedDocumentForUser = async (documentId, req, orgIds = []) => {
 /** Collect org ids (JWT + employee row) for tenant-safe queries. */
 async function collectOrgIds(req, requestedOrgId) {
   const ids = new Set();
-  const authOrg = String(req.user?.orgId || req.user?.tenantId || "").trim();
+  const authOrg = String(req.user?.orgId || "").trim();
   if (authOrg) ids.add(authOrg);
   if (requestedOrgId) ids.add(String(requestedOrgId).trim());
 
@@ -1389,20 +1401,24 @@ router.post(
       const {
         documentId,
         employeeId,
-        employeeName,
-        organizationId,
         acknowledgedAt,
         ipAddress,
         accepted,
       } = req.body;
 
       let resolvedEmployeeId = req.user.userId;
+      let resolvedOrgId = userOrgIdFromReq(req) || resolveScopedOrgId(req);
+
       if (employeeId) {
         const access = await assertCanAccessEmployeeDocuments(req, employeeId);
         if (!access.ok) {
           return sendError(res, access.message, access.status, access.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
         }
         resolvedEmployeeId = access.userId;
+        // Update org from employee's org for validation
+        if (access.employeeOrgId) {
+          resolvedOrgId = access.employeeOrgId;
+        }
       }
 
       if (!documentId || !resolvedEmployeeId) {
@@ -1421,6 +1437,32 @@ router.post(
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
+      // Fetch and validate the generated document
+      const orgIds = await collectOrgIds(req, null);
+      const docLookup = await findGeneratedDocumentForUser(documentId, req, orgIds);
+      
+      if (docLookup.error === "NOT_FOUND") {
+        return sendError(res, "Document not found", 404, "NOT_FOUND");
+      }
+      if (docLookup.error === "FORBIDDEN") {
+        return sendError(res, "Unauthorized document access", 403, "FORBIDDEN");
+      }
+
+      const doc = docLookup.doc;
+      
+      // For employees: verify document is visible to them
+      if (req.user.role === "employee") {
+        const uid = String(req.user.userId);
+        const assignAll = !doc.assignTo || doc.assignTo === "all";
+        const targeted =
+          Array.isArray(doc.targetUsers) &&
+          doc.targetUsers.some((t) => String(t) === uid);
+        
+        if (!assignAll && !targeted) {
+          return sendError(res, "Document not assigned to you", 403, "FORBIDDEN");
+        }
+      }
+
       const existingAcknowledgment = await DocumentAcknowledgment.findOne({
         documentId,
         employeeId: resolvedEmployeeId,
@@ -1434,15 +1476,16 @@ router.post(
         );
       }
 
+      // Use resolved org ID from JWT, not from request body
       const acknowledgment = await DocumentAcknowledgment.create({
         documentId,
         employeeId: resolvedEmployeeId,
-        employeeName,
-        organizationId,
+        employeeName: String(req.user.name || "Employee"),
+        organizationId: String(resolvedOrgId || doc.organizationId),
         acknowledgedAt: acknowledgedAt || new Date(),
         ipAddress,
-        accepted,
-        status: accepted ? "Completed" : "Rejected",
+        accepted: accepted === true || accepted === "true",
+        status: (accepted === true || accepted === "true") ? "Completed" : "Rejected",
       });
 
       return sendSuccess(res, acknowledgment, "Document acknowledged successfully");

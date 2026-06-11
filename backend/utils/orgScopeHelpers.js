@@ -52,7 +52,7 @@ const pickHolidayOrg = (v) => {
 export function resolveHolidayOrgIdForRequest(req) {
   const fromValidated = pickHolidayOrg(req.validatedOrgId);
   const fromUser = pickHolidayOrg(
-    userOrgIdFromReq(req) || req.user?.orgId || req.user?.tenantId
+    userOrgIdFromReq(req) || req.user?.orgId
   );
   const fromQuery = pickHolidayOrg(req.query?.orgId);
   const fromBody = pickHolidayOrg(req.body?.orgId);

@@ -145,6 +145,7 @@ const employeeSchema = new mongoose.Schema(
     },
     orgId: {
       type: String,
+      required: true,
       index: true // Index for tenant queries
     },
     // Sensitive Information Fields

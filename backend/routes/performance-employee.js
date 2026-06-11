@@ -43,7 +43,7 @@ async function performanceForUserHandler(req, res) {
     }
 
     const scopedOrg =
-      userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId || req.user?.tenantId;
+      userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId;
     const orgMatch = buildOrgIdFlexible(scopedOrg);
     let employee = await Employee.findOne({
       ...orgMatch,

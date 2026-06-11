@@ -327,7 +327,7 @@ export default function Assets() {
           ? { role: user.role, orgId: user.orgId, tenantId: user.tenantId }
           : undefined
       );
-      const normalized = (Array.isArray(list) ? list : []).map((emp: AssignEmployeeOption) => ({
+      const normalized = (Array.isArray(list) ? list : []).map((emp) => ({
         _id: String(emp._id || ''),
         employeeCode: emp.employeeCode,
         designation: emp.designation,

@@ -817,16 +817,28 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
     }
   };
 
-  // Mock productivity data - CONVERT TO REAL DATA
-  const [productivityData, setProductivityData] = useState([
-    { day: 'Mon', productivity: 85 },
-    { day: 'Tue', productivity: 92 },
-    { day: 'Wed', productivity: 88 },
-    { day: 'Thu', productivity: 95 },
-    { day: 'Fri', productivity: 78 },
-    { day: 'Sat', productivity: 65 },
-    { day: 'Sun', productivity: 45 },
-  ]);
+  // Weekly productivity data - fetched from real attendance data
+  const [productivityData, setProductivityData] = useState<Array<{ day: string; productivity: number }>>([]);
+
+  // Fetch weekly productivity from backend
+  useEffect(() => {
+    const fetchProductivity = async () => {
+      try {
+        await ensureAccessToken();
+        const response = await apiGet<{ success?: boolean; data?: Array<{ day: string; productivity: number }> }>(
+          '/dashboard/weekly-productivity',
+          false
+        );
+        if (response?.success !== false && response?.data) {
+          setProductivityData(response.data);
+        }
+      } catch (error) {
+        console.error('Error fetching weekly productivity:', error);
+      }
+    };
+    
+    fetchProductivity();
+  }, []);
 
   // Currency amount display component with INR icon
   const CurrencyAmount: React.FC<{ amount: number; className?: string }> = ({ amount, className }) => {

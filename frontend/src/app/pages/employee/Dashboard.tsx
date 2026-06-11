@@ -2,21 +2,19 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { KPICard } from '../../components/KPICard';
 import ChatWidget from '../../components/ChatWidget';
 import { useAuth } from '../../context/AuthContext';
-import { TokenManager } from '../../utils/api';
 import {
   fetchLeaveBalanceKpiSummary,
   formatLeaveBalanceKpi,
 } from '../../utils/leaveBalance';
 import { resolveEmployeeMongoId } from '../../utils/resolveEmployeeId';
 import {
-  apiGet,
   apiGetSafe,
   appendOrgIdParam,
   clearApiCache,
   holidaysStorageKey,
   resolveAuthOrgId,
 } from '../../utils/apiHelper';
-import { safeLocaleTime, safeFormatTime, runSafe, authUserKey, safeArrayAccess, safePropertyAccess } from '../../utils/safeUi';
+import { safeLocaleTime, safeFormatTime, runSafe, authUserKey, safeArrayAccess } from '../../utils/safeUi';
 import { postAttendanceAction } from '../../utils/attendanceApi';
 import {
   formatWeekHours,
@@ -25,9 +23,9 @@ import {
   calendarWeekKey,
 } from '../../utils/weekHours';
 import {
-  clearPersistedAttendance,
-  writePersistedAttendance,
+    writePersistedAttendance,
   readPersistedAttendance,
+  clearPersistedAttendance,
   isPayloadFresh,
   localDayKey,
 } from '../../utils/attendancePersistence';
@@ -38,18 +36,24 @@ function resolveOnBreakFromServer(
   breaks: BreakRecord[] | undefined,
   fallback: boolean
 ): boolean {
-  if (liveStatus?.isOnBreak === true || liveStatus?.status === 'on_break') return true;
-  if (liveStatus?.isOnBreak === false && liveStatus?.status !== 'on_break') {
-    if (Array.isArray(breaks) && breaks.length > 0) {
-      const last = breaks[breaks.length - 1];
-      if (last?.startTime && !last?.endTime) return true;
-    }
+  // Server says explicitly on break
+  if (liveStatus?.isOnBreak === true || liveStatus?.status === 'on_break') {
+    return true;
+  }
+  
+  // Server says explicitly NOT on break
+  if (liveStatus?.isOnBreak === false) {
     return false;
   }
+  
+  // Check breaks array if server didn't provide explicit state
   if (Array.isArray(breaks) && breaks.length > 0) {
     const last = breaks[breaks.length - 1];
-    if (last?.startTime && !last?.endTime) return true;
+    if (last?.startTime && !last?.endTime) {
+      return true;
+    }
   }
+  
   return fallback;
 }
 import realTimeSocket from '../../utils/realTimeSocket';
@@ -253,6 +257,7 @@ export default function EmployeeDashboard() {
   const fetchDashboardDataRef = useRef<((_force?: boolean) => Promise<void>) | null>(null);
   const safeRefreshRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
   const lastWeekSyncRef = useRef(0);
+  const lastWeekKeyRef = useRef<string | null>(null); // FIX #2: Track week boundaries
   /** Completed break seconds today (closed breaks only). */
   const completedBreakSecondsRef = useRef(0);
   /** Total break seconds = completed + current open segment (for working-hours math). */
@@ -321,7 +326,19 @@ export default function EmployeeDashboard() {
 
   const ingestWeekHoursFromServer = useCallback(
     (hoursThisWeek: number, weekKey?: string, todayLiveHours = 0) => {
-      weekHoursExclTodayRef.current = Math.max(0, hoursThisWeek - todayLiveHours);
+      // FIX #2: Only update baseline if:
+      // 1. Week boundary changed (new weekKey), OR
+      // 2. We have credible today live hours (> 0), OR
+      // 3. Baseline is empty (first sync)
+      const currentWeekKey = weekKey || calendarWeekKey();
+      const isNewWeek = lastWeekKeyRef.current !== currentWeekKey;
+      const hasCreditableTodayData = todayLiveHours > 0;
+      const needsInit = weekHoursExclTodayRef.current === 0;
+
+      if (isNewWeek || hasCreditableTodayData || needsInit) {
+        weekHoursExclTodayRef.current = Math.max(0, hoursThisWeek - todayLiveHours);
+        lastWeekKeyRef.current = currentWeekKey;
+      }
       applyWeekHours(hoursThisWeek, weekKey, true);
     },
     [applyWeekHours]
@@ -375,10 +392,18 @@ export default function EmployeeDashboard() {
   }, [authUid]);
 
   const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [payrollCycleSummary, setPayrollCycleSummary] = useState<{
+    cycleStartDate: string;
+    cycleEndDate: string;
+    salaryReleaseDate: string;
+    salaryHoldUntil: string;
+    holdDays: number;
+    cycleLabel: string;
+    currency: string;
+  } | null>(null);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
   const [breakHistory, setBreakHistory] = useState<BreakRecord[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
-  const [currentBreakDuration, setCurrentBreakDuration] = useState(0);
   const [workingHours, setWorkingHours] = useState(0);
   // ============================================================================
   // DERIVED UI STATE - Computed from attendance state
@@ -470,9 +495,10 @@ export default function EmployeeDashboard() {
         tenantOrgId
       );
 
-      const [attendanceResult, holidaysResult] = await Promise.allSettled([
+      const [attendanceResult, holidaysResult, payrollResult] = await Promise.allSettled([
         apiGetSafe('/attendance/today', false),
         apiGetSafe(holidaysUrl, false),
+        apiGetSafe('/payroll/employee/cycle-summary', false),
       ]);
 
       const holidayKey = holidaysStorageKey(authUid, user?.orgId || user?.tenantId);
@@ -511,6 +537,23 @@ export default function EmployeeDashboard() {
         } catch (e) {
           console.warn('Failed to parse cached holidays');
         }
+      }
+
+      // Handle payroll cycle summary
+      if (
+        payrollResult.status === 'fulfilled' &&
+        payrollResult.value.ok &&
+        payrollResult.value.data &&
+        (payrollResult.value.data as { success?: boolean }).success !== false
+      ) {
+        const payrollPayload = payrollResult.value.data as { data?: Record<string, unknown> };
+        const cycleData = payrollPayload.data;
+        if (cycleData && typeof cycleData === 'object') {
+          console.log('✅ Loaded payroll cycle summary');
+          if (mountedRef.current) setPayrollCycleSummary(cycleData as typeof payrollCycleSummary);
+        }
+      } else {
+        console.warn('Payroll cycle summary unavailable');
       }
 
       const attendanceResolved =
@@ -627,9 +670,7 @@ export default function EmployeeDashboard() {
           }
         }
 
-        if (!calculatedIsOnBreak) {
-          setCurrentBreakDuration(calculatedBreakDuration);
-        }
+        // Break duration now tracked via state only, not separate useState
 
         const totalBreakMin =
           typeof (ls as { totalBreakTime?: number })?.totalBreakTime === 'number'
@@ -835,7 +876,12 @@ export default function EmployeeDashboard() {
 
   // Fetch data on mount — cache hydrates via AttendanceContext when user is ready
   useEffect(() => {
-    if (!authUid) return;
+    if (!authUid) {
+      // FIX #2: Reset week hours tracking on logout
+      lastWeekKeyRef.current = null;
+      weekHoursExclTodayRef.current = 0;
+      return;
+    }
     loadFromLocalStorage();
     const timeoutId = setTimeout(() => {
       void fetchDashboardDataRef.current?.(true);
@@ -954,7 +1000,6 @@ export default function EmployeeDashboard() {
   const resetCurrentBreakSegment = useCallback(() => {
     currentBreakSegmentSecondsRef.current = 0;
     setBreakDisplaySeconds(0);
-    setCurrentBreakDuration(0);
   }, []);
 
   const resetAllBreakTracking = useCallback(() => {
@@ -962,7 +1007,6 @@ export default function EmployeeDashboard() {
     breakSecondsRef.current = 0;
     currentBreakSegmentSecondsRef.current = 0;
     setBreakDisplaySeconds(0);
-    setCurrentBreakDuration(0);
   }, []);
 
   const fetchAttendanceHistory = useCallback(async () => {
@@ -1083,6 +1127,9 @@ export default function EmployeeDashboard() {
     }
 
     const interval = setInterval(() => {
+      // FIX #1: Pause timer when tab is hidden to prevent drift
+      if (document.visibilityState !== 'visible') return;
+      
       if (!todayAttendance.checkInTime) return;
       const checkInTime = parseTodayCheckInTime(todayAttendance.checkInTime);
       if (!checkInTime) return;
@@ -1094,7 +1141,6 @@ export default function EmployeeDashboard() {
         const seg = currentBreakSegmentSecondsRef.current;
         breakSecondsRef.current = completedBreakSecondsRef.current + seg;
         setBreakDisplaySeconds(seg);
-        setCurrentBreakDuration(seg / 60);
       } else {
         setBreakDisplaySeconds(0);
         breakSecondsRef.current = completedBreakSecondsRef.current;
@@ -1205,13 +1251,23 @@ export default function EmployeeDashboard() {
           attendance?: { breaks?: BreakRecord[] };
         };
         const liveStatus = payload?.liveStatus;
+        
+        console.log('🔍 [BREAK START] API Response:', {
+          liveStatusIsOnBreak: liveStatus?.isOnBreak,
+          liveStatusStatus: liveStatus?.status,
+          breaksLength: payload?.attendance?.breaks?.length,
+        });
+        
+        const resolvedIsOnBreak = resolveOnBreakFromServer(
+          liveStatus,
+          payload?.attendance?.breaks,
+          true  // fallback for break-start is true
+        );
+        console.log('✅ [BREAK START] resolveOnBreakFromServer returned:', resolvedIsOnBreak);
+        
         updateAttendance(
           {
-            isOnBreak: resolveOnBreakFromServer(
-              liveStatus,
-              payload?.attendance?.breaks,
-              true
-            ),
+            isOnBreak: resolvedIsOnBreak,
             breakType: (liveStatus?.breakType as string) || breakType,
             currentBreakDuration:
               typeof liveStatus?.currentBreakDuration === 'number'
@@ -1233,12 +1289,15 @@ export default function EmployeeDashboard() {
 
         clearApiCache('/attendance/today');
         disableRefreshRef.current = true;
-        void fetchAttendanceHistory();
-        setTimeout(() => {
-          disableRefreshRef.current = false;
-        }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
+        // CRITICAL FIX: Do NOT call fetchAttendanceHistory immediately - let state update first
         toast.success('Break started');
         setLastSocketEventTime(Date.now());
+        
+        // Refresh history after guard period
+        setTimeout(() => {
+          disableRefreshRef.current = false;
+          void fetchAttendanceHistory();
+        }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
     } catch (error) {
       debug.error('❌ [BREAK START] Error:', error);
       toast.error(error instanceof Error ? error.message : 'Could not start break');
@@ -1315,13 +1374,30 @@ export default function EmployeeDashboard() {
           attendance?: { breaks?: BreakRecord[] };
         };
         const liveStatus = breakPayload?.liveStatus;
+        
+        // CRITICAL DEBUG: Log what we're receiving from the API
+        console.log('🔍 [BREAK END] API Response:', {
+          hasResult: !!result,
+          resultOk: result.ok,
+          hasData: !!breakPayload,
+          liveStatusKeys: liveStatus ? Object.keys(liveStatus) : 'undefined',
+          liveStatusIsOnBreak: liveStatus?.isOnBreak,
+          liveStatusStatus: liveStatus?.status,
+          breaksArray: breakPayload?.attendance?.breaks,
+          breaksLength: breakPayload?.attendance?.breaks?.length,
+          lastBreakEndTime: breakPayload?.attendance?.breaks?.[breakPayload.attendance.breaks.length - 1]?.endTime,
+        });
+        
+        const resolvedIsOnBreak = resolveOnBreakFromServer(
+          liveStatus,
+          breakPayload?.attendance?.breaks,
+          false
+        );
+        console.log('✅ [BREAK END] resolveOnBreakFromServer returned:', resolvedIsOnBreak);
+        
         updateAttendance(
           {
-            isOnBreak: resolveOnBreakFromServer(
-              liveStatus,
-              breakPayload?.attendance?.breaks,
-              false
-            ),
+            isOnBreak: resolvedIsOnBreak,
             breakType: (liveStatus?.breakType as string) || 'regular',
             currentBreakDuration: 0,
             isCheckedIn: true,
@@ -1353,13 +1429,17 @@ export default function EmployeeDashboard() {
         });
 
         clearApiCache('/attendance/today');
-        void fetchAttendanceHistory();
+        // CRITICAL FIX: Do NOT call fetchAttendanceHistory here - it will re-fetch and potentially overwrite state
+        // Instead, wait for socket event to confirm, and refresh history separately
         setLastSocketEventTime(Date.now());
         disableRefreshRef.current = true;
         toast.success('Break ended');
+        
+        // Refresh history after guard period to get updated data
         setTimeout(() => {
           disableRefreshRef.current = false;
-        }, 4000);
+          void fetchAttendanceHistory();
+        }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
     } catch (error) {
       debug.error('❌ [BREAK END] Error:', error);
       toast.error(error instanceof Error ? error.message : 'Could not end break');
@@ -1725,6 +1805,62 @@ export default function EmployeeDashboard() {
             color="secondary"
           />
         </div>
+
+        {/* Payroll Cycle Summary */}
+        {payrollCycleSummary && (
+          <Card className="rounded-2xl overflow-hidden">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                    <Calendar className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-lg">Payroll Cycle</h3>
+                    <p className="text-sm text-muted-foreground">Current cycle dates</p>
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Cycle</p>
+                  <p className="text-sm font-medium">{payrollCycleSummary.cycleLabel}</p>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Hold Period</p>
+                  <p className="text-sm font-medium">
+                    {payrollCycleSummary.cycleStartDate ? 
+                      `${new Date(payrollCycleSummary.cycleStartDate).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric'
+                      })} - ${new Date(payrollCycleSummary.salaryHoldUntil).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric'
+                      })}`
+                      : 'N/A'
+                    }
+                  </p>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Payment Date</p>
+                  <p className="text-sm font-medium">
+                    {payrollCycleSummary.salaryReleaseDate ?
+                      new Date(payrollCycleSummary.salaryReleaseDate).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric'
+                      })
+                      : 'N/A'
+                    }
+                  </p>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Currency</p>
+                  <p className="text-sm font-medium">₹ {payrollCycleSummary.currency}</p>
+                </div>
+              </div>
+            </div>
+          </Card>
+        )}
 
         {/* Apply leave — click a day on the calendar */}
         <InteractiveCalendar />

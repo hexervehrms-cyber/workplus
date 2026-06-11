@@ -459,7 +459,9 @@ export default function TeamsMessenger() {
         appSocket.on('chat:group_updated', onGroupUpdated);
         appSocket.on('chat:group_deleted', onGroupDeleted);
 
-        reg('chat:error', (data: { message?: string }) => {
+        reg('chat:error', (data: unknown) => {
+          const typedData = data as { message?: string } | undefined;
+          if (!typedData) return;
           if (cancelled) return;
           const msg = data?.message || 'Could not send message';
           toast.error(msg);
@@ -467,16 +469,18 @@ export default function TeamsMessenger() {
           setSending(false);
         });
 
-        reg('chat:new_message', (data: {
-          messageId: string;
-          senderId: string;
-          conversationId?: string;
-          content: string;
-          senderName: string;
-          senderAvatar?: string;
-          timestamp: string;
-          messageType?: string;
-        }) => {
+        reg('chat:new_message', (data: unknown) => {
+          const typedData = data as {
+            messageId: string;
+            senderId: string;
+            conversationId?: string;
+            content: string;
+            senderName: string;
+            senderAvatar?: string;
+            timestamp: string;
+            messageType?: string;
+          } | undefined;
+          if (!typedData) return;
           if (cancelled) return;
           const incomingId = String(data.messageId);
           const senderId = String(data.senderId);
@@ -532,7 +536,9 @@ export default function TeamsMessenger() {
           });
         });
 
-        reg('chat:message_read', (data: { messageId: string }) => {
+        reg('chat:message_read', (data: unknown) => {
+          const typedData = data as { messageId: string } | undefined;
+          if (!typedData) return;
           if (cancelled) return;
           setMessages((prev) =>
             prev.map((msg) =>
@@ -541,11 +547,13 @@ export default function TeamsMessenger() {
           );
         });
 
-        reg('chat:user_typing', (data: {
-          conversationId?: string;
-          userId: string;
-          isTyping: boolean;
-        }) => {
+        reg('chat:user_typing', (data: unknown) => {
+          const typedData = data as {
+            conversationId?: string;
+            userId: string;
+            isTyping: boolean;
+          } | undefined;
+          if (!typedData) return;
           if (cancelled) return;
           const sel = selectedUserRef.current;
           if (!sel) return;
@@ -560,7 +568,9 @@ export default function TeamsMessenger() {
           }
         });
 
-        reg('chat:message_edited', (data: { messageId?: string; newContent?: string; conversationId?: string }) => {
+        reg('chat:message_edited', (data: unknown) => {
+          const typedData = data as { messageId?: string; newContent?: string; conversationId?: string } | undefined;
+          if (!typedData) return;
           if (cancelled) return;
           const sel = selectedUserRef.current;
           if (
@@ -578,7 +588,9 @@ export default function TeamsMessenger() {
           );
         });
 
-        reg('chat:avatar_updated', (data: { userId: string; avatar: string }) => {
+        reg('chat:avatar_updated', (data: unknown) => {
+          const typedData = data as { userId: string; avatar: string } | undefined;
+          if (!typedData) return;
           if (cancelled) return;
           const url = resolveAvatarUrl(data.avatar);
           setUsers((prev) =>
@@ -589,7 +601,9 @@ export default function TeamsMessenger() {
           );
         });
 
-        reg('chat:message_deleted', (data: { messageId?: string; conversationId?: string }) => {
+        reg('chat:message_deleted', (data: unknown) => {
+          const typedData = data as { messageId?: string; conversationId?: string } | undefined;
+          if (!typedData) return;
           if (cancelled) return;
           const sel = selectedUserRef.current;
           if (
@@ -609,12 +623,14 @@ export default function TeamsMessenger() {
 
         reg(
           'call:incoming',
-          (data: {
-            callerId: string;
-            callerName: string;
-            sdp: RTCSessionDescriptionInit;
-            withVideo: boolean;
-          }) => {
+          (data: unknown) => {
+            const typedData = data as {
+              callerId: string;
+              callerName: string;
+              sdp: RTCSessionDescriptionInit;
+              withVideo: boolean;
+            } | undefined;
+            if (!typedData) return;
             if (cancelled || nativeCallBusyRef.current) return;
             nativeCallBusyRef.current = true;
             const offer: IncomingCallOffer = {

@@ -157,7 +157,7 @@ export default function Leave() {
         setLeaveHistory(leaveData);
 
         // Fetch leave balance from allocation
-        let employeeId = user.employeeId;
+        let employeeId = user?.employeeId;
         
         // If employeeId is not set, try to fetch it from the employee service
         if (!employeeId) {
@@ -251,7 +251,7 @@ export default function Leave() {
   useEffect(() => {
     const refreshBalances = async () => {
       if (!authUserId || document.visibilityState !== 'visible') return;
-      let employeeId = user.employeeId;
+      let employeeId = user?.employeeId;
       if (!employeeId) {
         try {
           const emp = await EmployeeService.getEmployeeByUserId(authUserId);
@@ -499,7 +499,7 @@ export default function Leave() {
         }
 
         // Refresh balance
-        let refreshEmployeeId = user.employeeId;
+        let refreshEmployeeId = user?.employeeId;
         if (!refreshEmployeeId) {
           try {
             const employeeResponse = await EmployeeService.getEmployeeByUserId(authUserId);
@@ -774,7 +774,7 @@ Reason: ${leave.reason}
                         try {
                           // Calculate days to restore
                           // Get employeeId
-                          let employeeId = user.employeeId;
+                          let employeeId = user?.employeeId;
                           if (!employeeId) {
                             const employeeResponse = await EmployeeService.getEmployeeByUserId(authUserId);
                             if (employeeResponse && employeeResponse._id) {

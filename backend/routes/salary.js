@@ -766,11 +766,16 @@ router.get(
           ? String(emp.orgId)
           : String(req.user.orgId);
 
+      // Employee role: only see released/approved slips
+      const isEmployee = req.user.role === "employee";
+      const statusFilter = isEmployee ? { status: { $in: ["approved", "released"] } } : {};
+
       const salarySlip = await SalarySlip.findOne({
         employeeId,
         month: parseInt(month),
         year: parseInt(year),
-        orgId: slipOrgId
+        orgId: slipOrgId,
+        ...statusFilter
       })
         .populate("employeeId", "firstName lastName employeeCode")
         .populate("userId", "email")
@@ -794,6 +799,9 @@ router.get(
 /**
  * GET /api/salary/slips/:employeeId
  * Get all salary slips for an employee
+ * - Employee role: only see released/approved slips
+ * - Admin/HR: see all slips for same org
+ * - Super admin: see all slips
  */
 router.get(
   "/slips/:employeeId",
@@ -815,14 +823,20 @@ router.get(
           ? String(emp.orgId)
           : String(req.user.orgId);
 
+      // Employee role: only see released/approved slips
+      const isEmployee = req.user.role === "employee";
+      const statusFilter = isEmployee ? { status: { $in: ["approved", "released"] } } : {};
+
       const total = await SalarySlip.countDocuments({
         employeeId,
-        orgId: slipOrgId
+        orgId: slipOrgId,
+        ...statusFilter
       });
 
       const slips = await SalarySlip.find({
         employeeId,
-        orgId: slipOrgId
+        orgId: slipOrgId,
+        ...statusFilter
       })
         .sort({ year: -1, month: -1 })
         .skip(skip)
@@ -932,6 +946,8 @@ router.put(
 /**
  * GET /api/salary/slip/:slipId/download
  * Download salary slip as PDF
+ * Employee role: can only download approved/released slips
+ * Admin/HR/Super_admin: can download any slip
  */
 router.get(
   "/slip/:slipId/download",
@@ -979,6 +995,12 @@ router.get(
       const orgAccess = await assertSlipOrgAccess(req, slip);
       if (!orgAccess.ok) {
         return sendError(res, orgAccess.message, orgAccess.status, orgAccess.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
+      }
+
+      // Employee role: only allow downloading approved/released slips
+      const isEmployee = req.user.role === "employee";
+      if (isEmployee && !["approved", "released", "paid", "processed"].includes(slip.status)) {
+        return sendError(res, "This salary slip is not yet available for download", 403, "FORBIDDEN");
       }
 
       if (slip.source === "employee_upload" && slip.uploadFilePath && fs.existsSync(slip.uploadFilePath)) {
@@ -1177,9 +1199,23 @@ router.get(
     if (!access.ok) {
       return sendError(res, access.message, access.status, "FORBIDDEN");
     }
-    const slips = await SalarySlip.find({ employeeId })
+
+    // Get employee to retrieve orgId
+    const emp = await Employee.findById(employeeId).select("orgId").lean();
+    if (!emp) {
+      return sendError(res, "Employee not found", 404, "NOT_FOUND");
+    }
+
+    // Determine orgId (super_admin can export from any org, others use their own)
+    const slipOrgId =
+      isSuperAdmin(req) && emp.orgId
+        ? String(emp.orgId)
+        : String(req.user.orgId);
+
+    const slips = await SalarySlip.find({ employeeId, orgId: slipOrgId })
       .sort({ year: -1, month: -1 })
       .lean();
+
     const header = "month,year,status,source,grossEarnings,netSalary,uploadFileName\n";
     const rows = slips
       .map((s) =>

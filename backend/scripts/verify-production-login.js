@@ -10,9 +10,16 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
-const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL || 'admin@workpluspro.com';
-const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || 'Jadu@123';
+const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL;
+const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD;
 const API_URL = process.env.VITE_API_URL || 'https://workplus-backend-sg3a.onrender.com';
+
+// Validate environment
+if (!SUPER_ADMIN_EMAIL || !SUPER_ADMIN_PASSWORD) {
+  console.error('❌ ERROR: Missing required environment variables');
+  console.error('   Set SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD in .env');
+  process.exit(1);
+}
 
 console.log('\n🌐 PRODUCTION LOGIN VERIFICATION');
 console.log('='.repeat(60));

@@ -79,18 +79,56 @@ export async function postAttendanceAction(
   try {
     parsed = await response.json();
   } catch {
-    /* non-JSON body */
+    /* non-JSON body - treat as generic error */
+    return {
+      ok: false,
+      status: response.status || 0,
+      message: response.status === 0 ? 'Network error - unable to connect to server' : 'Request failed'
+    };
   }
 
   if (response.ok) {
     return { ok: true, data: mergeSuccessPayload(parsed), status: response.status };
   }
 
+  // Handle specific status codes with actionable messages
   if (response.status === 409) {
     return {
       ok: false,
       status: 409,
       message: parsed.message || 'Request in progress — syncing…',
+    };
+  }
+
+  if (response.status === 400) {
+    return {
+      ok: false,
+      status: 400,
+      message: parsed.message || 'Invalid request - please check your input',
+    };
+  }
+
+  if (response.status === 403) {
+    return {
+      ok: false,
+      status: 403,
+      message: parsed.message || 'You do not have permission to perform this action',
+    };
+  }
+
+  if (response.status === 404) {
+    return {
+      ok: false,
+      status: 404,
+      message: parsed.message || 'Attendance record not found',
+    };
+  }
+
+  if (response.status >= 500) {
+    return {
+      ok: false,
+      status: response.status,
+      message: parsed.message || 'Server error - please try again later',
     };
   }
 

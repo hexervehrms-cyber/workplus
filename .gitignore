@@ -11,14 +11,24 @@ pnpm-debug.log*
 # ENVIRONMENT VARIABLES - CRITICAL: NEVER COMMIT
 # ============================================
 .env
-.env.local
-.env.*.local
-.env.production
+.env.*
 backend/.env
-backend/.env.local
-backend/.env.production
+backend/.env.*
 frontend/.env
-frontend/.env.local
+frontend/.env.*
+# Exception: example files ARE committed (no real secrets)
+!backend/.env.example
+!frontend/.env.example
+!backend/.env.teams.example
+
+# ============================================================================
+# DEPLOYMENT CONFIGURATION - CRITICAL: NEVER COMMIT PRODUCTION SECRETS
+# ============================================================================
+# Store deployment configs in Render/Vercel dashboard, not in git
+render.yaml
+render.*.yaml
+docker-compose.yml.local
+.vercel/env*.json
 
 # ============================================
 # BUILD OUTPUT

@@ -39,12 +39,12 @@ function resolveOnBreakFromServer(
   // Server says explicitly on break or status is on_break
   if (liveStatus?.isOnBreak === true || liveStatus?.status === 'on_break') return true;
   
-  // Server says explicitly NOT on break - trust the server state immediately
-  if (liveStatus?.isOnBreak === false && liveStatus?.status !== 'on_break') {
+  // Server says explicitly NOT on break - trust immediately (ignore status field)
+  if (liveStatus?.isOnBreak === false) {
     return false;
   }
   
-  // No explicit server state - use breaks array or fallback
+  // No explicit isOnBreak from server - use breaks array or fallback
   if (Array.isArray(breaks) && breaks.length > 0) {
     const last = breaks[breaks.length - 1];
     if (last?.startTime && !last?.endTime) return true;

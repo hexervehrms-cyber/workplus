@@ -149,7 +149,7 @@ router.get("/:id", authorize('super_admin'), asyncHandler(async (req, res) => {
  * POST /api/organizations
  * Create new organization (Super Admin only)
  */
-router.post("/", authorize(['super_admin']), asyncHandler(async (req, res) => {
+router.post("/", authorize('super_admin'), asyncHandler(async (req, res) => {
   const {
     name,
     email,
@@ -225,7 +225,7 @@ router.post("/", authorize(['super_admin']), asyncHandler(async (req, res) => {
  * PUT /api/organizations/:id
  * Update organization (Super Admin only)
  */
-router.put("/:id", authorize(['super_admin']), asyncHandler(async (req, res) => {
+router.put("/:id", authorize('super_admin'), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const updates = req.body;
   
@@ -285,7 +285,7 @@ router.put("/:id", authorize(['super_admin']), asyncHandler(async (req, res) => 
  * DELETE /api/organizations/:id
  * Delete organization (Super Admin only)
  */
-router.delete("/:id", authorize(['super_admin']), asyncHandler(async (req, res) => {
+router.delete("/:id", authorize('super_admin'), asyncHandler(async (req, res) => {
   const { id } = req.params;
   
   if (!mongoose.Types.ObjectId.isValid(id)) {

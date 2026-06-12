@@ -236,6 +236,12 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
   };
 
   const handleReadDocument = (document: CompanyDocument) => {
+    // FIX #4: Validate document before opening reader
+    if (!document.id) {
+      toast.error('Document ID is missing - cannot open document');
+      return;
+    }
+    
     setSelectedDocument(document);
     setShowDocumentReader(true);
   };
@@ -264,7 +270,8 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         }
       );
 
-      const newAcknowledgment = result?.data || {
+      // Use response data if available, otherwise create acknowledgment object
+      const acknowledgedData = result?.data || {
         id: `ack_${Date.now()}`,
         documentId,
         employeeId: currentEmployeeId,
@@ -274,14 +281,20 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         accepted,
       };
 
+      // Update local acknowledgments state with the new acknowledgment keyed by documentId
       setAcknowledgments((prev) => ({
         ...prev,
-        [documentId]: newAcknowledgment,
+        [documentId]: acknowledgedData,
       }));
 
       toast.success('Document acknowledged successfully');
+      
+      // Close reader and clear selection
       setShowDocumentReader(false);
       setSelectedDocument(null);
+      
+      // Refresh acknowledgments to ensure persistence on page reload
+      await loadAcknowledgments();
     } catch (error) {
       console.error('Error submitting acknowledgment:', error);
       toast.error('Error submitting acknowledgment');
@@ -378,23 +391,27 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
   };
 
   const handleDownload = async (doc: CompanyDocument) => {
-    if (doc.documentUrl && doc.id) {
-      try {
-        await downloadCompanyGeneratedDocument(doc.id, doc.fileName || doc.title);
-        return;
-      } catch (e) {
-        console.warn('Authenticated download failed, trying direct URL', e);
-      }
+    // FIX #4: Ensure we have a document ID before attempting download
+    if (!doc.id) {
+      toast.error('Document ID is missing');
+      return;
     }
-    const url = doc.documentUrl?.startsWith('http')
-      ? doc.documentUrl
-      : buildFileUrl(doc.documentUrl || '');
-    if (url) {
-      window.open(url, '_blank', 'noopener,noreferrer');
-    } else if (doc.content) {
-      handleReadDocument(doc);
-    } else {
-      toast.error('No file available for this document');
+
+    try {
+      // FIX #4: Use authenticated endpoint for company documents
+      await downloadCompanyGeneratedDocument(doc.id, doc.fileName || doc.title);
+      return;
+    } catch (e) {
+      console.error('Download failed:', e);
+      
+      // FIX #4: Show specific error message
+      if (e instanceof Error && e.message.includes('404')) {
+        toast.error('Document file not found on server');
+      } else if (e instanceof Error && e.message.includes('403')) {
+        toast.error('You do not have permission to download this document');
+      } else {
+        toast.error(e instanceof Error ? e.message : 'Failed to download document');
+      }
     }
   };
 
@@ -840,22 +857,26 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
                           Pending
                         </Badge>
                       )}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="rounded-xl"
-                        onClick={() => handleReadDocument(document)}
-                      >
-                        <Eye className="w-4 h-4" />
-                      </Button>
                     </>
                   )}
+                  
+                  {/* FIX #4: Add View button for all users (including admin) */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="rounded-xl"
+                    onClick={() => handleReadDocument(document)}
+                    title="View document"
+                  >
+                    <Eye className="w-4 h-4" />
+                  </Button>
                   
                   <Button
                     variant="outline"
                     size="sm"
                     className="rounded-xl"
                     onClick={() => handleDownload(document)}
+                    title="Download document"
                   >
                     <Download className="w-4 h-4" />
                   </Button>

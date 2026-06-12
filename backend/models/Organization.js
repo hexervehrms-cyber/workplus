@@ -113,6 +113,25 @@ const organizationSchema = new mongoose.Schema(
         }
       }
     },
+    // Custom domain support
+    customDomain: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      sparse: true,
+      index: true
+    },
+    customDomainStatus: {
+      type: String,
+      enum: ['not_configured', 'pending', 'verified', 'failed'],
+      default: 'not_configured'
+    },
+    customDomainDnsRecords: [{
+      type: { type: String, enum: ['CNAME', 'A', 'MX'] },
+      name: String,
+      value: String,
+      status: { type: String, enum: ['pending', 'verified', 'failed'], default: 'pending' }
+    }],
     isActive: { 
       type: Boolean, 
       default: true 

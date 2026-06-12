@@ -1,5 +1,6 @@
 import express from "express";
 import mongoose from "mongoose";
+import bcrypt from "bcrypt";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { authorize } from "../middleware/auth.js";
 import Organization from "../models/Organization.js";
@@ -8,6 +9,23 @@ import Employee from "../models/Employee.js";
 import ActivityLog from "../models/ActivityLog.js";
 
 const router = express.Router();
+
+/**
+ * Helper function to generate DNS records for custom domain
+ */
+function generateDnsRecords(customDomain) {
+  // Get platform domain from environment or use default
+  const platformDomain = process.env.PLATFORM_DOMAIN || process.env.APP_PUBLIC_DOMAIN || 'workplus.hexerve.online';
+  
+  return [
+    {
+      type: 'CNAME',
+      name: customDomain,
+      value: platformDomain,
+      status: 'pending'
+    }
+  ];
+}
 
 /**
  * GET /api/organizations
@@ -147,7 +165,7 @@ router.get("/:id", authorize('super_admin'), asyncHandler(async (req, res) => {
 
 /**
  * POST /api/organizations
- * Create new organization (Super Admin only)
+ * Create new organization with admin account (Super Admin only)
  */
 router.post("/", authorize('super_admin'), asyncHandler(async (req, res) => {
   const {
@@ -157,7 +175,9 @@ router.post("/", authorize('super_admin'), asyncHandler(async (req, res) => {
     address,
     website,
     industry,
-    subscriptionPlan = 'free'
+    subscriptionPlan = 'free',
+    adminPassword,
+    customDomain
   } = req.body;
   
   // Validate required fields
@@ -166,6 +186,49 @@ router.post("/", authorize('super_admin'), asyncHandler(async (req, res) => {
       success: false,
       message: 'Organization name and email are required'
     });
+  }
+  
+  if (!adminPassword) {
+    return res.status(400).json({
+      success: false,
+      message: 'Admin password is required'
+    });
+  }
+  
+  if (adminPassword.length < 8) {
+    return res.status(400).json({
+      success: false,
+      message: 'Password must be at least 8 characters'
+    });
+  }
+  
+  // Validate custom domain if provided
+  let normalizedDomain = null;
+  if (customDomain) {
+    let domain = customDomain.trim().toLowerCase();
+    
+    // Remove protocol if accidentally included
+    domain = domain.replace(/^https?:\/\//, '');
+    domain = domain.replace(/\/$/, ''); // Remove trailing slash
+    
+    // Basic domain validation
+    if (!/^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z0-9]+(-[a-z0-9]+)*$/.test(domain)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid custom domain format'
+      });
+    }
+    
+    // Check if domain is already in use
+    const existingDomain = await Organization.findOne({ customDomain: domain });
+    if (existingDomain) {
+      return res.status(400).json({
+        success: false,
+        message: 'This custom domain is already assigned to another organization'
+      });
+    }
+    
+    normalizedDomain = domain;
   }
   
   // Check if organization with same email exists
@@ -177,48 +240,112 @@ router.post("/", authorize('super_admin'), asyncHandler(async (req, res) => {
     });
   }
   
+  // Check if admin user with same email already exists
+  const existingAdminUser = await User.findOne({ 
+    email: email.toLowerCase(),
+    deletedAt: null
+  });
+  if (existingAdminUser) {
+    return res.status(400).json({
+      success: false,
+      message: 'Admin user with this email already exists'
+    });
+  }
+  
   // Generate unique organization code
   const code = `ORG-${Date.now().toString().slice(-6)}`;
   
-  const organization = await Organization.create({
-    name: name.trim(),
-    code,
-    email: email.toLowerCase().trim(),
-    phone: phone?.trim(),
-    address,
-    website: website?.trim(),
-    industry: industry?.trim(),
-    subscriptionPlan,
-    subscriptionStatus: 'trial',
-    subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days trial
-    createdBy: req.user.userId
-  });
+  // Hash admin password
+  const hashedPassword = await bcrypt.hash(adminPassword, 12);
   
-  // Log activity
-  await ActivityLog.logActivity({
-    userId: req.user.userId,
-    orgId: organization._id,
-    action: 'org_create',
-    entity: {
-      entityType: 'organization',
-      entityId: organization._id,
-      entityName: organization.name
-    },
-    details: {
-      organizationName: organization.name,
-      subscriptionPlan: organization.subscriptionPlan
-    },
-    ipAddress: req.ip,
-    userAgent: req.get('User-Agent'),
-    severity: 'medium',
-    category: 'admin'
-  });
+  // Create organization and admin user atomically if possible
+  let organization, adminUser;
+  try {
+    // Create organization
+    organization = await Organization.create({
+      name: name.trim(),
+      code,
+      email: email.toLowerCase().trim(),
+      phone: phone?.trim(),
+      address,
+      website: website?.trim(),
+      industry: industry?.trim(),
+      subscriptionPlan,
+      subscriptionStatus: 'trial',
+      subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days trial
+      customDomain: normalizedDomain,
+      customDomainStatus: normalizedDomain ? 'pending' : 'not_configured',
+      customDomainDnsRecords: normalizedDomain ? generateDnsRecords(normalizedDomain) : [],
+      createdBy: req.user.userId
+    });
+    
+    // Create admin user for the organization
+    adminUser = await User.create({
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      password: hashedPassword,
+      role: 'admin',
+      orgId: organization._id.toString(),
+      isActive: true,
+      status: 'active',
+      createdBy: req.user.userId
+    });
+    
+    // Log activity
+    await ActivityLog.logActivity({
+      userId: req.user.userId,
+      orgId: organization._id,
+      action: 'org_create',
+      entity: {
+        entityType: 'organization',
+        entityId: organization._id,
+        entityName: organization.name
+      },
+      details: {
+        organizationName: organization.name,
+        subscriptionPlan: organization.subscriptionPlan,
+        adminUserCreated: true,
+        customDomainConfigured: !!normalizedDomain
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      severity: 'medium',
+      category: 'admin'
+    });
+    
+  } catch (error) {
+    // Clean up: if admin user creation fails, remove the organization
+    if (organization) {
+      await Organization.deleteOne({ _id: organization._id });
+    }
+    throw error;
+  }
   
-  res.status(201).json({
+  // Build response
+  const response = {
     success: true,
-    message: 'Organization created successfully',
-    data: organization
-  });
+    message: 'Organization and admin account created',
+    data: {
+      organization,
+      adminUser: {
+        id: adminUser._id,
+        email: adminUser.email,
+        name: adminUser.name,
+        role: adminUser.role
+      }
+    }
+  };
+  
+  // Add DNS records to response if custom domain was provided
+  if (normalizedDomain) {
+    response.data.customDomain = {
+      domain: normalizedDomain,
+      status: 'pending',
+      dnsRecords: generateDnsRecords(normalizedDomain)
+    };
+  }
+  
+  res.status(201).json(response);
 }));
 
 /**

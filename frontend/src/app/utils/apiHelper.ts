@@ -512,12 +512,26 @@ export const buildFileUrl = (filePath: string): string => {
   return `${backendUrl}${filePath}`;
 };
 
-/** Extract filename from stored receipt path (/uploads/receipts/...) */
+/** Extract and properly encode filename from stored receipt path (/uploads/receipts/...) */
 export function getReceiptFilename(receiptPath: string): string | null {
   if (!receiptPath?.trim()) return null;
-  const clean = receiptPath.split('?')[0];
-  const name = clean.split('/').pop();
-  return name && !name.includes('..') ? name : null;
+  
+  // Handle both string and object receipt formats
+  let raw = typeof receiptPath === 'string' ? receiptPath : (receiptPath as any)?.filename || (receiptPath as any)?.path || (receiptPath as any)?.url || String(receiptPath);
+  
+  if (!raw?.trim()) return null;
+  
+  // Remove query parameters
+  const clean = String(raw).split('?')[0];
+  
+  // Split by both forward and backward slashes to handle different path formats
+  const parts = clean.split(/[/\\]/);
+  const name = parts[parts.length - 1];
+  
+  // Reject if empty or contains dangerous patterns
+  if (!name || name.includes('..')) return null;
+  
+  return name;
 }
 
 /**
@@ -528,30 +542,50 @@ export async function fetchReceiptObjectUrl(receiptPath: string): Promise<string
   const filename = getReceiptFilename(receiptPath);
   const token = getBearerToken();
 
+  // Try authenticated API endpoint first
   if (filename && token) {
-    const response = await fetchWithTimeout(
-      buildApiUrl(`expenses/receipt/${encodeURIComponent(filename)}?inline=1`),
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        credentials: 'include',
-      },
-      REQUEST_TIMEOUT_MS
-    );
-    if (response.ok) {
-      const blob = await response.blob();
-      return URL.createObjectURL(blob);
+    try {
+      const response = await fetchWithTimeout(
+        buildApiUrl(`expenses/receipt/${encodeURIComponent(filename)}?inline=1`),
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          credentials: 'include',
+        },
+        REQUEST_TIMEOUT_MS
+      );
+      if (response.ok) {
+        const blob = await response.blob();
+        return URL.createObjectURL(blob);
+      } else if (response.status === 404) {
+        throw new Error('Receipt file not found');
+      } else if (response.status === 403) {
+        throw new Error('You do not have permission to view this receipt');
+      } else {
+        throw new Error(`Failed to load receipt (${response.status})`);
+      }
+    } catch (apiError) {
+      // Log but fall through to static URL as fallback
+      console.warn('API receipt fetch failed, trying static URL:', apiError);
     }
   }
 
+  // Fallback to public static URL
   const staticUrl = buildFileUrl(receiptPath);
-  const staticResponse = await fetchWithTimeout(
-    staticUrl,
-    { credentials: 'include' },
-    REQUEST_TIMEOUT_MS
-  );
-  if (!staticResponse.ok) {
-    throw new Error('Receipt not found');
+  try {
+    const staticResponse = await fetchWithTimeout(
+      staticUrl,
+      { credentials: 'include' },
+      REQUEST_TIMEOUT_MS
+    );
+    if (!staticResponse.ok) {
+      if (staticResponse.status === 404) {
+        throw new Error('Receipt file not found');
+      }
+      throw new Error('Unable to load receipt');
+    }
+    const blob = await staticResponse.blob();
+    return URL.createObjectURL(blob);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error('Unable to load receipt');
   }
-  const blob = await staticResponse.blob();
-  return URL.createObjectURL(blob);
 }

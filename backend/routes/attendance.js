@@ -17,7 +17,7 @@ import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
 import { emitAttendanceKPIUpdate } from '../utils/kpiUpdater.js';
 import { dashboardCache } from '../utils/dashboardCache.js';
-import { getUserTimezone } from '../utils/timezoneHelper.js';
+import { getUserTimezone, getTodayInTimezone, getTomorrowInTimezone } from '../utils/timezoneHelper.js';
 import { findEmployeeForSelfService } from '../utils/employeeSelfService.js';
 import {
   buildOrgIdClause,
@@ -201,6 +201,7 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
   const userRole = req.user.role;
   const currentUserId = req.user.userId;
   const userOrgId = req.user.orgId;
+  const timezone = getUserTimezone(req) || 'Asia/Kolkata';
 
   let effectiveEmployeeId = null;
   let effectiveOrgId = userOrgId;
@@ -221,7 +222,9 @@ router.get('/today', authorize('super_admin', 'admin', 'hr', 'manager', 'employe
     currentUserId,
     effectiveEmployeeId,
     effectiveOrgId,
-    userOrgId
+    userOrgId,
+    new Date(),
+    timezone
   );
 
   // Prefer open session so employees can start a new shift after checkout (multiple sessions/day)
@@ -487,18 +490,22 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
     });
   }
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  // Get timezone for consistent date handling
+  const timezone = getUserTimezone(req) || 'Asia/Kolkata';
 
   const todayQuery = buildTodayAttendanceQuery(
     authRole === 'employee' ? 'employee' : 'admin',
     effectiveUserId,
     effectiveEmployeeId,
     effectiveOrgId,
-    authOrgId
+    authOrgId,
+    new Date(),
+    timezone
   );
+
+  // Get today's date for storing in attendance record
+  const today = getTodayInTimezone(timezone);
+  const tomorrow = getTomorrowInTimezone(timezone);
 
   // Open session for today (not latest closed row — allows check-in again after checkout)
   const openSession = await Attendance.findOne(withOpenSessionFilter(todayQuery)).sort({ _id: -1 });
@@ -762,12 +769,15 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     }
   }
 
+  const timezone = getUserTimezone(req) || 'Asia/Kolkata';
   const todayQuery = buildTodayAttendanceQuery(
     authRole === 'employee' ? 'employee' : 'admin',
     effectiveUserId,
     effectiveEmployeeId,
     effectiveOrgId,
-    authOrgId
+    authOrgId,
+    new Date(),
+    timezone
   );
 
   const hoursThisWeekBefore = await sumHoursThisWeekForUser(
@@ -1079,12 +1089,15 @@ router.post('/break-start', authorize('super_admin', 'admin', 'hr', 'manager', '
   };
 
   try {
+    const timezone = getUserTimezone(req) || 'Asia/Kolkata';
     const dayQuery = buildTodayAttendanceQuery(
       authRole,
       currentUserId,
       effectiveEmployeeId,
       effectiveOrgId,
-      authOrgId
+      authOrgId,
+      new Date(),
+      timezone
     );
 
     const attendanceMatch = {
@@ -1275,12 +1288,15 @@ router.post('/break-end', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     // Avoids fragile arrayFilters syntax that can cause query errors
     const endTime = new Date();
 
+    const timezone = getUserTimezone(req) || 'Asia/Kolkata';
     const dayQuery = buildTodayAttendanceQuery(
       authRole,
       currentUserId,
       effectiveEmployeeId,
       effectiveOrgId,
-      authOrgId
+      authOrgId,
+      new Date(),
+      timezone
     );
 
     logger.info('Break-end: Finding attendance record', {

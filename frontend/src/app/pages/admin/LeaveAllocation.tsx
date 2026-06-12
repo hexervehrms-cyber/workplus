@@ -113,24 +113,24 @@ export default function LeaveAllocation() {
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
   const [formData, setFormData] = useState({
-    vacation: 0,
-    sickLeave: 0,
-    casualLeave: 0,
-    earnedLeave: 0,
-    medicalLeave: 0,
-    maternityLeave: 0,
-    paternityLeave: 0,
-    compensatoryOff: 0,
-    personal: 0,
-    emergency: 0,
-    ncns: 0,
-    sandwichLeave: 0
-  });
+    vacation: '',
+    sickLeave: '',
+    casualLeave: '',
+    earnedLeave: '',
+    medicalLeave: '',
+    maternityLeave: '',
+    paternityLeave: '',
+    compensatoryOff: '',
+    personal: '',
+    emergency: '',
+    ncns: '',
+    sandwichLeave: ''
+  } as Record<string, string | number>);
   const [yearlyFormData, setYearlyFormData] = useState({
-    casualLeave: 0,
-    earnedLeave: 0,
-    medicalLeave: 0
-  });
+    casualLeave: '',
+    earnedLeave: '',
+    medicalLeave: ''
+  } as Record<string, string | number>);
   const [showYearlyForm, setShowYearlyForm] = useState(false);
   const [selectedEmployeesForYearly, setSelectedEmployeesForYearly] = useState<string[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
@@ -229,29 +229,32 @@ export default function LeaveAllocation() {
       setSelectedEmployee(allocation.employeeId?._id || '');
       setSelectedEmployees([]);
       setIsMultiSelectMode(false);
-      setFormData({
-        ...defaultAllocationForm(),
-        ...(allocation.allocations as Partial<typeof formData>),
-      } as typeof formData);
+      // Convert numbers to string for editing
+      const formDataStr: Record<string, string | number> = {};
+      LEAVE_TYPES.forEach(({ key }) => {
+        const value = (allocation.allocations as Record<string, number>)[key];
+        formDataStr[key] = value !== undefined ? value : '';
+      });
+      setFormData(formDataStr as typeof formData);
     } else {
       setSelectedAllocation(null);
       setSelectedEmployee('');
       setSelectedEmployees([]);
       setIsMultiSelectMode(false);
       setFormData({
-        vacation: 0,
-        sickLeave: 0,
-        casualLeave: 0,
-        earnedLeave: 0,
-        medicalLeave: 0,
-        maternityLeave: 0,
-        paternityLeave: 0,
-        compensatoryOff: 0,
-        personal: 0,
-        emergency: 0,
-        ncns: 0,
-        sandwichLeave: 0
-      });
+        vacation: '',
+        sickLeave: '',
+        casualLeave: '',
+        earnedLeave: '',
+        medicalLeave: '',
+        maternityLeave: '',
+        paternityLeave: '',
+        compensatoryOff: '',
+        personal: '',
+        emergency: '',
+        ncns: '',
+        sandwichLeave: ''
+      } as typeof formData);
     }
     setShowForm(true);
   };
@@ -276,10 +279,17 @@ export default function LeaveAllocation() {
         return;
       }
 
+      // Convert empty strings to 0 for submission
+      const allocationsForSubmit: Record<string, number> = {};
+      Object.entries(formData).forEach(([key, val]) => {
+        const numVal = val === '' ? 0 : parseFloat(String(val));
+        allocationsForSubmit[key] = isNaN(numVal) ? 0 : numVal;
+      });
+
       if (selectedAllocation) {
         // Update existing (single employee only)
         const response = await LeaveAllocationService.updateAllocation(selectedAllocation._id, {
-          allocations: formData
+          allocations: allocationsForSubmit
         });
         console.log('Update response:', response);
         toast.success('Leave allocation updated successfully');
@@ -290,7 +300,7 @@ export default function LeaveAllocation() {
           selectedYear,
           allocationMonth,
           selectedEmployees,
-          formData,
+          allocationsForSubmit,
           user?.userId || user?.id || ''
         );
         if (response && (response as { success?: boolean }).success === false) {
@@ -303,7 +313,7 @@ export default function LeaveAllocation() {
           orgId: orgId,
           year: selectedYear,
           month: allocationMonth,
-          allocations: formData
+          allocations: allocationsForSubmit
         });
         if (response && (response as { success?: boolean }).success === false) {
           throw new Error((response as { message?: string }).message || 'Allocation failed');
@@ -349,13 +359,18 @@ export default function LeaveAllocation() {
         return;
       }
 
+      // Convert empty strings to 0 for submission
+      const casualVal = yearlyFormData.casualLeave === '' ? 0 : parseFloat(String(yearlyFormData.casualLeave));
+      const earnedVal = yearlyFormData.earnedLeave === '' ? 0 : parseFloat(String(yearlyFormData.earnedLeave));
+      const medicalVal = yearlyFormData.medicalLeave === '' ? 0 : parseFloat(String(yearlyFormData.medicalLeave));
+
       const response = await LeaveAllocationService.yearlyAllocate(
         orgId,
         selectedYear,
         selectedEmployeesForYearly,
-        yearlyFormData.casualLeave,
-        yearlyFormData.earnedLeave,
-        yearlyFormData.medicalLeave,
+        isNaN(casualVal) ? 0 : casualVal,
+        isNaN(earnedVal) ? 0 : earnedVal,
+        isNaN(medicalVal) ? 0 : medicalVal,
         user?.userId || user?.id || ''
       );
 
@@ -363,9 +378,9 @@ export default function LeaveAllocation() {
       setShowYearlyForm(false);
       setSelectedEmployeesForYearly([]);
       setYearlyFormData({
-        casualLeave: 0,
-        earnedLeave: 0,
-        medicalLeave: 0
+        casualLeave: '',
+        earnedLeave: '',
+        medicalLeave: ''
       });
       fetchData();
     } catch (error) {
@@ -635,13 +650,10 @@ export default function LeaveAllocation() {
                     value={formData[leave.key as keyof typeof formData]}
                     onChange={(e) => {
                       const value = e.target.value;
-                      // Handle empty string, convert to 0
-                      const numValue = value === '' ? 0 : parseFloat(value);
-                      // Ensure we don't get NaN
-                      const finalValue = isNaN(numValue) ? 0 : numValue;
+                      // Allow empty string for user editing
                       setFormData({
                         ...formData,
-                        [leave.key]: finalValue
+                        [leave.key]: value
                       });
                     }}
                   />
@@ -729,11 +741,9 @@ export default function LeaveAllocation() {
                   value={yearlyFormData.casualLeave}
                   onChange={(e) => {
                     const value = e.target.value;
-                    const numValue = value === '' ? 0 : parseFloat(value);
-                    const finalValue = isNaN(numValue) ? 0 : numValue;
                     setYearlyFormData({
                       ...yearlyFormData,
-                      casualLeave: finalValue
+                      casualLeave: value
                     });
                   }}
                 />
@@ -748,11 +758,9 @@ export default function LeaveAllocation() {
                   value={yearlyFormData.earnedLeave}
                   onChange={(e) => {
                     const value = e.target.value;
-                    const numValue = value === '' ? 0 : parseFloat(value);
-                    const finalValue = isNaN(numValue) ? 0 : numValue;
                     setYearlyFormData({
                       ...yearlyFormData,
-                      earnedLeave: finalValue
+                      earnedLeave: value
                     });
                   }}
                 />
@@ -767,11 +775,9 @@ export default function LeaveAllocation() {
                   value={yearlyFormData.medicalLeave}
                   onChange={(e) => {
                     const value = e.target.value;
-                    const numValue = value === '' ? 0 : parseFloat(value);
-                    const finalValue = isNaN(numValue) ? 0 : numValue;
                     setYearlyFormData({
                       ...yearlyFormData,
-                      medicalLeave: finalValue
+                      medicalLeave: value
                     });
                   }}
                 />
@@ -787,9 +793,9 @@ export default function LeaveAllocation() {
                   setShowYearlyForm(false);
                   setSelectedEmployeesForYearly([]);
                   setYearlyFormData({
-                    casualLeave: 0,
-                    earnedLeave: 0,
-                    medicalLeave: 0
+                    casualLeave: '',
+                    earnedLeave: '',
+                    medicalLeave: ''
                   });
                 }}
                 disabled={actionLoading}

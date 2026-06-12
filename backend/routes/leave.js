@@ -1562,6 +1562,51 @@ router.post('/bulk-reject', leaveApprovers, idempotencyMiddleware, asyncHandler(
 }));
 
 /**
+ * POST /api/leave-requests/bulk-delete
+ * Bulk delete pending leave requests with idempotency
+ */
+router.post('/bulk-delete', leaveApprovers, idempotencyMiddleware, asyncHandler(async (req, res) => {
+  const { requestIds } = req.body;
+
+  if (!requestIds || !Array.isArray(requestIds) || requestIds.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'requestIds array is required'
+    });
+  }
+
+  // Get all pending requests to delete (for allocation cleanup)
+  const LeaveAllocationBulkDelete = (await import('../models/LeaveAllocation.js')).default;
+  const pendingToDelete = await LeaveRequest.find({
+    _id: { $in: requestIds },
+    status: 'pending',
+    ...bulkOrgFilter(req),
+  }).lean();
+
+  // Release pending leave allocations before deletion
+  for (const lr of pendingToDelete) {
+    await syncLeaveAllocationReleasePending(LeaveAllocationBulkDelete, lr);
+  }
+
+  // Delete all pending requests
+  const result = await LeaveRequest.deleteMany({
+    _id: { $in: requestIds },
+    status: 'pending',
+    ...bulkOrgFilter(req),
+  });
+
+  logger.info('Leave requests bulk deleted', { count: result.deletedCount });
+
+  res.json({
+    success: true,
+    message: `${result.deletedCount} leave requests deleted successfully`,
+    data: {
+      deletedCount: result.deletedCount
+    }
+  });
+}));
+
+/**
  * POST /api/leave-requests/policy
  * Set leave policy for organization
  */

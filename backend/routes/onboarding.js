@@ -199,12 +199,26 @@ router.post('/generate-link',
         organizationName: req.user.orgName || 'WorkPlus'
       });
 
+      // Calculate expiration date (30 days from now)
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+      // FIX #2: Save OnboardingLink document to MongoDB so it appears in the invite list
+      const onboardingLink = await OnboardingLink.create({
+        token: jwtToken,
+        employeeEmail,
+        employeeName,
+        department: department || 'General',
+        organizationId: String(finalOrgId),
+        organizationName: req.user.orgName || 'WorkPlus',
+        createdBy: req.user.userId,
+        expiresAt,
+        isUsed: false
+      });
+      logger.info('OnboardingLink document created', { linkId: onboardingLink._id, email: employeeEmail });
+
       // Generate onboarding URL
       const frontendUrl = process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app';
       const onboardingUrl = `${frontendUrl}/onboarding/${jwtToken}`;
-
-      // Calculate expiration date (30 days from now)
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
       logger.info('Onboarding link generated', {
         employeeEmail,

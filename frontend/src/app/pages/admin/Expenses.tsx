@@ -234,7 +234,8 @@ export default function ExpensesAdmin() {
       toast.success('Receipt download started');
     } catch (error) {
       console.error('Error downloading receipt:', error);
-      toast.error('Failed to download receipt');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to download receipt';
+      toast.error(errorMessage);
     }
   };
 
@@ -292,8 +293,9 @@ export default function ExpensesAdmin() {
       setViewingReceipt(objectUrl);
     } catch (error) {
       console.error('Error loading receipt preview:', error);
-      setViewingReceipt(buildFileUrl(receiptPath));
-      toast.error('Could not load receipt preview');
+      const errorMessage = error instanceof Error ? error.message : 'Could not load receipt preview';
+      toast.error(errorMessage);
+      setViewingReceipt(null); // Don't fallback, show error instead
     } finally {
       setReceiptPreviewLoading(false);
     }

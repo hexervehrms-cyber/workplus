@@ -945,16 +945,21 @@ export default function TeamsMessenger() {
       }
 
       const response = await apiClient.upload<{
+        success?: boolean;
+        data?: { fileUrl?: string; messageId?: string; fileName?: string };
         fileUrl?: string;
         messageId?: string;
         fileName?: string;
       }>('/chat/upload', formData);
 
-      const payload = (response as { data?: { fileUrl?: string; messageId?: string } }).data;
-      const fileUrl = payload?.fileUrl;
+      // Normalize response - handle both nested and flat response structures
+      const responseData = (response as any)?.data || response;
+      const fileUrl = responseData?.fileUrl;
+      const uploadedMessageId = responseData?.messageId;
+      
       if (fileUrl) {
         const newMessage: Message = {
-          messageId: payload?.messageId || `temp-${Date.now()}`,
+          messageId: uploadedMessageId || `temp-${Date.now()}`,
           senderId: myAuthId,
           senderName: user?.name || 'You',
           recipientId: selectedUser.chatKind === 'group' ? undefined : selectedUser.id,
@@ -990,7 +995,12 @@ export default function TeamsMessenger() {
       return;
     }
     
-    // FIX #8: Store the message before deletion for rollback on error
+    // Confirm before deletion
+    if (!confirm('Delete this message?')) {
+      return;
+    }
+
+    // Store the message before deletion for rollback on error
     const messageToDelete = messages.find((m) => m.messageId === messageId);
     if (!messageToDelete) {
       toast.error('Message not found');
@@ -1001,7 +1011,7 @@ export default function TeamsMessenger() {
       // Remove optimistically
       setMessages((prev) => prev.filter((m) => m.messageId !== messageId));
       
-      // Call API
+      // Call API - backend soft-deletes the message
       await apiDelete(`/chat/messages/${messageId}`);
       toast.success('Message deleted');
     } catch (error) {
@@ -1013,6 +1023,7 @@ export default function TeamsMessenger() {
         }
         return [...prev, messageToDelete];
       });
+      console.error('Error deleting message:', error);
       toast.error('Failed to delete message');
     }
   };

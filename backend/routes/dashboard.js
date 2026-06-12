@@ -78,11 +78,52 @@ function getDateRange(filterType, customStartDate, customEndDate) {
   return { startDate, endDate };
 }
 
-function getDayBounds(baseDate = new Date()) {
-  const start = new Date(baseDate);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
+function getDayBounds(baseDate = new Date(), timezone = 'Asia/Kolkata') {
+  // The Attendance.date field is stored as UTC midnight (00:00:00 UTC).
+  // For India timezone (UTC+5:30), midnight in India = previous day 18:30 UTC.
+  // 
+  // Example: 
+  // - June 12, 2026 India local date = June 12, 2026 00:00 Asia/Kolkata
+  //   = June 11, 2026 18:30:00 UTC
+  // - June 13, 2026 India local date = June 13, 2026 00:00 Asia/Kolkata
+  //   = June 12, 2026 18:30:00 UTC
+  //
+  // Since Attendance.date stores UTC midnight, we need to:
+  // 1. Get the timezone-local date parts
+  // 2. Create UTC midnight for that local date
+  // 3. Subtract timezone offset to get the actual UTC boundary
+  
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  
+  const parts = formatter.formatToParts(baseDate);
+  const year = parseInt(parts.find(p => p.type === 'year')?.value || '2024', 10);
+  const month = parseInt(parts.find(p => p.type === 'month')?.value || '01', 10) - 1;
+  const day = parseInt(parts.find(p => p.type === 'day')?.value || '01', 10);
+  
+  // UTC midnight for this local date
+  const startUtcMidnight = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+  const endUtcMidnight = new Date(Date.UTC(year, month, day + 1, 0, 0, 0, 0));
+  
+  // For Asia/Kolkata (UTC+5:30), local midnight = UTC previous day 18:30
+  // So we need to subtract 5.5 hours from the UTC midnight to get the stored date value
+  const timezoneOffsets = {
+    'Asia/Kolkata': 5.5 * 60 * 60 * 1000,      // UTC+5:30
+    'America/New_York': -5 * 60 * 60 * 1000,   // UTC-5 (EST)
+    'America/Los_Angeles': -8 * 60 * 60 * 1000, // UTC-8 (PST)
+    'Europe/London': 0,                         // UTC (GMT in winter, BST in summer - simplified)
+  };
+  
+  const offset = timezoneOffsets[timezone] || 0;
+  
+  // Subtract offset to get the UTC timestamp that represents local midnight
+  const start = new Date(startUtcMidnight.getTime() - offset);
+  const end = new Date(endUtcMidnight.getTime() - offset);
+  
   return { start, end };
 }
 

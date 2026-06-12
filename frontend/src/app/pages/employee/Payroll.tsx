@@ -132,12 +132,24 @@ export default function Payroll() {
   };
 
   const handleDownloadSalarySlip = async (slipId: string) => {
+    const slip = findSlipById(slipId);
+    
+    // Block download for pending uploaded slips
+    if (slip && slip.status === 'pending_approval') {
+      toast.info('This payslip is pending admin approval. Download will be available after approval.');
+      return;
+    }
+
     try {
+      const fallbackName = slip 
+        ? `salary-slip-${slip.month}-${slip.year}.html`
+        : `salary-slip-${slipId}.html`;
+      
       const blob = await fetchSalarySlipBlob(slipId);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `salary-slip-${slipId}.html`;
+      a.download = fallbackName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -162,16 +174,27 @@ export default function Payroll() {
       toast.error('Payslip not found for this period');
       return;
     }
+
+    // Block preview for pending uploaded slips
+    if (slip.status === 'pending_approval') {
+      toast.info('This payslip is pending admin approval. Preview will be available after approval.');
+      return;
+    }
+
     setViewingSlip(slip);
     setPreviewOpen(true);
     setPreviewLoading(true);
     try {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       const blob = await fetchSalarySlipBlob(slipId);
-      setPreviewUrl(URL.createObjectURL(blob));
+      
+      // Ensure blob has correct MIME type for HTML rendering
+      const htmlBlob = blob.type ? blob : new Blob([blob], { type: 'text/html; charset=utf-8' });
+      const objectUrl = URL.createObjectURL(htmlBlob);
+      setPreviewUrl(objectUrl);
     } catch (error) {
       console.error('Error loading payslip preview:', error);
-      toast.error('Failed to load payslip preview');
+      toast.error('Failed to load payslip preview. It may not be available yet.');
       setPreviewOpen(false);
       setViewingSlip(null);
     } finally {
@@ -243,14 +266,20 @@ export default function Payroll() {
       form.append('file', file);
       form.append('month', String(selectedMonth));
       form.append('year', String(selectedYear));
-      const res = await apiUpload<{ success?: boolean; message?: string }>(
+      const res = await apiUpload<{ success?: boolean; message?: string; data?: Record<string, unknown> }>(
         'salary/slip/employee-upload',
         form
       );
-      if (res?.success === false) {
-        throw new Error(res.message || 'Upload failed');
+      // Check for error response format
+      if (res && typeof res === 'object' && 'success' in res && res.success === false) {
+        throw new Error((res as any).message || 'Upload failed');
       }
-      toast.success(res?.message || 'Payslip uploaded — waiting for admin approval');
+      // Show message from API or default message
+      const successMessage = (res as any)?.message || 'Payslip uploaded — waiting for admin approval';
+      toast.success(successMessage);
+      
+      // Refetch salary slips to show the uploaded payslip in pending state
+      // Note: Employee will only see approved/released slips, but the upload message confirms it was received
       await fetchSalarySlips(employeeMongoId);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to upload payslip');
@@ -601,46 +630,58 @@ export default function Payroll() {
           </div>
         ) : (
           <div className="space-y-2">
-            {salarySlips.map((slip) => (
-              <div
-                key={slip._id}
-                className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
-              >
-                <div className="flex items-center gap-4">
-                  <Calendar className="w-5 h-5 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium">
-                      {new Date(slip.year, slip.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-                    </p>
-                    <p className="text-sm text-muted-foreground">Net: ₹{slip.netSalary.toLocaleString()}</p>
+            {salarySlips.map((slip) => {
+              const isPending = slip.status === 'pending_approval';
+              const statusBadgeVariant = isPending 
+                ? 'outline' 
+                : slip.status === 'approved' 
+                  ? 'default' 
+                  : 'secondary';
+              const statusDisplay = isPending ? 'Pending Approval' : slip.status;
+              
+              return (
+                <div
+                  key={slip._id}
+                  className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
+                >
+                  <div className="flex items-center gap-4">
+                    <Calendar className="w-5 h-5 text-muted-foreground" />
+                    <div>
+                      <p className="font-medium">
+                        {new Date(slip.year, slip.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                      </p>
+                      <p className="text-sm text-muted-foreground">Net: ₹{slip.netSalary.toLocaleString()}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <Badge variant={statusBadgeVariant}>{statusDisplay}</Badge>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void handleViewSalarySlip(slip._id)}
+                      className="rounded-lg"
+                      disabled={isPending}
+                      title={isPending ? 'Pending approval - view disabled' : 'View payslip'}
+                    >
+                      <Eye className="w-4 h-4 mr-2" />
+                      View
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void handleDownloadSalarySlip(slip._id)}
+                      className="rounded-lg"
+                      disabled={isPending}
+                      title={isPending ? 'Pending approval - download disabled' : 'Download salary slip'}
+                    >
+                      <Download className="w-4 h-4 mr-2" />
+                      Download
+                    </Button>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 flex-wrap justify-end">
-                  <Badge variant={slip.status === 'approved' ? 'default' : 'secondary'}>{slip.status}</Badge>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void handleViewSalarySlip(slip._id)}
-                    className="rounded-lg"
-                    title="View payslip"
-                  >
-                    <Eye className="w-4 h-4 mr-2" />
-                    View
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void handleDownloadSalarySlip(slip._id)}
-                    className="rounded-lg"
-                    title="Download salary slip"
-                  >
-                    <Download className="w-4 h-4 mr-2" />
-                    Download
-                  </Button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>

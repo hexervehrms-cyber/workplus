@@ -1862,12 +1862,15 @@ export default function EmployeeDashboard() {
           </Card>
         )}
 
-        {/* Apply leave — click a day on the calendar */}
-        <InteractiveCalendar />
+        {/* Apply Leave Calendar and Holidays - Side by Side Layout */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
+          {/* Apply leave — click a day on the calendar */}
+          <div>
+            <InteractiveCalendar />
+          </div>
 
-        {/* Holidays */}
-        <div className="grid grid-cols-1 gap-6">
-          <Card className="rounded-2xl overflow-hidden flex flex-col">
+          {/* Holidays */}
+          <Card className="rounded-2xl overflow-hidden flex flex-col h-full">
             <div className="p-6 border-b border-border flex-shrink-0">
               <div>
                 <h3 className="font-semibold text-lg">Holidays</h3>
@@ -1879,9 +1882,9 @@ export default function EmployeeDashboard() {
                 </p>
               </div>
             </div>
-            <div className="p-6 space-y-3 flex-1 min-h-0">
+            <div className="p-6 space-y-3 flex-1 min-h-0 overflow-y-auto">
               {holidays && holidays.length > 0 ? (
-                <div className="space-y-3 h-full">
+                <div className="space-y-3">
                   {holidays
                     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
                     .map((holiday) => {

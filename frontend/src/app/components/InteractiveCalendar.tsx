@@ -317,12 +317,12 @@ export default function InteractiveCalendar() {
   return (
     <>
       {/* Interactive Calendar */}
-      <Card className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-visible relative z-0">
-        <div className="space-y-6 overflow-visible">
+      <Card className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-hidden flex flex-col h-full">
+        <div className="space-y-6 flex-1 flex flex-col min-w-0 overflow-hidden">
           {/* Calendar Header */}
-          <div className="flex items-center justify-between p-1 bg-muted/20 rounded-xl border border-foreground/10">
+          <div className="flex items-center justify-between p-1 bg-muted/20 rounded-xl border border-foreground/10 flex-shrink-0">
             <h3 className="font-semibold text-lg text-foreground ml-4">Apply Leave</h3>
-            <div className="flex gap-1">
+            <div className="flex gap-1 flex-shrink-0">
               <Button
                 variant="ghost"
                 size="sm"
@@ -343,7 +343,7 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Month/Year Display */}
-          <div className="text-center">
+          <div className="text-center flex-shrink-0">
             <h2 className="text-xl font-bold text-foreground">
               {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
             </h2>
@@ -353,7 +353,7 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Weekday Headers */}
-          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-visible bg-muted/30 shadow-sm">
+          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-hidden bg-muted/30 shadow-sm flex-shrink-0">
             {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => (
               <div 
                 key={day} 
@@ -367,7 +367,7 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Calendar Days */}
-          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-visible shadow-sm bg-background relative z-0">
+          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-hidden shadow-sm bg-background flex-1 min-h-0">
             {getDaysInMonth(currentMonth).map((day, index) => {
               if (!day) {
                 return (
@@ -463,29 +463,29 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Legend */}
-          <div className="mt-6 p-4 bg-muted/30 rounded-xl border border-foreground/10">
+          <div className="mt-6 p-4 bg-muted/30 rounded-xl border border-foreground/10 flex-shrink-0">
             <h4 className="text-sm font-medium text-foreground mb-3">Legend</h4>
             <div className="grid grid-cols-2 gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-red-100 border border-red-200 flex items-center justify-center">
+                <div className="w-4 h-4 rounded-full bg-red-100 border border-red-200 flex items-center justify-center flex-shrink-0">
                   <div className="w-2 h-2 rounded-full bg-red-500" />
                 </div>
                 <span className="text-xs text-muted-foreground">Weekend</span>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-green-100 border border-green-200 flex items-center justify-center">
+                <div className="w-4 h-4 rounded-full bg-green-100 border border-green-200 flex items-center justify-center flex-shrink-0">
                   <div className="w-2 h-2 rounded-full bg-green-500" />
                 </div>
                 <span className="text-xs text-muted-foreground">Holiday</span>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">
+                <div className="w-4 h-4 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
                   <div className="w-2 h-2 rounded-full bg-primary" />
                 </div>
                 <span className="text-xs text-muted-foreground">Approved Leave</span>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-yellow-100 border border-yellow-200 flex items-center justify-center">
+                <div className="w-4 h-4 rounded-full bg-yellow-100 border border-yellow-200 flex items-center justify-center flex-shrink-0">
                   <div className="w-2 h-2 rounded-full bg-yellow-500" />
                 </div>
                 <span className="text-xs text-muted-foreground">Pending Leave</span>

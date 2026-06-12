@@ -17,14 +17,33 @@ function generateDnsRecords(customDomain) {
   // Get platform domain from environment or use default
   const platformDomain = process.env.PLATFORM_DOMAIN || process.env.APP_PUBLIC_DOMAIN || 'workplus.hexerve.online';
   
-  return [
-    {
-      type: 'CNAME',
-      name: customDomain,
-      value: platformDomain,
-      status: 'pending'
-    }
-  ];
+  // Check if it's a root/apex domain (no subdomain)
+  const domainParts = customDomain.split('.');
+  const isApexDomain = domainParts.length === 2; // e.g., example.com
+  
+  if (isApexDomain) {
+    // For apex domain, we can't use CNAME. Return instructions for common scenarios
+    return [
+      {
+        type: 'ALIAS_or_ANAME',
+        name: '@',
+        value: platformDomain,
+        status: 'pending',
+        warning: 'Apex domains may require ALIAS or ANAME records depending on your DNS provider. Some providers (like AWS Route 53) use ALIAS, others support ANAME. Check your DNS provider documentation.'
+      }
+    ];
+  } else {
+    // For subdomain (e.g., app.example.com), extract the subdomain part
+    const subdomain = domainParts.slice(0, -2).join('.');
+    return [
+      {
+        type: 'CNAME',
+        name: subdomain || 'app',
+        value: platformDomain,
+        status: 'pending'
+      }
+    ];
+  }
 }
 
 /**
@@ -475,7 +494,7 @@ router.delete("/:id", authorize('super_admin'), asyncHandler(async (req, res) =>
  * GET /api/organizations/:id/stats
  * Get detailed organization statistics (Super Admin only)
  */
-router.get("/:id/stats", authorize(['super_admin']), asyncHandler(async (req, res) => {
+router.get("/:id/stats", authorize('super_admin'), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const days = parseInt(req.query.days) || 30;
   

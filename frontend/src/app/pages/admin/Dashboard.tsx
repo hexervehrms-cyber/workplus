@@ -377,13 +377,15 @@ export default function AdminDashboard() {
       }
     }
 
+    // Log failures to console but don't show noisy toast messages
+    // Dashboard has fallback/empty states and renders gracefully without stats
     if (statsResponse.status === 'rejected') {
-      toast.error('Dashboard stats could not be loaded');
+      console.warn('[ADMIN-DASHBOARD] Dashboard stats API failed - using fallback display');
     } else if (statsPayload?.success === false) {
-      toast.error(statsPayload.message || 'Dashboard stats unavailable');
+      console.warn('[ADMIN-DASHBOARD] Dashboard stats returned error:', statsPayload.message);
     }
     if (quickStatsResponse.status === 'rejected') {
-      toast.error('Quick stats could not be loaded');
+      console.warn('[ADMIN-DASHBOARD] Quick stats API failed - using fallback display');
     }
   }, [filterType, customStartDate, customEndDate, mounted, nextGeneration, isStale, user]);
 

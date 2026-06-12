@@ -317,6 +317,9 @@ app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
+// Serve static assets (logo, images, etc.)
+app.use('/assets', express.static(path.join(__dirname, 'public', 'assets')));
+
 // ============================================================================
 // REAL-TIME EMITTER MIDDLEWARE
 // ============================================================================

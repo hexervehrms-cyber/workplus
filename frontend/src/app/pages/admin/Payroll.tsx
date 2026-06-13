@@ -125,6 +125,18 @@ export default function Payroll() {
   const [slipMonth, setSlipMonth] = useState(new Date().getMonth() + 1);
   const [slipYear, setSlipYear] = useState(new Date().getFullYear());
   const [slipGenerating, setSlipGenerating] = useState(false);
+  const [slipGenerateError, setSlipGenerateError] = useState<{ code?: string; message?: string; employeeName?: string } | null>(null);
+
+  // Bulk generation fields
+  const [showBulkGenerateDialog, setShowBulkGenerateDialog] = useState(false);
+  const [bulkMonth, setBulkMonth] = useState(new Date().getMonth() + 1);
+  const [bulkYear, setBulkYear] = useState(new Date().getFullYear());
+  const [bulkAllEmployees, setBulkAllEmployees] = useState(true);
+  const [bulkSelectedEmployees, setBulkSelectedEmployees] = useState<string[]>([]);
+  const [bulkSkipExisting, setBulkSkipExisting] = useState(true);
+  const [bulkGenerating, setBulkGenerating] = useState(false);
+  const [bulkResult, setBulkResult] = useState<any>(null);
+  const [showBulkResult, setShowBulkResult] = useState(false);
   
   // Popover states
   const [openStructureEmployeePopover, setOpenStructureEmployeePopover] = useState(false);
@@ -556,7 +568,9 @@ export default function Payroll() {
 
     try {
       setSlipGenerating(true);
-      const data = await apiPost('/salary/slip/generate', {
+      setSlipGenerateError(null);
+      
+      const data = await apiPost<any>('/salary/slip/generate', {
         employeeId: slipEmployeeId,
         month: parseInt(slipMonth.toString()),
         year: parseInt(slipYear.toString())
@@ -568,9 +582,20 @@ export default function Payroll() {
         setSlipEmployeeId('');
         setSlipMonth(new Date().getMonth() + 1);
         setSlipYear(new Date().getFullYear());
+        setSlipGenerateError(null);
         fetchSalarySlips();
       } else {
-        toast.error((data as { message?: string }).message || 'Failed to generate salary slip');
+        // Check if it's a "no approved salary structure" error
+        if ((data as any).code === 'NO_APPROVED_SALARY_STRUCTURE') {
+          setSlipGenerateError({
+            code: 'NO_APPROVED_SALARY_STRUCTURE',
+            message: data.message || 'No approved salary structure found for this employee',
+            employeeName: (data as any).employeeName
+          });
+          toast.error('No approved salary structure found. Please create and approve one first.');
+        } else {
+          toast.error((data as { message?: string }).message || 'Failed to generate salary slip');
+        }
       }
     } catch (error) {
       console.error('Error generating salary slip:', error);
@@ -582,6 +607,58 @@ export default function Payroll() {
       );
     } finally {
       setSlipGenerating(false);
+    }
+  };
+
+  // Handle generate bulk salary slips
+  const handleGenerateBulkSalarySlips = async () => {
+    if (!bulkMonth || !bulkYear) {
+      toast.error('Please select month and year');
+      return;
+    }
+
+    if (!bulkAllEmployees && bulkSelectedEmployees.length === 0) {
+      toast.error('Please select employees or choose "All eligible employees"');
+      return;
+    }
+
+    try {
+      setBulkGenerating(true);
+      const data = await apiPost('/salary/slip/generate-bulk', {
+        month: parseInt(bulkMonth.toString()),
+        year: parseInt(bulkYear.toString()),
+        employeeIds: bulkAllEmployees ? undefined : bulkSelectedEmployees,
+        allEmployees: bulkAllEmployees,
+        skipExisting: bulkSkipExisting
+      });
+
+      if (data.success) {
+        const result = data.data;
+        setBulkResult(result);
+        setShowBulkResult(true);
+        toast.success(`Generated ${result.generated}, Skipped ${result.skipped}, Failed ${result.failed}`);
+        setShowBulkGenerateDialog(false);
+        fetchSalarySlips();
+        
+        // Reset bulk form
+        setBulkMonth(new Date().getMonth() + 1);
+        setBulkYear(new Date().getFullYear());
+        setBulkAllEmployees(true);
+        setBulkSelectedEmployees([]);
+        setBulkSkipExisting(true);
+      } else {
+        toast.error((data as { message?: string }).message || 'Failed to generate bulk salary slips');
+      }
+    } catch (error) {
+      console.error('Error generating bulk salary slips:', error);
+      const msg = error instanceof Error ? error.message : 'Failed to generate bulk salary slips';
+      toast.error(
+        msg.toLowerCase().includes('invalid credentials')
+          ? 'Your session expired. Please sign in again, then generate slips.'
+          : msg
+      );
+    } finally {
+      setBulkGenerating(false);
     }
   };
 
@@ -874,7 +951,11 @@ export default function Payroll() {
       {/* Salary Slips Tab */}
       {activeTab === 'slips' && (
         <div className="space-y-4">
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setShowBulkGenerateDialog(true)} variant="outline" className="rounded-xl">
+              <Plus className="w-4 h-4 mr-2" />
+              Generate Bulk Payslips
+            </Button>
             <Button onClick={() => setShowGenerateSlipDialog(true)} className="rounded-xl">
               <Plus className="w-4 h-4 mr-2" />
               Generate Salary Slip
@@ -976,7 +1057,10 @@ export default function Payroll() {
       )}
 
       {/* Generate Salary Slip Dialog */}
-      <Dialog open={showGenerateSlipDialog} onOpenChange={setShowGenerateSlipDialog}>
+      <Dialog open={showGenerateSlipDialog} onOpenChange={(open) => {
+        setShowGenerateSlipDialog(open);
+        if (!open) setSlipGenerateError(null);
+      }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Generate Salary Slip</DialogTitle>
@@ -987,6 +1071,33 @@ export default function Payroll() {
           </DialogHeader>
 
           <div className="space-y-4">
+            {/* Error message with CTA */}
+            {slipGenerateError?.code === 'NO_APPROVED_SALARY_STRUCTURE' && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
+                <p className="text-sm font-medium text-amber-900">
+                  ⚠️ No approved salary structure found for {slipGenerateError.employeeName || 'this employee'}
+                </p>
+                <p className="text-xs text-amber-800">
+                  {slipGenerateError.message}
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full rounded-lg bg-white hover:bg-amber-50"
+                  onClick={() => {
+                    setShowGenerateSlipDialog(false);
+                    setSlipGenerateError(null);
+                    setActiveTab('structure');
+                    setShowStructureDialog(true);
+                    setSelectedEmployee(slipEmployeeId);
+                    resetForm();
+                  }}
+                >
+                  Create Salary Structure
+                </Button>
+              </div>
+            )}
+
             <div>
               <Label>Employee</Label>
               <Popover open={openSlipEmployeePopover} onOpenChange={setOpenSlipEmployeePopover}>
@@ -1021,6 +1132,7 @@ export default function Payroll() {
                             onSelect={() => {
                               setSlipEmployeeId(emp._id);
                               setOpenSlipEmployeePopover(false);
+                              setSlipGenerateError(null);
                             }}
                           >
                             <Check
@@ -1079,7 +1191,10 @@ export default function Payroll() {
             <div className="flex gap-2 justify-end">
               <Button
                 variant="outline"
-                onClick={() => setShowGenerateSlipDialog(false)}
+                onClick={() => {
+                  setShowGenerateSlipDialog(false);
+                  setSlipGenerateError(null);
+                }}
                 className="rounded-lg"
               >
                 Cancel
@@ -1100,6 +1215,243 @@ export default function Payroll() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Generate Bulk Salary Slips Dialog */}
+      <Dialog open={showBulkGenerateDialog} onOpenChange={setShowBulkGenerateDialog}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Generate Bulk Payslips</DialogTitle>
+            <DialogDescription>
+              Generate salary slips for multiple employees at once. Existing slips will be skipped if the option is enabled.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {/* Month and Year */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Month</Label>
+                <Select value={bulkMonth.toString()} onValueChange={(val) => setBulkMonth(parseInt(val))}>
+                  <SelectTrigger className="rounded-lg mt-2">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
+                      <SelectItem key={month} value={month.toString()}>
+                        {new Date(2024, month - 1).toLocaleDateString('en-US', { month: 'long' })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>Year</Label>
+                <Select value={bulkYear.toString()} onValueChange={(val) => setBulkYear(parseInt(val))}>
+                  <SelectTrigger className="rounded-lg mt-2">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map((year) => (
+                      <SelectItem key={year} value={year.toString()}>
+                        {year}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Employee Selection */}
+            <div>
+              <Label className="block mb-3">Employees</Label>
+              <div className="space-y-3">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="radio"
+                    id="all-employees"
+                    checked={bulkAllEmployees}
+                    onChange={() => setBulkAllEmployees(true)}
+                    className="rounded"
+                  />
+                  <Label htmlFor="all-employees" className="font-normal cursor-pointer">
+                    Generate for all eligible employees (active, with approved salary structure)
+                  </Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="radio"
+                    id="selected-employees"
+                    checked={!bulkAllEmployees}
+                    onChange={() => setBulkAllEmployees(false)}
+                    className="rounded"
+                  />
+                  <Label htmlFor="selected-employees" className="font-normal cursor-pointer">
+                    Select specific employees
+                  </Label>
+                </div>
+
+                {!bulkAllEmployees && (
+                  <div className="ml-6 max-h-48 border rounded-lg p-3 overflow-y-auto bg-muted/30">
+                    {employees.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No employees available</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {employees.map((emp) => (
+                          <div key={emp._id} className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id={`emp-${emp._id}`}
+                              checked={bulkSelectedEmployees.includes(emp._id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setBulkSelectedEmployees([...bulkSelectedEmployees, emp._id]);
+                                } else {
+                                  setBulkSelectedEmployees(bulkSelectedEmployees.filter(id => id !== emp._id));
+                                }
+                              }}
+                              className="rounded"
+                            />
+                            <Label htmlFor={`emp-${emp._id}`} className="font-normal cursor-pointer text-sm">
+                              {payrollEmployeeLabel(emp)}
+                              {emp.employeeCode && <span className="text-xs text-muted-foreground ml-2">({emp.employeeCode})</span>}
+                            </Label>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Skip Existing Checkbox */}
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                id="skip-existing"
+                checked={bulkSkipExisting}
+                onChange={(e) => setBulkSkipExisting(e.target.checked)}
+                className="rounded"
+              />
+              <Label htmlFor="skip-existing" className="font-normal cursor-pointer">
+                Skip existing slips for this month/year (prevent duplicates)
+              </Label>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-2 justify-end">
+              <Button
+                variant="outline"
+                onClick={() => setShowBulkGenerateDialog(false)}
+                className="rounded-lg"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleGenerateBulkSalarySlips}
+                disabled={bulkGenerating}
+                className="rounded-lg"
+              >
+                {bulkGenerating ? (
+                  <>
+                    <Loader className="w-4 h-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  'Generate Bulk'
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Generation Results Dialog */}
+      <Dialog open={showBulkResult} onOpenChange={setShowBulkResult}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Bulk Generation Summary</DialogTitle>
+          </DialogHeader>
+
+          {bulkResult && (
+            <div className="space-y-4">
+              {/* Summary Cards */}
+              <div className="grid grid-cols-4 gap-2">
+                <Card className="p-4">
+                  <p className="text-sm text-muted-foreground">Processed</p>
+                  <p className="text-2xl font-bold">{bulkResult.processed}</p>
+                </Card>
+                <Card className="p-4 border-green-200 bg-green-50">
+                  <p className="text-sm text-green-700">Generated</p>
+                  <p className="text-2xl font-bold text-green-700">{bulkResult.generated}</p>
+                </Card>
+                <Card className="p-4 border-yellow-200 bg-yellow-50">
+                  <p className="text-sm text-yellow-700">Skipped</p>
+                  <p className="text-2xl font-bold text-yellow-700">{bulkResult.skipped}</p>
+                </Card>
+                <Card className="p-4 border-red-200 bg-red-50">
+                  <p className="text-sm text-red-700">Failed</p>
+                  <p className="text-2xl font-bold text-red-700">{bulkResult.failed}</p>
+                </Card>
+              </div>
+
+              {/* Results Table */}
+              <div>
+                <h3 className="font-semibold mb-3">Detailed Results</h3>
+                <div className="border rounded-lg overflow-hidden max-h-96 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted sticky top-0">
+                      <tr>
+                        <th className="p-2 text-left font-semibold">Employee</th>
+                        <th className="p-2 text-left font-semibold">Status</th>
+                        <th className="p-2 text-left font-semibold">Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bulkResult.results?.map((result: any, idx: number) => (
+                        <tr key={idx} className="border-t hover:bg-muted/50">
+                          <td className="p-2">
+                            <div>
+                              <p className="font-medium">{result.employeeName}</p>
+                              <p className="text-xs text-muted-foreground">{result.employeeId}</p>
+                            </div>
+                          </td>
+                          <td className="p-2">
+                            <Badge
+                              variant={
+                                result.status === 'generated' ? 'default' :
+                                result.status === 'skipped' ? 'secondary' :
+                                'destructive'
+                              }
+                            >
+                              {result.status}
+                            </Badge>
+                          </td>
+                          <td className="p-2 text-muted-foreground text-xs">
+                            {result.reason || '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Close Button */}
+              <div className="flex justify-end">
+                <Button
+                  onClick={() => setShowBulkResult(false)}
+                  className="rounded-lg"
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -1434,9 +1786,9 @@ export default function Payroll() {
 
       {/* View Salary Slip Dialog */}
       <Dialog open={showViewSlipDialog} onOpenChange={(open) => !open && closeViewSlipDialog()}>
-        <DialogContent className="max-w-4xl max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
+        <DialogContent className="max-w-6xl w-[95vw] max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
           <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
-            <DialogTitle>Salary payslip</DialogTitle>
+            <DialogTitle>Salary payslip preview</DialogTitle>
             <DialogDescription>
               {viewingSlip && `${viewingSlip.employeeName || 'Employee'} - ${new Date(viewingSlip.year, viewingSlip.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`}
             </DialogDescription>
@@ -1456,13 +1808,16 @@ export default function Payroll() {
                   Net: <span className="font-semibold text-foreground">₹{safeFormatInr(viewingSlip.netSalary ?? 0)}</span>
                 </span>
               </div>
-              {previewUrl ? (
-                <iframe
-                  title="Salary slip preview"
-                  src={previewUrl}
-                  className="w-[calc(100%-3rem)] mx-6 mb-2 h-[min(72vh,680px)] rounded-lg border border-border bg-white shrink-0"
-                />
-              ) : null}
+              <div className="flex-1 overflow-auto px-4 py-2 min-h-0">
+                {previewUrl ? (
+                  <iframe
+                    title="Salary slip preview"
+                    src={previewUrl}
+                    className="w-full h-[78vh] rounded-lg border border-border bg-white"
+                    style={{ minWidth: '900px' }}
+                  />
+                ) : null}
+              </div>
               <div className="flex gap-2 justify-end border-t px-6 py-4 shrink-0">
                 <Button variant="outline" onClick={closeViewSlipDialog} className="rounded-lg">
                   Close

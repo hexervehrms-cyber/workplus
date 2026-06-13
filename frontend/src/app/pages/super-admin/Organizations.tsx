@@ -3,7 +3,7 @@ import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
-import { Building2, Plus, Search, Filter, X, Edit, Trash2, Loader2, Copy } from 'lucide-react';
+import { Building2, Plus, Search, Filter, X, Edit, Trash2, Loader2, Copy, AlertCircle, Check } from 'lucide-react';
 import { apiClient, ApiError } from '../../utils/api';
 import { toast } from '../../utils/portalToast';
 import {
@@ -24,6 +24,26 @@ interface OrganizationRow {
   status?: string;
   isActive?: boolean;
   createdAt?: string;
+  customDomain?: string;
+  customDomainStatus?: string;
+}
+
+interface DnsRecord {
+  type: string;
+  name: string;
+  value: string;
+  status?: string;
+  purpose?: string;
+  warning?: string;
+}
+
+interface DomainSetupData {
+  domain: string;
+  status: string;
+  dnsRecords: DnsRecord[];
+  customDomainUrl?: string;
+  defaultTenantUrl?: string;
+  verificationRequired?: boolean;
 }
 
 const emptyForm = {
@@ -31,6 +51,7 @@ const emptyForm = {
   email: '',
   phone: '',
   adminPassword: '',
+  confirmPassword: '',
   customDomain: '',
   showPassword: false,
 };
@@ -47,6 +68,9 @@ export default function Organizations() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'active' | 'inactive' | 'all'>('active');
   const [formData, setFormData] = useState(emptyForm);
+  const [showDnsSetup, setShowDnsSetup] = useState(false);
+  const [dnsSetupData, setDnsSetupData] = useState<DomainSetupData | null>(null);
+  const [verifyingDomain, setVerifyingDomain] = useState(false);
 
   const loadOrganizations = useCallback(async () => {
     try {
@@ -93,6 +117,10 @@ export default function Organizations() {
       name: org.name || '',
       email: org.email || '',
       phone: org.phone || '',
+      adminPassword: '',
+      confirmPassword: '',
+      customDomain: '',
+      showPassword: false,
     });
     setShowEditForm(true);
   };
@@ -118,11 +146,21 @@ export default function Organizations() {
       }
     }
     
+    // When editing organization, validate password if provided
+    if (editingOrg && formData.adminPassword) {
+      if (formData.adminPassword.length < 8) {
+        toast.error('Password must be at least 8 characters');
+        return;
+      }
+      if (formData.adminPassword !== formData.confirmPassword) {
+        toast.error('Passwords do not match');
+        return;
+      }
+    }
+    
     // Validate custom domain if provided
     if (formData.customDomain.trim()) {
       let domain = formData.customDomain.trim().toLowerCase();
-      
-      // Remove protocol if accidentally included
       domain = domain.replace(/^https?:\/\//, '');
       domain = domain.replace(/\/$/, '');
       
@@ -135,13 +173,21 @@ export default function Organizations() {
     setSaving(true);
     try {
       if (editingOrg) {
-        const res = await apiClient.put<OrganizationRow>(`/organizations/${editingOrg._id}`, {
+        const updatePayload: Record<string, unknown> = {
           name: formData.name.trim(),
           email: formData.email.trim().toLowerCase(),
           phone: formData.phone.trim() || undefined,
-        });
+        };
+        
+        // Add password reset if provided
+        if (formData.adminPassword) {
+          updatePayload.adminPassword = formData.adminPassword;
+        }
+        
+        const res = await apiClient.put<OrganizationRow>(`/organizations/${editingOrg._id}`, updatePayload);
         if (res.success) {
-          toast.success('Organization updated');
+          const msg = res.message || 'Organization updated';
+          toast.success(msg);
           closeForms();
           await loadOrganizations();
         } else {
@@ -169,13 +215,8 @@ export default function Organizations() {
           
           // Show DNS records if custom domain was configured
           if (res.data?.customDomain) {
-            const dnsRecords = res.data.customDomain.dnsRecords || [];
-            if (dnsRecords.length > 0) {
-              const dnsText = dnsRecords
-                .map((r: any) => `${r.type} ${r.name} → ${r.value}`)
-                .join('\n');
-              toast.info(`DNS Records:\n${dnsText}`);
-            }
+            setDnsSetupData(res.data.customDomain);
+            setShowDnsSetup(true);
           }
           
           closeForms();
@@ -190,6 +231,47 @@ export default function Organizations() {
       toast.error(msg);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleVerifyDomain = async () => {
+    if (!dnsSetupData?.domain) return;
+    
+    setVerifyingDomain(true);
+    try {
+      const org = organizations.find(o => o.customDomain === dnsSetupData.domain);
+      if (!org) {
+        toast.error('Organization not found');
+        return;
+      }
+      
+      const res = await apiClient.post<any>(`/organizations/${org._id}/verify-domain`, {});
+      
+      if (res.success) {
+        toast.success('Domain verified successfully!');
+        if (dnsSetupData) {
+          setDnsSetupData({
+            ...dnsSetupData,
+            status: 'verified'
+          });
+        }
+        await loadOrganizations();
+        setTimeout(() => {
+          setShowDnsSetup(false);
+        }, 2000);
+      } else {
+        if (res.code === 'DNS_NOT_CONFIGURED') {
+          toast.error('DNS records not yet configured. Please add the DNS records and try again.');
+        } else if (res.code === 'PARTIAL_VERIFICATION') {
+          toast.warning('Some DNS records verified. Checking again in a moment...');
+        } else {
+          toast.error(res.message || 'Domain verification failed');
+        }
+      }
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.getUserMessage() : 'Verification failed');
+    } finally {
+      setVerifyingDomain(false);
     }
   };
 
@@ -229,8 +311,169 @@ export default function Organizations() {
     }
   };
 
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label} copied to clipboard`);
+    } catch {
+      toast.error('Could not copy to clipboard');
+    }
+  };
+
   return (
     <div className="p-6 space-y-6">
+      {/* DNS Setup Modal */}
+      {showDnsSetup && dnsSetupData && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-semibold">Custom Domain Setup</h2>
+              <Button variant="ghost" size="icon" onClick={() => setShowDnsSetup(false)} disabled={verifyingDomain}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+
+            <div className="space-y-6">
+              <div>
+                <Label className="text-base font-semibold mb-2 block">Domain</Label>
+                <div className="bg-muted p-3 rounded-lg font-mono text-sm">{dnsSetupData.domain}</div>
+              </div>
+
+              <div>
+                <Label className="text-base font-semibold mb-2 block">Status</Label>
+                <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-yellow-100 text-yellow-800">
+                  <AlertCircle className="w-4 h-4" />
+                  <span className="text-sm font-medium">
+                    {dnsSetupData.status === 'verified' ? 'Verified' : 'Pending DNS Configuration'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <Label className="text-base font-semibold">Login URLs</Label>
+                
+                <div>
+                  <div className="text-sm text-muted-foreground mb-1">Default (Always Available)</div>
+                  <div className="flex gap-2">
+                    <Input 
+                      value={dnsSetupData.defaultTenantUrl || ''} 
+                      readOnly 
+                      className="bg-muted text-xs"
+                    />
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => copyToClipboard(dnsSetupData.defaultTenantUrl || '', 'Default URL')}
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-sm text-muted-foreground mb-1">
+                    Custom Domain {dnsSetupData.status === 'verified' ? '✓' : '(Pending DNS)'}
+                  </div>
+                  <div className="flex gap-2">
+                    <Input 
+                      value={dnsSetupData.customDomainUrl || `https://${dnsSetupData.domain}`} 
+                      readOnly 
+                      className="bg-muted text-xs"
+                    />
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => copyToClipboard(dnsSetupData.customDomainUrl || `https://${dnsSetupData.domain}`, 'Custom Domain URL')}
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-base font-semibold mb-3 block">DNS Records to Add</Label>
+                {dnsSetupData.dnsRecords && dnsSetupData.dnsRecords.length > 0 ? (
+                  <div className="space-y-2">
+                    {dnsSetupData.dnsRecords.map((record, idx) => (
+                      <div key={idx} className="border rounded-lg p-3 bg-muted/40 space-y-2">
+                        <div className="grid grid-cols-4 gap-2 text-sm">
+                          <div>
+                            <div className="text-xs text-muted-foreground font-medium">Type</div>
+                            <div className="font-mono font-semibold">{record.type}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-muted-foreground font-medium">Host/Name</div>
+                            <div className="font-mono text-xs">{record.name || '@'}</div>
+                          </div>
+                          <div className="col-span-2">
+                            <div className="text-xs text-muted-foreground font-medium">Value/Target</div>
+                            <div className="flex items-center gap-1">
+                              <div className="font-mono text-xs break-all flex-1">{record.value}</div>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 px-2 shrink-0"
+                                onClick={() => copyToClipboard(record.value, 'Value')}
+                              >
+                                <Copy className="w-3 h-3" />
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                        {record.purpose && (
+                          <div className="text-xs text-muted-foreground">Purpose: {record.purpose}</div>
+                        )}
+                        {record.warning && (
+                          <div className="text-xs bg-amber-50 text-amber-800 p-2 rounded border border-amber-200">
+                            ⚠️ {record.warning}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground text-sm">No DNS records required</p>
+                )}
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <h3 className="font-semibold text-sm text-blue-900 mb-2">Next Steps</h3>
+                <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
+                  <li>Log in to your domain provider (GoDaddy, Namecheap, etc.)</li>
+                  <li>Go to DNS settings for {dnsSetupData.domain}</li>
+                  <li>Add the DNS records shown above</li>
+                  <li>Wait for DNS propagation (up to 48 hours)</li>
+                  <li>Come back here and click "Verify Domain" to confirm</li>
+                </ol>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-6">
+              <Button variant="outline" className="flex-1" onClick={() => setShowDnsSetup(false)} disabled={verifyingDomain}>
+                Close
+              </Button>
+              <Button 
+                className="flex-1" 
+                onClick={() => void handleVerifyDomain()} 
+                disabled={verifyingDomain || dnsSetupData.status === 'verified'}
+              >
+                {verifyingDomain && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+                {dnsSetupData.status === 'verified' ? (
+                  <>
+                    <Check className="w-4 h-4 mr-2" />
+                    Verified
+                  </>
+                ) : (
+                  'Verify Domain'
+                )}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Add/Edit Form Modal */}
       {(showAddForm || showEditForm) && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <Card className="w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
@@ -278,7 +521,6 @@ export default function Organizations() {
                 />
               </div>
               
-              {/* Admin password field - required when creating new organization */}
               {!editingOrg && (
                 <div>
                   <Label>Admin Password *</Label>
@@ -303,8 +545,58 @@ export default function Organizations() {
                   <p className="text-xs text-muted-foreground mt-1">This will be the admin login password</p>
                 </div>
               )}
+
+              {editingOrg && (
+                <div className="space-y-3 border-t pt-4">
+                  <Label className="text-sm font-semibold">Admin Password Reset (Optional)</Label>
+                  <p className="text-xs text-muted-foreground">Leave blank to keep current admin password</p>
+                  
+                  <div>
+                    <Label className="text-sm">New Admin Password</Label>
+                    <div className="relative">
+                      <Input
+                        type={formData.showPassword ? 'text' : 'password'}
+                        value={formData.adminPassword}
+                        onChange={(e) => setFormData({ ...formData, adminPassword: e.target.value })}
+                        placeholder="Min 8 characters"
+                        className="mt-1 rounded-xl pr-10"
+                        disabled={saving}
+                        autoComplete="new-password"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, showPassword: !formData.showPassword })}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {formData.showPassword ? '🙈' : '👁️'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-sm">Confirm New Password</Label>
+                    <div className="relative">
+                      <Input
+                        type={formData.showPassword ? 'text' : 'password'}
+                        value={formData.confirmPassword || ''}
+                        onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                        placeholder="Confirm password"
+                        className="mt-1 rounded-xl pr-10"
+                        disabled={saving}
+                        autoComplete="new-password"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, showPassword: !formData.showPassword })}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {formData.showPassword ? '🙈' : '👁️'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               
-              {/* Custom domain field - optional */}
               <div>
                 <Label>Custom Domain (optional)</Label>
                 <Input
@@ -329,6 +621,7 @@ export default function Organizations() {
         </div>
       )}
 
+      {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <Card className="w-full max-w-md p-6">
@@ -361,6 +654,7 @@ export default function Organizations() {
         </div>
       )}
 
+      {/* Main Content */}
       <div className="flex justify-between items-center flex-wrap gap-4">
         <div>
           <h1 className="text-3xl font-bold">Organizations</h1>
@@ -446,7 +740,24 @@ export default function Organizations() {
                   {org._id}
                 </p>
               </div>
-              <p className="text-sm text-muted-foreground mb-4">{org.email || '—'}</p>
+              <p className="text-sm text-muted-foreground mb-2">{org.email || '—'}</p>
+              
+              {org.customDomain && (
+                <div className="mb-3 p-2 rounded-lg border bg-blue-50 border-blue-200">
+                  <p className="text-xs font-medium text-blue-900 mb-1">Custom Domain</p>
+                  <div className="flex items-center justify-between gap-1">
+                    <p className="text-xs font-mono text-blue-800">{org.customDomain}</p>
+                    <span className={`px-2 py-0.5 text-xs rounded-full whitespace-nowrap ${
+                      org.customDomainStatus === 'verified' 
+                        ? 'bg-green-100 text-green-700' 
+                        : 'bg-yellow-100 text-yellow-700'
+                    }`}>
+                      {org.customDomainStatus === 'verified' ? '✓ Verified' : 'Pending'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-2 text-sm text-muted-foreground mb-4">
                 <div className="flex justify-between">
                   <span>Phone</span>

@@ -119,6 +119,19 @@ export function Navbar() {
     }
   };
 
+  // Clear all notifications
+  const clearAllNotifications = async () => {
+    try {
+      await apiRequest('/notifications/clear-all', { method: 'DELETE' });
+      setNotifications([]);
+      setUnreadCount(0);
+      toast.success('Notifications cleared');
+    } catch (error) {
+      console.error('Failed to clear notifications:', error);
+      toast.error('Failed to clear notifications');
+    }
+  };
+
   // Handle notification click
   const handleNotificationClick = (notification: Notification) => {
     // Mark as read
@@ -282,31 +295,42 @@ export function Navbar() {
             )}
           </Button>
 
-          {/* Notifications */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="rounded-xl relative">
-                <Bell className="w-5 h-5" />
-                {unreadCount > 0 && (
-                  <span className="absolute top-1 right-1 w-5 h-5 bg-destructive text-white text-xs rounded-full flex items-center justify-center">
-                    {unreadCount > 9 ? '9+' : unreadCount}
+          {/* Notifications - Only show when unreadCount > 0 */}
+          {unreadCount > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="rounded-xl relative">
+                  <Bell className="w-5 h-5" />
+                  <span className="absolute top-1 right-1 w-5 h-5 bg-destructive text-white text-xs rounded-full flex items-center justify-center font-semibold">
+                    {unreadCount > 99 ? '99+' : unreadCount}
                   </span>
-                )}
-              </Button>
-            </DropdownMenuTrigger>
+                </Button>
+              </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-96">
               <div className="flex items-center justify-between px-4 py-2">
                 <DropdownMenuLabel className="p-0">Notifications</DropdownMenuLabel>
-                {unreadCount > 0 && (
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="h-auto py-1 px-2 text-xs"
-                    onClick={markAllAsRead}
-                  >
-                    Mark all read
-                  </Button>
-                )}
+                <div className="flex gap-2">
+                  {unreadCount > 0 && (
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-auto py-1 px-2 text-xs"
+                      onClick={markAllAsRead}
+                    >
+                      Mark all read
+                    </Button>
+                  )}
+                  {notifications.length > 0 && (
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-auto py-1 px-2 text-xs text-destructive"
+                      onClick={clearAllNotifications}
+                    >
+                      Clear all
+                    </Button>
+                  )}
+                </div>
               </div>
               <DropdownMenuSeparator />
               <div className="max-h-[400px] overflow-y-auto">
@@ -364,6 +388,7 @@ export function Navbar() {
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          )}
 
           {/* User Menu */}
           <DropdownMenu>

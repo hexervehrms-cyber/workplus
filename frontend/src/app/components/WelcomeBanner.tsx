@@ -1,8 +1,11 @@
 import { Sparkles, ArrowRight } from 'lucide-react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
+import { useNavigate } from 'react-router';
 
 export function WelcomeBanner() {
+  const navigate = useNavigate();
+  
   return (
     <Card className="p-8 rounded-2xl bg-gradient-to-br from-primary via-secondary to-accent text-white border-0 overflow-hidden relative">
       <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
@@ -21,11 +24,19 @@ export function WelcomeBanner() {
               Switch between roles using the switcher at the bottom right to explore different dashboards.
             </p>
             <div className="flex gap-3">
-              <Button variant="secondary" className="rounded-xl">
+              <Button 
+                variant="secondary" 
+                className="rounded-xl"
+                onClick={() => navigate('/super-admin/organizations')}
+              >
                 Get Started
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
-              <Button variant="outline" className="rounded-xl bg-white/20 border-white/30 hover:bg-white/30 text-white">
+              <Button 
+                variant="outline" 
+                className="rounded-xl bg-white/20 border-white/30 hover:bg-white/30 text-white"
+                onClick={() => window.open('https://docs.workplus.app', '_blank')}
+              >
                 View Documentation
               </Button>
             </div>

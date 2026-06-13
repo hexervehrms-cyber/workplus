@@ -60,6 +60,7 @@ import Session from "./models/Session.js";
 import { errorHandler, requestIdMiddleware, asyncHandler } from "./middleware/errorHandler.js";
 import { createAuthenticatedUploadsHandler } from "./middleware/authenticatedUploads.js";
 import { tenantMiddleware, subscriptionMiddleware } from "./middleware/tenant.js";
+import { domainResolver, ensureDomainTenantMatch } from "./middleware/domainResolver.js";
 import fileValidator from "./middleware/fileValidator.js";
 import { registerLimiter } from "./middleware/rateLimiter.js";
 
@@ -309,6 +310,10 @@ app.use(morgan('combined', {
 
 // Request ID middleware
 app.use(requestIdMiddleware);
+
+// Domain Resolver Middleware (resolve custom domains to organizations)
+// Must be early, after basic middleware, before auth
+app.use(domainResolver);
 
 // Cookie parser middleware (for HTTP-only cookies)
 app.use(cookieParser());

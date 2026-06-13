@@ -115,18 +115,26 @@ export default function AdminRoles() {
       setError(null);
       
       const result = await apiGet('/roles');
-      const rolesData = result.data || result.roles || [];
+      // Normalize response - data can be at different levels
+      let rolesData = result?.data || result?.roles || [];
+      if (!Array.isArray(rolesData)) {
+        rolesData = [];
+      }
       
       // Convert to CustomRole format and filter out super admin
       const formattedRoles = rolesData
-        .filter((role: any) => role.id !== 'SUPER_ADMIN' && role.name !== 'Super Admin')
+        .filter((role: any) => role?.id && role.id !== 'SUPER_ADMIN' && role.name !== 'Super Admin')
         .map((role: any) => ({
-          id: role.id || role._id,
-          name: role.name,
-          description: role.description,
+          id: role._id || role.id, // Normalize ID field
+          name: role.displayName || role.name,
+          description: role.description || '',
           level: role.level || 50,
-          permissions: role.permissions || [],
-          isCustom: role.isCustom || false
+          permissions: (role.permissions || []).map((p: any) => ({
+            id: p.id || `PERM_${Math.random()}`,
+            name: p.name || p.module || '',
+            description: p.description || ''
+          })),
+          isCustom: role.isCustom !== false && role.isSystemRole !== true
         }));
 
       setRoles(formattedRoles);
@@ -162,7 +170,7 @@ export default function AdminRoles() {
         conditions: []
       }));
 
-      const result = await apiPost<{ data?: { _id?: string; id?: string } }>('/roles', {
+      const result = await apiPost<{ success?: boolean; data?: any; message?: string }>('/roles', {
         name: newRole.name,
         displayName: newRole.name,
         description: newRole.description,
@@ -171,8 +179,9 @@ export default function AdminRoles() {
         isCustom: true
       });
 
-      // FIX #5: Normalize response - handle both _id and id fields
-      const roleId = result?.data?._id || result?.data?.id || `CUSTOM_${Date.now()}`;
+      // FIX #5: Normalize response - handle both _id and id fields from nested data
+      const roleData = result?.data || result;
+      const roleId = roleData?._id || roleData?.id || `CUSTOM_${Date.now()}`;
 
       const createdRole: CustomRole = {
         id: roleId,
@@ -252,6 +261,12 @@ export default function AdminRoles() {
   };
 
   const handleDeleteRole = (roleId: string) => {
+    // Prevent deletion of system roles
+    const role = roles.find(r => r.id === roleId);
+    if (role && !role.isCustom) {
+      setError('Cannot delete system roles');
+      return;
+    }
     setDeletingRoleId(roleId);
     setShowDeleteConfirm(true);
   };
@@ -274,7 +289,14 @@ export default function AdminRoles() {
       toast.success('Role deleted successfully');
     } catch (err) {
       console.error('Error deleting role:', err);
-      setError(err instanceof Error ? err.message : 'Failed to delete role. Please try again.');
+      const errMsg = err instanceof Error ? err.message : 'Failed to delete role. Please try again.';
+      // Check if error is due to role being in use
+      if (errMsg.includes('Cannot delete role') || errMsg.includes('users are assigned')) {
+        setError(`Cannot delete this role: ${errMsg}`);
+      } else {
+        setError(errMsg);
+      }
+      setShowDeleteConfirm(false);
     }
   };
 
@@ -565,7 +587,7 @@ export default function AdminRoles() {
                 </div>
                 <div>
                   <h2 className="text-2xl font-semibold">{viewingRole.name}</h2>
-                  <p className="text-sm text-muted-foreground">Level {viewingRole.level}</p>
+                  <p className="text-sm text-muted-foreground">ID: {viewingRole.id} • Level {viewingRole.level}</p>
                 </div>
               </div>
               <Button variant="ghost" size="sm" onClick={() => setViewingRole(null)}>
@@ -577,14 +599,14 @@ export default function AdminRoles() {
               {/* Description */}
               <div>
                 <h3 className="font-semibold text-sm text-muted-foreground mb-2">Description</h3>
-                <p className="text-base">{viewingRole.description}</p>
+                <p className="text-base">{viewingRole.description || 'No description'}</p>
               </div>
 
               {/* Permissions */}
               <div>
-                <h3 className="font-semibold text-sm text-muted-foreground mb-3">Permissions ({viewingRole.permissions.length})</h3>
+                <h3 className="font-semibold text-sm text-muted-foreground mb-3">Permissions ({viewingRole.permissions?.length || 0})</h3>
                 <div className="space-y-2">
-                  {viewingRole.permissions.length > 0 ? (
+                  {viewingRole.permissions && viewingRole.permissions.length > 0 ? (
                     viewingRole.permissions.map((permission) => (
                       <div key={permission.id} className="flex items-start gap-2 p-3 bg-muted/50 rounded-lg">
                         <Shield className="w-4 h-4 mt-0.5 text-primary flex-shrink-0" />
@@ -618,16 +640,29 @@ export default function AdminRoles() {
                   Close
                 </Button>
                 {viewingRole.isCustom && (
-                  <Button 
-                    onClick={() => {
-                      handleEditRole(viewingRole);
-                      setViewingRole(null);
-                    }}
-                    className="rounded-xl"
-                  >
-                    <Edit className="w-4 h-4 mr-2" />
-                    Edit Role
-                  </Button>
+                  <>
+                    <Button 
+                      onClick={() => {
+                        handleEditRole(viewingRole);
+                        setViewingRole(null);
+                      }}
+                      className="rounded-xl"
+                    >
+                      <Edit className="w-4 h-4 mr-2" />
+                      Edit Role
+                    </Button>
+                    <Button 
+                      variant="destructive"
+                      onClick={() => {
+                        handleDeleteRole(viewingRole.id);
+                        setViewingRole(null);
+                      }}
+                      className="rounded-xl"
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Delete Role
+                    </Button>
+                  </>
                 )}
               </div>
             </div>

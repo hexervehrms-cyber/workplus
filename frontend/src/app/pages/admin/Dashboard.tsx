@@ -294,47 +294,71 @@ export default function AdminDashboard() {
   const refreshDashboardData = useCallback(async () => {
     const gen = nextGeneration();
     const params = new URLSearchParams();
-    params.append('filterType', filterType);
+    params.append('period', filterType);
     if (filterType === 'custom' && customStartDate && customEndDate) {
       params.append('startDate', customStartDate);
       params.append('endDate', customEndDate);
     }
 
-    console.log('⚡ [ADMIN-DASHBOARD] Fetching all data in parallel...');
+    console.log('⚡ [ADMIN-DASHBOARD] Loading KPI summary first...');
     
     await ensureAccessToken();
 
-    // Fetch all data in parallel using Promise.allSettled for resilience
-    const [statsResponse, quickStatsResponse, expenseTrendsResponse, leaveResponse, attendanceResponse, todayBreaksResponse] =
+    // PHASE 3 OPTIMIZATION: Fetch critical KPI summary first
+    try {
+      const summaryResponse = await apiGet<{ success?: boolean; data?: any }>(
+        `/dashboard/admin/summary?period=${filterType}`,
+        false
+      );
+
+      if (!mounted.current || isStale(gen)) return;
+
+      if (summaryResponse?.success !== false && summaryResponse?.data?.kpis) {
+        const kpis = summaryResponse.data.kpis;
+        setDashboardStats({
+          totalEmployees: kpis.totalEmployees || 0,
+          avgProductivity: kpis.avgProductivity || 0,
+          thisMonthExpenses: kpis.thisMonthExpense || 0,
+          thisMonthPayroll: kpis.thisMonthPayroll || 0,
+          totalCost: kpis.totalCost || 0,
+          loggedInEmployees: kpis.loggedInEmployees || 0,
+          onLeave: kpis.onLeave || 0,
+        });
+        setQuickStats({
+          totalEmployees: kpis.totalEmployees || 0,
+          presentToday: kpis.presentToday || 0,
+          attendanceRate: 0,
+          pendingLeaves: 0,
+          pendingExpenses: 0,
+          activeUsers: kpis.loggedInEmployees || 0,
+          onLeave: kpis.onLeave || 0,
+          onBreak: kpis.onBreak || 0,
+          totalSales: 0,
+          totalLoss: 0,
+          totalBonus: 0,
+          totalIncentive: 0,
+        });
+        setLastUpdate(Date.now());
+      }
+    } catch (error) {
+      console.warn('[ADMIN-DASHBOARD] KPI summary failed:', error);
+      // Use fallback zeros, don't block dashboard
+    }
+
+    // PHASE 5 OPTIMIZATION: Lazy-load tables/charts after KPIs with Promise.allSettled
+    console.log('⚡ [ADMIN-DASHBOARD] Loading tables/charts in parallel...');
+    
+    const [expenseTrendsResponse, leaveResponse, attendanceResponse] =
       await Promise.allSettled([
-        apiGet<{ success?: boolean; data?: DashboardStats }>(`/dashboard/stats?${params.toString()}`, false),
-        apiGet<{ success?: boolean; data?: QuickStats }>(
-          `/dashboard/quick-stats?${params.toString()}&_t=${Date.now()}`,
-          false
-        ),
         apiGet<{ success?: boolean; data?: ExpenseTrendRow[] }>('/dashboard/expense-trends', false),
         apiGet<{ success?: boolean; data?: unknown }>('/dashboard/recent-leave-requests', false),
         apiGet<{ success?: boolean; data?: AttendanceRow[] }>('/dashboard/todays-attendance', false),
-        apiGet<{ success?: boolean; data?: BreakRow[] }>(`/attendance/today-breaks?_t=${Date.now()}`, false),
       ]);
-
-    console.log('✅ [ADMIN-DASHBOARD] All requests completed');
 
     if (!mounted.current || isStale(gen)) return;
 
     const unwrap = <T,>(r: PromiseSettledResult<{ success?: boolean; data?: T; message?: string }>) =>
       r.status === 'fulfilled' ? r.value : null;
-
-    const statsPayload = unwrap(statsResponse);
-    const quickPayload = unwrap(quickStatsResponse);
-
-    if (statsPayload?.success !== false && statsPayload?.data) {
-      setDashboardStats(normalizeDashboardStats(statsPayload.data));
-    }
-    if (quickPayload?.success !== false && quickPayload?.data) {
-      setQuickStats(normalizeQuickStats(quickPayload.data));
-      setLastUpdate(Date.now());
-    }
 
     const trendsPayload = unwrap(expenseTrendsResponse);
     if (trendsPayload?.success !== false) {
@@ -351,42 +375,7 @@ export default function AdminDashboard() {
       setTodaysAttendance(extractApiList<AttendanceRow>(attPayload));
     }
 
-    const breaksPayload = unwrap(todayBreaksResponse);
-    if (breaksPayload?.success !== false) {
-      setTodayBreakLog(extractApiList<BreakRow>(breaksPayload));
-    }
-
-    const statsEmpCount = safeNum(statsPayload?.data?.totalEmployees, 0);
-    const quickEmpCount = safeNum(quickPayload?.data?.totalEmployees, 0);
-    if (statsEmpCount === 0 && quickEmpCount === 0) {
-      try {
-        const empRes = await apiGet<{
-          success?: boolean;
-          data?: unknown;
-          pagination?: { total?: number };
-        }>(appendOrgIdParam('/employees?simple=true&limit=1', user), false);
-        const fallbackTotal =
-          empRes?.pagination?.total ??
-          extractApiList(empRes).length;
-        if (fallbackTotal > 0) {
-          setDashboardStats((prev) => ({ ...prev, totalEmployees: fallbackTotal }));
-          setQuickStats((prev) => ({ ...prev, totalEmployees: fallbackTotal }));
-        }
-      } catch {
-        /* non-fatal */
-      }
-    }
-
-    // Log failures to console but don't show noisy toast messages
-    // Dashboard has fallback/empty states and renders gracefully without stats
-    if (statsResponse.status === 'rejected') {
-      console.warn('[ADMIN-DASHBOARD] Dashboard stats API failed - using fallback display');
-    } else if (statsPayload?.success === false) {
-      console.warn('[ADMIN-DASHBOARD] Dashboard stats returned error:', statsPayload.message);
-    }
-    if (quickStatsResponse.status === 'rejected') {
-      console.warn('[ADMIN-DASHBOARD] Quick stats API failed - using fallback display');
-    }
+    console.log('✅ [ADMIN-DASHBOARD] All data loaded');
   }, [filterType, customStartDate, customEndDate, mounted, nextGeneration, isStale, user]);
 
   const dashboardSocketDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -425,26 +414,22 @@ export default function AdminDashboard() {
   const refreshBreakSections = useCallback(async () => {
     try {
       await ensureAccessToken();
-      const [todayBreaksResponse, attendanceResponse] = await Promise.all([
-        apiGet<{ success?: boolean; data?: BreakRow[] }>(
-          `/attendance/today-breaks?_t=${Date.now()}`,
-          false
-        ),
-        apiGet<{ success?: boolean; data?: AttendanceRow[] }>(
-          '/dashboard/todays-attendance',
-          false
-        ),
-      ]);
+      
+      // PHASE 3 OPTIMIZATION: Removed ghost endpoint /attendance/today-breaks
+      // Break count now comes from /dashboard/admin/summary endpoint
+      // Only fetch the attendance table for lazy-load
+      const attendanceResponse = await apiGet<{ success?: boolean; data?: AttendanceRow[] }>(
+        '/dashboard/todays-attendance',
+        false
+      );
+      
       if (!mounted.current) return;
-      if (todayBreaksResponse?.success !== false) {
-        setTodayBreakLog(extractApiList<BreakRow>(todayBreaksResponse));
-      }
       if (attendanceResponse?.success !== false) {
         setTodaysAttendance(extractApiList<AttendanceRow>(attendanceResponse));
       }
       setLastUpdate(Date.now());
     } catch (error) {
-      console.error('Error refreshing break sections:', error);
+      console.error('Error refreshing attendance section:', error);
     }
   }, [mounted]);
 

@@ -27,6 +27,8 @@ export default function AttendanceCalendar() {
   const [loading, setLoading] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<string>('all');
   const [employees, setEmployees] = useState<any[]>([]);
+  const [detailsPage, setDetailsPage] = useState(1);
+  const [detailsPageSize, setDetailsPageSize] = useState(10);
 
   useEffect(() => {
     loadAttendanceData();
@@ -81,10 +83,12 @@ export default function AttendanceCalendar() {
 
   const previousMonth = () => {
     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1));
+    setDetailsPage(1);
   };
 
   const nextMonth = () => {
     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1));
+    setDetailsPage(1);
   };
 
   const getAttendanceForDate = (day: number) => {
@@ -138,7 +142,10 @@ export default function AttendanceCalendar() {
       <div className="flex gap-4">
         <div className="flex-1">
           <label className="text-sm font-medium">Select Employee</label>
-          <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
+          <Select value={selectedEmployee} onValueChange={(val) => {
+            setSelectedEmployee(val);
+            setDetailsPage(1);
+          }}>
             <SelectTrigger className="mt-2 rounded-xl">
               <SelectValue placeholder="Select employee" />
             </SelectTrigger>
@@ -216,7 +223,24 @@ export default function AttendanceCalendar() {
       {/* Attendance Details Table */}
       <Card className="rounded-xl">
         <div className="p-6">
-          <h3 className="font-semibold mb-4">Attendance Details for {monthName}</h3>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-semibold">Attendance Details for {monthName}</h3>
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-muted-foreground">Rows:</label>
+              <select
+                value={detailsPageSize}
+                onChange={(e) => {
+                  setDetailsPageSize(Number(e.target.value));
+                  setDetailsPage(1);
+                }}
+                className="px-2 py-1 border rounded-lg bg-background text-sm"
+              >
+                <option value={10}>10</option>
+                <option value={15}>15</option>
+                <option value={25}>25</option>
+              </select>
+            </div>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -242,32 +266,80 @@ export default function AttendanceCalendar() {
                       No attendance records for this month
                     </td>
                   </tr>
-                ) : (
-                  attendance
-                    .filter(record => {
-                      if (selectedEmployee === 'all') return true;
-                      return record.employeeName === selectedEmployee;
-                    })
-                    .map((record) => (
-                    <tr key={record._id} className="border-b hover:bg-accent/50">
-                      <td className="p-4">
-                        <p className="font-medium">{record.employeeName}</p>
-                      </td>
-                      <td className="p-4">{new Date(record.date).toLocaleDateString()}</td>
-                      <td className="p-4">{record.checkIn ? new Date(record.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
-                      <td className="p-4">{record.checkOut ? new Date(record.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
-                      <td className="p-4">{record.hoursWorked ? record.hoursWorked.toFixed(1) : '0.0'}h</td>
-                      <td className="p-4">
-                        <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(record.status)}`}>
-                          {safeTitleCase(record.status)}
-                        </span>
-                      </td>
-                    </tr>
-                  ))
-                )}
+                ) : (() => {
+                  const filteredRecords = attendance.filter(record => {
+                    if (selectedEmployee === 'all') return true;
+                    return record.employeeName === selectedEmployee;
+                  });
+                  
+                  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / detailsPageSize));
+                  const paginatedRecords = filteredRecords.slice(
+                    (detailsPage - 1) * detailsPageSize,
+                    detailsPage * detailsPageSize
+                  );
+                  
+                  return (
+                    <>
+                      {paginatedRecords.map((record) => (
+                        <tr key={record._id} className="border-b hover:bg-accent/50">
+                          <td className="p-4">
+                            <p className="font-medium">{record.employeeName}</p>
+                          </td>
+                          <td className="p-4">{new Date(record.date).toLocaleDateString()}</td>
+                          <td className="p-4">{record.checkIn ? new Date(record.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                          <td className="p-4">{record.checkOut ? new Date(record.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                          <td className="p-4">{record.hoursWorked ? record.hoursWorked.toFixed(1) : '0.0'}h</td>
+                          <td className="p-4">
+                            <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(record.status)}`}>
+                              {safeTitleCase(record.status)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </>
+                  );
+                })()}
               </tbody>
             </table>
           </div>
+          {(() => {
+            const filteredRecords = attendance.filter(record => {
+              if (selectedEmployee === 'all') return true;
+              return record.employeeName === selectedEmployee;
+            });
+            const totalPages = Math.max(1, Math.ceil(filteredRecords.length / detailsPageSize));
+            return filteredRecords.length > 0 ? (
+              <div className="flex items-center justify-between border-t pt-3 mt-3">
+                <p className="text-sm text-muted-foreground">
+                  Page {detailsPage} of {totalPages} ({filteredRecords.length} total)
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={detailsPage <= 1}
+                    onClick={() => setDetailsPage(prev => Math.max(1, prev - 1))}
+                    className="rounded-lg"
+                  >
+                    <ChevronLeft className="w-4 h-4 mr-1" />
+                    Previous
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={detailsPage >= totalPages}
+                    onClick={() => setDetailsPage(prev => Math.min(totalPages, prev + 1))}
+                    className="rounded-lg"
+                  >
+                    Next
+                    <ChevronRight className="w-4 h-4 ml-1" />
+                  </Button>
+                </div>
+              </div>
+            ) : null;
+          })()}
         </div>
       </Card>
     </div>

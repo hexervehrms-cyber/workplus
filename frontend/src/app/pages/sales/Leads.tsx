@@ -29,12 +29,13 @@ const Leads = () => {
     try {
       setLoading(true);
       const path = filterStatus
-        ? `sales/leads/status/${filterStatus}`
-        : 'sales/leads';
+        ? `/api/sales/leads/status/${filterStatus}`
+        : '/api/sales/leads';
       const res = await salesApi.get<{ data?: unknown[] }>(path);
-      setLeads(res?.data || []);
+      setLeads(res?.data?.data ?? res?.data ?? []);
     } catch (error) {
       console.error('Error fetching leads:', error);
+      setLeads([]);
     } finally {
       setLoading(false);
     }
@@ -44,9 +45,9 @@ const Leads = () => {
     e.preventDefault();
     try {
       if (editingLead) {
-        await salesApi.patch(`sales/leads/${editingLead._id}`, formData);
+        await salesApi.patch(`/api/sales/leads/${editingLead._id}`, formData);
       } else {
-        await salesApi.post('sales/leads', formData);
+        await salesApi.post('/api/sales/leads', formData);
       }
       fetchLeads();
       setShowModal(false);
@@ -75,7 +76,7 @@ const Leads = () => {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this lead?')) {
       try {
-        await salesApi.delete(`sales/leads/${id}`);
+        await salesApi.delete(`/api/sales/leads/${id}`);
         fetchLeads();
       } catch (error) {
         console.error('Error deleting lead:', error);

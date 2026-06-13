@@ -1,6 +1,6 @@
 /**
  * Login Page - Production Ready
- * Features: Secure authentication, error handling, loading states
+ * Features: Secure authentication, error handling, loading states, custom domain support
  */
 
 import { useState, useEffect } from 'react';
@@ -11,12 +11,30 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '../components/ui/card';
 import { Alert, AlertDescription } from '../components/ui/alert';
-import { Briefcase, Loader2, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { Briefcase, Loader2, AlertCircle, Eye, EyeOff, Lock } from 'lucide-react';
 import { ApiError } from '../utils/api';
 import { isPathAllowedForRole } from '../utils/roleRouteGuard';
 
 const REMEMBER_EMAIL_KEY = 'workplus_login_email';
 const LOGIN_ATTEMPTS_KEY = 'workplus_login_attempts_ts';
+
+// Detect if user is on a custom domain
+function getCustomDomainIfSet(): string | null {
+  try {
+    const hostname = window.location.hostname.toLowerCase();
+    const platformDomains = ['localhost', '127.0.0.1', 'workplus.hexerve.online', 'workplus.vercel.app', 'vercel.app'];
+    
+    // If hostname is a platform domain or IP, no custom domain
+    if (platformDomains.some(domain => hostname === domain || hostname.endsWith(domain))) {
+      return null;
+    }
+    
+    // If it's not a recognized platform domain, it might be custom
+    return hostname;
+  } catch {
+    return null;
+  }
+}
 
 function recordLoginAttempt(): { ok: boolean; retryAfterMs?: number } {
   const now = Date.now();
@@ -45,11 +63,18 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  const [customDomain, setCustomDomain] = useState<string | null>(null);
   
   const navigate = useNavigate();
   const location = useLocation();
   const { login, user, loading: authLoading } = useAuth();
   const roleRedirect = useRoleRedirect();
+
+  // Detect custom domain on mount
+  useEffect(() => {
+    const domain = getCustomDomainIfSet();
+    setCustomDomain(domain);
+  }, []);
 
   // Redirect if already logged in
   useEffect(() => {
@@ -129,7 +154,20 @@ export default function Login() {
           /* ignore */
         }
       } else {
-        setError(result.error || 'Invalid email or password');
+        const errorMsg = result.error || 'Invalid email or password';
+        if (customDomain) {
+          if (result.error?.includes('DOMAIN_NOT_VERIFIED')) {
+            setError('This custom domain is not verified yet. Please use the default WorkPlus login.');
+          } else if (result.error?.includes('DOMAIN_NOT_RECOGNIZED')) {
+            setError('This custom domain is not recognized. Please use the default WorkPlus login.');
+          } else if (result.error?.includes('ORG_MISMATCH')) {
+            setError('Your account does not belong to this organization. Please use the default login link.');
+          } else {
+            setError(errorMsg);
+          }
+        } else {
+          setError(errorMsg);
+        }
         setPassword('');
         requestAnimationFrame(() => document.getElementById('password')?.focus());
         setLoading(false);
@@ -138,7 +176,20 @@ export default function Login() {
       console.error('Login submission error:', err);
 
       if (err instanceof ApiError) {
-        setError(err.getUserMessage());
+        const msg = err.getUserMessage();
+        if (customDomain) {
+          if (msg.includes('DOMAIN_NOT_VERIFIED')) {
+            setError('This custom domain is not verified yet. Please use the default WorkPlus login.');
+          } else if (msg.includes('DOMAIN_NOT_RECOGNIZED')) {
+            setError('This custom domain is not recognized. Please use the default WorkPlus login.');
+          } else if (msg.includes('ORG_MISMATCH')) {
+            setError('Your account does not belong to this organization. Please use the default login link.');
+          } else {
+            setError(msg);
+          }
+        } else {
+          setError(msg);
+        }
       } else {
         setError('An unexpected error occurred. Please try again.');
       }
@@ -184,9 +235,19 @@ export default function Login() {
           <div>
             <CardTitle className="text-2xl font-bold">WorkPlus Pro</CardTitle>
             <CardDescription className="text-base mt-1">
-              Sign in to your HRMS dashboard
+              {customDomain ? (
+                <>Sign in to <span className="font-semibold text-foreground">{customDomain}</span></>
+              ) : (
+                'Sign in to your HRMS dashboard'
+              )}
             </CardDescription>
           </div>
+          {customDomain && (
+            <div className="text-xs text-muted-foreground flex items-center justify-center gap-1 pt-2">
+              <Lock className="w-3 h-3" />
+              Organization-specific login
+            </div>
+          )}
         </CardHeader>
         
         <CardContent className="pb-6">

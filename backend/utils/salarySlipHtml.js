@@ -19,6 +19,29 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
+function isMongoObjectIdLike(value) {
+  return typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
+}
+
+function getDisplayEmployeeCode(employee = {}, slip = {}) {
+  const code = 
+    employee?.employeeCode ||
+    employee?.employeeId ||
+    employee?.empId ||
+    employee?.nipId ||
+    slip?.employeeCode ||
+    slip?.employeeIdCode ||
+    slip?.employeeDisplayId ||
+    '';
+  
+  // Do not display MongoDB ObjectId-like values
+  if (code && isMongoObjectIdLike(String(code))) {
+    return 'N/A';
+  }
+  
+  return code || 'N/A';
+}
+
 function formatMoney(amount, currency = 'INR') {
   const n = Number(amount) || 0;
   const symbol = currency === 'IDR' ? 'Rp.' : '₹';
@@ -100,7 +123,7 @@ export function buildSalarySlipHtml({ slip, employee = {}, organization = {} }) 
     `${employee.firstName || ''} ${employee.lastName || ''}`.trim() ||
     slip.employeeName ||
     'Employee';
-  const empCode = employee.employeeCode || slip.employeeCode || 'N/A';
+  const empCode = getDisplayEmployeeCode(employee, slip);
   const department = employee.department || slip.department || 'N/A';
   const designation = employee.designation || slip.designation || 'N/A';
   const joinDate = employee.joiningDate
@@ -132,7 +155,7 @@ export function buildSalarySlipHtml({ slip, employee = {}, organization = {} }) 
     console.warn('Hexerve logo file not found at', logoPath, '- using placeholder');
     logoUrl = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="60"%3E%3Crect fill="%23f0f0f0" width="200" height="60"/%3E%3Ctext x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="12" fill="%23999"%3EHexerve%3C/text%3E%3C/svg%3E';
   }
-  const logoHtml = `<img src="${escapeHtml(logoUrl)}" alt="Hexerve Logo" class="company-logo-img" />`;
+  const logoHtml = `<div class="logo-container"><img src="${escapeHtml(logoUrl)}" alt="Hexerve Logo" class="company-logo-img" /></div>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -159,7 +182,9 @@ export function buildSalarySlipHtml({ slip, employee = {}, organization = {} }) 
         radial-gradient(circle at 80% 70%, rgba(0,0,0,0.02) 0%, transparent 50%);
       padding: 36px 40px 0;
       box-shadow: 0 4px 24px rgba(0,0,0,0.12);
-      overflow: hidden;
+      overflow: visible;
+      width: 100%;
+      box-sizing: border-box;
     }
     .corner-tl, .corner-tr {
       position: absolute;
@@ -190,25 +215,39 @@ export function buildSalarySlipHtml({ slip, employee = {}, organization = {} }) 
     .header-row {
       display: grid;
       grid-template-columns: 1fr auto 1fr;
-      align-items: start;
-      gap: 16px;
+      align-items: center;
+      gap: 24px;
       padding-top: 8px;
-      margin-bottom: 20px;
+      margin-bottom: 24px;
+      min-width: 0;
     }
     .company-block {
       display: flex;
-      align-items: flex-start;
-      gap: 14px;
+      align-items: center;
+      gap: 16px;
       z-index: 1;
+      min-width: 0;
+    }
+    .logo-container {
+      width: 160px;
+      height: 80px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      flex-shrink: 0;
     }
     .company-logo-img {
-      width: 160px;
-      height: auto;
+      width: 100%;
+      height: 100%;
       object-fit: contain;
-      flex-shrink: 0;
+      object-position: left center;
     }
     .company-info {
       flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 80px;
     }
     .company-name {
       font-size: 20px;
@@ -228,13 +267,17 @@ export function buildSalarySlipHtml({ slip, employee = {}, organization = {} }) 
       font-weight: 800;
       letter-spacing: 0.02em;
       color: #1a5f3f;
-      align-self: center;
       z-index: 1;
+      line-height: 1.2;
     }
     .slip-meta {
       text-align: right;
       font-size: 12px;
       z-index: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 80px;
     }
     .slip-meta-row {
       display: flex;
@@ -422,4 +465,4 @@ export function buildSalarySlipHtml({ slip, employee = {}, organization = {} }) 
 </html>`;
 }
 
-export default { buildSalarySlipHtml, formatMoney, escapeHtml };
+export default { buildSalarySlipHtml, formatMoney, escapeHtml, isMongoObjectIdLike, getDisplayEmployeeCode };

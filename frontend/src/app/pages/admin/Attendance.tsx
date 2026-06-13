@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { ensureAccessToken } from '../../utils/sessionAuth';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { Clock, Search, Filter, Calendar, CheckCircle, AlertCircle, Activity, Coffee, Users, LogIn, LogOut, Upload, Download, FileSpreadsheet, Eye, Loader2 } from 'lucide-react';
+import { Clock, Search, Filter, Calendar, CheckCircle, AlertCircle, Activity, Coffee, Users, LogIn, LogOut, Upload, Download, FileSpreadsheet, Eye, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -77,13 +77,14 @@ export default function AttendanceAdmin() {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [attendancePage, setAttendancePage] = useState(1);
+  const [attendancePageSize, setAttendancePageSize] = useState(10);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [activityLogTotal, setActivityLogTotal] = useState(0);
   const [activityLogsHasMore, setActivityLogsHasMore] = useState(false);
   const [activityLogsSkip, setActivityLogsSkip] = useState(0);
   const [loading, setLoading] = useState(true);
   const [logsLoading, setLogsLoading] = useState(true);
-  const [activeTab] = useState<'activity'>('activity');
   const [importLoading, setImportLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [stats, setStats] = useState({
@@ -92,7 +93,6 @@ export default function AttendanceAdmin() {
     absent: 0,
     rate: 0
   });
-  const [exportPeriod, setExportPeriod] = useState<'weekly' | 'monthly' | 'yearly'>('monthly');
   const [exportStartDate, setExportStartDate] = useState<string>('');
   const [exportEndDate, setExportEndDate] = useState<string>('');
 
@@ -439,18 +439,19 @@ export default function AttendanceAdmin() {
     : activityLogs;
 
   // Filter attendance data
-  const applyFilter = () => {
+  const applyFilter = useCallback(() => {
+    setAttendancePage(1);
     if (filterStatus === 'all') {
       setFilteredAttendance(attendance);
     } else {
       setFilteredAttendance(attendance.filter(record => record.status === filterStatus));
     }
-  };
+  }, [filterStatus, attendance]);
 
   // Update filtered attendance when attendance or filter status changes
   useEffect(() => {
     applyFilter();
-  }, [attendance, filterStatus]);
+  }, [applyFilter]);
 
   const formatTime = (value?: string | Date | null) => {
     if (!value) return '—';
@@ -821,8 +822,13 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
                     Loading attendance…
                   </td>
                 </tr>
-              ) : filteredAttendance.length > 0 ? (
-                filteredAttendance.map((record) => (
+              ) : filteredAttendance.length > 0 ? (() => {
+                const totalPages = Math.max(1, Math.ceil(filteredAttendance.length / attendancePageSize));
+                const paginatedAttendance = filteredAttendance.slice(
+                  (attendancePage - 1) * attendancePageSize,
+                  attendancePage * attendancePageSize
+                );
+                return paginatedAttendance.map((record) => (
                   <tr key={record._id} className="border-b hover:bg-accent/50">
                     <td className="p-4">
                       <p className="font-medium text-sm">{record.employeeName}</p>
@@ -852,8 +858,9 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
                       </Button>
                     </td>
                   </tr>
-                ))
-              ) : (
+                ));
+              })()
+              : (
                 <tr>
                   <td colSpan={7} className="p-8 text-center text-muted-foreground">
                     No attendance records for today.
@@ -863,6 +870,55 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
             </tbody>
           </table>
         </div>
+        {filteredAttendance.length > 0 && (() => {
+          const totalPages = Math.max(1, Math.ceil(filteredAttendance.length / attendancePageSize));
+          return (
+            <div className="p-4 border-t flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium text-muted-foreground">Rows:</label>
+                <select
+                  value={attendancePageSize}
+                  onChange={(e) => {
+                    setAttendancePageSize(Number(e.target.value));
+                    setAttendancePage(1);
+                  }}
+                  className="px-2 py-1 border rounded-lg bg-background text-sm"
+                >
+                  <option value={10}>10</option>
+                  <option value={15}>15</option>
+                  <option value={25}>25</option>
+                </select>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Page {attendancePage} of {totalPages} ({filteredAttendance.length} total)
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={attendancePage <= 1}
+                  onClick={() => setAttendancePage(prev => Math.max(1, prev - 1))}
+                  className="rounded-lg"
+                >
+                  <ChevronLeft className="w-4 h-4 mr-1" />
+                  Previous
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={attendancePage >= totalPages}
+                  onClick={() => setAttendancePage(prev => Math.min(totalPages, prev + 1))}
+                  className="rounded-lg"
+                >
+                  Next
+                  <ChevronRight className="w-4 h-4 ml-1" />
+                </Button>
+              </div>
+            </div>
+          );
+        })()}
       </Card>
 
       {lateEmployees.length > 0 && (

@@ -10,9 +10,13 @@ import {
   apiDelete,
   apiPost,
   buildFileUrl,
-  fetchReceiptObjectUrl,
   getBearerToken,
 } from '../../utils/apiHelper';
+import {
+  openExpenseReceiptInDialog,
+  downloadExpenseReceipt,
+  receiptFilenameFromPath,
+} from '../../utils/expenseReceipt';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -36,6 +40,15 @@ interface Expense {
     name: string;
   };
   receipt?: string;
+}
+
+// Shared receipt helper functions
+function hasExpenseReceipt(expense: Expense): boolean {
+  return Boolean(expense?.receipt?.trim());
+}
+
+function getExpenseReceiptValue(expense: Expense): string {
+  return expense?.receipt?.trim() || '';
 }
 
 const expenseCategories = [
@@ -103,10 +116,10 @@ export default function ExpensesAdmin() {
   const [isActionDialogOpen, setIsActionDialogOpen] = useState(false);
   const [isNewExpenseDialogOpen, setIsNewExpenseDialogOpen] = useState(false);
   const [isViewReceiptDialogOpen, setIsViewReceiptDialogOpen] = useState(false);
-  const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
-  const [viewingReceiptPath, setViewingReceiptPath] = useState<string | null>(null);
+  const [receiptPreviewUrl, setReceiptPreviewUrl] = useState<string | null>(null);
+  const [receiptPreviewType, setReceiptPreviewType] = useState<string>('');
   const [receiptPreviewLoading, setReceiptPreviewLoading] = useState(false);
-  const receiptBlobUrlRef = useRef<string | null>(null);
+  const [receiptPreviewError, setReceiptPreviewError] = useState<string>('');
   const [actionType, setActionType] = useState<'edit' | 'approve' | 'reject' | 'delete'>('edit');
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -154,13 +167,6 @@ export default function ExpensesAdmin() {
 
   const normalizedSearch = searchTerm.trim().toLowerCase();
 
-  const receiptPreviewKind = useMemo(() => {
-    const path = viewingReceiptPath || '';
-    if (/\.(jpg|jpeg|png|gif|webp)$/i.test(path)) return 'image';
-    if (/\.pdf$/i.test(path)) return 'pdf';
-    return 'other';
-  }, [viewingReceiptPath]);
-
   const filteredExpenses = useMemo(() => {
     return expenses.filter((expense) => {
       const categoryMatches = selectedCategory === 'all' || expense.category === selectedCategory;
@@ -206,38 +212,68 @@ export default function ExpensesAdmin() {
     return category ? category.color : 'bg-gray-100 text-gray-800';
   };
 
-  const revokeReceiptBlob = () => {
-    if (receiptBlobUrlRef.current) {
-      URL.revokeObjectURL(receiptBlobUrlRef.current);
-      receiptBlobUrlRef.current = null;
+  const revokeReceiptBlob = useCallback(() => {
+    if (receiptPreviewUrl) {
+      URL.revokeObjectURL(receiptPreviewUrl);
+      setReceiptPreviewUrl(null);
     }
-  };
+  }, [receiptPreviewUrl]);
 
-  // Handle document download
-  const handleDownloadReceipt = async (receiptPath: string, expenseTitle: string) => {
-    if (!receiptPath) {
-      toast.error('No receipt available');
+  // Handle View Receipt action
+  const handleViewReceipt = useCallback(async (expense: Expense) => {
+    if (!hasExpenseReceipt(expense)) {
+      toast.error('No receipt uploaded for this expense');
       return;
     }
 
     try {
-      const objectUrl = await fetchReceiptObjectUrl(receiptPath);
-      const ext = receiptPath.includes('.') ? receiptPath.substring(receiptPath.lastIndexOf('.')) : '';
-      const link = document.createElement('a');
-      link.href = objectUrl;
-      link.download = `${expenseTitle}-receipt${ext}`;
-      link.target = '_blank';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(objectUrl);
-      toast.success('Receipt download started');
+      setReceiptPreviewLoading(true);
+      setReceiptPreviewError('');
+      revokeReceiptBlob();
+      
+      const receiptPath = getExpenseReceiptValue(expense);
+      const objectUrl = await openExpenseReceiptInDialog(receiptPath);
+      setReceiptPreviewUrl(objectUrl);
+      
+      // Detect receipt type from filename
+      const filename = receiptFilenameFromPath(receiptPath) || '';
+      if (filename.toLowerCase().endsWith('.pdf')) {
+        setReceiptPreviewType('application/pdf');
+      } else if (/\.(jpg|jpeg|png|gif|webp)$/i.test(filename)) {
+        setReceiptPreviewType('image');
+      } else {
+        setReceiptPreviewType('other');
+      }
+      
+      setIsViewReceiptDialogOpen(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load receipt';
+      setReceiptPreviewError(message);
+      toast.error(message);
+      setReceiptPreviewUrl(null);
+    } finally {
+      setReceiptPreviewLoading(false);
+    }
+  }, [revokeReceiptBlob]);
+
+  // Handle Download Receipt action
+  const handleDownloadReceipt = useCallback(async (expense: Expense) => {
+    if (!hasExpenseReceipt(expense)) {
+      toast.error('No receipt uploaded for this expense');
+      return;
+    }
+
+    try {
+      const receiptPath = getExpenseReceiptValue(expense);
+      const filename = receiptFilenameFromPath(receiptPath) || expense.title || 'receipt';
+      await downloadExpenseReceipt(receiptPath, filename);
+      toast.success('Receipt downloaded');
     } catch (error) {
       console.error('Error downloading receipt:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to download receipt';
       toast.error(errorMessage);
     }
-  };
+  }, []);
 
   // Handle edit action
   const handleEdit = (expense: Expense) => {
@@ -275,41 +311,7 @@ export default function ExpensesAdmin() {
     setIsActionDialogOpen(true);
   };
 
-  const handleViewReceipt = async (receiptPath: string) => {
-    if (!receiptPath) {
-      toast.error('No receipt available');
-      return;
-    }
 
-    revokeReceiptBlob();
-    setViewingReceiptPath(receiptPath);
-    setViewingReceipt(null);
-    setIsViewReceiptDialogOpen(true);
-    setReceiptPreviewLoading(true);
-
-    try {
-      const objectUrl = await fetchReceiptObjectUrl(receiptPath);
-      receiptBlobUrlRef.current = objectUrl;
-      setViewingReceipt(objectUrl);
-    } catch (error) {
-      console.error('Error loading receipt preview:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Could not load receipt preview';
-      toast.error(errorMessage);
-      setViewingReceipt(null); // Don't fallback, show error instead
-    } finally {
-      setReceiptPreviewLoading(false);
-    }
-  };
-
-  const closeReceiptDialog = (open: boolean) => {
-    setIsViewReceiptDialogOpen(open);
-    if (!open) {
-      revokeReceiptBlob();
-      setViewingReceipt(null);
-      setViewingReceiptPath(null);
-      setReceiptPreviewLoading(false);
-    }
-  };
 
   // Handle checkbox toggle
   const handleCheckboxChange = (expenseId: string) => {
@@ -1150,9 +1152,9 @@ export default function ExpensesAdmin() {
                             variant="outline"
                             size="sm"
                             className="rounded-lg"
-                            onClick={() => void handleViewReceipt(expense.receipt || '')}
-                            disabled={actionLoading || !expense.receipt}
-                            title={expense.receipt ? 'View receipt' : 'No receipt uploaded'}
+                            onClick={() => handleViewReceipt(expense)}
+                            disabled={actionLoading || !hasExpenseReceipt(expense)}
+                            title={hasExpenseReceipt(expense) ? 'View receipt' : 'No receipt uploaded'}
                           >
                             <Eye className="w-4 h-4 mr-1" />
                             View
@@ -1160,9 +1162,9 @@ export default function ExpensesAdmin() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => void handleDownloadReceipt(expense.receipt || '', expense.title || 'receipt')}
-                            disabled={actionLoading || !expense.receipt}
-                            title={expense.receipt ? 'Download receipt' : 'No receipt uploaded'}
+                            onClick={() => handleDownloadReceipt(expense)}
+                            disabled={actionLoading || !hasExpenseReceipt(expense)}
+                            title={hasExpenseReceipt(expense) ? 'Download receipt' : 'No receipt uploaded'}
                           >
                             <Download className="w-4 h-4" />
                           </Button>
@@ -1394,109 +1396,72 @@ export default function ExpensesAdmin() {
       </Dialog>
 
       {/* View Receipt Dialog */}
-      <Dialog open={isViewReceiptDialogOpen} onOpenChange={closeReceiptDialog}>
-        <DialogContent className="max-w-4xl max-h-[90vh]">
+      <Dialog open={isViewReceiptDialogOpen} onOpenChange={(open) => {
+        setIsViewReceiptDialogOpen(open);
+        if (!open) {
+          revokeReceiptBlob();
+          setReceiptPreviewError('');
+        }
+      }}>
+        <DialogContent className="max-w-5xl w-[95vw] max-h-[92vh] overflow-hidden">
           <DialogHeader>
             <DialogTitle>View Receipt</DialogTitle>
-            <DialogDescription>
-              Receipt preview
-            </DialogDescription>
+            <DialogDescription>Receipt preview</DialogDescription>
           </DialogHeader>
-          <div className="overflow-auto max-h-[70vh]">
+          <div className="rounded-xl border bg-muted/20 overflow-hidden h-[75vh] flex items-center justify-center">
             {receiptPreviewLoading ? (
-              <div className="flex items-center justify-center py-16 text-muted-foreground">
-                <Loader className="w-6 h-6 animate-spin mr-2" />
-                Loading receipt…
+              <div className="p-10 text-center">
+                <Loader className="w-6 h-6 animate-spin mr-2 inline" />
+                <p>Loading receipt...</p>
               </div>
-            ) : viewingReceipt && viewingReceipt.trim() ? (
-              <div className="flex items-center justify-center bg-gray-50 rounded-lg p-4">
-                {receiptPreviewKind === 'image' ? (
-                  <div className="w-full">
-                    <img 
-                      src={viewingReceipt} 
-                      alt="Receipt" 
-                      className="max-w-full h-auto rounded-lg shadow-lg mx-auto"
-                      onLoad={() => console.log('Image loaded successfully:', viewingReceipt)}
-                      onError={(e) => {
-                        console.error('Image load error:', viewingReceipt);
-                        const errorDiv = document.createElement('div');
-                        errorDiv.className = 'text-center py-8';
-                        errorDiv.innerHTML = `
-                          <svg class="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                          </svg>
-                          <p class="text-gray-600 mb-2 font-medium">Receipt file not found</p>
-                          <p class="text-sm text-gray-500 mb-4">The receipt file may have been moved or deleted</p>
-                          <p class="text-xs text-gray-400 font-mono break-all px-4">${viewingReceipt}</p>
-                        `;
-                        e.currentTarget.replaceWith(errorDiv);
-                      }}
-                    />
-                  </div>
-                ) : receiptPreviewKind === 'pdf' ? (
-                  <div className="w-full">
-                    <iframe 
-                      src={viewingReceipt} 
-                      className="w-full h-[600px] rounded-lg shadow-lg"
-                      title="Receipt PDF"
-                      onError={(e) => {
-                        console.error('PDF load error:', viewingReceipt);
-                        e.currentTarget.style.display = 'none';
-                        const parent = e.currentTarget.parentElement;
-                        if (parent) {
-                          const errorDiv = document.createElement('div');
-                          errorDiv.className = 'text-center py-8';
-                          errorDiv.innerHTML = `
-                            <svg class="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                            </svg>
-                            <p class="text-gray-600 mb-2 font-medium">PDF file not found</p>
-                            <p class="text-sm text-gray-500 mb-4">The receipt file may have been moved or deleted</p>
-                            <p class="text-xs text-gray-400 font-mono break-all px-4">${viewingReceipt}</p>
-                            <button onclick="window.open('${viewingReceipt}', '_blank')" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                              Try Opening in New Tab
-                            </button>
-                          `;
-                          parent.appendChild(errorDiv);
-                        }
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <div className="text-center py-8">
-                    <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
-                    <p className="text-muted-foreground mb-4">Preview not available for this file type</p>
-                    <p className="text-xs text-gray-500 mb-4 break-all">{viewingReceipt}</p>
-                    <Button 
-                      onClick={() => window.open(viewingReceipt, '_blank')}
-                      className="rounded-xl"
-                    >
-                      <Download className="w-4 h-4 mr-2" />
-                      Open in New Tab
-                    </Button>
-                  </div>
-                )}
+            ) : receiptPreviewError ? (
+              <div className="p-10 text-center text-red-600">
+                <p className="font-semibold mb-2">{receiptPreviewError}</p>
+              </div>
+            ) : receiptPreviewUrl && receiptPreviewType === 'image' ? (
+              <img
+                src={receiptPreviewUrl}
+                alt="Expense receipt"
+                className="max-w-full max-h-full object-contain"
+              />
+            ) : receiptPreviewUrl && receiptPreviewType === 'application/pdf' ? (
+              <iframe
+                src={receiptPreviewUrl}
+                title="Expense receipt PDF"
+                className="w-full h-full border-0"
+              />
+            ) : receiptPreviewUrl ? (
+              <div className="p-10 text-center space-y-3">
+                <p>Preview not available for this file type.</p>
               </div>
             ) : (
-              <div className="text-center py-8">
-                <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
-                <p className="text-muted-foreground mb-2">No receipt available</p>
-                <p className="text-sm text-gray-500">This expense does not have a receipt attached. Please upload a receipt to view it here.</p>
-              </div>
+              <div className="p-10 text-center">No receipt available</div>
             )}
           </div>
           <div className="flex gap-2 pt-4">
             <Button 
+              type="button" 
               variant="outline" 
-              className="flex-1 rounded-xl" 
-              onClick={() => closeReceiptDialog(false)}
+              onClick={() => setIsViewReceiptDialogOpen(false)}
+              className="flex-1 rounded-xl"
             >
               Close
             </Button>
-            {viewingReceiptPath && (
+            {receiptPreviewUrl && (
               <Button 
-                className="flex-1 rounded-xl" 
-                onClick={() => void handleDownloadReceipt(viewingReceiptPath, 'receipt')}
+                type="button"
+                className="flex-1 rounded-xl"
+                onClick={() => {
+                  if (receiptPreviewUrl) {
+                    const link = document.createElement('a');
+                    link.href = receiptPreviewUrl;
+                    link.download = 'receipt';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    toast.success('Receipt downloaded');
+                  }
+                }}
               >
                 <Download className="w-4 h-4 mr-2" />
                 Download

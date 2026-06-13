@@ -105,6 +105,8 @@ export default function Attendance() {
   const [historyPage, setHistoryPage] = useState(1);
   const [historyTotalPages, setHistoryTotalPages] = useState(1);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [activityPage, setActivityPage] = useState(1);
+  const PAGE_SIZE = 10;
 
   const fetchEmployeeActivityLogs = useCallback(async () => {
     try {
@@ -207,7 +209,7 @@ export default function Attendance() {
     const uid = user?.id ? String(user.id) : null;
 
     try {
-      const data = await apiGet<{ data?: unknown }>('attendance/today', false);
+      const data = await apiGet<{ data?: { attendance?: any; liveStatus?: any } }>('attendance/today', false);
       const payload = data?.data;
       setTodayData(payload);
 
@@ -304,20 +306,20 @@ export default function Attendance() {
 
   // Fetch attendance history (paginated)
   const fetchAttendanceHistoryPage = useCallback(
-    async (page: number, append: boolean) => {
+    async (page: number) => {
       try {
-        if (append) setHistoryLoadingMore(true);
-        const data = await apiGet<{ data?: AttendanceRecord[] }>(
+        setHistoryLoadingMore(true);
+        const data = await apiGet<{ data?: AttendanceRecord[]; pagination?: { pages?: number } }>(
           `attendance?limit=${HISTORY_PAGE_SIZE}&page=${page}`,
           false
         );
         const list: AttendanceRecord[] = data?.data || [];
-        setAttendanceHistory((prev) => (append ? [...prev, ...list] : list));
-        const pages = data.pagination?.pages;
+        setAttendanceHistory(list);
+        const pages = data?.pagination?.pages;
         if (typeof pages === 'number' && pages > 0) {
           setHistoryTotalPages(pages);
         } else {
-          setHistoryTotalPages(list.length < HISTORY_PAGE_SIZE ? page : page + 1);
+          setHistoryTotalPages(Math.max(1, Math.ceil(list.length / HISTORY_PAGE_SIZE)));
         }
         setHistoryPage(page);
       } catch (error) {
@@ -330,17 +332,25 @@ export default function Attendance() {
   );
 
   const fetchAttendanceHistory = useCallback(async () => {
-    await fetchAttendanceHistoryPage(1, false);
+    await fetchAttendanceHistoryPage(1);
   }, [fetchAttendanceHistoryPage]);
 
-  const loadMoreHistory = () => {
-    if (historyPage >= historyTotalPages || historyLoadingMore) return;
-    void fetchAttendanceHistoryPage(historyPage + 1, true);
+  const handleHistoryPrevious = () => {
+    if (historyPage > 1) {
+      void fetchAttendanceHistoryPage(historyPage - 1);
+    }
+  };
+
+  const handleHistoryNext = () => {
+    if (historyPage < historyTotalPages) {
+      void fetchAttendanceHistoryPage(historyPage + 1);
+    }
   };
 
   // Handle filter submission
   const handleFilterSubmit = () => {
     setFilterLoading(true);
+    setHistoryPage(1); // Reset to page 1 when filtering
     
     try {
       let filtered = attendanceHistory;
@@ -373,6 +383,7 @@ export default function Attendance() {
   const handleFilterReset = () => {
     setFilterStartDate('');
     setFilterEndDate('');
+    setHistoryPage(1); // Reset to page 1 when clearing filters
     setFilteredAttendance(attendanceHistory);
   };
 
@@ -466,7 +477,7 @@ export default function Attendance() {
                       </td>
                     </tr>
                   ) : (
-                    activityLogs.map((log) => (
+                    activityLogs.slice((activityPage - 1) * PAGE_SIZE, activityPage * PAGE_SIZE).map((log) => (
                       <tr key={log.id} className="hover:bg-accent/50 transition-colors">
                         <td className="px-6 py-4 text-sm text-muted-foreground">{log.date || '—'}</td>
                         <td className="px-6 py-4 text-sm font-medium">{log.time}</td>
@@ -487,6 +498,37 @@ export default function Attendance() {
                 </tbody>
               </table>
             </div>
+            {activityLogs.length > 0 && (
+              <div className="p-4 border-t border-border flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Page {activityPage} of {Math.max(1, Math.ceil(activityLogs.length / PAGE_SIZE))}
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg"
+                    disabled={activityPage <= 1}
+                    onClick={() => setActivityPage(prev => Math.max(1, prev - 1))}
+                    aria-label="Previous page"
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg"
+                    disabled={activityPage >= Math.ceil(activityLogs.length / PAGE_SIZE)}
+                    onClick={() => setActivityPage(prev => Math.min(Math.ceil(activityLogs.length / PAGE_SIZE), prev + 1))}
+                    aria-label="Next page"
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
           </Card>
 
           {/* Attendance History */}
@@ -594,16 +636,30 @@ export default function Attendance() {
                 </tbody>
               </table>
             </div>
-            {!filterStartDate && !filterEndDate && historyPage < historyTotalPages && (
-              <div className="p-4 border-t border-border flex justify-center">
+            <div className="p-4 border-t border-border flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">
+                Page {historyPage} of {historyTotalPages}
+              </p>
+              <div className="flex gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   className="rounded-lg"
-                  onClick={loadMoreHistory}
-                  disabled={historyLoadingMore}
-                  aria-label="Load more attendance history"
+                  disabled={historyPage <= 1 || historyLoadingMore}
+                  onClick={handleHistoryPrevious}
+                  aria-label="Previous page"
+                >
+                  Previous
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg"
+                  disabled={historyPage >= historyTotalPages || historyLoadingMore}
+                  onClick={handleHistoryNext}
+                  aria-label="Next page"
                 >
                   {historyLoadingMore ? (
                     <>
@@ -611,11 +667,11 @@ export default function Attendance() {
                       Loading…
                     </>
                   ) : (
-                    'Load more'
+                    'Next'
                   )}
                 </Button>
               </div>
-            )}
+            </div>
           </Card>
         </>
       )}

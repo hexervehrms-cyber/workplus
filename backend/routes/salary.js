@@ -60,6 +60,166 @@ const payslipUpload = multer({
   },
 });
 
+/**
+ * Helper function to parse a CSV line respecting quoted fields
+ * Handles escaped quotes and commas within quoted strings
+ */
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    const nextChar = line[i + 1];
+    
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  
+  result.push(current.trim());
+  return result;
+}
+
+/**
+ * Helper function to parse CSV text into array of objects
+ * Respects quoted fields and handles escaped quotes
+ */
+function parseCSV(csvText) {
+  const lines = csvText.trim().split('\n');
+  if (lines.length === 0) return [];
+  
+  const headers = parseCSVLine(lines[0]);
+  const rows = [];
+  
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '') continue;
+    const values = parseCSVLine(lines[i]);
+    const row = {};
+    headers.forEach((header, idx) => {
+      row[header] = values[idx] || '';
+    });
+    rows.push(row);
+  }
+  
+  return rows;
+}
+
+/**
+ * Convert value to number or return 0
+ * Handles currency symbols, commas, and whitespace
+ */
+function toNumberOrZero(value) {
+  if (value === undefined || value === null || value === '') return 0;
+  const cleaned = String(value).replace(/[₹,\s]/g, '').trim();
+  const num = Number(cleaned);
+  return Number.isFinite(num) && num >= 0 ? num : 0;
+}
+
+/**
+ * Parse salary slip data from CSV row
+ * Returns object with parsed earnings, deductions, and totals
+ */
+function parseSalarySlipFromCSV(row, employeeRecord) {
+  // employeeRecord contains: _id, employeeCode, and other identifiers
+  // Form month/year is source of truth and passed separately to this function
+  
+  // Validate employee ID match (if provided in CSV)
+  // Accept multiple identifier formats: MongoDB ObjectId, employeeCode, etc.
+  if (row.employeeId && String(row.employeeId).trim() !== '') {
+    const csvEmpId = String(row.employeeId).trim();
+    
+    // Check if CSV employee ID matches any of the employee's identifiers
+    const employeeObjectId = String(employeeRecord._id || '').trim();
+    const employeeCode = String(employeeRecord.employeeCode || '').trim();
+    
+    // Valid match if:
+    // 1. Matches MongoDB ObjectId
+    // 2. Matches employeeCode (case-insensitive)
+    // 3. Any other identifier field
+    const isValidMatch = 
+      (csvEmpId === employeeObjectId) ||
+      (csvEmpId.toUpperCase() === employeeCode.toUpperCase());
+    
+    if (!isValidMatch && csvEmpId !== '') {
+      return {
+        valid: false,
+        error: 'Template employee ID does not match your account'
+      };
+    }
+  }
+  
+  // Validate month/year from CSV
+  // These should match the form-selected values (form is source of truth)
+  const csvMonth = toNumberOrZero(row.month);
+  const csvYear = toNumberOrZero(row.year);
+  
+  // Note: Actual month/year validation happens in upload handler
+  // where form values are the authoritative source
+  
+  // Parse earnings
+  const earnings = {
+    basic: toNumberOrZero(row.basicSalary),
+    hra: toNumberOrZero(row.hra),
+    medicalExpenses: toNumberOrZero(row.medicalAllowance),
+    travel: toNumberOrZero(row.travelAllowance),
+    internetCharges: toNumberOrZero(row.internetCharges),
+    incentives: toNumberOrZero(row.incentives),
+    bonus: toNumberOrZero(row.bonus),
+    commission: 0,
+    nightShiftAllowance: 0,
+    otherEarnings: []
+  };
+  
+  // Parse deductions
+  const deductions = {
+    providentFund: toNumberOrZero(row.pf),
+    employeeStateInsurance: toNumberOrZero(row.esi),
+    professionalTax: toNumberOrZero(row.professionalTax),
+    incomeTax: toNumberOrZero(row.tds),
+    leaveDeduction: 0,
+    otherDeductions: row.otherDeductions ? [{ name: 'Other', amount: toNumberOrZero(row.otherDeductions) }] : []
+  };
+  
+  // Calculate totals
+  const earningsTotal = Object.values(earnings)
+    .filter(v => typeof v === 'number')
+    .reduce((sum, v) => sum + v, 0);
+  
+  const deductionsTotal = Object.values(deductions)
+    .filter(v => typeof v === 'number')
+    .reduce((sum, v) => sum + v, 0);
+  
+  const grossEarnings = toNumberOrZero(row.grossEarnings) || earningsTotal;
+  const totalDeductions = toNumberOrZero(row.totalDeductions) || deductionsTotal;
+  const netSalary = toNumberOrZero(row.netSalary) || Math.max(0, grossEarnings - totalDeductions);
+  
+  return {
+    valid: true,
+    csvMonth,
+    csvYear,
+    earnings,
+    deductions,
+    grossEarnings,
+    totalDeductions,
+    netSalary,
+    slipNumber: String(row.slipNumber || '').trim(),
+    paidDate: String(row.paidDate || '').trim(),
+    notes: String(row.notes || '').trim()
+  };
+}
+
 const router = express.Router();
 
 /**
@@ -954,9 +1114,13 @@ router.put(
 
 /**
  * GET /api/salary/slip/:slipId/download
- * Download salary slip as PDF
- * Employee role: can only download approved/released slips
- * Admin/HR/Super_admin: can download any slip
+ * Download or preview salary slip as HTML
+ * Query params:
+ *   - inline=1 : render in browser (for preview in iframe)
+ *   - download=1 : download as file (default)
+ * 
+ * Employee role: can only view/download approved/released slips
+ * Admin/HR/Super_admin: can view/download any slip
  */
 router.get(
   "/slip/:slipId/download",
@@ -964,12 +1128,14 @@ router.get(
   asyncHandler(async (req, res) => {
     try {
       const { slipId } = req.params;
+      const inline = req.query.inline === '1';
+      const download = req.query.download === '1' || !inline;
 
       const slip = await SalarySlip.findById(slipId)
         .populate({
           path: "employeeId",
           select:
-            "firstName lastName employeeCode email userId department designation joiningDate",
+            "firstName lastName employeeCode empId nipId email userId department designation joiningDate orgId",
           populate: { path: "userId", select: "_id" }
         })
         .populate("salaryStructureId")
@@ -1007,25 +1173,32 @@ router.get(
       }
 
       // Employee role: 
-      // - allow downloading approved/released slips
-      // - allow downloading their own pending_approval uploaded slips
-      // - block downloading generated (non-uploaded) pending slips
+      // - allow viewing/downloading approved/released slips
+      // - allow viewing/downloading their own pending_approval uploaded slips
+      // - block viewing/downloading generated (non-uploaded) pending slips
       const isEmployee = req.user.role === "employee";
       if (isEmployee) {
         const isApprovedOrReleased = ["approved", "released", "paid", "processed"].includes(slip.status);
         const isOwnUpload = slip.status === "pending_approval" && slip.source === "employee_upload";
         if (!isApprovedOrReleased && !isOwnUpload) {
-          return sendError(res, "This salary slip is not yet available for download", 403, "FORBIDDEN");
+          return sendError(res, "This salary slip is not yet available", 403, "FORBIDDEN");
         }
       }
 
+      // Handle uploaded payslip files
       if (slip.source === "employee_upload" && slip.uploadFilePath && fs.existsSync(slip.uploadFilePath)) {
         const mime = slip.uploadMimeType || "application/octet-stream";
         res.setHeader("Content-Type", mime);
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${slip.uploadFileName || `payslip-${slip.month}-${slip.year}`}"`
-        );
+        
+        if (inline) {
+          res.setHeader("Content-Disposition", "inline");
+        } else {
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${slip.uploadFileName || `payslip-${slip.month}-${slip.year}`}"`
+          );
+        }
+        
         await SalarySlip.findByIdAndUpdate(slipId, {
           downloadedAt: new Date(),
           $inc: { downloadCount: 1 },
@@ -1033,6 +1206,7 @@ router.get(
         return res.sendFile(path.resolve(slip.uploadFilePath));
       }
 
+      // Generate professional HTML salary slip for admin-generated slips
       let organization = null;
       const orgId = slip.orgId || employeeDoc.orgId;
       if (orgId) {
@@ -1047,11 +1221,18 @@ router.get(
         organization: organization || {},
       });
 
-      // Set response headers for PDF download
+      // Set response headers based on inline parameter
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="salary-slip-${slip.month}-${slip.year}.html"`);
+      
+      if (inline) {
+        // Inline preview - allow rendering in iframe
+        res.setHeader('Content-Disposition', 'inline');
+      } else {
+        // Download as file
+        res.setHeader('Content-Disposition', `attachment; filename="salary-slip-${slip.month}-${slip.year}.html"`);
+      }
 
-      // Send HTML content (browser will handle conversion to PDF)
+      // Send HTML content
       res.send(htmlContent);
 
       // Update download count
@@ -1060,9 +1241,10 @@ router.get(
         $inc: { downloadCount: 1 }
       });
 
-      logger.info("Salary slip downloaded", {
+      logger.info("Salary slip accessed", {
         slipId,
-        downloadedBy: req.user.userId
+        accessedBy: req.user.userId,
+        inline
       });
     } catch (error) {
       logger.error("Download salary slip error", {
@@ -1188,16 +1370,83 @@ router.delete(
 /**
  * GET /api/salary/slip/upload/template
  * CSV template for employee payslip metadata import
+ * Professional template with meaningful columns for previous payslip records
  */
 router.get(
   "/slip/upload/template",
   authenticate,
   asyncHandler(async (req, res) => {
-    const csv =
-      "month,year,notes\n" +
-      `${new Date().getMonth() + 1},${new Date().getFullYear()},Optional note for HR\n`;
+    const month = new Date().getMonth() + 1;
+    const year = new Date().getFullYear();
+    
+    // Professional template headers
+    const headers = [
+      'employeeName',
+      'employeeId',
+      'month',
+      'year',
+      'payPeriod',
+      'grossEarnings',
+      'basicSalary',
+      'hra',
+      'medicalAllowance',
+      'travelAllowance',
+      'internetCharges',
+      'incentives',
+      'bonus',
+      'totalDeductions',
+      'pf',
+      'esi',
+      'professionalTax',
+      'tds',
+      'otherDeductions',
+      'netSalary',
+      'paidDate',
+      'slipNumber',
+      'notes'
+    ];
+    
+    // Example row with sample data
+    const exampleRow = [
+      '',
+      '',
+      String(month),
+      String(year),
+      `${new Date(year, month - 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })}`,
+      '20000',
+      '9000',
+      '3600',
+      '450',
+      '900',
+      '1500',
+      '1365',
+      '3185',
+      '10000',
+      '1200',
+      '0',
+      '0',
+      '0',
+      '0',
+      '20000',
+      `${year}-${String(month).padStart(2, '0')}-15`,
+      `SLIP-${year}-${String(month).padStart(2, '0')}-001`,
+      'Optional note for HR'
+    ];
+    
+    const csv = [
+      headers.join(','),
+      exampleRow.map(v => {
+        if (!v) return '';
+        // Escape values with commas or quotes
+        if (v.includes(',') || v.includes('"') || v.includes('\n')) {
+          return `"${v.replace(/"/g, '""')}"`;
+        }
+        return v;
+      }).join(',')
+    ].join('\n');
+    
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", 'attachment; filename="payslip-upload-template.csv"');
+    res.setHeader("Content-Disposition", 'attachment; filename="payslip-import-template.csv"');
     res.send(csv);
   })
 );
@@ -1256,8 +1505,302 @@ router.get(
 );
 
 /**
+ * POST /api/salary/slip/generate-bulk
+ * Generate salary slips for multiple employees (bulk operation)
+ * Prevents duplicates using unique index and skipExisting flag
+ */
+router.post(
+  "/slip/generate-bulk",
+  authenticate,
+  authorize("super_admin", "admin", "hr"),
+  asyncHandler(async (req, res) => {
+    try {
+      const { month, year, employeeIds, allEmployees = false, skipExisting = true } = req.body;
+
+      if (!month || !year) {
+        return sendError(res, "Month and year are required", 400, "VALIDATION_ERROR");
+      }
+
+      if (month < 1 || month > 12) {
+        return sendError(res, "Month must be between 1 and 12", 400, "VALIDATION_ERROR");
+      }
+
+      const orgId = isSuperAdmin(req) ? (req.query.orgId || req.user.orgId) : req.user.orgId;
+      if (!orgId) {
+        return sendError(res, "Organization ID is required", 400, "VALIDATION_ERROR");
+      }
+
+      // Determine which employees to process
+      let targetEmployees = [];
+      if (allEmployees) {
+        // Get all active employees with approved salary structure in this org
+        targetEmployees = await Employee.find({
+          orgId,
+          status: "active"
+        })
+          .select("_id userId")
+          .lean();
+      } else if (Array.isArray(employeeIds) && employeeIds.length > 0) {
+        // Use provided employee IDs
+        targetEmployees = await Employee.find({
+          _id: { $in: employeeIds },
+          orgId,
+          status: "active"
+        })
+          .select("_id userId")
+          .lean();
+      } else {
+        return sendError(
+          res,
+          "Either allEmployees must be true or employeeIds array must be provided",
+          400,
+          "VALIDATION_ERROR"
+        );
+      }
+
+      const results = [];
+      let generated = 0;
+      let skipped = 0;
+      let failed = 0;
+
+      // Process each employee
+      for (const emp of targetEmployees) {
+        try {
+          const employeeId = emp._id;
+
+          // Check if slip already exists
+          const existingSlip = await SalarySlip.findOne({
+            employeeId,
+            month,
+            year,
+            orgId
+          }).lean();
+
+          if (existingSlip) {
+            if (skipExisting) {
+              results.push({
+                employeeId: String(employeeId),
+                employeeName: emp.employeeName || "Unknown",
+                status: "skipped",
+                reason: "Salary slip already exists for this month/year"
+              });
+              skipped++;
+              continue;
+            } else {
+              // Would create duplicate - skip to prevent constraint violation
+              results.push({
+                employeeId: String(employeeId),
+                employeeName: emp.employeeName || "Unknown",
+                status: "skipped",
+                reason: "Duplicate prevention: slip already exists"
+              });
+              skipped++;
+              continue;
+            }
+          }
+
+          // Get approved salary structure for employee
+          const salaryStructure = await SalaryStructure.findOne({
+            employeeId,
+            orgId,
+            status: "approved"
+          })
+            .sort({ effectiveFrom: -1 })
+            .lean();
+
+          if (!salaryStructure) {
+            results.push({
+              employeeId: String(employeeId),
+              employeeName: emp.employeeName || "Unknown",
+              status: "failed",
+              reason: "No approved salary structure found"
+            });
+            failed++;
+            continue;
+          }
+
+          // Calculate attendance data
+          const startDate = new Date(year, month - 1, 1);
+          const endDate = new Date(year, month, 0);
+
+          const attendanceRecords = await Attendance.find({
+            userId: emp.userId,
+            orgId,
+            date: { $gte: startDate, $lte: endDate }
+          }).lean();
+
+          const presentDays = attendanceRecords.filter(r => r.status === "present").length;
+          const absentDays = attendanceRecords.filter(r => r.status === "absent").length;
+          const halfDays = attendanceRecords.filter(r => r.status === "half-day").length;
+
+          // Get approved leaves for the month
+          const approvedLeaves = await LeaveRequest.find({
+            userId: emp.userId,
+            status: "approved",
+            startDate: { $lte: endDate },
+            endDate: { $gte: startDate }
+          }).lean();
+
+          let leavesTaken = 0;
+          approvedLeaves.forEach(leave => {
+            const start = new Date(Math.max(leave.startDate, startDate));
+            const end = new Date(Math.min(leave.endDate, endDate));
+            const days = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+            leavesTaken += days;
+          });
+
+          const totalWorkingDays = attendanceRecords.length;
+
+          // Calculate leave deduction
+          const leaveDeduction = (leavesTaken / 30) * salaryStructure.earnings.basic;
+
+          // Build earnings
+          const earnings = {
+            basic: salaryStructure.earnings.basic || 0,
+            hra: salaryStructure.earnings.hra || 0,
+            medicalExpenses: salaryStructure.earnings.medicalExpenses || 0,
+            travel: salaryStructure.earnings.travel || 0,
+            internetCharges: salaryStructure.earnings.internetCharges || 0,
+            nightShiftAllowance: salaryStructure.earnings.nightShiftAllowance || 0,
+            incentives: salaryStructure.earnings.incentives || 0,
+            bonus: salaryStructure.earnings.bonus || 0,
+            commission: salaryStructure.earnings.commission || 0,
+            otherEarnings: salaryStructure.earnings.otherEarnings || []
+          };
+
+          // Build deductions
+          const deductions = {
+            providentFund: salaryStructure.deductions.providentFund || 0,
+            employeeStateInsurance: salaryStructure.deductions.employeeStateInsurance || 0,
+            professionalTax: salaryStructure.deductions.professionalTax || 0,
+            incomeTax: salaryStructure.deductions.incomeTax || 0,
+            leaveDeduction: leaveDeduction > 0 ? Math.round(leaveDeduction * 100) / 100 : 0,
+            otherDeductions: salaryStructure.deductions.otherDeductions || []
+          };
+
+          const { grossEarnings, totalDeductions, netSalary } = aggregateStructureMoney(earnings, deductions);
+
+          // Create salary slip with duplicate prevention
+          try {
+            const newSlip = await SalarySlip.create({
+              employeeId,
+              userId: emp.userId,
+              salaryStructureId: salaryStructure._id,
+              orgId,
+              month,
+              year,
+              earnings,
+              deductions,
+              grossEarnings,
+              totalDeductions,
+              netSalary,
+              attendanceData: {
+                totalWorkingDays,
+                presentDays,
+                absentDays,
+                leavesTaken,
+                halfDays
+              },
+              createdBy: req.user.userId,
+              status: "draft",
+              source: "generated"
+            });
+
+            results.push({
+              employeeId: String(employeeId),
+              employeeName: emp.employeeName || "Unknown",
+              status: "generated"
+            });
+            generated++;
+
+            logger.info("Salary slip generated in bulk", {
+              salarySlipId: newSlip._id,
+              employeeId,
+              month,
+              year
+            });
+          } catch (createError) {
+            // Handle duplicate key error from unique index
+            if (createError.code === 11000) {
+              results.push({
+                employeeId: String(employeeId),
+                employeeName: emp.employeeName || "Unknown",
+                status: "skipped",
+                reason: "Duplicate slip detected (race condition)"
+              });
+              skipped++;
+            } else {
+              throw createError;
+            }
+          }
+        } catch (employeeError) {
+          results.push({
+            employeeId: String(emp._id),
+            employeeName: emp.employeeName || "Unknown",
+            status: "failed",
+            reason: employeeError.message || "Unknown error"
+          });
+          failed++;
+
+          logger.error("Bulk salary slip generation error for employee", {
+            employeeId: emp._id,
+            error: employeeError.message,
+            month,
+            year
+          });
+        }
+      }
+
+      if (global.io && orgId) {
+        emitKPIUpdate(global.io, orgId, 'payroll', {
+          action: 'bulk_generation',
+          generated,
+          skipped,
+          failed
+        }).catch((err) =>
+          logger.warn('KPI emit after bulk generation failed', { error: err.message })
+        );
+      }
+
+      logger.info("Bulk salary slip generation completed", {
+        orgId,
+        month,
+        year,
+        generated,
+        skipped,
+        failed,
+        userId: req.user.userId
+      });
+
+      return sendSuccess(res, {
+        processed: results.length,
+        generated,
+        skipped,
+        failed,
+        results
+      }, "Bulk generation completed", 200);
+    } catch (error) {
+      logger.error("Bulk salary slip generation error", {
+        error: error.message,
+        userId: req.user.userId
+      });
+      return sendError(res, "Failed to generate salary slips in bulk", 500, "GENERATION_ERROR");
+    }
+  })
+);
+
+/**
  * POST /api/salary/slip/employee-upload
- * Employee uploads payslip file (PDF/image) for HR approval
+ * Employee uploads payslip file (PDF/image/CSV) for HR approval
+ * 
+ * If CSV: Parse salary fields and populate earnings/deductions
+ * If PDF/Image: Store as-is, use form month/year
+ * 
+ * CSV fields supported:
+ * - employeeName, employeeId, month, year, payPeriod
+ * - grossEarnings, basicSalary, hra, medicalAllowance, travelAllowance, internetCharges, incentives, bonus
+ * - totalDeductions, pf, esi, professionalTax, tds, otherDeductions
+ * - netSalary, paidDate, slipNumber, notes
  */
 router.post(
   "/slip/employee-upload",
@@ -1297,7 +1840,8 @@ router.post(
       );
     }
 
-    const payload = {
+    // Detect if file is CSV and parse salary data if so
+    let payloadData = {
       employeeId: emp._id,
       userId: req.user.userId,
       orgId: String(emp.orgId || orgId),
@@ -1318,6 +1862,77 @@ router.post(
       createdBy: req.user.userId,
     };
 
+    // Check if file is CSV
+    const isCSV = req.file.mimetype === 'text/csv' || 
+                  req.file.originalname.toLowerCase().endsWith('.csv');
+    
+    if (isCSV) {
+      try {
+        const csvText = req.file.buffer.toString('utf-8');
+        const rows = parseCSV(csvText);
+        
+        if (rows.length === 0) {
+          return sendError(res, "CSV file is empty", 400, "VALIDATION_ERROR");
+        }
+        
+        // Parse first row as salary data
+        const csvRow = rows[0];
+        
+        // Validate month/year match
+        const csvMonth = toNumberOrZero(csvRow.month);
+        const csvYear = toNumberOrZero(csvRow.year);
+        
+        if (csvMonth !== 0 && csvYear !== 0) {
+          // CSV has month/year values - they should match form selection
+          if (csvMonth !== month || csvYear !== year) {
+            return sendError(
+              res,
+              `Template month/year (${csvMonth}/${csvYear}) does not match selected payroll period (${month}/${year})`,
+              400,
+              "VALIDATION_ERROR"
+            );
+          }
+        }
+        
+        // Parse salary data (pass full employee record for ID validation)
+        const parsed = parseSalarySlipFromCSV(csvRow, emp);
+        
+        if (!parsed.valid) {
+          return sendError(res, parsed.error || "Invalid salary data in CSV", 400, "VALIDATION_ERROR");
+        }
+        
+        // If CSV has month/year different from form, use form values (form is source of truth)
+        // but allow CSV to populate salary fields
+        payloadData = {
+          ...payloadData,
+          earnings: parsed.earnings,
+          deductions: parsed.deductions,
+          grossEarnings: parsed.grossEarnings,
+          totalDeductions: parsed.totalDeductions,
+          netSalary: parsed.netSalary,
+          slipNumber: parsed.slipNumber || undefined,
+          paidDate: parsed.paidDate || undefined,
+          employeeNotes: parsed.notes || notes,
+        };
+        
+        logger.info("CSV payslip data parsed", {
+          employeeId: emp._id,
+          employeeCode: emp.employeeCode,
+          month,
+          year,
+          grossEarnings: parsed.grossEarnings,
+          netSalary: parsed.netSalary
+        });
+      } catch (csvError) {
+        logger.error("CSV parsing error", {
+          error: csvError.message,
+          fileName: req.file.originalname,
+          employeeId: emp._id
+        });
+        return sendError(res, "Failed to parse CSV file. Please check the format.", 400, "VALIDATION_ERROR");
+      }
+    }
+
     let slip;
     if (existing) {
       if (existing.uploadFilePath && fs.existsSync(existing.uploadFilePath)) {
@@ -1327,9 +1942,9 @@ router.post(
           /* ignore */
         }
       }
-      slip = await SalarySlip.findByIdAndUpdate(existing._id, payload, { new: true });
+      slip = await SalarySlip.findByIdAndUpdate(existing._id, payloadData, { new: true });
     } else {
-      slip = await SalarySlip.create(payload);
+      slip = await SalarySlip.create(payloadData);
     }
 
     return sendSuccess(

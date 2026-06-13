@@ -659,7 +659,14 @@ router.post(
       }).sort({ effectiveFrom: -1 });
 
       if (!salaryStructure) {
-        return sendError(res, "No approved salary structure found for this employee", 400, "VALIDATION_ERROR");
+        // Return structured error with code for frontend handling
+        return res.status(400).json({
+          success: false,
+          code: "NO_APPROVED_SALARY_STRUCTURE",
+          message: "No approved salary structure found for this employee. Please create and approve salary structure first.",
+          employeeId: employee._id,
+          employeeName: employee.firstName ? `${employee.firstName} ${employee.lastName || ''}`.trim() : 'Employee'
+        });
       }
 
       // Calculate attendance data

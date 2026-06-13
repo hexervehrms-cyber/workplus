@@ -598,6 +598,24 @@ router.delete("/:id",
       });
     }
     
+    // Check if this is the last super_admin
+    if (user.role === 'super_admin') {
+      const otherSuperAdmins = await User.countDocuments({
+        role: 'super_admin',
+        _id: { $ne: id },
+        deletedAt: null,
+        isActive: true
+      });
+      
+      if (otherSuperAdmins === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Cannot delete the last remaining Super Admin",
+          code: "LAST_SUPER_ADMIN"
+        });
+      }
+    }
+    
     // Soft delete
     user.deletedAt = new Date();
     user.deletedBy = userId;
@@ -607,6 +625,113 @@ router.delete("/:id",
     res.json({
       success: true,
       message: "User deleted successfully"
+    });
+  })
+);
+
+/**
+ * POST /api/users/bulk-delete
+ * Bulk delete users (soft delete with safety checks)
+ */
+router.post("/bulk-delete",
+  authorize('super_admin'),
+  auditLog('bulk_delete_users', 'users'),
+  asyncHandler(async (req, res) => {
+    const { userIds } = req.body;
+    const userId = req.user?.userId;
+    
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "userIds must be a non-empty array"
+      });
+    }
+    
+    // Validate all IDs are valid ObjectIds
+    const invalidIds = userIds.filter(id => !mongoose.Types.ObjectId.isValid(id));
+    if (invalidIds.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "One or more invalid user IDs"
+      });
+    }
+    
+    // Remove duplicates
+    const uniqueUserIds = [...new Set(userIds)];
+    
+    // Get all users to delete
+    const users = await User.find({
+      _id: { $in: uniqueUserIds },
+      deletedAt: null
+    });
+    
+    const deleted = [];
+    const skipped = [];
+    const errors = [];
+    
+    // Process each user
+    for (const user of users) {
+      let skipReason = null;
+      
+      // Check: Cannot delete self
+      if (user._id.toString() === userId) {
+        skipReason = 'Cannot delete your own account';
+      }
+      
+      // Check: Cannot delete last super_admin
+      if (!skipReason && user.role === 'super_admin') {
+        const otherActiveSuperAdmins = await User.countDocuments({
+          role: 'super_admin',
+          _id: { $ne: user._id },
+          deletedAt: null,
+          isActive: true
+        });
+        
+        if (otherActiveSuperAdmins === 0) {
+          skipReason = 'Cannot delete the last remaining Super Admin';
+        }
+      }
+      
+      if (skipReason) {
+        skipped.push({
+          userId: user._id,
+          email: user.email,
+          reason: skipReason
+        });
+        continue;
+      }
+      
+      // Perform soft delete
+      try {
+        user.deletedAt = new Date();
+        user.deletedBy = userId;
+        user.isActive = false;
+        await user.save();
+        
+        deleted.push({
+          userId: user._id,
+          email: user.email,
+          name: user.name
+        });
+      } catch (err) {
+        errors.push({
+          userId: user._id,
+          email: user.email,
+          error: err.message
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        requested: uniqueUserIds.length,
+        deleted: deleted.length,
+        skipped: skipped.length,
+        deletedUsers: deleted,
+        skippedUsers: skipped,
+        errors: errors
+      }
     });
   })
 );

@@ -266,7 +266,7 @@ export function Navbar() {
     <header className="h-16 border-b border-border bg-card/50 backdrop-blur-xl sticky top-0 z-40">
       <div className="h-full px-6 flex items-center justify-between gap-4">
         {/* Search */}
-        <div className="flex-1 max-w-md">
+        <div className="flex-1 max-w-md min-w-0">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
@@ -277,16 +277,18 @@ export function Navbar() {
         </div>
 
         {/* Right Actions */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
           {/* Currency Changer */}
-          <CurrencyChanger />
+          <div className="shrink-0">
+            <CurrencyChanger />
+          </div>
           
           {/* Theme Toggle */}
           <Button
             variant="ghost"
             size="icon"
             onClick={toggleTheme}
-            className="rounded-xl"
+            className="rounded-xl shrink-0 text-foreground hover:bg-muted"
           >
             {theme === 'light' ? (
               <Moon className="w-5 h-5" />
@@ -295,17 +297,24 @@ export function Navbar() {
             )}
           </Button>
 
-          {/* Notifications - Only show when unreadCount > 0 */}
-          {unreadCount > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="rounded-xl relative">
-                  <Bell className="w-5 h-5" />
-                  <span className="absolute top-1 right-1 w-5 h-5 bg-destructive text-white text-xs rounded-full flex items-center justify-center font-semibold">
+          {/* Notifications - Bell always visible, badge only when unreadCount > 0 */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="relative rounded-xl shrink-0 text-foreground hover:bg-muted"
+                aria-label="Notifications"
+                title="Notifications"
+              >
+                <Bell className="w-5 h-5" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-destructive text-white text-xs rounded-full flex items-center justify-center font-semibold">
                     {unreadCount > 99 ? '99+' : unreadCount}
                   </span>
-                </Button>
-              </DropdownMenuTrigger>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-96">
               <div className="flex items-center justify-between px-4 py-2">
                 <DropdownMenuLabel className="p-0">Notifications</DropdownMenuLabel>
@@ -388,12 +397,11 @@ export function Navbar() {
               )}
             </DropdownMenuContent>
           </DropdownMenu>
-          )}
 
           {/* User Menu */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="rounded-xl gap-3 h-auto py-2 px-3">
+              <Button variant="ghost" className="rounded-xl gap-3 h-auto py-2 px-3 shrink-0">
                 <Avatar className="w-8 h-8">
                   <AvatarImage src={user?.avatar} />
                   <AvatarFallback>{user?.name?.charAt(0)}</AvatarFallback>

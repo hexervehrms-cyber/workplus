@@ -6,7 +6,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Card } from './ui/card';
-import { Copy, Check, Loader, Mail, Link as LinkIcon, RefreshCw } from 'lucide-react';
+import { Copy, Check, Loader, Mail, Link as LinkIcon, RefreshCw, AlertCircle } from 'lucide-react';
 import { toast } from '../utils/portalToast';
 import { apiClient } from '../utils/api';
 import { apiPost } from '../utils/apiHelper';
@@ -17,6 +17,7 @@ interface OnboardingLinkGeneratorProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: () => void;
+  isSuperAdmin?: boolean;
 }
 
 interface GeneratedLink {
@@ -27,36 +28,67 @@ interface GeneratedLink {
   expiresAt: string;
 }
 
-const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpen, onClose, onSuccess }) => {
+interface Organization {
+  _id: string;
+  name: string;
+  isActive?: boolean;
+}
+
+const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpen, onClose, onSuccess, isSuperAdmin = false }) => {
   const { departmentNames, loading: deptLoading, error: deptError, reload: reloadDepartments } =
-    useDepartments({ enabled: isOpen, seedIfEmpty: true });
+    useDepartments({ enabled: isOpen && !isSuperAdmin, seedIfEmpty: true });
 
   const [step, setStep] = useState<'form' | 'result'>('form');
   const [loading, setLoading] = useState(false);
+  const [orgLoading, setOrgLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [generatedLink, setGeneratedLink] = useState<GeneratedLink | null>(null);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
 
   const [formData, setFormData] = useState({
     employeeEmail: '',
     employeeName: '',
-    department: ''
+    department: '',
+    organizationId: ''
   });
 
   const departmentOptions =
     departmentNames.length > 0 ? departmentNames : ['General'];
 
+  // Load organizations for Super Admin
   useEffect(() => {
-    if (!isOpen) return;
-    void reloadDepartments();
-  }, [isOpen, reloadDepartments]);
+    if (!isOpen || !isSuperAdmin) return;
+    
+    const loadOrganizations = async () => {
+      try {
+        setOrgLoading(true);
+        const response = await apiClient.get<{ success?: boolean; data?: Organization[] }>('/organizations?limit=100');
+        if (response.success && Array.isArray(response.data)) {
+          setOrganizations(response.data.filter(org => org.isActive !== false));
+        }
+      } catch (err) {
+        console.error('Failed to load organizations:', err);
+        toast.error('Failed to load organizations');
+      } finally {
+        setOrgLoading(false);
+      }
+    };
+    
+    loadOrganizations();
+  }, [isOpen, isSuperAdmin]);
 
   useEffect(() => {
-    if (!isOpen || deptLoading || !formData.department) return;
+    if (!isOpen || isSuperAdmin) return;
+    void reloadDepartments();
+  }, [isOpen, reloadDepartments, isSuperAdmin]);
+
+  useEffect(() => {
+    if (!isOpen || isSuperAdmin || deptLoading || !formData.department) return;
     const options = departmentNames.length > 0 ? departmentNames : ['General'];
     if (!options.includes(formData.department)) {
       setFormData((prev) => ({ ...prev, department: '' }));
     }
-  }, [isOpen, deptLoading, departmentNames, formData.department]);
+  }, [isOpen, deptLoading, departmentNames, formData.department, isSuperAdmin]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -74,7 +106,13 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
   };
 
   const handleGenerateLink = async () => {
-    const department = formData.department || departmentOptions[0] || 'General';
+    // For Super Admin, organization is required
+    if (isSuperAdmin && !formData.organizationId) {
+      toast.error('Please select an organization');
+      return;
+    }
+
+    const department = isSuperAdmin ? (formData.department || 'General') : (formData.department || departmentOptions[0] || 'General');
     if (!formData.employeeEmail || !formData.employeeName) {
       toast.error('Please fill in employee email and name');
       return;
@@ -83,10 +121,18 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
     try {
       setLoading(true);
 
-      const data = await apiClient.post<GeneratedLink>('/onboarding/generate-link', {
-        ...formData,
+      const payload: any = {
+        employeeEmail: formData.employeeEmail,
+        employeeName: formData.employeeName,
         department,
-      });
+      };
+
+      // Super Admin can specify target organization
+      if (isSuperAdmin && formData.organizationId) {
+        payload.organizationId = formData.organizationId;
+      }
+
+      const data = await apiClient.post<GeneratedLink>('/onboarding/generate-link', payload);
 
       if (!data?.success) {
         throw new Error(data?.message || 'Failed to generate onboarding link');
@@ -170,7 +216,8 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
     setFormData({
       employeeEmail: '',
       employeeName: '',
-      department: ''
+      department: '',
+      organizationId: ''
     });
     setGeneratedLink(null);
     setCopied(false);
@@ -195,6 +242,41 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
         {step === 'form' ? (
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Organization Selector for Super Admin */}
+              {isSuperAdmin && (
+                <div className="md:col-span-2">
+                  <Label>Organization *</Label>
+                  <Select
+                    value={formData.organizationId || undefined}
+                    onValueChange={(value) => setFormData(prev => ({ ...prev, organizationId: value }))}
+                    disabled={orgLoading}
+                  >
+                    <SelectTrigger className="mt-2 rounded-xl">
+                      <SelectValue
+                        placeholder={orgLoading ? 'Loading organizations…' : 'Select organization'}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {orgLoading ? (
+                        <SelectItem value="_loading" disabled>
+                          Loading organizations…
+                        </SelectItem>
+                      ) : organizations.length === 0 ? (
+                        <SelectItem value="_empty" disabled>
+                          No organizations found
+                        </SelectItem>
+                      ) : (
+                        organizations.map((org) => (
+                          <SelectItem key={org._id} value={org._id}>
+                            {org.name}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
               <div>
                 <Label>Employee Email *</Label>
                 <Input
@@ -218,8 +300,8 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
               </div>
               <div className="md:col-span-2">
                 <div className="flex items-center justify-between">
-                  <Label>Department *</Label>
-                  {deptError && (
+                  <Label>Department {!isSuperAdmin && '*'}</Label>
+                  {deptError && !isSuperAdmin && (
                     <Button
                       type="button"
                       variant="ghost"
@@ -234,12 +316,12 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
                 </div>
                 <Select
                   value={formData.department || undefined}
-                  onValueChange={handleSelectChange}
-                  disabled={deptLoading}
+                  onValueChange={(value) => setFormData(prev => ({ ...prev, department: value }))}
+                  disabled={deptLoading || orgLoading}
                 >
                   <SelectTrigger className="mt-2 rounded-xl">
                     <SelectValue
-                      placeholder={deptLoading ? 'Loading departments…' : 'Select department'}
+                      placeholder={deptLoading ? 'Loading departments…' : 'Select department (optional)'}
                     />
                   </SelectTrigger>
                   <SelectContent>
@@ -256,7 +338,7 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
                     )}
                   </SelectContent>
                 </Select>
-                {deptError && (
+                {deptError && !isSuperAdmin && (
                   <p className="text-xs text-destructive mt-1">{deptError}</p>
                 )}
               </div>
@@ -274,7 +356,7 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
               </Button>
               <Button 
                 onClick={handleGenerateLink} 
-                disabled={loading || deptLoading}
+                disabled={loading || deptLoading || orgLoading || (isSuperAdmin && !formData.organizationId)}
                 className="rounded-xl"
               >
                 {loading ? (

@@ -10,6 +10,7 @@ import Attendance from "../models/Attendance.js";
 import LeaveRequest from "../models/LeaveRequest.js";
 import Expense from "../models/Expense.js";
 import Payslip from "../models/Payroll.js";
+import Revenue from "../models/Revenue.js";
 import { calculateAllKPIChanges } from "../utils/kpiCalculations.js";
 import logger from "../utils/logger.js";
 
@@ -709,6 +710,221 @@ function getActivityIcon(action) {
   
   return iconMap[action] || 'activity';
 }
+
+/**
+ * GET /api/dashboard/superadmin/analytics
+ * Get analytics for Super Admin with optional organization filter
+ * Supports pagination for top organizations
+ */
+router.get("/superadmin/analytics", asyncHandler(async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
+  const { orgId, search, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+
+  // Validate orgId if provided
+  if (orgId && !mongoose.Types.ObjectId.isValid(orgId)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid organization ID"
+    });
+  }
+
+  // If orgId provided, validate organization exists
+  if (orgId) {
+    const org = await Organization.findById(orgId);
+    if (!org) {
+      return res.status(404).json({
+        success: false,
+        message: "Organization not found"
+      });
+    }
+  }
+
+  // Build filters
+  const orgFilter = orgId ? { orgId: orgId.toString() } : {};
+  const allOrgFilter = orgId ? { _id: orgId } : { isActive: true };
+
+  try {
+    // Calculate KPIs
+    const totalOrganizations = orgId 
+      ? 1 
+      : await Organization.countDocuments({ isActive: true });
+
+    const totalAdmins = await User.countDocuments({
+      role: { $in: ['admin', 'hr', 'manager'] },
+      isActive: true,
+      deletedAt: { $exists: false },
+      ...orgFilter
+    });
+
+    const totalEmployees = await Employee.countDocuments({
+      isActive: true,
+      ...orgFilter
+    });
+
+    // Calculate monthly revenue
+    const currentMonth = new Date();
+    currentMonth.setDate(1);
+    currentMonth.setHours(0, 0, 0, 0);
+    
+    const nextMonth = new Date(currentMonth);
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+    const monthlyRevenueResult = await Revenue.aggregate([
+      {
+        $match: {
+          date: {
+            $gte: currentMonth,
+            $lt: nextMonth
+          },
+          type: 'Sale',
+          ...orgFilter
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" }
+        }
+      }
+    ]);
+
+    const monthlyRevenue = monthlyRevenueResult[0]?.total || 0;
+
+    // Get top organizations
+    let topOrganizations = [];
+    let totalOrgsForPagination = 0;
+
+    if (!orgId) {
+      // Aggregation pipeline for top organizations
+      totalOrgsForPagination = await Organization.countDocuments({ isActive: true });
+
+      const sortMap = {
+        'createdAt': 'createdAt',
+        'name': 'name',
+        'employees': 'employeeCount',
+        'revenue': 'monthlyRevenue'
+      };
+
+      const sortField = sortMap[sortBy] || 'createdAt';
+      const sortDirection = sortOrder === 'asc' ? 1 : -1;
+
+      let orgsQuery = Organization.find({ isActive: true }).lean();
+      
+      if (search) {
+        orgsQuery = orgsQuery.where('name').regex(new RegExp(search, 'i'));
+      }
+
+      const baseOrgs = await orgsQuery.sort({ [sortField]: sortDirection }).skip(skip).limit(limit);
+
+      // Enrich with stats for each organization
+      topOrganizations = await Promise.all(
+        baseOrgs.map(async (org) => {
+          const empCount = await Employee.countDocuments({
+            orgId: org._id.toString(),
+            isActive: true
+          });
+
+          const adminCount = await User.countDocuments({
+            orgId: org._id.toString(),
+            role: { $in: ['admin', 'hr', 'manager'] },
+            isActive: true,
+            deletedAt: { $exists: false }
+          });
+
+          const revenueResult = await Revenue.aggregate([
+            {
+              $match: {
+                orgId: new mongoose.Types.ObjectId(org._id.toString()),
+                date: {
+                  $gte: currentMonth,
+                  $lt: nextMonth
+                },
+                type: 'Sale'
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: "$amount" }
+              }
+            }
+          ]);
+
+          return {
+            _id: org._id,
+            name: org.name,
+            code: org.code,
+            email: org.email,
+            employeeCount: empCount,
+            adminCount: adminCount,
+            monthlyRevenue: revenueResult[0]?.total || 0,
+            status: org.isActive ? 'Active' : 'Inactive',
+            createdAt: org.createdAt,
+            isActive: org.isActive
+          };
+        })
+      );
+    } else {
+      // Single organization view
+      const org = await Organization.findById(orgId).lean();
+      if (org) {
+        const empCount = await Employee.countDocuments({
+          orgId: orgId.toString(),
+          isActive: true
+        });
+
+        const adminCount = await User.countDocuments({
+          orgId: orgId.toString(),
+          role: { $in: ['admin', 'hr', 'manager'] },
+          isActive: true,
+          deletedAt: { $exists: false }
+        });
+
+        topOrganizations = [{
+          _id: org._id,
+          name: org.name,
+          code: org.code,
+          email: org.email,
+          employeeCount: empCount,
+          adminCount: adminCount,
+          monthlyRevenue: monthlyRevenue,
+          status: org.isActive ? 'Active' : 'Inactive',
+          createdAt: org.createdAt,
+          isActive: org.isActive
+        }];
+        
+        totalOrgsForPagination = 1;
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        kpis: {
+          totalAdmins,
+          totalOrganizations,
+          totalEmployees,
+          monthlyRevenue
+        },
+        topOrganizations,
+        pagination: {
+          page,
+          limit,
+          total: totalOrgsForPagination,
+          pages: Math.ceil(totalOrgsForPagination / limit)
+        }
+      }
+    });
+  } catch (error) {
+    logger.error('Error fetching super-admin analytics:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to load analytics'
+    });
+  }
+}));
 
 /**
  * GET /api/dashboard/superadmin/summary

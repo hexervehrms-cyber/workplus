@@ -172,6 +172,11 @@ export default function SuperAdminDashboard() {
     fetchDashboardData();
   }, []);
 
+  const handleRefresh = async () => {
+    setLastUpdated(new Date());
+    await fetchDashboardData();
+  };
+
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
@@ -343,7 +348,7 @@ export default function SuperAdminDashboard() {
           <Button 
             variant="outline" 
             className="rounded-xl"
-            onClick={requestRefresh}
+            onClick={handleRefresh}
             disabled={loading}
           >
             <Activity className="w-4 h-4 mr-2" />
@@ -375,6 +380,7 @@ export default function SuperAdminDashboard() {
       <OnboardingLinkGenerator
         isOpen={showOnboardingGenerator}
         onClose={() => setShowOnboardingGenerator(false)}
+        isSuperAdmin={true}
       />
 
       {/* Document Generator */}

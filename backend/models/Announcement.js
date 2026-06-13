@@ -28,6 +28,13 @@ const announcementSchema = new mongoose.Schema(
       default: "medium",
       index: true
     },
+    // Scope determines if announcement is global or organization-specific
+    scope: {
+      type: String,
+      enum: ["global", "organization"],
+      default: "organization",
+      index: true
+    },
     visibility: {
       type: String,
       enum: ["all", "department", "role", "specific_users"],
@@ -54,9 +61,9 @@ const announcementSchema = new mongoose.Schema(
       required: true,
       index: true
     },
+    // orgId is required for organization-scoped announcements, optional for global
     orgId: { 
       type: String, 
-      required: true,
       index: true
     },
     publishedAt: { 
@@ -142,6 +149,8 @@ const announcementSchema = new mongoose.Schema(
 );
 
 // Compound indexes for performance
+announcementSchema.index({ scope: 1, isPublished: 1, publishedAt: -1 });
+announcementSchema.index({ scope: 1, orgId: 1, isPublished: 1, publishedAt: -1 });
 announcementSchema.index({ orgId: 1, isPublished: 1, publishedAt: -1 });
 announcementSchema.index({ orgId: 1, isPinned: 1, publishedAt: -1 });
 announcementSchema.index({ authorId: 1, createdAt: -1 });

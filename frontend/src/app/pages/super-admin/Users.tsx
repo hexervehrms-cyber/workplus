@@ -58,6 +58,8 @@ export default function GlobalUsers() {
   const [users, setUsers] = useState<GlobalUser[]>([]);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [organizations, setOrganizations] = useState<{ _id: string; name: string }[]>([]);
+  const [loadingOrgs, setLoadingOrgs] = useState(false);
   
   // Pagination state
   const [page, setPage] = useState(1);
@@ -75,7 +77,8 @@ export default function GlobalUsers() {
     email: '',
     password: '',
     role: 'employee',
-    organization: ''
+    organization: '',
+    orgId: ''
   });
 
   useEffect(() => {
@@ -90,6 +93,22 @@ export default function GlobalUsers() {
       console.error('Error parsing token:', err);
     }
     
+    // Load organizations for Super Admin user creation
+    const loadOrganizations = async () => {
+      try {
+        setLoadingOrgs(true);
+        const response = await apiClient.get<any>('/organizations?limit=100');
+        if (response.success && Array.isArray(response.data)) {
+          setOrganizations(response.data.map(org => ({ _id: org._id, name: org.name })));
+        }
+      } catch (err) {
+        console.error('Failed to load organizations:', err);
+      } finally {
+        setLoadingOrgs(false);
+      }
+    };
+    
+    loadOrganizations();
     loadUsers();
   }, [page, pageSize, searchQuery, roleFilter, statusFilter]);
 
@@ -158,7 +177,8 @@ export default function GlobalUsers() {
       email: '',
       password: '',
       role: 'employee',
-      organization: ''
+      organization: '',
+      orgId: ''
     });
     setShowAddForm(true);
   };
@@ -174,18 +194,31 @@ export default function GlobalUsers() {
       return;
     }
 
+    // For tenant roles (admin, hr, manager, employee), organization is required
+    const tenantRoles = ['admin', 'hr', 'manager', 'employee'];
+    if (tenantRoles.includes(formData.role) && !formData.orgId) {
+      setError(`Organization is required for ${formData.role} role`);
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     try {
-      const response = await apiClient.post<ApiUser>('/api/users', {
+      const payload: any = {
         name: formData.name,
         email: formData.email,
         password: formData.password,
         role: formData.role,
-        organization: formData.organization || 'WorkPlus Inc.',
         isActive: true
-      });
+      };
+
+      // Include orgId only for tenant roles (not for super_admin)
+      if (formData.role !== 'super_admin' && formData.orgId) {
+        payload.orgId = formData.orgId;
+      }
+
+      const response = await apiClient.post<ApiUser>('/api/users', payload);
 
       if (response.success && response.data) {
         const userData = response.data;
@@ -207,7 +240,8 @@ export default function GlobalUsers() {
           email: '',
           password: '',
           role: 'employee',
-          organization: ''
+          organization: '',
+          orgId: ''
         });
         toast.success('User created successfully');
       }
@@ -227,7 +261,8 @@ export default function GlobalUsers() {
       email: user.email,
       password: '',
       role: user.role,
-      organization: user.organization || ''
+      organization: user.organization || '',
+      orgId: ''
     });
     setShowEditForm(true);
   };
@@ -386,8 +421,10 @@ export default function GlobalUsers() {
           email: '',
           password: '',
           role: 'employee',
-          organization: ''
+          organization: '',
+          orgId: ''
         });
+        toast.success('User updated successfully');
       }
     } catch (err: any) {
       const errorMsg = err.response?.data?.message || err.message || 'Failed to update user';
@@ -469,17 +506,24 @@ export default function GlobalUsers() {
                     <option value="super_admin">Super Admin</option>
                   </select>
                 </div>
-                <div>
-                  <label className="text-sm font-medium">Organization</label>
-                  <input
-                    type="text"
-                    placeholder="Organization name..."
-                    value={formData.organization}
-                    onChange={(e) => setFormData({ ...formData, organization: e.target.value })}
-                    className="w-full mt-1 px-3 py-2 border rounded-xl bg-background"
-                    disabled={loading}
-                  />
-                </div>
+                {['admin', 'hr', 'manager', 'employee', 'accountant'].includes(formData.role) && (
+                  <div>
+                    <label className="text-sm font-medium">Organization *</label>
+                    <select 
+                      value={formData.orgId}
+                      onChange={(e) => setFormData({ ...formData, orgId: e.target.value })}
+                      className="w-full mt-1 px-3 py-2 border rounded-xl bg-background" 
+                      disabled={loading || loadingOrgs}
+                    >
+                      <option value="">Select organization...</option>
+                      {organizations.map(org => (
+                        <option key={org._id} value={org._id}>
+                          {org.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
               <div className="flex gap-2 mt-6">
                 <Button 

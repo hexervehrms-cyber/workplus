@@ -119,11 +119,18 @@ export default function Payroll() {
     try {
       const data = await apiGet(`/salary/slips/${empId}`, false);
 
-      const rows = Array.isArray(data?.data)
-        ? data.data
-        : Array.isArray(data)
-          ? data
-          : [];
+      // Normalize response: handle data.data, data, or array directly
+      let rows: unknown[] = [];
+      if (Array.isArray(data?.data)) {
+        rows = data.data;
+      } else if (Array.isArray(data)) {
+        rows = data;
+      } else if (data && typeof data === 'object' && Array.isArray((data as Record<string, unknown>).records)) {
+        rows = (data as Record<string, unknown>).records as unknown[];
+      } else if (data && typeof data === 'object' && Array.isArray((data as Record<string, unknown>).slips)) {
+        rows = (data as Record<string, unknown>).slips as unknown[];
+      }
+
       setSalarySlips(rows.map((row) => normalizeSalarySlip(row as Record<string, unknown>)) as SalarySlip);
     } catch (error) {
       console.error('Error fetching salary slips:', error);
@@ -136,7 +143,7 @@ export default function Payroll() {
     
     // Block download for pending uploaded slips
     if (slip && slip.status === 'pending_approval') {
-      toast.info('This payslip is pending admin approval. Download will be available after approval.');
+      toast.info('Download will be available after admin approves this payslip.');
       return;
     }
 
@@ -155,9 +162,15 @@ export default function Payroll() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       toast.success('Salary slip downloaded successfully');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error downloading salary slip:', error);
-      toast.error('Failed to download salary slip. Please try again.');
+      if (error?.status === 403) {
+        toast.error('You do not have permission to download this payslip.');
+      } else if (error?.status === 404) {
+        toast.error('Payslip not found.');
+      } else {
+        toast.error('Failed to download salary slip. Please try again.');
+      }
     }
   };
 
@@ -192,9 +205,15 @@ export default function Payroll() {
       const htmlBlob = blob.type ? blob : new Blob([blob], { type: 'text/html; charset=utf-8' });
       const objectUrl = URL.createObjectURL(htmlBlob);
       setPreviewUrl(objectUrl);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error loading payslip preview:', error);
-      toast.error('Failed to load payslip preview. It may not be available yet.');
+      if (error?.status === 403) {
+        toast.error('You do not have permission to view this payslip.');
+      } else if (error?.status === 404) {
+        toast.error('Payslip not found.');
+      } else {
+        toast.error('Failed to load payslip preview. It may not be available yet.');
+      }
       setPreviewOpen(false);
       setViewingSlip(null);
     } finally {
@@ -304,9 +323,9 @@ export default function Payroll() {
   return (
     <div className="p-6 space-y-6">
       <Dialog open={previewOpen} onOpenChange={(open) => !open && closePreview()}>
-        <DialogContent className="max-w-4xl max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
+        <DialogContent className="max-w-6xl w-[95vw] max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
           <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
-            <DialogTitle>Salary payslip</DialogTitle>
+            <DialogTitle>Salary payslip preview</DialogTitle>
             {viewingSlip && (
               <DialogDescription>
                 {new Date(viewingSlip.year, viewingSlip.month - 1).toLocaleDateString('en-US', {
@@ -317,16 +336,17 @@ export default function Payroll() {
               </DialogDescription>
             )}
           </DialogHeader>
-          <div className="flex-1 min-h-[480px] px-4 pb-2">
+          <div className="flex-1 overflow-auto px-4 py-2 min-h-0">
             {previewLoading ? (
-              <div className="flex items-center justify-center h-[480px]">
+              <div className="flex items-center justify-center h-[500px]">
                 <Loader className="w-8 h-8 animate-spin text-primary" />
               </div>
             ) : previewUrl ? (
               <iframe
                 title="Salary slip preview"
                 src={previewUrl}
-                className="w-full h-[min(70vh,640px)] rounded-lg border border-border bg-white"
+                className="w-full h-[78vh] rounded-lg border border-border bg-white"
+                style={{ minWidth: '900px' }}
               />
             ) : null}
           </div>
@@ -466,6 +486,9 @@ export default function Payroll() {
           <p className="text-muted-foreground">
             No salary slip available for{' '}
             {new Date(selectedYear, selectedMonth - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+          </p>
+          <p className="text-sm text-muted-foreground mt-2">
+            Please check with HR or try another month.
           </p>
         </Card>
       )}

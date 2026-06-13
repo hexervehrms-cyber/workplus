@@ -161,10 +161,13 @@ router.get(
   authenticate,
   asyncHandler(async (req, res) => {
     try {
-      const { filename } = req.params;
+      let { filename } = req.params;
+      
+      // Decode the filename from URL encoding
+      filename = decodeURIComponent(filename);
       
       // Validate filename to prevent directory traversal
-      if (filename.includes('..') || filename.includes('/')) {
+      if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
         return sendError(res, "Invalid filename", 400, "VALIDATION_ERROR");
       }
 
@@ -204,6 +207,10 @@ router.get(
         contentType = 'image/png';
       } else if (ext === '.jpg' || ext === '.jpeg') {
         contentType = 'image/jpeg';
+      } else if (ext === '.gif') {
+        contentType = 'image/gif';
+      } else if (ext === '.webp') {
+        contentType = 'image/webp';
       }
 
       const inline = req.query.inline === '1' || req.query.inline === 'true';

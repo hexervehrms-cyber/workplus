@@ -804,6 +804,17 @@ export class LeaveRequestService {
     return [];
   }
 
+  static async bulkDeleteLeaveRequests(requestIds: string[]) {
+    const response = await apiClient.post<any>('/leave-requests/bulk-delete', { requestIds });
+    if (response.data?.data) {
+      return response.data.data;
+    }
+    if (Array.isArray(response.data)) {
+      return response.data;
+    }
+    return [];
+  }
+
   static async deleteLeaveRequest(requestId: string) {
     const { apiDelete, clearApiCache } = await import('./apiHelper');
     const { ensureAccessToken } = await import('./sessionAuth');

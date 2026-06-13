@@ -30,6 +30,9 @@ const emptyForm = {
   name: '',
   email: '',
   phone: '',
+  adminPassword: '',
+  customDomain: '',
+  showPassword: false,
 };
 
 export default function Organizations() {
@@ -106,6 +109,29 @@ export default function Organizations() {
       toast.error('Name and email are required');
       return;
     }
+    
+    // When creating new organization, password is required
+    if (!editingOrg) {
+      if (!formData.adminPassword || formData.adminPassword.length < 8) {
+        toast.error('Admin password is required and must be at least 8 characters');
+        return;
+      }
+    }
+    
+    // Validate custom domain if provided
+    if (formData.customDomain.trim()) {
+      let domain = formData.customDomain.trim().toLowerCase();
+      
+      // Remove protocol if accidentally included
+      domain = domain.replace(/^https?:\/\//, '');
+      domain = domain.replace(/\/$/, '');
+      
+      if (!/^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z0-9]+(-[a-z0-9]+)*$/.test(domain)) {
+        toast.error('Invalid custom domain format');
+        return;
+      }
+    }
+    
     setSaving(true);
     try {
       if (editingOrg) {
@@ -122,17 +148,36 @@ export default function Organizations() {
           throw new Error(res.message || 'Update failed');
         }
       } else {
-        const res = await apiClient.post<OrganizationRow>('/organizations', {
+        const payload: Record<string, unknown> = {
           name: formData.name.trim(),
           email: formData.email.trim().toLowerCase(),
           phone: formData.phone.trim() || undefined,
-        });
+          adminPassword: formData.adminPassword,
+        };
+        
+        if (formData.customDomain.trim()) {
+          payload.customDomain = formData.customDomain.trim().toLowerCase();
+        }
+        
+        const res = await apiClient.post<any>('/organizations', payload);
         if (res.success) {
-          toast.success(
-            res.data?.code
-              ? `Organization created (code: ${res.data.code})`
-              : 'Organization created'
-          );
+          let successMsg = 'Organization and admin account created';
+          if (res.data?.code) {
+            successMsg += ` (code: ${res.data.code})`;
+          }
+          toast.success(successMsg);
+          
+          // Show DNS records if custom domain was configured
+          if (res.data?.customDomain) {
+            const dnsRecords = res.data.customDomain.dnsRecords || [];
+            if (dnsRecords.length > 0) {
+              const dnsText = dnsRecords
+                .map((r: any) => `${r.type} ${r.name} → ${r.value}`)
+                .join('\n');
+              toast.info(`DNS Records:\n${dnsText}`);
+            }
+          }
+          
           closeForms();
           await loadOrganizations();
         } else {
@@ -231,6 +276,45 @@ export default function Organizations() {
                   className="mt-1 rounded-xl"
                   disabled={saving}
                 />
+              </div>
+              
+              {/* Admin password field - required when creating new organization */}
+              {!editingOrg && (
+                <div>
+                  <Label>Admin Password *</Label>
+                  <div className="relative">
+                    <Input
+                      type={formData.showPassword ? 'text' : 'password'}
+                      value={formData.adminPassword}
+                      onChange={(e) => setFormData({ ...formData, adminPassword: e.target.value })}
+                      placeholder="Min 8 characters"
+                      className="mt-1 rounded-xl pr-10"
+                      disabled={saving}
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, showPassword: !formData.showPassword })}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      {formData.showPassword ? '🙈' : '👁️'}
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">This will be the admin login password</p>
+                </div>
+              )}
+              
+              {/* Custom domain field - optional */}
+              <div>
+                <Label>Custom Domain (optional)</Label>
+                <Input
+                  value={formData.customDomain}
+                  onChange={(e) => setFormData({ ...formData, customDomain: e.target.value })}
+                  placeholder="e.g., clientdomain.com"
+                  className="mt-1 rounded-xl"
+                  disabled={saving}
+                />
+                <p className="text-xs text-muted-foreground mt-1">Custom domain for your organization (DNS setup will be provided)</p>
               </div>
             </div>
             <div className="flex gap-2 mt-6">

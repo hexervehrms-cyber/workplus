@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -34,6 +34,11 @@ export default function BulkOperations() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [importFormat, setImportFormat] = useState<'csv' | 'json'>('csv');
+  
+  // FIX #3: Add file input refs for each module type
+  const employeeFileInputRef = useRef<HTMLInputElement>(null);
+  const expenseFileInputRef = useRef<HTMLInputElement>(null);
+  const assetFileInputRef = useRef<HTMLInputElement>(null);
 
   const handleExport = async (format: 'csv' | 'json') => {
     try {
@@ -79,20 +84,34 @@ export default function BulkOperations() {
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // Validate file type
-      const validTypes = ['text/csv', 'application/json', 'text/plain'];
-      if (!validTypes.includes(file.type)) {
-        toast.error('Please select a valid CSV or JSON file');
+      // FIX #3: Validate file type more robustly
+      const validExtensions = ['.csv', '.json', '.xlsx', '.xls'];
+      const fileName = file.name.toLowerCase();
+      const hasValidExtension = validExtensions.some(ext => fileName.endsWith(ext));
+      
+      // Also check MIME type
+      const validMimeTypes = ['text/csv', 'application/json', 'text/plain', 
+                               'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                               'application/vnd.ms-excel'];
+      const hasValidMimeType = validMimeTypes.includes(file.type) || file.type === '';
+
+      if (!hasValidExtension && !hasValidMimeType) {
+        toast.error('Please select a valid CSV, JSON, or XLSX file');
+        // FIX #3: Reset file input to allow selecting same file twice
+        e.target.value = '';
         return;
       }
 
       // Validate file size (max 5MB)
       if (file.size > 5 * 1024 * 1024) {
         toast.error('File size must be less than 5MB');
+        // FIX #3: Reset file input
+        e.target.value = '';
         return;
       }
 
       setSelectedFile(file);
+      setShowImportModal(true);
     }
   };
 
@@ -114,28 +133,48 @@ export default function BulkOperations() {
       const formData = new FormData();
       formData.append('file', selectedFile);
 
-      const endpoint = `admin/bulk/${activeTab}/import/${importFormat}`;
+      // FIX #3: Auto-detect format from file extension if not explicitly set
+      let format = importFormat;
+      if (selectedFile.name.endsWith('.json')) {
+        format = 'json';
+      } else if (selectedFile.name.endsWith('.csv') || selectedFile.name.endsWith('.xlsx') || selectedFile.name.endsWith('.xls')) {
+        format = 'csv';
+      }
 
-      const data = await apiPost(endpoint, formData);
+      const endpoint = `admin/bulk/${activeTab}/import/${format}`;
+
+      const data = await apiPost<{
+        success?: boolean;
+        message?: string;
+        recordsProcessed?: number;
+        recordsSuccessful?: number;
+        recordsFailed?: number;
+        errors?: string[];
+      }>(endpoint, formData);
 
       setImportResult({
-        success: true,
-        message: data.message || 'Import completed successfully',
-        recordsProcessed: data.recordsProcessed,
-        recordsSuccessful: data.recordsSuccessful,
-        recordsFailed: data.recordsFailed,
-        errors: data.errors
+        success: data?.success !== false,
+        message: data?.message || 'Import completed successfully',
+        recordsProcessed: data?.recordsProcessed,
+        recordsSuccessful: data?.recordsSuccessful,
+        recordsFailed: data?.recordsFailed,
+        errors: data?.errors
       });
 
-      toast.success('Import completed successfully');
+      if (data?.success !== false) {
+        toast.success(data?.message || 'Import completed successfully');
+      } else {
+        toast.error(data?.message || `Failed to import ${activeTab}`);
+      }
     } catch (error: any) {
       console.error('Import error:', error);
+      const errorMessage = error?.message || `Failed to import ${activeTab}`;
       setImportResult({
         success: false,
-        message: error.message || `Failed to import ${activeTab}`,
-        errors: [error.message]
+        message: errorMessage,
+        errors: [errorMessage]
       });
-      toast.error(error.message || `Failed to import ${activeTab}`);
+      toast.error(errorMessage);
     } finally {
       setImporting(false);
     }
@@ -146,6 +185,10 @@ export default function BulkOperations() {
     setImportResult(null);
     setShowImportModal(false);
     setImportFormat('csv');
+    // FIX #3: Reset file input refs to allow selecting same file twice
+    if (employeeFileInputRef.current) employeeFileInputRef.current.value = '';
+    if (expenseFileInputRef.current) expenseFileInputRef.current.value = '';
+    if (assetFileInputRef.current) assetFileInputRef.current.value = '';
   };
 
   const getTabIcon = () => {
@@ -263,12 +306,49 @@ export default function BulkOperations() {
             Upload data to add or update {activeTab}
           </p>
 
+          {/* FIX #3: Add hidden file inputs for each module type */}
+          <input
+            ref={employeeFileInputRef}
+            type="file"
+            accept=".csv,.json,.xlsx,.xls"
+            onChange={handleImportFile}
+            className="hidden"
+            disabled={importing}
+          />
+          <input
+            ref={expenseFileInputRef}
+            type="file"
+            accept=".csv,.json,.xlsx,.xls"
+            onChange={handleImportFile}
+            className="hidden"
+            disabled={importing}
+          />
+          <input
+            ref={assetFileInputRef}
+            type="file"
+            accept=".csv,.json,.xlsx,.xls"
+            onChange={handleImportFile}
+            className="hidden"
+            disabled={importing}
+          />
+
+          {/* FIX #3: Direct Import button that triggers file picker based on active tab */}
           <Button
-            onClick={() => setShowImportModal(true)}
+            type="button"
+            onClick={() => {
+              if (activeTab === 'employees') {
+                employeeFileInputRef.current?.click();
+              } else if (activeTab === 'expenses') {
+                expenseFileInputRef.current?.click();
+              } else if (activeTab === 'assets') {
+                assetFileInputRef.current?.click();
+              }
+            }}
+            disabled={importing}
             className="w-full"
           >
             <Upload className="w-4 h-4 mr-2" />
-            Choose File to Import
+            {importing ? 'Importing...' : 'Import'}
           </Button>
 
           <div className="mt-6 p-4 bg-amber-50 rounded-lg border border-amber-200">
@@ -285,91 +365,71 @@ export default function BulkOperations() {
           <Card className="w-full max-w-md mx-4 p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Import {getTabLabel()}</h2>
-              <Button variant="ghost" onClick={resetImport} disabled={importing}>
+              <Button variant="ghost" onClick={resetImport} disabled={importing} type="button">
                 <X className="w-4 h-4" />
               </Button>
             </div>
 
             {!importResult ? (
-              <div className="space-y-4">
-                <div>
-                  <Label>File Format</Label>
-                  <div className="flex gap-2 mt-2">
-                    {(['csv', 'json'] as const).map((format) => (
-                      <button
-                        key={format}
-                        onClick={() => setImportFormat(format)}
-                        className={`flex-1 py-2 px-3 rounded-lg border-2 transition-colors ${
-                          importFormat === format
-                            ? 'border-primary bg-primary/10'
-                            : 'border-border hover:border-primary'
-                        }`}
-                      >
-                        {format.toUpperCase()}
-                      </button>
-                    ))}
+              selectedFile && (
+                <div className="space-y-4">
+                  <div>
+                    <Label>File Format</Label>
+                    <div className="flex gap-2 mt-2">
+                      {(['csv', 'json'] as const).map((format) => (
+                        <button
+                          key={format}
+                          type="button"
+                          onClick={() => setImportFormat(format)}
+                          className={`flex-1 py-2 px-3 rounded-lg border-2 transition-colors ${
+                            importFormat === format
+                              ? 'border-primary bg-primary/10'
+                              : 'border-border hover:border-primary'
+                          }`}
+                        >
+                          {format.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
 
-                <div>
-                  <Label>Select File</Label>
-                  <div className="mt-2 border-2 border-dashed rounded-lg p-6 text-center hover:bg-muted/50 transition-colors cursor-pointer">
-                    <input
-                      type="file"
-                      accept=".csv,.json"
-                      onChange={handleImportFile}
-                      className="hidden"
-                      id="import-file"
-                      disabled={importing}
-                    />
-                    <label htmlFor="import-file" className="cursor-pointer">
-                      <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                      <p className="text-sm font-medium">
-                        {selectedFile ? selectedFile.name : 'Click to select or drag and drop'}
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        CSV or JSON files up to 5MB
-                      </p>
-                    </label>
-                  </div>
-                </div>
-
-                {selectedFile && (
                   <div className="p-3 bg-green-50 rounded-lg border border-green-200">
                     <p className="text-sm text-green-900">
                       ✓ File selected: {selectedFile.name}
                     </p>
                   </div>
-                )}
 
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={resetImport}
-                    className="flex-1"
-                    disabled={importing}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={handleImport}
-                    className="flex-1"
-                    disabled={!selectedFile || importing}
-                  >
-                    {importing ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Importing...
-                      </>
-                    ) : (
-                      <>
-                        <Upload className="w-4 h-4 mr-2" />
-                        Import
-                      </>
-                    )}
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={resetImport}
+                      className="flex-1"
+                      disabled={importing}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => void handleImport()}
+                      className="flex-1"
+                      disabled={!selectedFile || importing}
+                    >
+                      {importing ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Importing...
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-4 h-4 mr-2" />
+                          Import
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              )
             ) : (
               <div className="space-y-4">
                 <div className={`p-4 rounded-lg border-2 ${
@@ -425,6 +485,7 @@ export default function BulkOperations() {
 
                 <div className="flex gap-2">
                   <Button
+                    type="button"
                     onClick={resetImport}
                     className="flex-1"
                   >

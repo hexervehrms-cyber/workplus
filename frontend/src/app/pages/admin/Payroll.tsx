@@ -447,7 +447,8 @@ export default function Payroll() {
       fetchSalarySlips();
     } catch (error) {
       console.error('Error deleting salary slip:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to delete salary slip');
+      const message = error instanceof Error ? error.message : 'Failed to delete salary slip';
+      toast.error('Failed to delete salary slip: ' + message);
     }
   };
 
@@ -494,14 +495,16 @@ export default function Payroll() {
       const fullStructure = data?.data ?? data;
       if (!fullStructure || !fullStructure._id) {
         setEditingStructureId(null);
+        toast.error('Failed to load salary structure details');
         return;
       }
 
-      setSelectedEmployee(
-        typeof fullStructure.employeeId === 'object' && fullStructure.employeeId?._id
-          ? fullStructure.employeeId._id
-          : String(fullStructure.employeeId)
-      );
+      // Handle employeeId which could be object or string
+      const empId = typeof fullStructure.employeeId === 'object' && fullStructure.employeeId?._id
+        ? fullStructure.employeeId._id
+        : (fullStructure.employeeId || '');
+      
+      setSelectedEmployee(String(empId));
       setEmployeeType(fullStructure.employeeType || 'employee');
       const eff = fullStructure.effectiveFrom
         ? new Date(fullStructure.effectiveFrom).toISOString().split('T')[0]
@@ -538,7 +541,7 @@ export default function Payroll() {
     } catch (error) {
       console.error('Error opening edit dialog:', error);
       toast.error(
-        error instanceof Error ? error.message : 'Failed to open salary structure'
+        'Failed to open salary structure: ' + (error instanceof Error ? error.message : 'Unknown error')
       );
       setEditingStructureId(null);
     }
@@ -619,7 +622,7 @@ export default function Payroll() {
       toast.success('Salary slip downloaded');
     } catch (error) {
       console.error('Error downloading salary slip:', error);
-      toast.error('Failed to download salary slip');
+      toast.error('Failed to download salary slip: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
@@ -631,7 +634,7 @@ export default function Payroll() {
       setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
     } catch (error) {
       console.error('Error opening salary slip:', error);
-      toast.error('Failed to open salary slip');
+      toast.error('Failed to open salary slip: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
@@ -644,11 +647,17 @@ export default function Payroll() {
       setViewingSlip(full?._id ? full : slip);
 
       if (previewUrl) URL.revokeObjectURL(previewUrl);
-      const blob = await fetchSalarySlipBlob(slip._id);
-      setPreviewUrl(URL.createObjectURL(blob));
+      try {
+        const blob = await fetchSalarySlipBlob(slip._id);
+        setPreviewUrl(URL.createObjectURL(blob));
+      } catch (blobError) {
+        console.error('Error loading salary slip blob:', blobError);
+        toast.error('Failed to load salary slip preview: ' + (blobError instanceof Error ? blobError.message : 'Unknown error'));
+      }
     } catch (error) {
       console.error('Error loading salary slip:', error);
       setViewingSlip(slip);
+      toast.error('Failed to open salary slip: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setViewSlipLoading(false);
     }
@@ -791,8 +800,8 @@ export default function Payroll() {
                 <Card key={structure._id} className="p-6">
                   <div className="flex justify-between items-start mb-4">
                     <div>
-                      <h3 className="font-semibold text-lg">{structure.employeeName}</h3>
-                      <p className="text-sm text-muted-foreground">{structure.employeeType}</p>
+                      <h3 className="font-semibold text-lg">{structure.employeeName || 'Unknown Employee'}</h3>
+                      <p className="text-sm text-muted-foreground">{structure.employeeType || 'Unknown Type'}</p>
                     </div>
                     <Badge variant={structure.status === 'approved' ? 'default' : 'secondary'}>
                       {structure.status}
@@ -886,7 +895,7 @@ export default function Payroll() {
                 <Card key={slip._id} className="p-6">
                   <div className="flex justify-between items-start mb-4">
                     <div>
-                      <h3 className="font-semibold text-lg">{slip.employeeName}</h3>
+                      <h3 className="font-semibold text-lg">{slip.employeeName || 'Unknown Employee'}</h3>
                       <p className="text-sm text-muted-foreground">
                         {new Date(slip.year, slip.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
                       </p>

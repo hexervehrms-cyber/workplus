@@ -62,6 +62,7 @@ export default function InviteManagement() {
   const mapApiStatus = (s: string): InviteLinkRow['status'] => {
     if (s === 'used') return 'completed';
     if (s === 'expired') return 'expired';
+    if (s === 'active') return 'pending'; // FIX #2: Map 'active' to 'pending' for UI consistency
     return 'pending';
   };
 
@@ -79,12 +80,26 @@ export default function InviteManagement() {
 
       let url = `/onboarding/links?limit=100&orgId=${encodeURIComponent(String(oid))}`;
       
-      const res = await apiGet<{ success?: boolean; data?: { links?: ApiInviteLink[] }; links?: ApiInviteLink[] }>(url);
-      const payload = res?.data ?? res;
-      const rows: ApiInviteLink[] =
-        (payload && typeof payload === 'object' && 'links' in payload
-          ? (payload as { links?: ApiInviteLink[] }).links
-          : undefined) ?? [];
+      const res = await apiGet<{ 
+        success?: boolean; 
+        data?: { links?: ApiInviteLink[]; invites?: ApiInviteLink[] } | ApiInviteLink[];
+        links?: ApiInviteLink[];
+        invites?: ApiInviteLink[];
+      }>(url);
+      
+      // FIX #2: Normalize response shape - backend returns { data: { links: [...] } }
+      let rows: ApiInviteLink[] = [];
+      if (res?.data) {
+        const payload = res.data;
+        if (Array.isArray(payload)) {
+          rows = payload;
+        } else if (payload && typeof payload === 'object') {
+          rows = (payload as any).links || (payload as any).invites || [];
+        }
+      } else if (Array.isArray(res)) {
+        rows = res;
+      }
+      
       setInviteLinks(
         rows.map((link) => ({
           id: link.id,

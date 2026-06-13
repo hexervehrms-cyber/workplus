@@ -117,17 +117,21 @@ export function buildSalarySlipHtml({ slip, employee = {}, organization = {} }) 
     day: 'numeric',
   });
 
-  // Hexerve logo - Embedded as base64 SVG for universal compatibility
+  // Hexerve logo - Load PNG file and convert to base64 for universal compatibility
   // Works in: iframe preview, blob download, new tab, printed PDF, production
-  // This is the Hexerve brand logo (purple/cyan colors with modern design)
-  // SVG base64 encoded to ensure it works in all contexts without external dependencies
-  const HEXERVE_LOGO_BASE64 = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDIwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJncmFkMSIgeDE9IjAlIiB5MT0iMCUiIHgyPSIxMDAlIiB5Mj0iMTAwJSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3R5bGU9InN0b3AtY29sb3I6IzY2MTBGMjtzdG9wLW9wYWNpdHk6MSIgLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0eWxlPSJzdG9wLWNvbG9yOiMwMEQyRkM7c3RvcC1vcGFjaXR5OjEiIC8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjIwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9InVybCgjZ3JhZDEpIi8+PHRleHQgeD0iNTAiIHk9IjYwIiBmb250LXNpemU9IjQ4IiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0id2hpdGUiIGZvbnQtZmFtaWx5PSJBcmlhbCxzYW5zLXNlcmlmIj5IZXhlcnZlPC90ZXh0Pjwvc3ZnPg==';
-  
-  // Use organization's custom logo if available, otherwise use Hexerve branded logo
-  // If organization.logo exists and is a valid URL/base64, use it; otherwise use Hexerve logo
-  const logoUrl = (organization?.logo && typeof organization.logo === 'string' && organization.logo.length > 10) 
-    ? organization.logo 
-    : HEXERVE_LOGO_BASE64;
+  // This is the exact Hexerve brand logo PNG image
+  const fs = require('fs');
+  const path = require('path');
+  const logoPath = path.join(__dirname, '../public/assets/Hexerve_logo.PNG');
+  let logoUrl;
+  try {
+    const logoBuffer = fs.readFileSync(logoPath);
+    logoUrl = 'data:image/png;base64,' + logoBuffer.toString('base64');
+  } catch (err) {
+    // Fallback: use a minimal placeholder if logo file is missing
+    console.warn('Hexerve logo file not found at', logoPath, '- using placeholder');
+    logoUrl = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="60"%3E%3Crect fill="%23f0f0f0" width="200" height="60"/%3E%3Ctext x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="12" fill="%23999"%3EHexerve%3C/text%3E%3C/svg%3E';
+  }
   const logoHtml = `<img src="${escapeHtml(logoUrl)}" alt="Hexerve Logo" class="company-logo-img" />`;
 
   return `<!DOCTYPE html>

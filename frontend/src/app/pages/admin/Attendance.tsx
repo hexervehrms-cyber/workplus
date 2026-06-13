@@ -238,20 +238,22 @@ export default function AttendanceAdmin() {
       }
       const response = await apiGet<ActivityLogsResponse>(endpoint, false);
       if (response?.success !== false) {
-        const rows = extractApiList<ActivityLog>(response);
+        const rows = Array.isArray(response?.data) ? response.data : extractApiList<ActivityLog>(response);
         setActivityLogs((prev) => (append ? [...prev, ...rows] : rows));
         setActivityLogTotal(
-          Number((response as ActivityLogsResponse).total) || rows.length
+          Number((response as ActivityLogsResponse)?.total) || rows.length
         );
-        setActivityLogsHasMore(Boolean((response as ActivityLogsResponse).hasMore));
+        setActivityLogsHasMore(Boolean((response as ActivityLogsResponse)?.hasMore));
         setActivityLogsSkip(skip);
       } else if (!append) {
         toast.error(response?.message || 'Could not load activity log');
+        setActivityLogs([]);
       }
     } catch (error) {
       console.error('Error fetching activity logs:', error);
       if (!append) {
         toast.error('Failed to load activity log. Try refreshing.');
+        setActivityLogs([]);
       }
     } finally {
       setLogsLoading(false);
@@ -922,8 +924,8 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
                   filteredActivityLogs.map((log) => (
                     <tr key={log._id} className="border-b hover:bg-accent/50">
                       <td className="p-4">
-                        <p className="font-medium">{new Date(log.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</p>
-                        <p className="text-xs text-muted-foreground">{new Date(log.timestamp).toLocaleDateString()}</p>
+                        <p className="font-medium">{log?.timestamp ? new Date(log.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'}</p>
+                        <p className="text-xs text-muted-foreground">{log?.timestamp ? new Date(log.timestamp).toLocaleDateString() : '—'}</p>
                       </td>
                       <td className="p-4">
                         <div className="flex items-center gap-3">
@@ -939,46 +941,46 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
                       </td>
                       <td className="p-4">
                         <div className="flex items-center gap-2">
-                          {log.action === 'attendance_checkin' && <LogIn className="w-4 h-4 text-green-600" />}
-                          {log.action === 'attendance_checkout' && <LogOut className="w-4 h-4 text-red-600" />}
-                          {log.action === 'attendance_break_start' && <Coffee className="w-4 h-4 text-orange-600" />}
-                          {log.action === 'attendance_break_end' && <Coffee className="w-4 h-4 text-blue-600" />}
-                          {log.action === 'attendance_meeting_start' && <Users className="w-4 h-4 text-purple-600" />}
-                          {log.action === 'attendance_meeting_end' && <Users className="w-4 h-4 text-gray-600" />}
+                          {log?.action === 'attendance_checkin' && <LogIn className="w-4 h-4 text-green-600" />}
+                          {log?.action === 'attendance_checkout' && <LogOut className="w-4 h-4 text-red-600" />}
+                          {log?.action === 'attendance_break_start' && <Coffee className="w-4 h-4 text-orange-600" />}
+                          {log?.action === 'attendance_break_end' && <Coffee className="w-4 h-4 text-blue-600" />}
+                          {log?.action === 'attendance_meeting_start' && <Users className="w-4 h-4 text-purple-600" />}
+                          {log?.action === 'attendance_meeting_end' && <Users className="w-4 h-4 text-gray-600" />}
                           <span className={`px-2 py-1 text-xs rounded-full ${
-                            log.action === 'attendance_checkin' ? 'bg-green-100 text-green-800' :
-                            log.action === 'attendance_checkout' ? 'bg-red-100 text-red-800' :
-                            log.action.includes('break') ? 'bg-orange-100 text-orange-800' :
-                            log.action.includes('meeting') ? 'bg-purple-100 text-purple-800' :
+                            log?.action === 'attendance_checkin' ? 'bg-green-100 text-green-800' :
+                            log?.action === 'attendance_checkout' ? 'bg-red-100 text-red-800' :
+                            log?.action?.includes('break') ? 'bg-orange-100 text-orange-800' :
+                            log?.action?.includes('meeting') ? 'bg-purple-100 text-purple-800' :
                             'bg-gray-100 text-gray-800'
                           }`}>
-                            {log.action.replace('attendance_', '').replace('_', ' ').toUpperCase()}
+                            {log?.action?.replace('attendance_', '').replace('_', ' ').toUpperCase() || 'Unknown'}
                           </span>
                         </div>
                       </td>
                       <td className="p-4">
                         <div className="text-sm">
-                          {log.details?.isLate && (
-                            <p className="text-yellow-600 font-medium">Late by {log.details.minutesLate} minutes</p>
+                          {log?.details?.isLate && (
+                            <p className="text-yellow-600 font-medium">Late by {log.details.minutesLate || 0} minutes</p>
                           )}
-                          {log.details?.breakType && (
+                          {log?.details?.breakType && (
                             <p className="text-muted-foreground">Break type: {log.details.breakType}</p>
                           )}
-                          {log.details?.meetingTitle && (
+                          {log?.details?.meetingTitle && (
                             <p className="text-muted-foreground">Meeting: {log.details.meetingTitle}</p>
                           )}
-                          {log.details?.duration && (
+                          {log?.details?.duration && (
                             <p className="text-muted-foreground">Duration: {log.details.duration} minutes</p>
                           )}
-                          {log.details?.hoursWorked && (
+                          {log?.details?.hoursWorked && (
                             <p className="text-muted-foreground">Total hours: {log.details.hoursWorked.toFixed(1)}h</p>
                           )}
                         </div>
                       </td>
                       <td className="p-4">
                         <div className="text-xs text-muted-foreground">
-                          {log.ipAddress && <p>IP: {log.ipAddress}</p>}
-                          {log.deviceInfo?.type && <p>Device: {log.deviceInfo.type}</p>}
+                          {log?.ipAddress && <p>IP: {log.ipAddress}</p>}
+                          {log?.deviceInfo?.type && <p>Device: {log.deviceInfo.type}</p>}
                         </div>
                       </td>
                       <td className="p-4 text-right">

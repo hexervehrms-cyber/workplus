@@ -163,7 +163,7 @@ const OnboardingForm: React.FC<{
   };
 
   const handleNext = () => {
-    // FIX #1: Validate current section before allowing navigation
+    // Validate current section before allowing navigation
     const errors: string[] = [];
 
     switch (currentSection) {
@@ -177,8 +177,8 @@ const OnboardingForm: React.FC<{
         if (!formData.address.trim()) errors.push('Address is required');
         if (!isHRMode && !formData.password) errors.push('Password is required');
         break;
-      case 1: // Official Information
-        if (!formData.employeeId.trim()) errors.push('Employee ID is required');
+      case 1: // Official Information - only validate employeeId if not in HR mode or if explicitly filled
+        if (!isHRMode && !formData.employeeId.trim()) errors.push('Employee ID is required');
         break;
       case 2: // Emergency Contact
         if (!formData.emergencyName.trim()) errors.push('Emergency contact name is required');
@@ -204,6 +204,7 @@ const OnboardingForm: React.FC<{
       return;
     }
 
+    // Move to next section
     if (currentSection < sections.length - 1) {
       setCurrentSection(currentSection + 1);
     }
@@ -216,7 +217,7 @@ const OnboardingForm: React.FC<{
   };
 
   const handleSubmit = async () => {
-    // FIX #1: Validate all required fields before submission
+    // Validate all required fields before submission
     const errors: string[] = [];
 
     // Personal Information validation
@@ -229,8 +230,8 @@ const OnboardingForm: React.FC<{
     if (!formData.address.trim()) errors.push('Address is required');
     if (!isHRMode && !formData.password) errors.push('Password is required');
 
-    // Official Information validation
-    if (!formData.employeeId.trim()) errors.push('Employee ID is required');
+    // Official Information validation - only enforce employeeId in non-HR mode
+    if (!isHRMode && !formData.employeeId.trim()) errors.push('Employee ID is required');
 
     // Emergency Contact validation
     if (!formData.emergencyName.trim()) errors.push('Emergency contact name is required');
@@ -810,6 +811,7 @@ const OnboardingForm: React.FC<{
       {/* Navigation */}
       <div className="flex items-center justify-between">
         <Button 
+          type="button"
           variant="outline" 
           onClick={handlePrevious}
           disabled={currentSection === 0}
@@ -820,7 +822,7 @@ const OnboardingForm: React.FC<{
         
         <div className="flex gap-2">
           {currentSection === sections.length - 1 ? (
-            <Button 
+            <Button type="button"
               onClick={handleSubmit}
               className="rounded-xl bg-green-600 hover:bg-green-700"
             >
@@ -828,7 +830,7 @@ const OnboardingForm: React.FC<{
               Submit Form
             </Button>
           ) : (
-            <Button onClick={handleNext} className="rounded-xl">
+            <Button type="button" onClick={handleNext} className="rounded-xl">
               Next Section
             </Button>
           )}

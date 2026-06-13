@@ -799,7 +799,7 @@ router.get(
 /**
  * GET /api/salary/slips/:employeeId
  * Get all salary slips for an employee
- * - Employee role: only see released/approved slips
+ * - Employee role: see approved/released slips + their own pending_approval slips (uploads)
  * - Admin/HR: see all slips for same org
  * - Super admin: see all slips
  */
@@ -823,9 +823,18 @@ router.get(
           ? String(emp.orgId)
           : String(req.user.orgId);
 
-      // Employee role: only see released/approved slips
-      const isEmployee = req.user.role === "employee";
-      const statusFilter = isEmployee ? { status: { $in: ["approved", "released"] } } : {};
+      // Employee role: see released/approved slips + their own pending_approval slips (from uploads)
+      // Non-employee (admin/hr/super_admin): see all slips
+      let statusFilter = {};
+      if (req.user.role === "employee") {
+        // Employee can see approved/released slips and their own pending uploaded slips
+        statusFilter = {
+          $or: [
+            { status: { $in: ["approved", "released"] } },
+            { status: "pending_approval", source: "employee_upload" }
+          ]
+        };
+      }
 
       const total = await SalarySlip.countDocuments({
         employeeId,
@@ -997,10 +1006,17 @@ router.get(
         return sendError(res, orgAccess.message, orgAccess.status, orgAccess.status === 403 ? "FORBIDDEN" : "NOT_FOUND");
       }
 
-      // Employee role: only allow downloading approved/released slips
+      // Employee role: 
+      // - allow downloading approved/released slips
+      // - allow downloading their own pending_approval uploaded slips
+      // - block downloading generated (non-uploaded) pending slips
       const isEmployee = req.user.role === "employee";
-      if (isEmployee && !["approved", "released", "paid", "processed"].includes(slip.status)) {
-        return sendError(res, "This salary slip is not yet available for download", 403, "FORBIDDEN");
+      if (isEmployee) {
+        const isApprovedOrReleased = ["approved", "released", "paid", "processed"].includes(slip.status);
+        const isOwnUpload = slip.status === "pending_approval" && slip.source === "employee_upload";
+        if (!isApprovedOrReleased && !isOwnUpload) {
+          return sendError(res, "This salary slip is not yet available for download", 403, "FORBIDDEN");
+        }
       }
 
       if (slip.source === "employee_upload" && slip.uploadFilePath && fs.existsSync(slip.uploadFilePath)) {

@@ -81,12 +81,37 @@ export function buildTodayAttendanceQuery(
   effectiveEmployeeId,
   effectiveOrgId,
   authOrgId,
-  now = new Date()
+  now = new Date(),
+  timezone = 'Asia/Kolkata'
 ) {
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  // Use timezone-aware date calculation to ensure consistency with getDayBounds
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  
+  const parts = formatter.formatToParts(now);
+  const year = parseInt(parts.find(p => p.type === 'year')?.value || '2024', 10);
+  const month = parseInt(parts.find(p => p.type === 'month')?.value || '01', 10) - 1;
+  const day = parseInt(parts.find(p => p.type === 'day')?.value || '01', 10);
+  
+  // Create UTC midnight for the timezone-local date
+  const startUtcMidnight = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+  const endUtcMidnight = new Date(Date.UTC(year, month, day + 1, 0, 0, 0, 0));
+  
+  // Apply timezone offset to get the stored date value
+  const timezoneOffsets = {
+    'Asia/Kolkata': 5.5 * 60 * 60 * 1000,
+    'America/New_York': -5 * 60 * 60 * 1000,
+    'America/Los_Angeles': -8 * 60 * 60 * 1000,
+    'Europe/London': 0,
+  };
+  
+  const offset = timezoneOffsets[timezone] || 0;
+  const today = new Date(startUtcMidnight.getTime() - offset);
+  const tomorrow = new Date(endUtcMidnight.getTime() - offset);
 
   const base = {
     ...buildOrgIdClause(effectiveOrgId, authOrgId),

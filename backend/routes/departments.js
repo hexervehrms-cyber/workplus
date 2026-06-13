@@ -96,8 +96,25 @@ router.get(
   "/",
   authorize("super_admin", "admin", "hr", "manager"),
   asyncHandler(async (req, res) => {
-    const orgId = assertScopedOrgId(req, res);
-    if (!orgId) return;
+    let orgId = null;
+    const userRole = req.user?.role;
+    
+    // For Super Admin: require orgId query param
+    if (userRole === 'super_admin') {
+      orgId = req.query.orgId ? String(req.query.orgId).trim() : null;
+      if (!orgId) {
+        return res.status(400).json({
+          success: false,
+          message: "Organization is required for Super Admin department management",
+          code: "ORG_ID_REQUIRED"
+        });
+      }
+    } else {
+      // For Admin/HR/Manager: use their own org from JWT
+      orgId = assertScopedOrgId(req, res);
+      if (!orgId) return;
+    }
+    
     const { search, status } = req.query;
 
     const filter = { orgId };
@@ -137,8 +154,24 @@ router.post(
   "/seed-defaults",
   authorize("super_admin", "admin", "hr"),
   asyncHandler(async (req, res) => {
-    const orgId = assertScopedOrgId(req, res);
-    if (!orgId) return;
+    let orgId = null;
+    const userRole = req.user?.role;
+    
+    // For Super Admin: require orgId query param or body
+    if (userRole === 'super_admin') {
+      orgId = req.query.orgId || req.body.orgId ? String(req.query.orgId || req.body.orgId).trim() : null;
+      if (!orgId) {
+        return res.status(400).json({
+          success: false,
+          message: "Organization is required for Super Admin",
+          code: "ORG_ID_REQUIRED"
+        });
+      }
+    } else {
+      // For Admin/HR: use their own org
+      orgId = assertScopedOrgId(req, res);
+      if (!orgId) return;
+    }
 
     const created = [];
     const skipped = [];
@@ -204,8 +237,25 @@ router.get(
   "/:id",
   authorize("super_admin", "admin", "hr", "manager"),
   asyncHandler(async (req, res) => {
-    const orgId = assertScopedOrgId(req, res);
-    if (!orgId) return;
+    let orgId = null;
+    const userRole = req.user?.role;
+    
+    // For Super Admin: require orgId query param
+    if (userRole === 'super_admin') {
+      orgId = req.query.orgId ? String(req.query.orgId).trim() : null;
+      if (!orgId) {
+        return res.status(400).json({
+          success: false,
+          message: "Organization is required for Super Admin",
+          code: "ORG_ID_REQUIRED"
+        });
+      }
+    } else {
+      // For Admin/HR/Manager: use their own org
+      orgId = assertScopedOrgId(req, res);
+      if (!orgId) return;
+    }
+    
     const { id } = req.params;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -245,8 +295,25 @@ router.post(
   "/",
   authorize("super_admin", "admin", "hr"),
   asyncHandler(async (req, res) => {
-    const orgId = assertScopedOrgId(req, res);
-    if (!orgId) return;
+    let orgId = null;
+    const userRole = req.user?.role;
+    
+    // For Super Admin: require orgId in body or query
+    if (userRole === 'super_admin') {
+      orgId = req.body.orgId || req.query.orgId ? String(req.body.orgId || req.query.orgId).trim() : null;
+      if (!orgId) {
+        return res.status(400).json({
+          success: false,
+          message: "Organization is required for Super Admin",
+          code: "ORG_ID_REQUIRED"
+        });
+      }
+    } else {
+      // For Admin/HR: use their own org
+      orgId = assertScopedOrgId(req, res);
+      if (!orgId) return;
+    }
+    
     const { name, description, headName, code, isActive = true } = req.body;
 
     if (!name || !String(name).trim()) {
@@ -290,8 +357,25 @@ router.put(
   "/:id",
   authorize("super_admin", "admin", "hr"),
   asyncHandler(async (req, res) => {
-    const orgId = assertScopedOrgId(req, res);
-    if (!orgId) return;
+    let orgId = null;
+    const userRole = req.user?.role;
+    
+    // For Super Admin: require orgId query param
+    if (userRole === 'super_admin') {
+      orgId = req.query.orgId ? String(req.query.orgId).trim() : null;
+      if (!orgId) {
+        return res.status(400).json({
+          success: false,
+          message: "Organization is required for Super Admin",
+          code: "ORG_ID_REQUIRED"
+        });
+      }
+    } else {
+      // For Admin/HR: use their own org
+      orgId = assertScopedOrgId(req, res);
+      if (!orgId) return;
+    }
+    
     const { id } = req.params;
     const { name, description, headName, code, isActive } = req.body;
 
@@ -335,8 +419,25 @@ router.delete(
   "/:id",
   authorize("super_admin", "admin", "hr"),
   asyncHandler(async (req, res) => {
-    const orgId = assertScopedOrgId(req, res);
-    if (!orgId) return;
+    let orgId = null;
+    const userRole = req.user?.role;
+    
+    // For Super Admin: require orgId query param
+    if (userRole === 'super_admin') {
+      orgId = req.query.orgId ? String(req.query.orgId).trim() : null;
+      if (!orgId) {
+        return res.status(400).json({
+          success: false,
+          message: "Organization is required for Super Admin",
+          code: "ORG_ID_REQUIRED"
+        });
+      }
+    } else {
+      // For Admin/HR: use their own org
+      orgId = assertScopedOrgId(req, res);
+      if (!orgId) return;
+    }
+    
     const { id } = req.params;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {

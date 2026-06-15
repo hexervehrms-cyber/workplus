@@ -15,6 +15,7 @@ import ChatMessage from '../models/ChatMessage.js';
 import ChatGroup from '../models/ChatGroup.js';
 import User from '../models/User.js';
 import logger from '../utils/logger.js';
+import storageService from '../utils/storageService.js';
 import {
   assertScopedOrgId,
   userOrgIdFromReq,
@@ -38,67 +39,13 @@ const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
-const chatUploadDir = path.join(__dirname, '..', 'uploads', 'chat');
-const chatFileStorage = multer.diskStorage({
-  destination(_req, _file, cb) {
-    if (!fs.existsSync(chatUploadDir)) {
-      fs.mkdirSync(chatUploadDir, { recursive: true });
-    }
-    cb(null, chatUploadDir);
-  },
-  filename(_req, file, cb) {
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `chat-${uniqueSuffix}${path.extname(file.originalname)}`);
-  }
+// Configure multer for chat file uploads (memory storage for storageService processing)
+const chatFileUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }
 });
 
-const avatarUploadDir = path.join(__dirname, '..', 'uploads', 'avatars');
-const avatarStorage = multer.diskStorage({
-  destination(_req, _file, cb) {
-    if (!fs.existsSync(avatarUploadDir)) {
-      fs.mkdirSync(avatarUploadDir, { recursive: true });
-    }
-    cb(null, avatarUploadDir);
-  },
-  filename(req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const targetId = req.params.userId || req.user?.userId || 'user';
-    cb(null, `avatar-${targetId}-${uniqueSuffix}${path.extname(file.originalname)}`);
-  },
-});
-
-const avatarUpload = multer({
-  storage: avatarStorage,
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter(_req, file, cb) {
-    const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-    cb(null, allowed.includes(file.mimetype));
-  },
-});
-
-const groupAvatarStorage = multer.diskStorage({
-  destination(_req, _file, cb) {
-    if (!fs.existsSync(avatarUploadDir)) {
-      fs.mkdirSync(avatarUploadDir, { recursive: true });
-    }
-    cb(null, avatarUploadDir);
-  },
-  filename(req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const cid = String(req.params.conversationId || 'group').replace(/[^a-zA-Z0-9_-]/g, '_');
-    cb(null, `group-${cid}-${uniqueSuffix}${path.extname(file.originalname)}`);
-  },
-});
-
-const groupAvatarUpload = multer({
-  storage: groupAvatarStorage,
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter(_req, file, cb) {
-    const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-    cb(null, allowed.includes(file.mimetype));
-  },
-});
-
+// Helper functions for group chat management
 async function findGroupForMember(orgId, conversationId, userId) {
   return ChatGroup.findOne({
     conversationId: String(conversationId),
@@ -124,11 +71,6 @@ async function emitGroupUpdate(orgId, conversationId, payload) {
     });
   }
 }
-
-const chatFileUpload = multer({
-  storage: chatFileStorage,
-  limits: { fileSize: 25 * 1024 * 1024 }
-});
 
 /**
  * Send a message
@@ -614,7 +556,9 @@ router.delete(
 
 /**
  * POST /api/chat/upload
- * Upload a file attachment for a direct message (persists message + file on disk)
+ * Upload a file attachment for direct/group messages via storageService
+ * Stores in GridFS or local depending on FILE_STORAGE_DRIVER
+ * Maintains backward compatibility with old file paths
  */
 router.post(
   '/upload',
@@ -623,32 +567,142 @@ router.post(
   asyncHandler(async (req, res) => {
     const senderId = req.user.userId;
     const orgId = assertScopedOrgId(req, res);
-  if (!orgId) return;
+    if (!orgId) return;
     const { recipientId, conversationId: groupConversationId } = req.body;
 
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No file uploaded' });
     }
 
-    const relPath = `/uploads/chat/${req.file.filename}`;
+    try {
+      // Upload via storageService (GridFS or local)
+      const uploadResult = await storageService.uploadFile({
+        buffer: req.file.buffer,
+        folder: 'chat',
+        fileName: `chat-${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(req.file.originalname)}`,
+        mimeType: req.file.mimetype,
+        size: req.file.size
+      });
 
-    if (groupConversationId && String(groupConversationId).startsWith('grp_')) {
-      const group = await ChatGroup.findOne({
-        conversationId: String(groupConversationId),
+      // Backward compatibility: create local path format
+      const relPath = `/uploads/chat/${uploadResult.storageKey}`;
+
+      if (groupConversationId && String(groupConversationId).startsWith('grp_')) {
+        const group = await ChatGroup.findOne({
+          conversationId: String(groupConversationId),
+          orgId,
+          members: senderId,
+        })
+          .select('members conversationId')
+          .lean();
+
+        if (!group) {
+          return res.status(403).json({ success: false, message: 'Not a member of this group' });
+        }
+
+        const message = await ChatMessage.create({
+          senderId,
+          recipientId: null,
+          conversationId: group.conversationId,
+          messageType: 'file',
+          content: {
+            text: relPath,
+            file: {
+              fileName: req.file.originalname,
+              filePath: relPath,
+              fileSize: req.file.size,
+              mimeType: req.file.mimetype,
+              // NEW: Store GridFS metadata
+              storageKey: uploadResult.storageKey,
+              storageDriver: uploadResult.driver
+            },
+          },
+          channelInfo: {
+            channelType: 'group',
+            channelId: group.conversationId,
+            participants: group.members,
+          },
+          orgId,
+          status: 'delivered',
+        });
+
+        if (global.io) {
+          const senderDoc = await User.findById(senderId).select('name avatar').lean();
+          const payload = {
+            messageId: message._id,
+            senderId: message.senderId,
+            conversationId: message.conversationId,
+            content: relPath,
+            messageType: 'file',
+            timestamp: message.createdAt,
+            attachment: {
+              fileName: req.file.originalname,
+              fileSize: req.file.size,
+              mimeType: req.file.mimetype,
+              storageKey: uploadResult.storageKey,
+              storageDriver: uploadResult.driver
+            },
+          };
+          for (const mid of group.members) {
+            global.io.to(`user_${mid}`).emit('chat:new_message', {
+              ...payload,
+              senderName: senderDoc?.name || 'User',
+              senderAvatar: senderDoc?.avatar,
+              status: String(mid) === String(senderId) ? 'sent' : 'delivered',
+            });
+          }
+        }
+
+        logger.info('Chat file uploaded to group via storageService', {
+          conversationId: group.conversationId,
+          messageId: message._id,
+          storageKey: uploadResult.storageKey,
+          driver: uploadResult.driver,
+          size: req.file.size
+        });
+
+        return res.status(201).json({
+          success: true,
+          data: {
+            messageId: message._id.toString(),
+            attachment: {
+              fileName: req.file.originalname,
+              fileSize: req.file.size,
+              mimeType: req.file.mimetype,
+              storageKey: uploadResult.storageKey,
+              storageDriver: uploadResult.driver
+            },
+          },
+          message: 'File uploaded',
+        });
+      }
+
+      if (!recipientId) {
+        return res.status(400).json({
+          success: false,
+          message: 'recipientId or group conversationId is required',
+        });
+      }
+
+      const recipient = await User.findOne({
+        _id: recipientId,
         orgId,
-        members: senderId,
+        isActive: true,
+        deletedAt: null,
       })
-        .select('members conversationId')
+        .select('_id')
         .lean();
 
-      if (!group) {
-        return res.status(403).json({ success: false, message: 'Not a member of this group' });
+      if (!recipient) {
+        return res.status(404).json({ success: false, message: 'Recipient not found' });
       }
+
+      const conversationId = [String(senderId), String(recipientId)].sort().join('_');
 
       const message = await ChatMessage.create({
         senderId,
-        recipientId: null,
-        conversationId: group.conversationId,
+        recipientId,
+        conversationId,
         messageType: 'file',
         content: {
           text: relPath,
@@ -657,101 +711,49 @@ router.post(
             filePath: relPath,
             fileSize: req.file.size,
             mimeType: req.file.mimetype,
+            // NEW: Store GridFS metadata
+            storageKey: uploadResult.storageKey,
+            storageDriver: uploadResult.driver
           },
         },
         channelInfo: {
-          channelType: 'group',
-          channelId: group.conversationId,
-          participants: group.members,
+          channelType: 'direct',
+          participants: [senderId, recipientId],
         },
         orgId,
         status: 'delivered',
       });
 
-      if (global.io) {
-        const senderDoc = await User.findById(senderId).select('name avatar').lean();
-        const payload = {
-          messageId: message._id,
-          senderId: message.senderId,
-          conversationId: message.conversationId,
-          content: relPath,
-          messageType: 'file',
-          timestamp: message.createdAt,
-        };
-        for (const mid of group.members) {
-          global.io.to(`user_${mid}`).emit('chat:new_message', {
-            ...payload,
-            senderName: senderDoc?.name || 'User',
-            senderAvatar: senderDoc?.avatar,
-            status: String(mid) === String(senderId) ? 'sent' : 'delivered',
-          });
-        }
-      }
+      logger.info('Chat file uploaded via storageService', {
+        messageId: message._id,
+        conversationId,
+        storageKey: uploadResult.storageKey,
+        driver: uploadResult.driver,
+        size: req.file.size
+      });
 
-      return res.status(201).json({
+      res.status(201).json({
         success: true,
         data: {
-          fileUrl: relPath,
-          messageId: message.messageId || message._id.toString(),
-          fileName: req.file.originalname,
+          messageId: message._id.toString(),
+          attachment: {
+            fileName: req.file.originalname,
+            fileSize: req.file.size,
+            mimeType: req.file.mimetype,
+            storageKey: uploadResult.storageKey,
+            storageDriver: uploadResult.driver
+          },
         },
         message: 'File uploaded',
       });
-    }
-
-    if (!recipientId) {
-      return res.status(400).json({
+    } catch (error) {
+      logger.error('Chat file upload failed', { error: error.message });
+      res.status(500).json({
         success: false,
-        message: 'recipientId or group conversationId is required',
+        message: 'Failed to upload file',
+        error: error.message
       });
     }
-
-    const recipient = await User.findOne({
-      _id: recipientId,
-      orgId,
-      isActive: true,
-      deletedAt: null,
-    })
-      .select('_id')
-      .lean();
-
-    if (!recipient) {
-      return res.status(404).json({ success: false, message: 'Recipient not found' });
-    }
-
-    const conversationId = [String(senderId), String(recipientId)].sort().join('_');
-
-    const message = await ChatMessage.create({
-      senderId,
-      recipientId,
-      conversationId,
-      messageType: 'file',
-      content: {
-        text: relPath,
-        file: {
-          fileName: req.file.originalname,
-          filePath: relPath,
-          fileSize: req.file.size,
-          mimeType: req.file.mimetype,
-        },
-      },
-      channelInfo: {
-        channelType: 'direct',
-        participants: [senderId, recipientId],
-      },
-      orgId,
-      status: 'delivered',
-    });
-
-    res.status(201).json({
-      success: true,
-      data: {
-        fileUrl: relPath,
-        messageId: message.messageId || message._id.toString(),
-        fileName: req.file.originalname,
-      },
-      message: 'File uploaded',
-    });
   })
 );
 
@@ -1399,6 +1401,252 @@ router.get('/users', authenticate, asyncHandler(async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch users',
+      error: error.message
+    });
+  }
+}));
+
+/**
+ * GET /api/chat/messages/:messageId/attachment/view
+ * View attachment file with GridFS support and fallback to local storage
+ */
+router.get('/messages/:messageId/attachment/view', authenticate, asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  const userId = req.user.userId;
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
+
+  try {
+    // Look up message by ID
+    const message = await ChatMessage.findById(messageId).lean();
+    
+    if (!message) {
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found'
+      });
+    }
+
+    // Verify org match
+    if (String(message.orgId) !== String(orgId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied to this message'
+      });
+    }
+
+    // Authorization: sender or valid participant
+    const isSender = String(message.senderId) === String(userId);
+    const isRecipient = message.recipientId && String(message.recipientId) === String(userId);
+    const isParticipant = (message.channelInfo?.participants || []).some(
+      p => String(p) === String(userId)
+    );
+
+    if (!isSender && !isRecipient && !isParticipant) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to view this attachment'
+      });
+    }
+
+    // Get file info from message content
+    const fileInfo = message.content?.file;
+    if (!fileInfo) {
+      return res.status(404).json({
+        success: false,
+        message: 'No attachment found in this message'
+      });
+    }
+
+    let fileStream;
+    const fileName = fileInfo.fileName || 'attachment';
+    const mimeType = fileInfo.mimeType || 'application/octet-stream';
+
+    // Try GridFS first if storage key exists
+    if (fileInfo.storageKey && fileInfo.storageDriver) {
+      try {
+        fileStream = await storageService.getFileStream(fileInfo.storageKey, fileInfo.storageDriver);
+        logger.info('Chat attachment retrieved from GridFS', { 
+          messageId, 
+          storageKey: fileInfo.storageKey, 
+          driver: fileInfo.storageDriver 
+        });
+      } catch (gridfsError) {
+        logger.warn('Failed to retrieve chat attachment from GridFS, falling back to local', { 
+          error: gridfsError.message, 
+          messageId 
+        });
+        fileStream = null;
+      }
+    }
+
+    // Fall back to local file if GridFS fails or no storage key
+    if (!fileStream && fileInfo.filePath) {
+      // Path traversal prevention: ensure path is within uploads directory
+      const resolvedPath = path.resolve(__dirname, '..', fileInfo.filePath);
+      const uploadsDir = path.resolve(__dirname, '..', 'uploads');
+      
+      if (!resolvedPath.startsWith(uploadsDir)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Invalid file path'
+        });
+      }
+
+      // Verify file exists
+      if (!fs.existsSync(resolvedPath)) {
+        return res.status(404).json({
+          success: false,
+          message: 'File not found on server'
+        });
+      }
+
+      fileStream = fs.createReadStream(resolvedPath);
+      logger.info('Chat attachment retrieved from local storage (fallback)', { messageId });
+    }
+
+    if (!fileStream) {
+      return res.status(404).json({
+        success: false,
+        message: 'File not found'
+      });
+    }
+
+    // Set headers
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+    // Send file
+    fileStream.pipe(res);
+  } catch (error) {
+    logger.error('Error viewing attachment', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to view attachment',
+      error: error.message
+    });
+  }
+}));
+
+/**
+ * GET /api/chat/messages/:messageId/attachment/download
+ * Download attachment file with GridFS support and fallback to local storage
+ */
+router.get('/messages/:messageId/attachment/download', authenticate, asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  const userId = req.user.userId;
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
+
+  try {
+    // Look up message by ID
+    const message = await ChatMessage.findById(messageId).lean();
+    
+    if (!message) {
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found'
+      });
+    }
+
+    // Verify org match
+    if (String(message.orgId) !== String(orgId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied to this message'
+      });
+    }
+
+    // Authorization: sender or valid participant
+    const isSender = String(message.senderId) === String(userId);
+    const isRecipient = message.recipientId && String(message.recipientId) === String(userId);
+    const isParticipant = (message.channelInfo?.participants || []).some(
+      p => String(p) === String(userId)
+    );
+
+    if (!isSender && !isRecipient && !isParticipant) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to download this attachment'
+      });
+    }
+
+    // Get file info from message content
+    const fileInfo = message.content?.file;
+    if (!fileInfo) {
+      return res.status(404).json({
+        success: false,
+        message: 'No attachment found in this message'
+      });
+    }
+
+    let fileStream;
+    const fileName = fileInfo.fileName || 'attachment';
+    const mimeType = fileInfo.mimeType || 'application/octet-stream';
+
+    // Try GridFS first if storage key exists
+    if (fileInfo.storageKey && fileInfo.storageDriver) {
+      try {
+        fileStream = await storageService.getFileStream(fileInfo.storageKey, fileInfo.storageDriver);
+        logger.info('Chat attachment downloaded from GridFS', { 
+          messageId, 
+          storageKey: fileInfo.storageKey, 
+          driver: fileInfo.storageDriver 
+        });
+      } catch (gridfsError) {
+        logger.warn('Failed to retrieve chat attachment from GridFS, falling back to local', { 
+          error: gridfsError.message, 
+          messageId 
+        });
+        fileStream = null;
+      }
+    }
+
+    // Fall back to local file if GridFS fails or no storage key
+    if (!fileStream && fileInfo.filePath) {
+      // Path traversal prevention: ensure path is within uploads directory
+      const resolvedPath = path.resolve(__dirname, '..', fileInfo.filePath);
+      const uploadsDir = path.resolve(__dirname, '..', 'uploads');
+      
+      if (!resolvedPath.startsWith(uploadsDir)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Invalid file path'
+        });
+      }
+
+      // Verify file exists
+      if (!fs.existsSync(resolvedPath)) {
+        return res.status(404).json({
+          success: false,
+          message: 'File not found on server'
+        });
+      }
+
+      fileStream = fs.createReadStream(resolvedPath);
+      logger.info('Chat attachment downloaded from local storage (fallback)', { messageId });
+    }
+
+    if (!fileStream) {
+      return res.status(404).json({
+        success: false,
+        message: 'File not found'
+      });
+    }
+
+    // Set headers for download
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+    // Send file stream
+    fileStream.pipe(res);
+  } catch (error) {
+    logger.error('Error downloading attachment', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to download attachment',
       error: error.message
     });
   }

@@ -21,6 +21,8 @@ import EmailNotificationService from "../utils/emailNotificationService.js";
 import logger from "../utils/logger.js";
 import { aggregateStructureMoney } from "../utils/payrollMoney.js";
 import { emitKPIUpdate } from "../utils/kpiUpdater.js";
+import { resolveOrganizationSmtp } from "../utils/workflowNotifications.js";
+import storageService from "../utils/storageService.js";
 import {
   employeeLookupQuery,
   structureLookupQuery,
@@ -29,24 +31,15 @@ import {
   userOrgIdFromReq
 } from "../utils/orgScopeHelpers.js";
 import { buildSalarySlipHtml } from "../utils/salarySlipHtml.js";
+import { generateSalarySlipPdf } from "../utils/htmlToPdfConverter.js";
 import Organization from "../models/Organization.js";
 import { findEmployeeForSelfService } from "../utils/employeeSelfService.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const payslipUploadDir = path.join(__dirname, "..", "uploads", "payslips");
+
+// Configure multer for payslip uploads (memory storage for storageService processing)
 const payslipUpload = multer({
-  storage: multer.diskStorage({
-    destination(_req, _file, cb) {
-      if (!fs.existsSync(payslipUploadDir)) {
-        fs.mkdirSync(payslipUploadDir, { recursive: true });
-      }
-      cb(null, payslipUploadDir);
-    },
-    filename(_req, file, cb) {
-      const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-      cb(null, `payslip-${unique}${path.extname(file.originalname) || ".pdf"}`);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 },
   fileFilter(_req, file, cb) {
     const allowed = [
@@ -1078,17 +1071,19 @@ router.put(
         const employee = {
           _id: slip.employeeId._id,
           name: slip.employeeId.userId?.name || slip.employeeName,
-          email: slip.employeeId.userId?.email
+          email: slip.employeeId.userId?.email,
+          orgId: slip.orgId
         };
 
         if (employee.email) {
+          const organizationSmtp = await resolveOrganizationSmtp(slip.orgId);
           await EmailNotificationService.sendSalarySlipApprovedEmail(employee, {
             _id: slip._id,
             month: slip.month,
             year: slip.year,
             grossEarnings: slip.grossEarnings,
             netSalary: slip.netSalary
-          });
+          }, { organizationSmtp });
           
           logger.info("Salary slip approval email sent", {
             slipId,
@@ -1102,7 +1097,7 @@ router.put(
         }
       } catch (emailError) {
         // Log error but don't fail the approval
-        logger.error("Failed to send salary slip approval email", {
+        logger.warn("Failed to send salary slip approval email", {
           error: emailError.message,
           slipId
         });
@@ -1165,13 +1160,23 @@ router.get(
         const u = employeeDoc.userId;
         employeeUserId = (u._id || u).toString();
       }
+      
       const requestUserId = req.user.userId?.toString?.() || String(req.user.userId);
       const isOwner =
         (slipOwnerUserId != null && slipOwnerUserId === requestUserId) ||
         (employeeUserId != null && employeeUserId === requestUserId);
       const isPrivileged = ["admin", "hr", "super_admin"].includes(req.user.role);
+      
+      // Enforce access control
       if (!isOwner && !isPrivileged) {
-        return sendError(res, "Unauthorized", 403, "FORBIDDEN");
+        logger.warn("Unauthorized salary slip download attempt", {
+          slipId,
+          requestUserId,
+          slipOwnerUserId,
+          employeeUserId,
+          userRole: req.user.role
+        });
+        return sendError(res, "You do not have permission to access this payslip", 403, "FORBIDDEN");
       }
 
       const orgAccess = await assertSlipOrgAccess(req, slip);
@@ -1192,25 +1197,79 @@ router.get(
         }
       }
 
-      // Handle uploaded payslip files
-      if (slip.source === "employee_upload" && slip.uploadFilePath && fs.existsSync(slip.uploadFilePath)) {
-        const mime = slip.uploadMimeType || "application/octet-stream";
-        res.setHeader("Content-Type", mime);
-        
-        if (inline) {
-          res.setHeader("Content-Disposition", "inline");
-        } else {
-          res.setHeader(
-            "Content-Disposition",
-            `attachment; filename="${slip.uploadFileName || `payslip-${slip.month}-${slip.year}`}"`
-          );
+      // Handle uploaded payslip files (GridFS or local fallback)
+      if (slip.source === "employee_upload" && (slip.storageKey || slip.uploadFilePath)) {
+        try {
+          let fileStream;
+          const mime = slip.uploadMimeType || "application/octet-stream";
+          res.setHeader("Content-Type", mime);
+          
+          // Try GridFS first if storageKey exists
+          if (slip.storageKey && slip.storageDriver) {
+            try {
+              fileStream = await storageService.getFileStream(slip.storageKey, slip.storageDriver);
+              logger.info('Payslip retrieved from GridFS', { slipId, storageKey: slip.storageKey, driver: slip.storageDriver });
+            } catch (gridfsError) {
+              logger.warn('Failed to retrieve payslip from GridFS, falling back to local', { error: gridfsError.message, slipId });
+              // Fall through to local file handling
+              fileStream = null;
+            }
+          }
+          
+          // Fall back to local file if GridFS fails or no storage key
+          if (!fileStream && slip.uploadFilePath) {
+            // Security: Prevent path traversal attacks
+            const resolvedPath = path.resolve(slip.uploadFilePath);
+            const uploadsDir = path.resolve(path.join(__dirname, "..", "uploads", "payslips"));
+            
+            // Ensure the resolved file path is within the uploads directory
+            if (!resolvedPath.startsWith(uploadsDir)) {
+              logger.error("Path traversal attempt detected", {
+                slipId,
+                uploadFilePath: slip.uploadFilePath,
+                resolvedPath,
+                uploadsDir
+              });
+              return sendError(res, "Invalid payslip file path", 400, "BAD_REQUEST");
+            }
+            
+            if (!fs.existsSync(resolvedPath)) {
+              logger.warn("Uploaded payslip file not found locally", {
+                slipId,
+                uploadFilePath: slip.uploadFilePath,
+                resolvedPath
+              });
+              return sendError(res, "Payslip file not found on server", 404, "NOT_FOUND");
+            }
+            
+            fileStream = fs.createReadStream(resolvedPath);
+            logger.info('Payslip retrieved from local storage (fallback)', { slipId });
+          }
+          
+          if (!fileStream) {
+            return sendError(res, "Payslip file not found", 404, "NOT_FOUND");
+          }
+          
+          if (inline) {
+            res.setHeader("Content-Disposition", "inline");
+          } else {
+            res.setHeader(
+              "Content-Disposition",
+              `attachment; filename="${slip.uploadFileName || `payslip-${slip.month}-${slip.year}`}"`
+            );
+          }
+          
+          await SalarySlip.findByIdAndUpdate(slipId, {
+            downloadedAt: new Date(),
+            $inc: { downloadCount: 1 },
+          });
+          
+          fileStream.pipe(res);
+        } catch (error) {
+          logger.error('Failed to download payslip file', { error: error.message, slipId });
+          return sendError(res, "Failed to download payslip file", 500, "INTERNAL_ERROR");
         }
-        
-        await SalarySlip.findByIdAndUpdate(slipId, {
-          downloadedAt: new Date(),
-          $inc: { downloadCount: 1 },
-        });
-        return res.sendFile(path.resolve(slip.uploadFilePath));
+        return;
       }
 
       // Generate professional HTML salary slip for admin-generated slips
@@ -1222,37 +1281,68 @@ router.get(
           .lean();
       }
 
-      const htmlContent = buildSalarySlipHtml({
-        slip,
-        employee: employeeDoc,
-        organization: organization || {},
-      });
-
-      // Set response headers based on inline parameter
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      
+      // For inline preview: return HTML
       if (inline) {
-        // Inline preview - allow rendering in iframe
+        const htmlContent = buildSalarySlipHtml({
+          slip,
+          employee: employeeDoc,
+          organization: organization || {},
+        });
+
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.setHeader('Content-Disposition', 'inline');
-      } else {
-        // Download as file
-        res.setHeader('Content-Disposition', `attachment; filename="salary-slip-${slip.month}-${slip.year}.html"`);
+        res.send(htmlContent);
+
+        await SalarySlip.findByIdAndUpdate(slipId, {
+          downloadedAt: new Date(),
+          $inc: { downloadCount: 1 }
+        });
+
+        logger.info("Salary slip preview accessed", {
+          slipId,
+          accessedBy: req.user.userId
+        });
+        return;
       }
 
-      // Send HTML content
-      res.send(htmlContent);
+      // For download: return PDF
+      const employeeName = employeeDoc ? 
+        `${employeeDoc.firstName || ''} ${employeeDoc.lastName || ''}`.trim() || 'Employee' 
+        : 'Employee';
+      
+      try {
+        const pdfBuffer = await generateSalarySlipPdf(
+          slip,
+          employeeDoc,
+          organization
+        );
 
-      // Update download count
-      await SalarySlip.findByIdAndUpdate(slipId, {
-        downloadedAt: new Date(),
-        $inc: { downloadCount: 1 }
-      });
+        const fileName = `Payslip-${employeeName}-${slip.month}-${slip.year}.pdf`;
+        
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.send(pdfBuffer);
 
-      logger.info("Salary slip accessed", {
-        slipId,
-        accessedBy: req.user.userId,
-        inline
-      });
+        await SalarySlip.findByIdAndUpdate(slipId, {
+          downloadedAt: new Date(),
+          $inc: { downloadCount: 1 }
+        });
+
+        logger.info("Salary slip PDF downloaded", {
+          slipId,
+          accessedBy: req.user.userId,
+          fileName
+        });
+      } catch (pdfError) {
+        logger.error("PDF generation failed", {
+          slipId,
+          error: pdfError.message,
+          employeeName
+        });
+        
+        // Return clean 500 error - do not silently fall back to HTML
+        return sendError(res, "Unable to generate PDF payslip", 500, "PDF_GENERATION_ERROR");
+      }
     } catch (error) {
       logger.error("Download salary slip error", {
         error: error.message,
@@ -1847,119 +1937,148 @@ router.post(
       );
     }
 
-    // Detect if file is CSV and parse salary data if so
-    let payloadData = {
-      employeeId: emp._id,
-      userId: req.user.userId,
-      orgId: String(emp.orgId || orgId),
-      month,
-      year,
-      status: "pending_approval",
-      source: "employee_upload",
-      uploadFileName: req.file.originalname,
-      uploadMimeType: req.file.mimetype,
-      uploadFilePath: req.file.path,
-      employeeNotes: notes,
-      grossEarnings: 0,
-      totalDeductions: 0,
-      netSalary: 0,
-      earnings: {},
-      deductions: {},
-      attendanceData: {},
-      createdBy: req.user.userId,
-    };
+    try {
+      // Upload file via storageService (GridFS or local)
+      const uploadResult = await storageService.uploadFile({
+        buffer: req.file.buffer,
+        folder: 'payslips',
+        fileName: `payslip-${emp._id}-${month}-${year}-${Date.now()}${path.extname(req.file.originalname)}`,
+        mimeType: req.file.mimetype,
+        size: req.file.size
+      });
 
-    // Check if file is CSV
-    const isCSV = req.file.mimetype === 'text/csv' || 
-                  req.file.originalname.toLowerCase().endsWith('.csv');
-    
-    if (isCSV) {
-      try {
-        const csvText = req.file.buffer.toString('utf-8');
-        const rows = parseCSV(csvText);
-        
-        if (rows.length === 0) {
-          return sendError(res, "CSV file is empty", 400, "VALIDATION_ERROR");
+      // Detect if file is CSV and parse salary data if so
+      let payloadData = {
+        employeeId: emp._id,
+        userId: req.user.userId,
+        orgId: String(emp.orgId || orgId),
+        month,
+        year,
+        status: "pending_approval",
+        source: "employee_upload",
+        uploadFileName: req.file.originalname,
+        uploadMimeType: req.file.mimetype,
+        storageKey: uploadResult.storageKey,
+        storageDriver: uploadResult.driver,
+        uploadFilePath: `uploads/payslips/${uploadResult.storageKey}`,
+        employeeNotes: notes,
+        grossEarnings: 0,
+        totalDeductions: 0,
+        netSalary: 0,
+        earnings: {},
+        deductions: {},
+        attendanceData: {},
+        createdBy: req.user.userId,
+      };
+
+      // Check if file is CSV
+      const isCSV = req.file.mimetype === 'text/csv' || 
+                    req.file.originalname.toLowerCase().endsWith('.csv');
+      
+      if (isCSV) {
+        try {
+          const csvText = req.file.buffer.toString('utf-8');
+          const rows = parseCSV(csvText);
+          
+          if (rows.length === 0) {
+            return sendError(res, "CSV file is empty", 400, "VALIDATION_ERROR");
+          }
+          
+          const csvRow = rows[0];
+          const csvMonth = toNumberOrZero(csvRow.month);
+          const csvYear = toNumberOrZero(csvRow.year);
+          
+          if (csvMonth !== 0 && csvYear !== 0) {
+            if (csvMonth !== month || csvYear !== year) {
+              return sendError(
+                res,
+                `Template month/year (${csvMonth}/${csvYear}) does not match selected payroll period (${month}/${year})`,
+                400,
+                "VALIDATION_ERROR"
+              );
+            }
+          }
+          
+          const parsed = parseSalarySlipFromCSV(csvRow, emp);
+          
+          if (!parsed.valid) {
+            return sendError(res, parsed.error || "Invalid salary data in CSV", 400, "VALIDATION_ERROR");
+          }
+          
+          payloadData = {
+            ...payloadData,
+            earnings: parsed.earnings,
+            deductions: parsed.deductions,
+            grossEarnings: parsed.grossEarnings,
+            totalDeductions: parsed.totalDeductions,
+            netSalary: parsed.netSalary,
+            slipNumber: parsed.slipNumber || undefined,
+            paidDate: parsed.paidDate || undefined,
+            employeeNotes: parsed.notes || notes,
+          };
+          
+          logger.info("CSV payslip data parsed", {
+            employeeId: emp._id,
+            employeeCode: emp.employeeCode,
+            month,
+            year,
+            grossEarnings: parsed.grossEarnings,
+            netSalary: parsed.netSalary,
+            storageKey: uploadResult.storageKey,
+            storageDriver: uploadResult.driver
+          });
+        } catch (csvError) {
+          logger.error("CSV parsing error", {
+            error: csvError.message,
+            fileName: req.file.originalname,
+            employeeId: emp._id
+          });
+          return sendError(res, "Failed to parse CSV file. Please check the format.", 400, "VALIDATION_ERROR");
         }
-        
-        // Parse first row as salary data
-        const csvRow = rows[0];
-        
-        // Validate month/year match
-        const csvMonth = toNumberOrZero(csvRow.month);
-        const csvYear = toNumberOrZero(csvRow.year);
-        
-        if (csvMonth !== 0 && csvYear !== 0) {
-          // CSV has month/year values - they should match form selection
-          if (csvMonth !== month || csvYear !== year) {
-            return sendError(
-              res,
-              `Template month/year (${csvMonth}/${csvYear}) does not match selected payroll period (${month}/${year})`,
-              400,
-              "VALIDATION_ERROR"
-            );
+      }
+
+      let slip;
+      if (existing) {
+        // Delete old file from GridFS if it exists
+        if (existing.storageKey && existing.storageDriver) {
+          try {
+            await storageService.deleteFile(existing.storageKey, existing.storageDriver);
+            logger.info('Old payslip deleted from GridFS', { slipId: existing._id, storageKey: existing.storageKey });
+          } catch (error) {
+            logger.warn('Failed to delete old payslip from GridFS', { error: error.message, slipId: existing._id });
+          }
+        } else if (existing.uploadFilePath && fs.existsSync(existing.uploadFilePath)) {
+          try {
+            fs.unlinkSync(existing.uploadFilePath);
+          } catch {
+            /* ignore */
           }
         }
-        
-        // Parse salary data (pass full employee record for ID validation)
-        const parsed = parseSalarySlipFromCSV(csvRow, emp);
-        
-        if (!parsed.valid) {
-          return sendError(res, parsed.error || "Invalid salary data in CSV", 400, "VALIDATION_ERROR");
-        }
-        
-        // If CSV has month/year different from form, use form values (form is source of truth)
-        // but allow CSV to populate salary fields
-        payloadData = {
-          ...payloadData,
-          earnings: parsed.earnings,
-          deductions: parsed.deductions,
-          grossEarnings: parsed.grossEarnings,
-          totalDeductions: parsed.totalDeductions,
-          netSalary: parsed.netSalary,
-          slipNumber: parsed.slipNumber || undefined,
-          paidDate: parsed.paidDate || undefined,
-          employeeNotes: parsed.notes || notes,
-        };
-        
-        logger.info("CSV payslip data parsed", {
-          employeeId: emp._id,
-          employeeCode: emp.employeeCode,
-          month,
-          year,
-          grossEarnings: parsed.grossEarnings,
-          netSalary: parsed.netSalary
-        });
-      } catch (csvError) {
-        logger.error("CSV parsing error", {
-          error: csvError.message,
-          fileName: req.file.originalname,
-          employeeId: emp._id
-        });
-        return sendError(res, "Failed to parse CSV file. Please check the format.", 400, "VALIDATION_ERROR");
+        slip = await SalarySlip.findByIdAndUpdate(existing._id, payloadData, { new: true });
+      } else {
+        slip = await SalarySlip.create(payloadData);
       }
-    }
 
-    let slip;
-    if (existing) {
-      if (existing.uploadFilePath && fs.existsSync(existing.uploadFilePath)) {
-        try {
-          fs.unlinkSync(existing.uploadFilePath);
-        } catch {
-          /* ignore */
-        }
-      }
-      slip = await SalarySlip.findByIdAndUpdate(existing._id, payloadData, { new: true });
-    } else {
-      slip = await SalarySlip.create(payloadData);
-    }
+      logger.info('Payslip uploaded via storageService', {
+        slipId: slip._id,
+        employeeId: emp._id,
+        storageKey: uploadResult.storageKey,
+        driver: uploadResult.driver,
+        size: req.file.size,
+        month,
+        year
+      });
 
-    return sendSuccess(
-      res,
-      slip,
-      "Payslip uploaded and sent to admin for approval",
-      existing ? 200 : 201
-    );
+      return sendSuccess(
+        res,
+        slip,
+        "Payslip uploaded and sent to admin for approval",
+        existing ? 200 : 201
+      );
+    } catch (error) {
+      logger.error('Payslip upload failed', { error: error.message, employeeId: emp._id });
+      return sendError(res, "Failed to upload payslip", 500, "INTERNAL_ERROR");
+    }
   })
 );
 

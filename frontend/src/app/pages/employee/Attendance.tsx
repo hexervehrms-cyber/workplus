@@ -592,46 +592,63 @@ export default function Attendance() {
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Date</th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Check-in</th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Check-out</th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Hours</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Day</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Working Hours</th>
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {filteredAttendance.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-6 py-4 text-center text-muted-foreground">
+                      <td colSpan={4} className="px-6 py-4 text-center text-muted-foreground">
                         {attendanceHistory.length === 0 ? 'No attendance records found' : 'No records match the selected date range'}
                       </td>
                     </tr>
                   ) : (
-                    filteredAttendance.map((record) => (
-                      <tr key={record._id} className="hover:bg-accent/50 transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <Calendar className="w-4 h-4 text-muted-foreground" />
-                            <span className="font-medium">{new Date(record.date).toLocaleDateString()}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-sm">
-                          {record.checkIn ? new Date(record.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '-'}
-                        </td>
-                        <td className="px-6 py-4 text-sm">
-                          {record.checkOut ? new Date(record.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '-'}
-                        </td>
-                        <td className="px-6 py-4 text-sm font-medium">
-                          {record.hoursWorked 
-                            ? `${Math.floor(record.hoursWorked)}h ${Math.round((record.hoursWorked % 1) * 60)}m`
-                            : '-'}
-                        </td>
-                        <td className="px-6 py-4">
-                          <Badge variant={record.status === 'present' ? 'default' : 'secondary'}>
-                            {safeTitleCase(record.status, '—')}
-                          </Badge>
-                        </td>
-                      </tr>
-                    ))
+                    filteredAttendance.map((record) => {
+                      const date = new Date(record.date);
+                      const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
+                      const formattedDate = date.toISOString().split('T')[0];
+                      const hoursText = record.hoursWorked 
+                        ? `${Math.floor(record.hoursWorked)}h ${Math.round((record.hoursWorked % 1) * 60)}m`
+                        : '—';
+                      
+                      // Status badge colors
+                      const getStatusColor = (status: string) => {
+                        switch (status) {
+                          case 'present':
+                            return 'bg-green-100 text-green-800';
+                          case 'absent':
+                            return 'bg-red-100 text-red-800';
+                          case 'on-leave':
+                          case 'approved-leave':
+                            return 'bg-blue-100 text-blue-800';
+                          case 'lwp':
+                            return 'bg-orange-100 text-orange-800';
+                          case 'comp-off':
+                            return 'bg-purple-100 text-purple-800';
+                          case 'ncns':
+                            return 'bg-red-200 text-red-900';
+                          case 'sandwich-leave':
+                            return 'bg-indigo-100 text-indigo-800';
+                          default:
+                            return 'bg-gray-100 text-gray-800';
+                        }
+                      };
+                      
+                      return (
+                        <tr key={record._id} className="hover:bg-accent/50 transition-colors">
+                          <td className="px-6 py-4 font-medium">{formattedDate}</td>
+                          <td className="px-6 py-4 text-sm text-muted-foreground">{dayName}</td>
+                          <td className="px-6 py-4 text-sm font-medium">{hoursText}</td>
+                          <td className="px-6 py-4">
+                            <Badge className={`${getStatusColor(record.status)} border-0`}>
+                              {safeTitleCase(record.status, '—')}
+                            </Badge>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>

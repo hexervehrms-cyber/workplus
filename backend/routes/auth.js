@@ -4,7 +4,6 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, auditLog } from "../middleware/auth.js";
-import { blockUnverifiedDomain } from "../middleware/domainResolver.js";
 import { loginLimiter, registerLimiter, passwordResetLimiter } from "../middleware/rateLimiter.js";
 import User from "../models/User.js";
 import Employee from "../models/Employee.js";
@@ -34,7 +33,6 @@ const router = express.Router();
  */
 router.post("/login", 
   loginLimiter,
-  blockUnverifiedDomain,
   asyncHandler(async (req, res) => {
     const { email, password } = req.body;
 

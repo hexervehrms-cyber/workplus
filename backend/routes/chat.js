@@ -45,6 +45,38 @@ const chatFileUpload = multer({
   limits: { fileSize: 25 * 1024 * 1024 }
 });
 
+// Configure multer for avatar uploads (memory storage for storageService processing)
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed.'));
+    }
+  }
+});
+
+// Configure multer for group avatar uploads (memory storage for storageService processing)
+const groupAvatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed.'));
+    }
+  }
+});
+
 // Helper functions for group chat management
 async function findGroupForMember(orgId, conversationId, userId) {
   return ChatGroup.findOne({
@@ -384,20 +416,51 @@ router.post(
       return res.status(403).json({ success: false, message: 'Not authorized to change group photo' });
     }
 
-    const avatarPath = `uploads/avatars/${req.file.filename}`;
-    group.avatar = avatarPath;
-    await group.save();
-    await emitGroupUpdate(orgId, conversationId, { avatar: avatarPath });
+    try {
+      // Upload via storageService (GridFS or local)
+      const uploadResult = await storageService.uploadFile({
+        buffer: req.file.buffer,
+        folder: 'chat/group-avatars',
+        fileName: `group-avatar-${conversationId}-${Date.now()}${path.extname(req.file.originalname)}`,
+        mimeType: req.file.mimetype,
+        size: req.file.size
+      });
 
-    res.json({
-      success: true,
-      data: {
-        conversationId,
-        avatar: avatarPath,
-        name: group.name,
-      },
-      message: 'Group photo updated',
-    });
+      // Store avatar path for backward compatibility
+      const avatarPath = `/uploads/chat/group-avatars/${uploadResult.storageKey}`;
+      
+      // Clean up old avatar file if it exists and uses GridFS
+      if (group.avatar && group.avatarStorageKey) {
+        try {
+          await storageService.deleteFile(group.avatarStorageKey);
+        } catch (cleanupError) {
+          logger.warn('Failed to clean up old group avatar', { error: cleanupError.message });
+        }
+      }
+
+      group.avatar = avatarPath;
+      group.avatarStorageKey = uploadResult.storageKey;
+      group.avatarStorageDriver = uploadResult.driver;
+      await group.save();
+      await emitGroupUpdate(orgId, conversationId, { avatar: avatarPath });
+
+      res.json({
+        success: true,
+        data: {
+          conversationId,
+          avatar: avatarPath,
+          name: group.name,
+        },
+        message: 'Group photo updated',
+      });
+    } catch (error) {
+      logger.error('Group avatar upload failed', { error: error.message, conversationId });
+      res.status(500).json({
+        success: false,
+        message: 'Failed to upload group avatar',
+        error: error.message
+      });
+    }
   })
 );
 
@@ -1326,32 +1389,63 @@ router.post(
       orgId,
       isActive: true,
       deletedAt: null,
-    }).select('avatar name email');
+    }).select('avatar name email avatarStorageKey avatarStorageDriver');
 
     if (!targetUser) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    const avatarPath = `uploads/avatars/${req.file.filename}`;
-    targetUser.avatar = avatarPath;
-    await targetUser.save();
-
-    if (global.io) {
-      global.io.to(`user_${targetUserId}`).emit('chat:avatar_updated', {
-        userId: targetUserId,
-        avatar: avatarPath,
+    try {
+      // Upload via storageService (GridFS or local)
+      const uploadResult = await storageService.uploadFile({
+        buffer: req.file.buffer,
+        folder: 'chat/user-avatars',
+        fileName: `user-avatar-${targetUserId}-${Date.now()}${path.extname(req.file.originalname)}`,
+        mimeType: req.file.mimetype,
+        size: req.file.size
       });
-      global.io.to(`tenant_${orgId}`).emit('chat:avatar_updated', {
-        userId: targetUserId,
-        avatar: avatarPath,
+
+      // Store avatar path for backward compatibility
+      const avatarPath = `/uploads/chat/user-avatars/${uploadResult.storageKey}`;
+      
+      // Clean up old avatar file if it exists and uses GridFS
+      if (targetUser.avatar && targetUser.avatarStorageKey) {
+        try {
+          await storageService.deleteFile(targetUser.avatarStorageKey);
+        } catch (cleanupError) {
+          logger.warn('Failed to clean up old user avatar', { error: cleanupError.message });
+        }
+      }
+
+      targetUser.avatar = avatarPath;
+      targetUser.avatarStorageKey = uploadResult.storageKey;
+      targetUser.avatarStorageDriver = uploadResult.driver;
+      await targetUser.save();
+
+      if (global.io) {
+        global.io.to(`user_${targetUserId}`).emit('chat:avatar_updated', {
+          userId: targetUserId,
+          avatar: avatarPath,
+        });
+        global.io.to(`tenant_${orgId}`).emit('chat:avatar_updated', {
+          userId: targetUserId,
+          avatar: avatarPath,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'Avatar updated successfully',
+        data: { avatarPath, user: targetUser },
+      });
+    } catch (error) {
+      logger.error('User avatar upload failed', { error: error.message, userId: targetUserId });
+      res.status(500).json({
+        success: false,
+        message: 'Failed to upload avatar',
+        error: error.message
       });
     }
-
-    res.json({
-      success: true,
-      message: 'Avatar updated successfully',
-      data: { avatarPath, user: targetUser },
-    });
   })
 );
 

@@ -1984,11 +1984,15 @@ router.post(
             return sendError(res, "CSV file is empty", 400, "VALIDATION_ERROR");
           }
           
+          // Parse first row as salary data
           const csvRow = rows[0];
+          
+          // Validate month/year match
           const csvMonth = toNumberOrZero(csvRow.month);
           const csvYear = toNumberOrZero(csvRow.year);
           
           if (csvMonth !== 0 && csvYear !== 0) {
+            // CSV has month/year values - they should match form selection
             if (csvMonth !== month || csvYear !== year) {
               return sendError(
                 res,
@@ -1999,12 +2003,15 @@ router.post(
             }
           }
           
+          // Parse salary data (pass full employee record for ID validation)
           const parsed = parseSalarySlipFromCSV(csvRow, emp);
           
           if (!parsed.valid) {
             return sendError(res, parsed.error || "Invalid salary data in CSV", 400, "VALIDATION_ERROR");
           }
           
+          // If CSV has month/year different from form, use form values (form is source of truth)
+          // but allow CSV to populate salary fields
           payloadData = {
             ...payloadData,
             earnings: parsed.earnings,

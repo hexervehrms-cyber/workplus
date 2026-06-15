@@ -835,7 +835,7 @@ export default function Organizations() {
                     className="rounded-lg flex-1"
                     onClick={() => {
                       setDnsSetupData({
-                        domain: org.customDomain,
+                        domain: org.customDomain || '',
                         status: org.customDomainStatus || 'pending_dns',
                         defaultTenantUrl: `${process.env.REACT_APP_API_URL?.replace('/api', '') || 'https://workplus.vercel.app'}/login?org=${org._id}`,
                         customDomainUrl: `https://${org.customDomain}`,

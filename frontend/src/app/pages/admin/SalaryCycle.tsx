@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
-import { Checkbox } from '../../components/ui/checkbox';
-import { toast } from 'sonner';
-import { Plus, Edit2, Trash2, Calendar, Settings, Loader2, Check } from 'lucide-react';
+import { toast } from '../../utils/portalToast';
+import { Plus, Edit2, Trash2, Calendar, Settings, Loader2 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import { apiGet, apiPost, apiPut, apiDelete } from '../../utils/apiHelper';
 
 interface SalaryCycle {
   _id: string;
@@ -24,6 +25,7 @@ interface SalaryCycle {
 }
 
 export default function AdminSalaryCycle() {
+  const { user } = useAuth();
   const [cycles, setCycles] = useState<SalaryCycle[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -31,10 +33,10 @@ export default function AdminSalaryCycle() {
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    cycleStartDate: '1',
-    cycleEndDate: '30',
+    cycleStartDate: '21',
+    cycleEndDate: '20',
     salaryPaymentDate: '1',
-    holdDays: '0',
+    holdDays: '10',
     workingDaysPerWeek: '5',
     workingDaysPerMonth: '22',
     leavePolicy: {
@@ -56,21 +58,50 @@ export default function AdminSalaryCycle() {
     }
   });
 
-  useEffect(() => {
-    fetchCycles();
-  }, []);
-
-  const fetchCycles = async () => {
+  const fetchCycles = useCallback(async () => {
     try {
       setLoading(true);
-      // TODO: Call API to fetch salary cycles
+      const params = new URLSearchParams({ page: '1', limit: '50' });
+      const oid = user?.orgId || user?.tenantId;
+      if (user?.role === 'super_admin') {
+        if (!oid || oid === 'system') {
+          toast.error('Organization context is required to list salary cycles.');
+          setCycles([]);
+          return;
+        }
+        params.set('orgId', oid);
+      }
+      const res = await apiGet(`salary-cycle?${params.toString()}`, false);
+      setCycles(Array.isArray(res.data) ? res.data : []);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to load salary cycles';
+      toast.error(msg);
       setCycles([]);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to fetch salary cycles');
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.orgId, user?.tenantId, user?.role]);
+
+  useEffect(() => {
+    fetchCycles();
+    // Check if there's an active cycle and prefill the form for editing
+    const loadActiveCycle = async () => {
+      try {
+        const oid = user?.orgId || user?.tenantId;
+        if (!oid || oid === 'system') return;
+        
+        const res = await apiGet(`salary-cycle/org/${oid}/active`, false);
+        if (res?.data && !editingId) {
+          // Active cycle exists - auto-populate for editing
+          handleEdit(res.data);
+          toast.info('An active salary cycle already exists. You can edit it below.');
+        }
+      } catch (err: unknown) {
+        // No active cycle exists yet, which is fine
+      }
+    };
+    loadActiveCycle();
+  }, [fetchCycles, user?.orgId, user?.tenantId, editingId]);
 
   const handleSaveCycle = async () => {
     if (!formData.name || !formData.cycleStartDate || !formData.cycleEndDate || !formData.salaryPaymentDate) {
@@ -79,15 +110,74 @@ export default function AdminSalaryCycle() {
     }
 
     try {
-      // TODO: Call API to save salary cycle
-      toast.success(editingId ? 'Salary cycle updated successfully' : 'Salary cycle created successfully');
-      setFormData({
+      const orgId = user?.orgId || user?.tenantId;
+      if (!orgId || orgId === 'system') {
+        toast.error('Organization context is required.');
+        return;
+      }
+
+      // Check if attempting to create when active cycle exists
+      if (!editingId) {
+        try {
+          const activeCheck = await apiGet(`salary-cycle/org/${orgId}/active`, false);
+          if (activeCheck?.data) {
+            toast.error('An active salary cycle already exists. Please edit the existing one instead of creating a new one.');
+            return;
+          }
+        } catch (err) {
+          // No active cycle, safe to proceed
+        }
+      }
+
+      const leavePolicy = {
+        paidLeavePerMonth: Number(formData.leavePolicy.paidLeavePerMonth) || 0,
+        sickLeavePerMonth: Number(formData.leavePolicy.sickLeavePerMonth) || 0,
+        casualLeavePerMonth: Number(formData.leavePolicy.casualLeavePerMonth) || 0,
+        leaveEncashmentRate: Number(formData.leavePolicy.leaveEncashmentRate) || 0
+      };
+      const bonusPolicy = {
+        annualBonus: Number(formData.bonusPolicy.annualBonus) || 0,
+        bonusMonth: Number(formData.bonusPolicy.bonusMonth) || 12,
+        bonusEligibilityMonths: Number(formData.bonusPolicy.bonusEligibilityMonths) || 6
+      };
+      const fnfPolicy = {
+        gratuityEligibilityYears: Number(formData.fnfPolicy.gratuityEligibilityYears) || 0,
+        gratuityRate: Number(formData.fnfPolicy.gratuityRate) || 0,
+        severancePayDays: Number(formData.fnfPolicy.severancePayDays) || 0,
+        fnfCalculationDays: Number(formData.fnfPolicy.fnfCalculationDays) || 2
+      };
+
+      const payload = {
+        orgId,
+        name: formData.name.trim(),
+        description: formData.description.trim() || undefined,
+        cycleStartDate: Number(formData.cycleStartDate),
+        cycleEndDate: Number(formData.cycleEndDate),
+        salaryPaymentDate: Number(formData.salaryPaymentDate),
+        holdDays: Number(formData.holdDays) || 0,
+        workingDaysPerWeek: Number(formData.workingDaysPerWeek) || 5,
+        workingDaysPerMonth: Number(formData.workingDaysPerMonth) || 22,
+        leavePolicy,
+        bonusPolicy,
+        fnfPolicy,
+        deductionPolicy: {},
+        taxPolicy: {}
+      };
+
+      if (editingId) {
+        await apiPut(`salary-cycle/${editingId}`, payload);
+        toast.success('Salary cycle updated successfully');
+      } else {
+        await apiPost('salary-cycle', payload);
+        toast.success('Salary cycle created successfully');
+      }
+      const resetForm = () => ({
         name: '',
         description: '',
-        cycleStartDate: '1',
-        cycleEndDate: '30',
+        cycleStartDate: '21',
+        cycleEndDate: '20',
         salaryPaymentDate: '1',
-        holdDays: '0',
+        holdDays: '10',
         workingDaysPerWeek: '5',
         workingDaysPerMonth: '22',
         leavePolicy: {
@@ -108,6 +198,7 @@ export default function AdminSalaryCycle() {
           fnfCalculationDays: '2'
         }
       });
+      setFormData(resetForm());
       setShowForm(false);
       setEditingId(null);
       fetchCycles();
@@ -117,6 +208,14 @@ export default function AdminSalaryCycle() {
   };
 
   const handleEdit = (cycle: SalaryCycle) => {
+    const c = cycle as SalaryCycle & {
+      leavePolicy?: Record<string, number>;
+      bonusPolicy?: Record<string, number>;
+      fnfPolicy?: Record<string, number>;
+    };
+    const lp = c.leavePolicy || {};
+    const bp = c.bonusPolicy || {};
+    const fp = c.fnfPolicy || {};
     setEditingId(cycle._id);
     setFormData({
       name: cycle.name,
@@ -128,21 +227,21 @@ export default function AdminSalaryCycle() {
       workingDaysPerWeek: cycle.workingDaysPerWeek.toString(),
       workingDaysPerMonth: cycle.workingDaysPerMonth.toString(),
       leavePolicy: {
-        paidLeavePerMonth: '2',
-        sickLeavePerMonth: '1',
-        casualLeavePerMonth: '1',
-        leaveEncashmentRate: '1'
+        paidLeavePerMonth: String(lp.paidLeavePerMonth ?? 2),
+        sickLeavePerMonth: String(lp.sickLeavePerMonth ?? 1),
+        casualLeavePerMonth: String(lp.casualLeavePerMonth ?? 1),
+        leaveEncashmentRate: String(lp.leaveEncashmentRate ?? 1)
       },
       bonusPolicy: {
-        annualBonus: '0',
-        bonusMonth: '12',
-        bonusEligibilityMonths: '6'
+        annualBonus: String(bp.annualBonus ?? 0),
+        bonusMonth: String(bp.bonusMonth ?? 12),
+        bonusEligibilityMonths: String(bp.bonusEligibilityMonths ?? 6)
       },
       fnfPolicy: {
-        gratuityEligibilityYears: '5',
-        gratuityRate: '15',
-        severancePayDays: '0',
-        fnfCalculationDays: '2'
+        gratuityEligibilityYears: String(fp.gratuityEligibilityYears ?? 5),
+        gratuityRate: String(fp.gratuityRate ?? 15),
+        severancePayDays: String(fp.severancePayDays ?? 0),
+        fnfCalculationDays: String(fp.fnfCalculationDays ?? 2)
       }
     });
     setShowForm(true);
@@ -152,7 +251,7 @@ export default function AdminSalaryCycle() {
     if (!confirm('Are you sure you want to delete this salary cycle?')) return;
 
     try {
-      // TODO: Call API to delete salary cycle
+      await apiDelete(`salary-cycle/${id}`);
       toast.success('Salary cycle deleted successfully');
       fetchCycles();
     } catch (err: any) {

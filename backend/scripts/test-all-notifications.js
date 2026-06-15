@@ -9,10 +9,16 @@ import axios from 'axios';
 dotenv.config({ path: './.env.production' });
 
 const API_BASE_URL = process.env.BACKEND_URL || 'https://workplus-backend-sg3a.onrender.com';
-const EMPLOYEE_EMAIL = 'abhishek.rajput@hexerve.com';
-const EMPLOYEE_PASSWORD = 'Jadu@123';
-const ADMIN_EMAIL = 'atul@hexerve.com';
-const ADMIN_PASSWORD = 'Jadu@123';
+const EMPLOYEE_EMAIL = process.env.EMPLOYEE_EMAIL || 'abhishek.rajput@hexerve.com';
+const EMPLOYEE_PASSWORD = process.env.EMPLOYEE_PASSWORD;
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'atul@hexerve.com';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+if (!EMPLOYEE_PASSWORD || !ADMIN_PASSWORD) {
+  console.error('❌ ERROR: Missing required environment variables');
+  console.error('   Set EMPLOYEE_PASSWORD and ADMIN_PASSWORD in .env file');
+  process.exit(1);
+}
 
 let employeeToken = null;
 let adminToken = null;

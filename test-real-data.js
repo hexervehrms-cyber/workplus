@@ -1,18 +1,35 @@
 /**
  * Test with REAL data from MongoDB database
- * Connects to actual production database and retrieves real employee/admin records
+ * Usage: node test-real-data.js
+ * 
+ * Connects to database and retrieves real employee/admin records
+ * 
+ * Requires environment variables:
+ * - MONGODB_URI: MongoDB connection string (from .env)
  */
 
 import mongoose from 'mongoose';
+import dotenv from 'dotenv';
 
-// Direct connection string from user's .env file
-const MONGODB_URI = 'mongodb+srv://atulcse08_db_user:Jadu%40123@workplus.tcf4qho.mongodb.net/workpluspro?retryWrites=true&w=majority';
+// Load environment variables from .env
+dotenv.config();
+
+// Get MongoDB URI from environment
+const MONGODB_URI = process.env.MONGODB_URI;
+
+// Validate environment
+if (!MONGODB_URI) {
+  console.error('❌ ERROR: MONGODB_URI environment variable is not set');
+  console.error('   Please set MONGODB_URI in your .env file');
+  console.error('   Example: MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/db');
+  process.exit(1);
+}
 
 async function checkRealData() {
   console.log('='.repeat(70));
   console.log('WORKPLUS PRO - REAL DATA VERIFICATION');
   console.log('='.repeat(70));
-  console.log('Connecting to:', MONGODB_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'));
+  console.log('Connecting to database...\n');
   
   try {
     await mongoose.connect(MONGODB_URI);

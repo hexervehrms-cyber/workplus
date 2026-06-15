@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
+import { useIsMounted } from '../../hooks/useIsMounted';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
+import { PasswordInput } from '../../components/PasswordInput';
 import { Label } from '../../components/ui/label';
 import { Badge } from '../../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
@@ -11,11 +13,14 @@ import {
   FileText, Loader2, Briefcase, Calendar, DollarSign, IndianRupee, Link as LinkIcon, Key
 } from 'lucide-react';
 import { EmployeeService } from '../../utils/api';
-import { toast } from 'sonner';
+import { useAuth } from '../../context/AuthContext';
+import { useDepartments } from '../../hooks/useDepartments';
+import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { useCurrency } from '../../context/CurrencyContext';
 import OnboardingLinkGenerator from '../../components/OnboardingLinkGenerator';
 import { apiPost } from '../../utils/apiHelper';
+import { safeInitials } from '../../utils/safeUi';
 
 interface Employee {
   _id: string;
@@ -36,6 +41,30 @@ interface Employee {
 }
 
 // Predefined roles
+const EMPTY_FORM_DATA = {
+  name: '',
+  email: '',
+  password: '',
+  designation: '',
+  department: '',
+  baseSalary: '',
+  hourlyRate: '',
+  dailyRate: '',
+  salaryCalculationType: 'fixed',
+  phone: '',
+  role: 'employee',
+  shiftStartTime: '09:00',
+  shiftEndTime: '18:00',
+  lateThreshold: '0',
+  workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+  aadharNumber: '',
+  panNumber: '',
+  bankAccount: '',
+  ifscCode: '',
+  employeeCode: '',
+  joiningDate: ''
+};
+
 const PREDEFINED_ROLES = [
   { id: 'recruiter', name: 'Recruiter' },
   { id: 'accountant', name: 'Accountant' },
@@ -46,8 +75,11 @@ const PREDEFINED_ROLES = [
 ];
 
 export default function Employees() {
+  const { user } = useAuth();
+  const mounted = useIsMounted();
   const navigate = useNavigate();
   const { formatCurrency, selectedCurrency } = useCurrency();
+  const { departmentNames, loading: deptOptionsLoading } = useDepartments();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -63,27 +95,7 @@ export default function Employees() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   
-  const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    password: '',
-    designation: '',
-    department: '',
-    baseSalary: '',
-    hourlyRate: '',
-    dailyRate: '',
-    salaryCalculationType: 'fixed',
-    phone: '',
-    role: 'employee',
-    shiftStartTime: '09:00',
-    shiftEndTime: '18:00',
-    lateThreshold: '0',
-    workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-    aadharNumber: '',
-    panNumber: '',
-    bankAccount: '',
-    ifscCode: ''
-  });
+  const [formData, setFormData] = useState(EMPTY_FORM_DATA);
 
   useEffect(() => {
     fetchEmployees();
@@ -96,7 +108,6 @@ export default function Employees() {
       // Add new employee to the list
       if (data.employee) {
         setEmployees(prev => [data.employee, ...prev]);
-        toast.success('New employee added by ' + (data.createdBy || 'admin'));
       }
     };
 
@@ -136,12 +147,23 @@ export default function Employees() {
   const fetchEmployees = async () => {
     try {
       setLoading(true);
-      const data = await EmployeeService.getAllEmployees();
-      setEmployees(data);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to fetch employees');
+      const data = await EmployeeService.getAllEmployees(
+        user
+          ? {
+              role: user.role,
+              orgId: user.orgId,
+              tenantId: user.tenantId,
+            }
+          : undefined
+      );
+      if (mounted.current) setEmployees(data as Employee[]);
+    } catch (err: unknown) {
+      if (mounted.current) {
+        toast.error('Failed to load employees');
+      }
+      console.error('Error loading employees:', err);
     } finally {
-      setLoading(false);
+      if (mounted.current) setLoading(false);
     }
   };
 
@@ -178,7 +200,9 @@ export default function Employees() {
         department: formData.department.trim(),
         baseSalary: parseFloat(formData.baseSalary) || 0,
         phone: formData.phone.trim(),
-        role: formData.role
+        role: formData.role,
+        employeeCode: formData.employeeCode.trim() || undefined,
+        joiningDate: formData.joiningDate || undefined
       });
       
       console.log('Employee created response:', response);
@@ -190,7 +214,7 @@ export default function Employees() {
       
       toast.success('Employee created successfully');
       setShowAddForm(false);
-      setFormData({ name: '', email: '', password: '', designation: '', department: '', baseSalary: '', phone: '', role: 'employee' });
+      setFormData(EMPTY_FORM_DATA);
     } catch (err: any) {
       console.error('Error creating employee:', err);
       toast.error(err.message || 'Failed to create employee');
@@ -241,7 +265,9 @@ export default function Employees() {
         aadharNumber: formData.aadharNumber.trim(),
         panNumber: formData.panNumber.trim(),
         bankAccount: formData.bankAccount.trim(),
-        ifscCode: formData.ifscCode.trim()
+        ifscCode: formData.ifscCode.trim(),
+        employeeCode: formData.employeeCode.trim() || undefined,
+        joiningDate: formData.joiningDate ? new Date(formData.joiningDate).toISOString() : undefined
       });
       
       console.log('Employee updated response:', response);
@@ -258,14 +284,16 @@ export default function Employees() {
           designation: formData.designation.trim(),
           department: formData.department.trim(),
           baseSalary: parseFloat(formData.baseSalary) || 0,
-          phone: formData.phone.trim()
+          phone: formData.phone.trim(),
+          employeeCode: formData.employeeCode.trim(),
+          joiningDate: formData.joiningDate || emp.joiningDate
         } : emp)
       );
       
       toast.success('Employee updated successfully');
       setShowEditForm(false);
       setEditingEmployee(null);
-      setFormData({ name: '', email: '', password: '', designation: '', department: '', baseSalary: '', hourlyRate: '', dailyRate: '', salaryCalculationType: 'fixed', phone: '' });
+      setFormData(EMPTY_FORM_DATA);
     } catch (err: any) {
       console.error('Error updating employee:', err);
       toast.error(err.message || 'Failed to update employee');
@@ -298,8 +326,8 @@ export default function Employees() {
     setEditingEmployee(employee);
     const shiftTiming = (employee as any)?.shiftTiming || {};
     setFormData({
-      name: employee.userId.name,
-      email: employee.userId.email,
+      name: employee.userId?.name || '',
+      email: employee.userId?.email || '',
       password: '',
       designation: employee.designation || '',
       department: employee.department || '',
@@ -316,7 +344,11 @@ export default function Employees() {
       aadharNumber: (employee as any)?.aadharNumber || '',
       panNumber: (employee as any)?.panNumber || '',
       bankAccount: (employee as any)?.bankAccount || '',
-      ifscCode: (employee as any)?.ifscCode || ''
+      ifscCode: (employee as any)?.ifscCode || '',
+      employeeCode: employee.employeeCode || '',
+      joiningDate: employee.joiningDate
+        ? new Date(employee.joiningDate).toISOString().split('T')[0]
+        : ''
     });
     setShowEditForm(true);
   };
@@ -367,11 +399,12 @@ export default function Employees() {
     navigate(`/admin/employees/${employeeId}/correspondence`);
   };
 
-  const filteredEmployees = employees.filter(emp => {
-    if (!emp.userId) return false;
-    return emp.userId.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    emp.userId.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    emp.department?.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredEmployees = employees.filter((emp) => {
+    const q = searchTerm.toLowerCase();
+    const name = (emp.userId?.name || '').toLowerCase();
+    const email = (emp.userId?.email || '').toLowerCase();
+    const dept = (emp.department || '').toLowerCase();
+    return name.includes(q) || email.includes(q) || dept.includes(q);
   });
 
   if (loading) {
@@ -418,8 +451,8 @@ export default function Employees() {
               </div>
               <div>
                 <Label>Password</Label>
-                <Input
-                  type="password"
+                <PasswordInput
+                  autoComplete="new-password"
                   value={formData.password}
                   onChange={(e) => setFormData({...formData, password: e.target.value})}
                   placeholder="Enter password"
@@ -429,12 +462,26 @@ export default function Employees() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Department</Label>
-                  <Input
-                    value={formData.department}
-                    onChange={(e) => setFormData({...formData, department: e.target.value})}
-                    placeholder="e.g. Engineering"
-                    className="mt-1"
-                  />
+                  <Select
+                    value={formData.department || undefined}
+                    onValueChange={(v) => setFormData({ ...formData, department: v })}
+                    disabled={deptOptionsLoading}
+                  >
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="Select department" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {departmentNames.length === 0 ? (
+                        <SelectItem value="General">General</SelectItem>
+                      ) : (
+                        departmentNames.map((d) => (
+                          <SelectItem key={d} value={d}>
+                            {d}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label>Designation</Label>
@@ -518,16 +565,16 @@ export default function Employees() {
             <div className="space-y-4">
               <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
                 <p className="text-sm text-blue-900">
-                  <strong>Employee:</strong> {passwordResetEmployee.userId.name}
+                  <strong>Employee:</strong> {passwordResetEmployee.userId?.name || 'Unknown'}
                 </p>
                 <p className="text-sm text-blue-900">
-                  <strong>Email:</strong> {passwordResetEmployee.userId.email}
+                  <strong>Email:</strong> {passwordResetEmployee.userId?.email || '—'}
                 </p>
               </div>
               <div>
                 <Label>New Password</Label>
-                <Input
-                  type="password"
+                <PasswordInput
+                  autoComplete="new-password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="Enter new password"
@@ -540,8 +587,8 @@ export default function Employees() {
               </div>
               <div>
                 <Label>Confirm Password</Label>
-                <Input
-                  type="password"
+                <PasswordInput
+                  autoComplete="new-password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Confirm new password"
@@ -588,8 +635,8 @@ export default function Employees() {
 
       {/* Edit Employee Modal */}
       {showEditForm && editingEmployee && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <Card className="w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-2xl mx-4 p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Edit Employee</h2>
               <Button variant="ghost" onClick={() => setShowEditForm(false)}>
@@ -618,24 +665,65 @@ export default function Employees() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label>Department</Label>
-                  <Input
-                    value={formData.department}
-                    onChange={(e) => setFormData({...formData, department: e.target.value})}
-                    placeholder="e.g. Engineering"
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label>Designation</Label>
-                  <Input
-                    value={formData.designation}
-                    onChange={(e) => setFormData({...formData, designation: e.target.value})}
-                    placeholder="e.g. Software Engineer"
-                    className="mt-1"
-                  />
+              <div className="border-t pt-4">
+                <h3 className="font-semibold text-sm mb-1 flex items-center gap-2">
+                  <Briefcase className="w-4 h-4" />
+                  Official Information
+                </h3>
+                <p className="text-xs text-muted-foreground mb-4">
+                  Synced to the employee&apos;s My Profile → Official Information (read-only for employees)
+                </p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Employee ID</Label>
+                    <Input
+                      value={formData.employeeCode}
+                      onChange={(e) => setFormData({...formData, employeeCode: e.target.value})}
+                      placeholder="e.g. EMP001"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label>Joining Date</Label>
+                    <Input
+                      type="date"
+                      value={formData.joiningDate}
+                      onChange={(e) => setFormData({...formData, joiningDate: e.target.value})}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label>Department</Label>
+                    <Select
+                      value={formData.department || undefined}
+                      onValueChange={(v) => setFormData({ ...formData, department: v })}
+                      disabled={deptOptionsLoading}
+                    >
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select department" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {departmentNames.length === 0 ? (
+                          <SelectItem value="General">General</SelectItem>
+                        ) : (
+                          departmentNames.map((d) => (
+                            <SelectItem key={d} value={d}>
+                              {d}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Designation</Label>
+                    <Input
+                      value={formData.designation}
+                      onChange={(e) => setFormData({...formData, designation: e.target.value})}
+                      placeholder="e.g. Software Engineer"
+                      className="mt-1"
+                    />
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -795,7 +883,7 @@ export default function Employees() {
                       onChange={(e) => setFormData({...formData, aadharNumber: e.target.value})}
                       placeholder="12-digit Aadhar number"
                       className="mt-1"
-                      maxLength="12"
+                      maxLength={12}
                     />
                   </div>
                   <div>
@@ -805,7 +893,7 @@ export default function Employees() {
                       onChange={(e) => setFormData({...formData, panNumber: e.target.value})}
                       placeholder="10-character PAN"
                       className="mt-1"
-                      maxLength="10"
+                      maxLength={10}
                     />
                   </div>
                   <div>
@@ -824,7 +912,7 @@ export default function Employees() {
                       onChange={(e) => setFormData({...formData, ifscCode: e.target.value})}
                       placeholder="11-character IFSC code"
                       className="mt-1"
-                      maxLength="11"
+                      maxLength={11}
                     />
                   </div>
                 </div>
@@ -936,7 +1024,7 @@ export default function Employees() {
             <div className="flex items-start justify-between mb-4">
               <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center">
                 <span className="text-lg font-medium text-primary">
-                  {employee.userId.name.split(' ').map(n => n[0]).join('').toUpperCase()}
+                  {safeInitials(employee.userId?.name, 'U')}
                 </span>
               </div>
               <div className="flex gap-2 flex-wrap justify-end">
@@ -946,14 +1034,14 @@ export default function Employees() {
                     Onboarding
                   </Badge>
                 )}
-                <Badge variant={employee.userId.isActive ? 'default' : 'secondary'}>
-                  {employee.userId.isActive ? 'Active' : 'Inactive'}
+                <Badge variant={employee.userId?.isActive ? 'default' : 'secondary'}>
+                  {employee.userId?.isActive ? 'Active' : 'Inactive'}
                 </Badge>
               </div>
             </div>
             
             <h3 className="font-semibold text-lg mb-1 group-hover:text-primary transition-colors">
-              {employee.userId.name}
+              {employee.userId?.name || employee.userId?.email || 'Unknown'}
               <span className="ml-2 text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
                 Click to view correspondence →
               </span>
@@ -967,7 +1055,7 @@ export default function Employees() {
               </div>
               <div className="flex items-center gap-2">
                 <Mail className="w-4 h-4" />
-                <span>{employee.userId.email}</span>
+                <span>{employee.userId?.email || '—'}</span>
               </div>
               <div className="flex items-center gap-2">
                 <Phone className="w-4 h-4" />

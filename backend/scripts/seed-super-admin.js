@@ -15,14 +15,21 @@ dotenv.config();
 // Import User model
 import User from '../models/User.js';
 
-const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL || 'admin@workpluspro.com';
-const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || 'Jadu@123';
-const SUPER_ADMIN_NAME = process.env.SUPER_ADMIN_NAME || 'Super Admin';
+const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL;
+const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD;
+const SUPER_ADMIN_NAME = process.env.SUPER_ADMIN_NAME;
+
+// Validate environment
+if (!SUPER_ADMIN_EMAIL || !SUPER_ADMIN_PASSWORD || !SUPER_ADMIN_NAME) {
+  console.error('❌ ERROR: Missing required environment variables');
+  console.error('   Set SUPER_ADMIN_EMAIL, SUPER_ADMIN_PASSWORD, SUPER_ADMIN_NAME in .env');
+  process.exit(1);
+}
 
 console.log('\n🔐 SUPER ADMIN SEEDING SCRIPT');
 console.log('='.repeat(60));
 console.log('Environment:', process.env.NODE_ENV || 'development');
-console.log('Database:', process.env.MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@'));
+console.log('Email:', SUPER_ADMIN_EMAIL);
 console.log('='.repeat(60));
 
 /**

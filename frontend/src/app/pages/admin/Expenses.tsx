@@ -1,16 +1,30 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { Receipt, Search, Filter, Download, Eye, CheckCircle, AlertCircle, Tag, Car, Utensils, Home, Briefcase, Plane, Heart, Book, ShoppingCart, Coffee, IndianRupee, Edit, Trash2, XCircle, Loader, Train, Fuel, Hotel, Phone, Wifi, Laptop, Printer, FileText, Users, Lightbulb, Wrench, GraduationCap, Stethoscope, Building2, Truck, Package, FileDown, FileUp } from 'lucide-react';
 import { useCurrency } from '../../context/CurrencyContext';
-import { apiGet, apiPut, apiDelete, apiPost } from '../../utils/apiHelper';
+import {
+  apiGet,
+  apiPut,
+  apiDelete,
+  apiPost,
+  buildFileUrl,
+  getBearerToken,
+} from '../../utils/apiHelper';
+import {
+  openExpenseReceiptInDialog,
+  downloadExpenseReceipt,
+  receiptFilenameFromPath,
+} from '../../utils/expenseReceipt';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
+import { extractApiList } from '../../utils/api';
+import { ExpenseLimitSettingsDialog } from '../../components/ExpenseLimitSettingsDialog';
 
 interface Expense {
   _id: string;
@@ -25,6 +39,16 @@ interface Expense {
     _id: string;
     name: string;
   };
+  receipt?: string;
+}
+
+// Shared receipt helper functions
+function hasExpenseReceipt(expense: Expense): boolean {
+  return Boolean(expense?.receipt?.trim());
+}
+
+function getExpenseReceiptValue(expense: Expense): string {
+  return expense?.receipt?.trim() || '';
 }
 
 const expenseCategories = [
@@ -69,9 +93,8 @@ const expenseCategories = [
 
 // Currency amount display component with INR icon
 const CurrencyAmount: React.FC<{ amount: number; className?: string }> = ({ amount, className }) => {
-  const { selectedCurrency } = useCurrency();
-  
-  // For INR, just format without conversion since amounts are already in INR
+  const { selectedCurrency, formatCurrency } = useCurrency();
+
   if (selectedCurrency.code === 'INR') {
     return (
       <div className={`flex items-center gap-1 ${className || ''}`}>
@@ -80,9 +103,7 @@ const CurrencyAmount: React.FC<{ amount: number; className?: string }> = ({ amou
       </div>
     );
   }
-  
-  // For other currencies, use the currency context
-  const { formatCurrency } = useCurrency();
+
   return <span className={className}>{formatCurrency(amount)}</span>;
 };
 
@@ -95,7 +116,10 @@ export default function ExpensesAdmin() {
   const [isActionDialogOpen, setIsActionDialogOpen] = useState(false);
   const [isNewExpenseDialogOpen, setIsNewExpenseDialogOpen] = useState(false);
   const [isViewReceiptDialogOpen, setIsViewReceiptDialogOpen] = useState(false);
-  const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
+  const [receiptPreviewUrl, setReceiptPreviewUrl] = useState<string | null>(null);
+  const [receiptPreviewType, setReceiptPreviewType] = useState<string>('');
+  const [receiptPreviewLoading, setReceiptPreviewLoading] = useState(false);
+  const [receiptPreviewError, setReceiptPreviewError] = useState<string>('');
   const [actionType, setActionType] = useState<'edit' | 'approve' | 'reject' | 'delete'>('edit');
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -125,11 +149,15 @@ export default function ExpensesAdmin() {
   const fetchExpenses = useCallback(async () => {
     try {
       const data = await apiGet(`/expenses?page=${page}&limit=10`);
-      setExpenses(data.data || []);
-      setTotalExpenses(data.pagination?.total || 0);
+      const list = extractApiList<Expense>(data);
+      setExpenses(list);
+      const pagination = (data as { pagination?: { total?: number } })?.pagination;
+      setTotalExpenses(pagination?.total ?? list.length);
     } catch (error) {
       console.error('Error fetching expenses:', error);
-      toast.error('Failed to fetch expenses');
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to load expenses'
+      );
     }
   }, [page]);
 
@@ -184,32 +212,68 @@ export default function ExpensesAdmin() {
     return category ? category.color : 'bg-gray-100 text-gray-800';
   };
 
-  // Handle document download
-  const handleDownloadReceipt = (receiptPath: string, expenseTitle: string) => {
-    if (!receiptPath) {
-      toast.error('No receipt available');
+  const revokeReceiptBlob = useCallback(() => {
+    if (receiptPreviewUrl) {
+      URL.revokeObjectURL(receiptPreviewUrl);
+      setReceiptPreviewUrl(null);
+    }
+  }, [receiptPreviewUrl]);
+
+  // Handle View Receipt action
+  const handleViewReceipt = useCallback(async (expense: Expense) => {
+    if (!hasExpenseReceipt(expense)) {
+      toast.error('No receipt uploaded for this expense');
       return;
     }
 
     try {
-      // Create a link element
-      const link = document.createElement('a');
-      const apiUrl = (import.meta as any).env.VITE_API_URL === '/api' ? '' : ((import.meta as any).env.VITE_API_URL || '');
-      link.href = `${apiUrl}${receiptPath}`;
-      link.download = `${expenseTitle}-receipt${receiptPath.substring(receiptPath.lastIndexOf('.'))}`;
-      link.target = '_blank';
+      setReceiptPreviewLoading(true);
+      setReceiptPreviewError('');
+      revokeReceiptBlob();
       
-      // Trigger download
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const receiptPath = getExpenseReceiptValue(expense);
+      const objectUrl = await openExpenseReceiptInDialog(receiptPath);
+      setReceiptPreviewUrl(objectUrl);
       
+      // Detect receipt type from filename
+      const filename = receiptFilenameFromPath(receiptPath) || '';
+      if (filename.toLowerCase().endsWith('.pdf')) {
+        setReceiptPreviewType('application/pdf');
+      } else if (/\.(jpg|jpeg|png|gif|webp)$/i.test(filename)) {
+        setReceiptPreviewType('image');
+      } else {
+        setReceiptPreviewType('other');
+      }
+      
+      setIsViewReceiptDialogOpen(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load receipt';
+      setReceiptPreviewError(message);
+      toast.error(message);
+      setReceiptPreviewUrl(null);
+    } finally {
+      setReceiptPreviewLoading(false);
+    }
+  }, [revokeReceiptBlob]);
+
+  // Handle Download Receipt action
+  const handleDownloadReceipt = useCallback(async (expense: Expense) => {
+    if (!hasExpenseReceipt(expense)) {
+      toast.error('No receipt uploaded for this expense');
+      return;
+    }
+
+    try {
+      const receiptPath = getExpenseReceiptValue(expense);
+      const filename = receiptFilenameFromPath(receiptPath) || expense.title || 'receipt';
+      await downloadExpenseReceipt(receiptPath, filename);
       toast.success('Receipt downloaded');
     } catch (error) {
       console.error('Error downloading receipt:', error);
-      toast.error('Failed to download receipt');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to download receipt';
+      toast.error(errorMessage);
     }
-  };
+  }, []);
 
   // Handle edit action
   const handleEdit = (expense: Expense) => {
@@ -247,30 +311,7 @@ export default function ExpensesAdmin() {
     setIsActionDialogOpen(true);
   };
 
-  const handleViewReceipt = (receiptUrl: string) => {
-    if (!receiptUrl) {
-      toast.error('No receipt available');
-      return;
-    }
-    
-    // Construct the full backend URL for the receipt
-    const apiUrl = (import.meta as any).env.VITE_API_URL || '';
-    
-    // Remove /api from the end if present to get the base backend URL
-    let baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
-    if (baseUrl.endsWith('/api')) {
-      baseUrl = baseUrl.slice(0, -4); // Remove '/api'
-    }
-    
-    // If receiptUrl is a relative path, prepend the backend URL
-    let fullUrl = receiptUrl;
-    if (receiptUrl.startsWith('/')) {
-      fullUrl = `${baseUrl}${receiptUrl}`;
-    }
-    
-    setViewingReceipt(fullUrl);
-    setIsViewReceiptDialogOpen(true);
-  };
+
 
   // Handle checkbox toggle
   const handleCheckboxChange = (expenseId: string) => {
@@ -322,6 +363,30 @@ export default function ExpensesAdmin() {
     }
   };
 
+  // Handle bulk delete
+  const handleBulkDelete = async () => {
+    if (selectedExpenses.size === 0) {
+      toast.error('Please select expenses to delete');
+      return;
+    }
+    if (!window.confirm(`Delete ${selectedExpenses.size} selected expense(s)? This cannot be undone.`)) return;
+
+    try {
+      setActionLoading(true);
+      const ids = Array.from(selectedExpenses);
+      await Promise.all(ids.map((id) => apiDelete(`/expenses/${id}`)));
+      toast.success(`${ids.length} expense(s) deleted`);
+      setSelectedExpenses(new Set());
+      setSelectAll(false);
+      await fetchExpenses();
+    } catch (error) {
+      console.error('Error deleting expenses:', error);
+      toast.error('Failed to delete selected expenses');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Handle bulk reject
   const handleBulkReject = async () => {
     if (selectedExpenses.size === 0) {
@@ -358,7 +423,7 @@ export default function ExpensesAdmin() {
 
     try {
       setActionLoading(true);
-      const token = localStorage.getItem('authToken');
+      const token = getBearerToken();
 
       if (actionType === 'edit') {
         // Update expense
@@ -400,14 +465,9 @@ export default function ExpensesAdmin() {
         }
         await fetchExpenses();
       } else if (actionType === 'delete') {
-        if (selectedExpense.status !== 'approved') {
-          toast.error('Hard delete is allowed only for approved expenses');
-          return;
-        }
-        // Delete expense
         await apiDelete(`/expenses/${selectedExpense._id}`);
 
-        toast.success('Approved expense permanently deleted');
+        toast.success('Expense deleted');
         setIsActionDialogOpen(false);
         await fetchExpenses();
       }
@@ -659,7 +719,7 @@ export default function ExpensesAdmin() {
       }
 
       // Submit imported expenses
-      const token = localStorage.getItem('authToken');
+      const token = getBearerToken();
       let successCount = 0;
       let failureCount = 0;
       const submitErrors = [];
@@ -766,7 +826,8 @@ export default function ExpensesAdmin() {
           <h1 className="text-3xl font-bold">Expenses</h1>
           <p className="text-muted-foreground">Manage employee expense claims</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
+          <ExpenseLimitSettingsDialog />
           {/* Export Button */}
           <div className="relative group">
             <Button 
@@ -777,16 +838,16 @@ export default function ExpensesAdmin() {
               <FileDown className="w-4 h-4 mr-2" />
               Export
             </Button>
-            <div className="absolute right-0 mt-2 w-32 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+            <div className="absolute right-0 mt-2 w-36 bg-card border border-border rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 text-foreground">
               <button
                 onClick={() => handleExportExpenses('csv')}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm rounded-t-lg"
+                className="w-full text-left px-4 py-2 hover:bg-muted text-sm rounded-t-lg text-foreground"
               >
                 Export as CSV
               </button>
               <button
                 onClick={() => handleExportExpenses('excel')}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm rounded-b-lg border-t border-gray-200"
+                className="w-full text-left px-4 py-2 hover:bg-muted text-sm rounded-b-lg border-t border-border text-foreground"
               >
                 Export as Excel
               </button>
@@ -950,7 +1011,7 @@ export default function ExpensesAdmin() {
           <div className="flex items-center justify-between">
             <p className="font-semibold">{selectedExpenses.size} expense(s) selected</p>
             <div className="flex gap-2">
-              <Button 
+              <Button
                 className="rounded-xl bg-green-600 hover:bg-green-700"
                 onClick={handleBulkApprove}
                 disabled={actionLoading}
@@ -958,7 +1019,7 @@ export default function ExpensesAdmin() {
                 <CheckCircle className="w-4 h-4 mr-2" />
                 Approve Selected
               </Button>
-              <Button 
+              <Button
                 className="rounded-xl bg-red-600 hover:bg-red-700"
                 onClick={() => {
                   setActionType('reject');
@@ -969,6 +1030,15 @@ export default function ExpensesAdmin() {
               >
                 <XCircle className="w-4 h-4 mr-2" />
                 Reject Selected
+              </Button>
+              <Button
+                variant="outline"
+                className="rounded-xl border-red-300 text-red-600 hover:bg-red-50"
+                onClick={handleBulkDelete}
+                disabled={actionLoading}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete Selected
               </Button>
             </div>
           </div>
@@ -1006,6 +1076,18 @@ export default function ExpensesAdmin() {
               <tbody>
                 {filteredExpenses.map((expense) => {
                   const CategoryIcon = getCategoryIcon(expense.category);
+                  const employeeLabel =
+                    expense.employeeName?.trim() ||
+                    (expense as { employeeEmail?: string }).employeeEmail?.trim() ||
+                    'Unknown';
+                  const employeeInitials =
+                    employeeLabel
+                      .split(/\s+/)
+                      .filter(Boolean)
+                      .map((n) => n[0])
+                      .join('')
+                      .slice(0, 2)
+                      .toUpperCase() || '?';
                   return (
                     <tr key={expense._id} className="border-b hover:bg-accent/50">
                       <td className="p-4 w-12">
@@ -1019,11 +1101,13 @@ export default function ExpensesAdmin() {
                       <td className="p-4">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
-                            <span className="text-sm font-medium">{expense.employeeName.split(' ').map(n => n[0]).join('')}</span>
+                            <span className="text-sm font-medium">{employeeInitials}</span>
                           </div>
                           <div>
-                            <p className="font-medium">{expense.employeeName}</p>
-                            <p className="text-sm text-muted-foreground">{expense.employeeName.toLowerCase().replace(' ', '')}@company.com</p>
+                            <p className="font-medium">{employeeLabel}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {(expense as { employeeEmail?: string }).employeeEmail || '—'}
+                            </p>
                           </div>
                         </div>
                       </td>
@@ -1059,33 +1143,31 @@ export default function ExpensesAdmin() {
                           expense.status === 'approved' ? 'bg-green-100 text-green-800' :
                           'bg-red-100 text-red-800'
                         }`}>
-                          {expense.status.charAt(0).toUpperCase() + expense.status.slice(1)}
+                          {(expense.status || 'pending').charAt(0).toUpperCase() + (expense.status || 'pending').slice(1)}
                         </span>
                       </td>
                       <td className="p-4">
                         <div className="flex gap-2">
-                          {expense.receipt && (
-                            <>
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                onClick={() => handleViewReceipt(expense.receipt || '')}
-                                disabled={actionLoading}
-                                title="View receipt"
-                              >
-                                <Eye className="w-4 h-4" />
-                              </Button>
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                onClick={() => handleDownloadReceipt(expense.receipt || '', expense.title || 'receipt')}
-                                disabled={actionLoading}
-                                title="Download receipt"
-                              >
-                                <Download className="w-4 h-4" />
-                              </Button>
-                            </>
-                          )}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="rounded-lg"
+                            onClick={() => handleViewReceipt(expense)}
+                            disabled={actionLoading || !hasExpenseReceipt(expense)}
+                            title={hasExpenseReceipt(expense) ? 'View receipt' : 'No receipt uploaded'}
+                          >
+                            <Eye className="w-4 h-4 mr-1" />
+                            View
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDownloadReceipt(expense)}
+                            disabled={actionLoading || !hasExpenseReceipt(expense)}
+                            title={hasExpenseReceipt(expense) ? 'Download receipt' : 'No receipt uploaded'}
+                          >
+                            <Download className="w-4 h-4" />
+                          </Button>
                           <Button variant="ghost" size="sm" onClick={() => handleEdit(expense)} disabled={actionLoading}>
                             <Edit className="w-4 h-4" />
                           </Button>
@@ -1095,17 +1177,15 @@ export default function ExpensesAdmin() {
                           <Button variant="ghost" size="sm" onClick={() => handleReject(expense)} disabled={actionLoading || expense.status !== 'pending'}>
                             <XCircle className="w-4 h-4 text-red-600" />
                           </Button>
-                          {expense.status === 'approved' && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDelete(expense)}
-                              disabled={actionLoading}
-                              title="Hard delete approved expense"
-                            >
-                              <Trash2 className="w-4 h-4 text-red-600" />
-                            </Button>
-                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDelete(expense)}
+                            disabled={actionLoading}
+                            title="Delete expense"
+                          >
+                            <Trash2 className="w-4 h-4 text-red-600" />
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -1316,104 +1396,72 @@ export default function ExpensesAdmin() {
       </Dialog>
 
       {/* View Receipt Dialog */}
-      <Dialog open={isViewReceiptDialogOpen} onOpenChange={setIsViewReceiptDialogOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh]">
+      <Dialog open={isViewReceiptDialogOpen} onOpenChange={(open) => {
+        setIsViewReceiptDialogOpen(open);
+        if (!open) {
+          revokeReceiptBlob();
+          setReceiptPreviewError('');
+        }
+      }}>
+        <DialogContent className="max-w-5xl w-[95vw] max-h-[92vh] overflow-hidden">
           <DialogHeader>
             <DialogTitle>View Receipt</DialogTitle>
-            <DialogDescription>
-              Receipt preview
-            </DialogDescription>
+            <DialogDescription>Receipt preview</DialogDescription>
           </DialogHeader>
-          <div className="overflow-auto max-h-[70vh]">
-            {viewingReceipt && viewingReceipt.trim() ? (
-              <div className="flex items-center justify-center bg-gray-50 rounded-lg p-4">
-                {viewingReceipt.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
-                  <div className="w-full">
-                    <img 
-                      src={viewingReceipt} 
-                      alt="Receipt" 
-                      className="max-w-full h-auto rounded-lg shadow-lg mx-auto"
-                      onLoad={() => console.log('Image loaded successfully:', viewingReceipt)}
-                      onError={(e) => {
-                        console.error('Image load error:', viewingReceipt);
-                        const errorDiv = document.createElement('div');
-                        errorDiv.className = 'text-center py-8';
-                        errorDiv.innerHTML = `
-                          <svg class="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                          </svg>
-                          <p class="text-gray-600 mb-2 font-medium">Receipt file not found</p>
-                          <p class="text-sm text-gray-500 mb-4">The receipt file may have been moved or deleted</p>
-                          <p class="text-xs text-gray-400 font-mono break-all px-4">${viewingReceipt}</p>
-                        `;
-                        e.currentTarget.replaceWith(errorDiv);
-                      }}
-                    />
-                  </div>
-                ) : viewingReceipt.match(/\.pdf$/i) ? (
-                  <div className="w-full">
-                    <iframe 
-                      src={viewingReceipt} 
-                      className="w-full h-[600px] rounded-lg shadow-lg"
-                      title="Receipt PDF"
-                      onError={(e) => {
-                        console.error('PDF load error:', viewingReceipt);
-                        e.currentTarget.style.display = 'none';
-                        const parent = e.currentTarget.parentElement;
-                        if (parent) {
-                          const errorDiv = document.createElement('div');
-                          errorDiv.className = 'text-center py-8';
-                          errorDiv.innerHTML = `
-                            <svg class="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                            </svg>
-                            <p class="text-gray-600 mb-2 font-medium">PDF file not found</p>
-                            <p class="text-sm text-gray-500 mb-4">The receipt file may have been moved or deleted</p>
-                            <p class="text-xs text-gray-400 font-mono break-all px-4">${viewingReceipt}</p>
-                            <button onclick="window.open('${viewingReceipt}', '_blank')" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                              Try Opening in New Tab
-                            </button>
-                          `;
-                          parent.appendChild(errorDiv);
-                        }
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <div className="text-center py-8">
-                    <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
-                    <p className="text-muted-foreground mb-4">Preview not available for this file type</p>
-                    <p className="text-xs text-gray-500 mb-4 break-all">{viewingReceipt}</p>
-                    <Button 
-                      onClick={() => window.open(viewingReceipt, '_blank')}
-                      className="rounded-xl"
-                    >
-                      <Download className="w-4 h-4 mr-2" />
-                      Open in New Tab
-                    </Button>
-                  </div>
-                )}
+          <div className="rounded-xl border bg-muted/20 overflow-hidden h-[75vh] flex items-center justify-center">
+            {receiptPreviewLoading ? (
+              <div className="p-10 text-center">
+                <Loader className="w-6 h-6 animate-spin mr-2 inline" />
+                <p>Loading receipt...</p>
+              </div>
+            ) : receiptPreviewError ? (
+              <div className="p-10 text-center text-red-600">
+                <p className="font-semibold mb-2">{receiptPreviewError}</p>
+              </div>
+            ) : receiptPreviewUrl && receiptPreviewType === 'image' ? (
+              <img
+                src={receiptPreviewUrl}
+                alt="Expense receipt"
+                className="max-w-full max-h-full object-contain"
+              />
+            ) : receiptPreviewUrl && receiptPreviewType === 'application/pdf' ? (
+              <iframe
+                src={receiptPreviewUrl}
+                title="Expense receipt PDF"
+                className="w-full h-full border-0"
+              />
+            ) : receiptPreviewUrl ? (
+              <div className="p-10 text-center space-y-3">
+                <p>Preview not available for this file type.</p>
               </div>
             ) : (
-              <div className="text-center py-8">
-                <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
-                <p className="text-muted-foreground mb-2">No receipt available</p>
-                <p className="text-sm text-gray-500">This expense does not have a receipt attached. Please upload a receipt to view it here.</p>
-              </div>
+              <div className="p-10 text-center">No receipt available</div>
             )}
           </div>
           <div className="flex gap-2 pt-4">
             <Button 
+              type="button" 
               variant="outline" 
-              className="flex-1 rounded-xl" 
               onClick={() => setIsViewReceiptDialogOpen(false)}
+              className="flex-1 rounded-xl"
             >
               Close
             </Button>
-            {viewingReceipt && viewingReceipt.trim() && (
+            {receiptPreviewUrl && (
               <Button 
-                className="flex-1 rounded-xl" 
-                onClick={() => handleDownloadReceipt(viewingReceipt, 'receipt')}
+                type="button"
+                className="flex-1 rounded-xl"
+                onClick={() => {
+                  if (receiptPreviewUrl) {
+                    const link = document.createElement('a');
+                    link.href = receiptPreviewUrl;
+                    link.download = 'receipt';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    toast.success('Receipt downloaded');
+                  }
+                }}
               >
                 <Download className="w-4 h-4 mr-2" />
                 Download

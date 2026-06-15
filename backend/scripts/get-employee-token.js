@@ -40,12 +40,19 @@ const getEmployeeToken = async () => {
     const token = jwt.sign(
       {
         userId: employee._id.toString(),
-        orgId: employee.orgId || 'system',
+        orgId: employee.orgId,
         role: employee.role
       },
-      process.env.JWT_SECRET || 'your-secret-key',
+      process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
+
+    // Validate JWT_SECRET exists
+    if (!process.env.JWT_SECRET) {
+      console.error('❌ ERROR: JWT_SECRET not set in environment');
+      console.error('   Set JWT_SECRET in .env file');
+      process.exit(1);
+    }
 
     console.log('Generated Token:');
     console.log(token);

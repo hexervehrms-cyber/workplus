@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { useCurrency } from '../../context/CurrencyContext';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { DollarSign, TrendingUp, TrendingDown, Calendar, Download, Loader2, BarChart3 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import { apiFetchBlob, apiGet } from '../../utils/apiHelper';
 
 interface SalaryBreakdown {
   month: string;
@@ -31,48 +33,174 @@ interface SalaryHistory {
   dailyWage: number;
 }
 
+function mapSlipToBreakdown(slip: Record<string, unknown>): SalaryBreakdown {
+  const e = (slip.earnings as Record<string, unknown>) || {};
+  const d = (slip.deductions as Record<string, unknown>) || {};
+  const otherEarnSum = Array.isArray(e.otherEarnings)
+    ? (e.otherEarnings as { amount?: number }[]).reduce(
+        (acc, x) => acc + (Number(x?.amount) || 0),
+        0
+      )
+    : 0;
+  const otherDedSum = Array.isArray(d.otherDeductions)
+    ? (d.otherDeductions as { amount?: number }[]).reduce(
+        (acc, x) => acc + (Number(x?.amount) || 0),
+        0
+      )
+    : 0;
+  const allowances =
+    (Number(e.medicalExpenses) || 0) +
+    (Number(e.travel) || 0) +
+    (Number(e.internetCharges) || 0) +
+    (Number(e.nightShiftAllowance) || 0) +
+    (Number(e.incentives) || 0) +
+    (Number(e.bonus) || 0) +
+    (Number(e.commission) || 0) +
+    otherEarnSum;
+
+  return {
+    month: String(slip.month).padStart(2, '0'),
+    year: Number(slip.year) || 0,
+    baseSalary: Number(e.basic) || 0,
+    hra: Number(e.hra) || 0,
+    allowances,
+    grossSalary: Number(slip.grossEarnings) || 0,
+    providentFund: Number(d.providentFund) || 0,
+    tax: (Number(d.professionalTax) || 0) + (Number(d.incomeTax) || 0),
+    insurance: Number(d.employeeStateInsurance) || 0,
+    otherDeductions: (Number(d.leaveDeduction) || 0) + otherDedSum,
+    totalDeductions: Number(slip.totalDeductions) || 0,
+    netPay: Number(slip.netSalary) || 0
+  };
+}
+
 export default function EmployeeSalaryBreakdown() {
+  const { user } = useAuth();
   const { formatCurrency } = useCurrency();
   const [loading, setLoading] = useState(true);
   const [salaryBreakdown, setSalaryBreakdown] = useState<SalaryBreakdown | null>(null);
   const [salaryHistory, setSalaryHistory] = useState<SalaryHistory[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState<string>('');
-  const [selectedYear, setSelectedYear] = useState<string>('');
+  const [currentSlipId, setCurrentSlipId] = useState<string | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState(() =>
+    String(new Date().getMonth() + 1).padStart(2, '0')
+  );
+  const [selectedYear, setSelectedYear] = useState(() =>
+    String(new Date().getFullYear())
+  );
+  const [employeeId, setEmployeeId] = useState<string | null>(null);
+  const [employeeMissing, setEmployeeMissing] = useState(false);
 
-  useEffect(() => {
-    // Set current month and year
-    const now = new Date();
-    setSelectedMonth((now.getMonth() + 1).toString().padStart(2, '0'));
-    setSelectedYear(now.getFullYear().toString());
-    fetchSalaryData();
-  }, []);
+  const fetchSalaryData = useCallback(async () => {
+    const authUserId = user?.userId || user?.id;
+    if (!authUserId) {
+      setEmployeeId(null);
+      setEmployeeMissing(true);
+      setSalaryBreakdown(null);
+      setSalaryHistory([]);
+      setCurrentSlipId(null);
+      setLoading(false);
+      return;
+    }
 
-  const fetchSalaryData = async () => {
+    const monthNum = parseInt(selectedMonth, 10);
+    const yearNum = parseInt(selectedYear, 10);
+
     try {
       setLoading(true);
-      // TODO: Call API to fetch salary breakdown and history
-      // const response = await EmployeeService.getSalaryBreakdown(month, year);
-      // setSalaryBreakdown(response.breakdown);
-      // setSalaryHistory(response.history);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to fetch salary data');
+      setSalaryBreakdown(null);
+      setCurrentSlipId(null);
+
+      const employeeData = await apiGet(`/employees/user/${authUserId}`);
+      if (!employeeData.data?._id) {
+        setEmployeeId(null);
+        setEmployeeMissing(true);
+        setSalaryHistory([]);
+        return;
+      }
+
+      const empId = String(employeeData.data._id);
+      setEmployeeId(empId);
+      setEmployeeMissing(false);
+
+      try {
+        const slipRes = await apiGet(
+          `salary/slip/${empId}/${monthNum}/${yearNum}`,
+          false
+        );
+        if (slipRes.success && slipRes.data) {
+          const slip = slipRes.data as Record<string, unknown>;
+          setCurrentSlipId(String(slip._id));
+          setSalaryBreakdown(mapSlipToBreakdown(slip));
+        }
+      } catch {
+        setSalaryBreakdown(null);
+        setCurrentSlipId(null);
+      }
+
+      try {
+        const structRes = await apiGet(`/salary/structure/${empId}`, false);
+        if (structRes.success && structRes.data) {
+          const s = structRes.data as Record<string, unknown>;
+          const e = (s.earnings as Record<string, number>) || {};
+          const gross = Number(s.grossEarnings) || 0;
+          setSalaryHistory([
+            {
+              fromDate: String(s.effectiveFrom),
+              toDate: s.effectiveTo ? String(s.effectiveTo) : undefined,
+              baseSalary: Number(e.basic) || 0,
+              grossSalary: gross,
+              netSalary: Number(s.netSalary) || 0,
+              payFrequency: 'monthly',
+              dailyWage: gross > 0 ? Math.round((gross / 22) * 100) / 100 : 0
+            }
+          ]);
+        } else {
+          setSalaryHistory([]);
+        }
+      } catch {
+        setSalaryHistory([]);
+      }
+    } catch {
+      setSalaryBreakdown(null);
+      setSalaryHistory([]);
+      setCurrentSlipId(null);
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.userId, user?.id, selectedMonth, selectedYear]);
+
+  useEffect(() => {
+    void fetchSalaryData();
+  }, [fetchSalaryData]);
 
   const handleMonthChange = (month: string) => {
     setSelectedMonth(month);
-    // Fetch data for new month
   };
 
   const handleYearChange = (year: string) => {
     setSelectedYear(year);
-    // Fetch data for new year
   };
 
-  const handleDownloadPayslip = () => {
-    toast.success('Payslip downloaded successfully');
+  const handleDownloadPayslip = async () => {
+    if (!currentSlipId) {
+      toast.error('No payslip available for this period.');
+      return;
+    }
+    try {
+      const blob = await apiFetchBlob(`salary/slip/${currentSlipId}/download`, {
+        headers: { Accept: 'text/html,application/pdf,*/*' },
+      });
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = `payslip-${selectedYear}-${selectedMonth}.html`;
+      a.click();
+      URL.revokeObjectURL(href);
+      toast.success('Payslip downloaded successfully');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Download failed';
+      toast.error(msg);
+    }
   };
 
   if (loading) {
@@ -85,7 +213,7 @@ export default function EmployeeSalaryBreakdown() {
 
   const months = Array.from({ length: 12 }, (_, i) => ({
     value: (i + 1).toString().padStart(2, '0'),
-    label: new Date(2024, i).toLocaleString('default', { month: 'long' })
+    label: new Date(2026, i).toLocaleString('default', { month: 'long' })
   }));
 
   const years = Array.from({ length: 5 }, (_, i) => {
@@ -137,6 +265,19 @@ export default function EmployeeSalaryBreakdown() {
           </div>
         </div>
       </Card>
+
+      {!loading && !salaryBreakdown && employeeId && (
+        <Card className="p-6 text-center text-gray-600">
+          No salary slip found for {selectedMonth}/{selectedYear}. Try another month or year, or ask HR to
+          generate your payslip.
+        </Card>
+      )}
+
+      {employeeMissing && !loading && (
+        <Card className="p-6 text-center text-gray-600">
+          Your profile is not linked to an employee record, so salary data cannot be loaded.
+        </Card>
+      )}
 
       {/* Salary Summary */}
       {salaryBreakdown && (

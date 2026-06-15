@@ -19,17 +19,39 @@ import User from '../models/User.js';
 import Employee from '../models/Employee.js';
 import logger from '../utils/logger.js';
 import OnboardingTokenManager from '../utils/onboardingTokenManager.js';
+import EmailNotificationService from '../utils/emailNotificationService.js';
+import {
+  resolveOrganizationSmtp,
+  buildEnvSmtp,
+  getHrInboxEmail,
+} from '../utils/workflowNotifications.js';
+import { emailSendLimiter } from '../middleware/rateLimiter.js';
+import {
+  normalizeSmtpConfig,
+  testSmtpConnection,
+  getSmtpServiceStatus,
+} from '../utils/smtpService.js';
 
 const router = express.Router();
 
 /**
  * GET /api/onboarding/debug/check-employee
  * Debug endpoint to check if employee was created with correct orgId
+ * GATED: Only available in development environment
  */
 router.get('/debug/check-employee',
   authenticate,
   authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
+    // Gate: Only available in development
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(404).json({
+        success: false,
+        message: 'Not found',
+        code: 'NOT_FOUND'
+      });
+    }
+
     const { email } = req.query;
 
     if (!email) {
@@ -102,13 +124,27 @@ router.post('/generate-link',
         });
       }
 
-      // Determine the correct orgId
-      // Priority: 1) organizationId from request body, 2) user's orgId, 3) user's company
-      let finalOrgId = organizationId || req.user.orgId;
-      
-      // Fallback: use a default if still not set
+      // Priority: explicit body orgId for super_admin only; otherwise authenticated admin's org
+      const finalOrgId =
+        req.user.role === 'super_admin'
+          ? organizationId || req.user.orgId
+          : req.user.orgId;
+      if (
+        organizationId &&
+        req.user.role !== 'super_admin' &&
+        String(organizationId) !== String(req.user.orgId)
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: 'Unauthorized org access',
+        });
+      }
       if (!finalOrgId) {
-        finalOrgId = 'ORG-DEFAULT';
+        return res.status(400).json({
+          success: false,
+          message:
+            'Your account has no organization assigned. Set organization on your admin profile before generating onboarding links.',
+        });
       }
 
       logger.info('Generating onboarding link', {
@@ -163,12 +199,26 @@ router.post('/generate-link',
         organizationName: req.user.orgName || 'WorkPlus'
       });
 
+      // Calculate expiration date (30 days from now)
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+      // FIX #2: Save OnboardingLink document to MongoDB so it appears in the invite list
+      const onboardingLink = await OnboardingLink.create({
+        token: jwtToken,
+        employeeEmail,
+        employeeName,
+        department: department || 'General',
+        organizationId: String(finalOrgId),
+        organizationName: req.user.orgName || 'WorkPlus',
+        createdBy: req.user.userId,
+        expiresAt,
+        isUsed: false
+      });
+      logger.info('OnboardingLink document created', { linkId: onboardingLink._id, email: employeeEmail });
+
       // Generate onboarding URL
       const frontendUrl = process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app';
       const onboardingUrl = `${frontendUrl}/onboarding/${jwtToken}`;
-
-      // Calculate expiration date (30 days from now)
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
       logger.info('Onboarding link generated', {
         employeeEmail,
@@ -213,6 +263,7 @@ router.post('/generate-link',
 router.post('/send-email',
   authenticate,
   authorize('super_admin', 'admin', 'hr'),
+  emailSendLimiter,
   asyncHandler(async (req, res) => {
     const { token, employeeEmail, employeeName, onboardingUrl } = req.body;
 
@@ -244,78 +295,110 @@ router.post('/send-email',
         });
       }
 
-      logger.info('Sending onboarding email', {
-        employeeEmail,
-        employeeName,
-        tokenPrefix: token.substring(0, 10) + '...'
-      });
+      const orgName = req.user.orgName || 'WorkPlus';
+      const orgSmtp = await resolveOrganizationSmtp(req.user.orgId);
+      const envSmtp = buildEnvSmtp();
+      const smtpCandidates = [];
+      const smtpSeen = new Set();
+      for (const entry of [
+        { smtp: envSmtp, label: 'env' },
+        { smtp: orgSmtp, label: 'org' },
+      ]) {
+        if (!entry.smtp) continue;
+        const key = `${entry.smtp.host}|${entry.smtp.user}`;
+        if (smtpSeen.has(key)) continue;
+        smtpSeen.add(key);
+        smtpCandidates.push(entry);
+      }
 
-      // Send email to employee with onboarding link
-      const EmailNotificationService = (await import('../utils/emailNotificationService.js')).default;
+      if (!smtpCandidates.length) {
+        return res.status(503).json({
+          success: false,
+          code: 'SMTP_NOT_CONFIGURED',
+          message:
+            'Email is not configured. Set SMTP_HOST, SMTP_USER, and SMTP_PASS (e.g. hr@hexerve.com with a Microsoft 365 app password), or configure organization SMTP in Admin Settings.',
+        });
+      }
 
-      const emailSubject = `Welcome to ${req.user.orgName || 'WorkPlus'}! Complete Your Onboarding`;
-      
-      const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-            <h1 style="color: white; margin: 0;">Welcome to ${req.user.orgName || 'WorkPlus'}!</h1>
-          </div>
-          
-          <div style="padding: 30px; background-color: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 0 0 8px 8px;">
-            <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
-              Hi <strong>${employeeName}</strong>,
-            </p>
-            
-            <p style="font-size: 14px; color: #666; line-height: 1.6; margin-bottom: 20px;">
-              We're excited to have you join our team! To get started, please complete your onboarding form using the link below. This link will be valid for 30 days.
-            </p>
-            
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${onboardingUrl}" style="display: inline-block; background-color: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
-                Complete Your Onboarding
-              </a>
-            </div>
-          
-            <p style="font-size: 12px; color: #999; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
-              Or copy and paste this link in your browser:<br>
-              <code style="background-color: #f0f0f0; padding: 5px 10px; border-radius: 3px; word-break: break-all;">
-                ${onboardingUrl}
-              </code>
-            </p>
-            
-            <p style="font-size: 12px; color: #999; margin-top: 20px;">
-              If you have any questions, please contact our HR team.
-            </p>
-            
-            <p style="font-size: 12px; color: #999; margin-top: 30px;">
-              Best regards,<br>
-              <strong>${req.user.orgName || 'WorkPlus'} HR Team</strong>
-            </p>
-          </div>
-        </div>
-      `;
+      const normalizedEmail = String(employeeEmail).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid employee email address',
+        });
+      }
 
-      await EmailNotificationService.sendEmail({
-        to: employeeEmail,
-        subject: emailSubject,
-        html: emailHtml,
-        from: process.env.FROM_EMAIL || process.env.SMTP_USER
-      });
+      let sent = false;
+      let usedSmtp = smtpCandidates[0].smtp;
+      let lastError = null;
+
+      for (const candidate of smtpCandidates) {
+        logger.info('Sending onboarding email', {
+          employeeEmail: normalizedEmail,
+          employeeName,
+          from: candidate.smtp.fromEmail || candidate.smtp.user,
+          smtpSource: candidate.label,
+          tokenPrefix: token.substring(0, 10) + '...',
+        });
+
+        try {
+          sent = await EmailNotificationService.sendOnboardingInviteEmail({
+            to: normalizedEmail,
+            employeeName,
+            onboardingUrl,
+            orgName,
+            organizationSmtp: candidate.smtp,
+          });
+          if (sent) {
+            usedSmtp = candidate.smtp;
+            break;
+          }
+        } catch (sendErr) {
+          lastError = sendErr;
+          logger.warn('Onboarding email attempt failed', {
+            smtpSource: candidate.label,
+            error: sendErr.message,
+          });
+        }
+      }
+
+      if (!sent) {
+        const smtpStatus = getSmtpServiceStatus();
+        if (smtpStatus.circuitBreaker?.state === 'OPEN') {
+          return res.status(503).json({
+            success: false,
+            code: 'SMTP_CIRCUIT_OPEN',
+            message:
+              'Email service is temporarily overloaded or unavailable. Wait a minute and try again.',
+            retryAfterMs: smtpStatus.circuitBreaker.timeUntilRetry,
+          });
+        }
+        return res.status(500).json({
+          success: false,
+          code: 'SMTP_SEND_FAILED',
+          message:
+            lastError?.message ||
+            'Failed to send email. Verify SMTP_HOST, SMTP_USER, and SMTP_PASS (Microsoft 365 app password) on Render or in Admin → Notification Settings.',
+        });
+      }
 
       logger.info('Onboarding email sent successfully', {
-        employeeEmail,
+        employeeEmail: normalizedEmail,
         employeeName,
-        tokenPrefix: token.substring(0, 10) + '...'
+        from: usedSmtp.fromEmail || usedSmtp.user,
+        tokenPrefix: token.substring(0, 10) + '...',
       });
 
       res.json({
         success: true,
-        message: 'Onboarding email sent successfully to employee',
+        message: `Onboarding email sent to ${normalizedEmail} from ${usedSmtp.fromEmail || usedSmtp.user}`,
         data: {
-          employeeEmail,
+          employeeEmail: normalizedEmail,
           employeeName,
-          sentAt: new Date()
-        }
+          from: usedSmtp.fromEmail || usedSmtp.user,
+          replyTo: getHrInboxEmail(),
+          sentAt: new Date(),
+        },
       });
 
     } catch (error) {
@@ -326,10 +409,39 @@ router.post('/send-email',
       });
       res.status(500).json({
         success: false,
-        message: 'Failed to send onboarding email',
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        message: error.message || 'Failed to send onboarding email',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined,
       });
     }
+  })
+);
+
+/**
+ * GET /api/onboarding/email-status
+ * Check whether SMTP is configured for onboarding emails
+ */
+router.get('/email-status',
+  authenticate,
+  authorize('super_admin', 'admin', 'hr'),
+  asyncHandler(async (req, res) => {
+    const smtp =
+      (await resolveOrganizationSmtp(req.user.orgId)) || buildEnvSmtp();
+    const config = normalizeSmtpConfig(smtp);
+    const runTest = req.query.test === 'true' || req.query.test === '1';
+    let connectionTest = null;
+    if (runTest && config) {
+      connectionTest = await testSmtpConnection(config);
+    }
+    res.json({
+      success: true,
+      data: {
+        configured: !!config,
+        from: config?.fromEmail || smtp?.fromEmail || smtp?.user || process.env.FROM_EMAIL || null,
+        host: config?.host || smtp?.host || process.env.SMTP_HOST || null,
+        service: getSmtpServiceStatus(),
+        connectionTest,
+      },
+    });
   })
 );
 
@@ -352,8 +464,7 @@ router.get('/validate/:token',
         });
       }
 
-      // Get token data from Redis
-      const tokenData = await OnboardingTokenManager.getToken(token);
+      const tokenData = await OnboardingTokenManager.resolveTokenData(token);
       if (!tokenData) {
         return res.status(404).json({
           success: false,
@@ -392,7 +503,114 @@ router.get('/validate/:token',
  */
 router.post('/submit',
   asyncHandler(async (req, res) => {
-    const { token, profilePhoto, personalInfo, sensitiveInfo, emergencyContact, educationalDocuments, employmentDocuments, password } = req.body;
+    // Handle both JSON and FormData submissions
+    let token, profilePhoto, personalInfo, sensitiveInfo, emergencyContact, educationalDocuments, employmentDocuments, password;
+    
+    // Check if this is FormData (multipart/form-data) by checking for files
+    if (req.files || req.body.firstName) {
+      // FormData submission - extract fields from req.body
+      token = req.body.token;
+      password = req.body.password;
+      
+      // Parse personal info from individual fields
+      personalInfo = {
+        firstName: req.body.firstName,
+        lastName: req.body.lastName,
+        dateOfBirth: req.body.dateOfBirth,
+        gender: req.body.gender,
+        address: req.body.address,
+        phone: req.body.phone
+      };
+      
+      // Parse sensitive info
+      sensitiveInfo = {
+        aadharNumber: req.body.aadharNumber,
+        panNumber: req.body.panNumber,
+        bankAccount: req.body.bankAccount,
+        ifscCode: req.body.ifscCode
+      };
+      
+      // Parse emergency contact
+      emergencyContact = {
+        name: req.body.emergencyName,
+        relation: req.body.emergencyRelation,
+        phone: req.body.emergencyPhone
+      };
+      
+      // Handle file uploads
+      profilePhoto = req.files?.avatar?.[0] || null;
+      employmentDocuments = [];
+      
+      educationalDocuments = {};
+      try {
+        if (req.body.educationalDocuments) {
+          educationalDocuments = JSON.parse(req.body.educationalDocuments);
+        }
+      } catch {
+        educationalDocuments = {};
+      }
+
+      // Collect uploaded documents
+      if (req.files) {
+        Object.keys(req.files).forEach((key) => {
+          if (key.startsWith('document_')) {
+            const file = req.files[key][0];
+            employmentDocuments.push({
+              name: file.originalname,
+              category: req.body[`${key}_type`] || 'document',
+              url: file.path || file.filename,
+              size: file.size,
+            });
+          }
+          if (key.startsWith('edu_')) {
+            const rest = key.slice(4);
+            const lastUnderscore = rest.lastIndexOf('_');
+            const level = rest.slice(0, lastUnderscore);
+            const docType = rest.slice(lastUnderscore + 1);
+            if (!level || !docType) return;
+            const file = req.files[key][0];
+            if (!educationalDocuments[level]) educationalDocuments[level] = {};
+            educationalDocuments[level][docType] = {
+              name: file.originalname,
+              url: file.path || file.filename,
+              size: file.size,
+            };
+          }
+        });
+      }
+    } else {
+      // JSON submission
+      token = req.body.token;
+      profilePhoto = req.body.profilePhoto;
+      personalInfo = req.body.personalInfo;
+      sensitiveInfo = req.body.sensitiveInfo;
+      emergencyContact = req.body.emergencyContact;
+      educationalDocuments = req.body.educationalDocuments;
+      employmentDocuments = req.body.employmentDocuments;
+      password = req.body.password;
+    }
+
+    const parsedEducationDetails = (() => {
+      try {
+        if (typeof req.body.educationDetails === "string") {
+          return JSON.parse(req.body.educationDetails || "{}");
+        }
+        return req.body.educationDetails || {};
+      } catch {
+        return {};
+      }
+    })();
+
+    const parsedPreviousEmployment = (() => {
+      try {
+        if (typeof req.body.previousEmployment === "string") {
+          return JSON.parse(req.body.previousEmployment || "[]");
+        }
+        return Array.isArray(req.body.previousEmployment) ? req.body.previousEmployment : [];
+      } catch {
+        return [];
+      }
+    })();
 
     try {
       logger.info('Onboarding submit request received', {
@@ -412,13 +630,21 @@ router.post('/submit',
         });
       }
 
-      // Get token data from Redis
-      const tokenData = await OnboardingTokenManager.getToken(token);
+      const tokenData = await OnboardingTokenManager.resolveTokenData(token);
       if (!tokenData) {
-        logger.warn('Token data not found in Redis', { token: token?.substring(0, 10) + '...' });
+        logger.warn('Onboarding token data could not be resolved', {
+          token: token?.substring(0, 10) + '...',
+        });
         return res.status(404).json({
           success: false,
-          message: 'Onboarding link not found'
+          message: 'Onboarding link not found or expired',
+        });
+      }
+
+      if (tokenData.isUsed) {
+        return res.status(400).json({
+          success: false,
+          message: 'This onboarding link has already been used',
         });
       }
 
@@ -470,6 +696,8 @@ router.post('/submit',
           phone: emergencyContact?.phone
         },
         educationalDocuments: educationalDocuments || {},
+        educationDetails: parsedEducationDetails,
+        previousEmployment: parsedPreviousEmployment,
         employmentDocuments: employmentDocuments || [],
         documents: employmentDocuments || [],
         status: 'pending'
@@ -689,7 +917,8 @@ router.post('/submit',
             to: tokenData.employeeEmail,
             subject: emailSubject,
             html: emailHtml,
-            from: process.env.FROM_EMAIL || process.env.SMTP_USER
+            from: process.env.FROM_EMAIL || process.env.SMTP_USER,
+            fromName: `${tokenData.organizationName || 'WorkPlus'} HR Team`
           });
 
           logger.info('Onboarding confirmation email sent successfully', {
@@ -745,10 +974,23 @@ router.get('/links',
   authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
     const { status, page = 1, limit = 20 } = req.query;
-    const orgId = req.user.orgId;
+    const orgId =
+      (req.query.orgId && String(req.query.orgId).trim()) ||
+      req.validatedOrgId ||
+      req.user.orgId ||
+      req.user.tenantId ||
+      req.user.organizationId;
+
+    if (!orgId || String(orgId) === 'system') {
+      return res.status(400).json({
+        success: false,
+        message: 'Organization context is required',
+        code: 'MISSING_ORG_CONTEXT',
+      });
+    }
 
     try {
-      const query = { organizationId: orgId };
+      const query = { organizationId: String(orgId) };
 
       // Filter by status
       if (status === 'active') {
@@ -777,13 +1019,14 @@ router.get('/links',
         data: {
           links: links.map(link => ({
             id: link._id,
+            token: link.token,
             employeeEmail: link.employeeEmail,
             employeeName: link.employeeName,
             department: link.department,
             status: link.isUsed ? 'used' : (link.expiresAt < new Date() ? 'expired' : 'active'),
             expiresAt: link.expiresAt,
             createdBy: link.createdBy?.name,
-            createdAt: link.createdAt
+            createdAt: link.createdAt,
           })),
           pagination: {
             page: parseInt(page),
@@ -1030,11 +1273,23 @@ router.put('/submissions/:id/reject',
  */
 router.get('/documents/employee/:employeeId',
   authenticate,
+  authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
     const { employeeId } = req.params;
 
     try {
       logger.info('Fetching onboarding documents for employee', { employeeId });
+
+      const employee = await Employee.findById(employeeId).select('orgId').lean();
+      if (!employee) {
+        return res.status(404).json({ success: false, message: 'Employee not found' });
+      }
+      if (
+        req.user.role !== 'super_admin' &&
+        String(employee.orgId) !== String(req.user.orgId)
+      ) {
+        return res.status(403).json({ success: false, message: 'Unauthorized org access' });
+      }
 
       // Find onboarding submission by employee ID (try both string and ObjectId)
       let submission = await OnboardingSubmission.findOne({

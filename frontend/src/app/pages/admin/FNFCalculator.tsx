@@ -7,7 +7,9 @@ import { Label } from '../../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { useCurrency } from '../../context/CurrencyContext';
 import { EmployeeService } from '../../utils/api';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
+import { useAuth } from '../../context/AuthContext';
+import { apiPost, apiPatch } from '../../utils/apiHelper';
 import { Calculator, Download, Check, X, Clock, Loader2, FileText, AlertCircle } from 'lucide-react';
 
 interface Employee {
@@ -22,30 +24,31 @@ interface Employee {
 
 interface FNFSettlement {
   _id: string;
-  employeeId: string;
+  employeeId: string | { _id?: string; employeeCode?: string; firstName?: string; lastName?: string };
   terminationDate: string;
   terminationReason: string;
-  yearsOfService: number;
-  earnings: {
-    totalEarnings: number;
+  yearsOfService?: number;
+  earnings?: {
+    totalEarnings?: number;
   };
-  leaveEncashment: {
-    totalLeaveEncashment: number;
+  leaveEncashment?: {
+    totalLeaveEncashment?: number;
   };
-  gratuity: {
-    gratuityAmount: number;
+  gratuity?: {
+    gratuityAmount?: number;
   };
-  severancePay: {
-    amount: number;
+  severancePay?: {
+    amount?: number;
   };
-  deductions: {
-    totalDeductions: number;
+  deductions?: {
+    totalDeductions?: number;
   };
   netSettlement: number;
   status: string;
 }
 
 export default function AdminFNFCalculator() {
+  const { user } = useAuth();
   const { formatCurrency } = useCurrency();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,11 +67,11 @@ export default function AdminFNFCalculator() {
   const fetchEmployees = async () => {
     try {
       setLoading(true);
-      const data = await EmployeeService.getAllEmployees();
+      const data = await EmployeeService.getAllEmployees(user ?? undefined);
       // Filter only active employees
-      setEmployees(data.filter((emp: any) => emp.status === 'active'));
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to fetch employees');
+      setEmployees((data as any).filter((emp: any) => emp.status === 'active'));
+    } catch {
+      /* load errors surfaced via toast */
     } finally {
       setLoading(false);
     }
@@ -80,18 +83,27 @@ export default function AdminFNFCalculator() {
       return;
     }
 
+    const orgId = user?.orgId || user?.tenantId;
+    if (!orgId || orgId === 'system') {
+      toast.error('Organization context is required.');
+      return;
+    }
+
     try {
       setCalculating(true);
-      // TODO: Call API to calculate FNF
-      // const response = await FNFService.calculateFNF({
-      //   employeeId: selectedEmployee,
-      //   terminationDate: formData.terminationDate,
-      //   terminationReason: formData.terminationReason
-      // });
-      // setFNFSettlement(response);
-      toast.success('FNF calculated successfully');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to calculate FNF');
+      const res = await apiPost('fnf/calculate', {
+        employeeId: selectedEmployee,
+        terminationDate: formData.terminationDate,
+        terminationReason: formData.terminationReason,
+        orgId
+      });
+      if (res.success && res.data) {
+        setFNFSettlement(res.data as FNFSettlement);
+        toast.success(res.message || 'FNF calculated successfully');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to calculate FNF';
+      toast.error(msg);
     } finally {
       setCalculating(false);
     }
@@ -101,10 +113,14 @@ export default function AdminFNFCalculator() {
     if (!fnfSettlement) return;
 
     try {
-      // TODO: Call API to approve FNF
-      toast.success('FNF approved successfully');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to approve FNF');
+      const res = await apiPatch(`fnf/${fnfSettlement._id}/approve`, {});
+      if (res.success && res.data) {
+        setFNFSettlement(res.data as FNFSettlement);
+        toast.success(res.message || 'FNF approved successfully');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to approve FNF';
+      toast.error(msg);
     }
   };
 
@@ -112,22 +128,19 @@ export default function AdminFNFCalculator() {
     if (!fnfSettlement) return;
 
     try {
-      // TODO: Call API to mark FNF as paid
-      toast.success('FNF marked as paid successfully');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to mark FNF as paid');
+      const res = await apiPatch(`fnf/${fnfSettlement._id}/mark-paid`, {});
+      if (res.success && res.data) {
+        setFNFSettlement(res.data as FNFSettlement);
+        toast.success(res.message || 'FNF marked as paid successfully');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to mark FNF as paid';
+      toast.error(msg);
     }
   };
 
   const handleGenerateLetter = async () => {
-    if (!fnfSettlement) return;
-
-    try {
-      // TODO: Call API to generate FNF letter
-      toast.success('FNF letter generated successfully');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to generate FNF letter');
-    }
+    toast.info('FNF letter generation is not available via API yet.');
   };
 
   if (loading) {
@@ -165,7 +178,7 @@ export default function AdminFNFCalculator() {
               <SelectContent>
                 {employees.map((emp) => (
                   <SelectItem key={emp._id} value={emp._id}>
-                    {emp.employeeCode} - {emp.userId.name}
+                    {emp.employeeCode} - {emp.userId?.name || 'Unknown'}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -259,16 +272,20 @@ export default function AdminFNFCalculator() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
               {/* Employee Info */}
-              <div>
-                <p className="text-sm text-gray-600 mb-1">Employee</p>
-                <p className="font-semibold text-lg">Employee Name</p>
-                <p className="text-sm text-gray-600">Code: EMP001</p>
-              </div>
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">Employee</p>
+                    <p className="font-semibold text-lg">
+                      {employees.find((e) => e._id === selectedEmployee)?.userId?.name ?? '—'}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      Code: {employees.find((e) => e._id === selectedEmployee)?.employeeCode ?? '—'}
+                    </p>
+                  </div>
 
-              {/* Service Period */}
-              <div>
-                <p className="text-sm text-gray-600 mb-1">Years of Service</p>
-                <p className="font-semibold text-lg">{fnfSettlement.yearsOfService} years</p>
+                  {/* Service Period */}
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">Years of Service</p>
+                    <p className="font-semibold text-lg">{fnfSettlement.yearsOfService ?? 0} years</p>
                 <p className="text-sm text-gray-600">Termination: {new Date(fnfSettlement.terminationDate).toLocaleDateString()}</p>
               </div>
             </div>
@@ -279,19 +296,19 @@ export default function AdminFNFCalculator() {
               <div className="space-y-2">
                 <div className="flex justify-between">
                   <span>Earned Salary Till Termination</span>
-                  <span className="font-semibold">{formatCurrency(fnfSettlement.earnings.totalEarnings)}</span>
+                  <span className="font-semibold">{formatCurrency(fnfSettlement.earnings?.totalEarnings ?? 0)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Leave Encashment</span>
-                  <span className="font-semibold">{formatCurrency(fnfSettlement.leaveEncashment.totalLeaveEncashment)}</span>
+                  <span className="font-semibold">{formatCurrency(fnfSettlement.leaveEncashment?.totalLeaveEncashment ?? 0)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Gratuity</span>
-                  <span className="font-semibold">{formatCurrency(fnfSettlement.gratuity.gratuityAmount)}</span>
+                  <span className="font-semibold">{formatCurrency(fnfSettlement.gratuity?.gratuityAmount ?? 0)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Severance Pay</span>
-                  <span className="font-semibold">{formatCurrency(fnfSettlement.severancePay.amount)}</span>
+                  <span className="font-semibold">{formatCurrency(fnfSettlement.severancePay?.amount ?? 0)}</span>
                 </div>
               </div>
             </div>
@@ -301,7 +318,7 @@ export default function AdminFNFCalculator() {
               <h4 className="font-semibold mb-4 text-red-900">Deductions</h4>
               <div className="flex justify-between">
                 <span>Total Deductions</span>
-                <span className="font-semibold text-red-600">{formatCurrency(fnfSettlement.deductions.totalDeductions)}</span>
+                <span className="font-semibold text-red-600">{formatCurrency(fnfSettlement.deductions?.totalDeductions ?? 0)}</span>
               </div>
             </div>
 

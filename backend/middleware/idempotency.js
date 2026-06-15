@@ -1,14 +1,14 @@
 /**
  * Idempotency Middleware
- * Prevents duplicate submissions of critical operations
- * Uses Redis-like in-memory cache with TTL
+ * Prevents duplicate submissions of critical operations.
+ * Uses shared Redis client when available; in-memory fallback for single-instance dev.
  */
 
 import crypto from 'crypto';
+import redis from '../utils/redis.js';
+import logger from '../utils/logger.js';
 
 const idempotencyStore = new Map();
-let redisClient = null;
-let redisEnabled = false;
 
 const IDEMPOTENCY_TTL = 24 * 60 * 60 * 1000;
 const PROCESSING_TTL = 60 * 1000;
@@ -24,28 +24,18 @@ const cleanupExpiredKeys = () => {
 
 setInterval(cleanupExpiredKeys, 60 * 60 * 1000);
 
-const getRedisClient = async () => {
-  if (redisClient) return redisClient;
-  const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl) return null;
+let prodFallbackWarned = false;
 
-  try {
-    const { createClient } = await import('redis');
-    redisClient = createClient({ url: redisUrl });
-    redisClient.on('error', (err) => {
-      console.warn('[idempotency] Redis client error', err);
-      redisEnabled = false;
-      redisClient = null;
-    });
-    await redisClient.connect();
-    redisEnabled = true;
-    return redisClient;
-  } catch (err) {
-    console.warn('[idempotency] Redis unavailable, falling back to in-memory cache', err?.message || err);
-    redisEnabled = false;
-    redisClient = null;
-    return null;
-  }
+const redisKey = (idempotencyKey) => `idempotency:${idempotencyKey}`;
+
+const useRedis = () => redis.isRedisConnected();
+
+const warnProdMemoryFallback = () => {
+  if (prodFallbackWarned || process.env.NODE_ENV !== 'production') return;
+  prodFallbackWarned = true;
+  logger.warn(
+    '[idempotency] REDIS_URL not connected — using in-memory store (not safe across multiple server instances)'
+  );
 };
 
 /**
@@ -77,6 +67,48 @@ const generateIdempotencyKey = (req) => {
   return crypto.createHash('sha256').update(signature).digest('hex');
 };
 
+const readEntry = async (idempotencyKey) => {
+  if (useRedis()) {
+    try {
+      return await redis.get(redisKey(idempotencyKey));
+    } catch (err) {
+      logger.warn('[idempotency] Redis read failed, using fallback', err.message || err);
+    }
+  } else {
+    warnProdMemoryFallback();
+  }
+  return idempotencyStore.get(idempotencyKey) || null;
+};
+
+const writeEntry = async (idempotencyKey, entry, ttlMs) => {
+  if (useRedis()) {
+    try {
+      const ok = await redis.setex(
+        redisKey(idempotencyKey),
+        Math.max(1, Math.ceil(ttlMs / 1000)),
+        entry
+      );
+      if (ok) return;
+    } catch (err) {
+      logger.warn('[idempotency] Redis write failed, using fallback', err.message || err);
+    }
+  } else {
+    warnProdMemoryFallback();
+  }
+  idempotencyStore.set(idempotencyKey, entry);
+};
+
+const deleteEntry = async (idempotencyKey) => {
+  if (useRedis()) {
+    try {
+      await redis.del(redisKey(idempotencyKey));
+    } catch {
+      /* ignore */
+    }
+  }
+  idempotencyStore.delete(idempotencyKey);
+};
+
 /**
  * Idempotency middleware for critical operations (payroll, expenses, leave, breaks, etc.)
  */
@@ -86,27 +118,13 @@ export const idempotencyMiddleware = async (req, res, next) => {
   }
 
   const idempotencyKey = generateIdempotencyKey(req);
-  const redis = await getRedisClient();
-
-  let cached = null;
-  if (redis) {
-    try {
-      const raw = await redis.get(`idempotency:${idempotencyKey}`);
-      cached = raw ? JSON.parse(raw) : null;
-    } catch (err) {
-      console.warn('[idempotency] Redis read failed, using fallback', err.message || err);
-      cached = idempotencyStore.get(idempotencyKey);
-    }
-  } else {
-    cached = idempotencyStore.get(idempotencyKey);
-  }
+  const cached = await readEntry(idempotencyKey);
 
   if (cached) {
     const now = Date.now();
 
     if (cached.expiresAt < now) {
-      if (redis) await redis.del(`idempotency:${idempotencyKey}`);
-      idempotencyStore.delete(idempotencyKey);
+      await deleteEntry(idempotencyKey);
       return next();
     }
 
@@ -123,24 +141,14 @@ export const idempotencyMiddleware = async (req, res, next) => {
     }
   }
 
-  const entry = {
-    status: 'processing',
-    expiresAt: Date.now() + PROCESSING_TTL
-  };
-
-  if (redis) {
-    try {
-      await redis.set(`idempotency:${idempotencyKey}`, JSON.stringify(entry), {
-        PX: PROCESSING_TTL,
-        NX: true
-      });
-    } catch (err) {
-      console.warn('[idempotency] Redis write failed, using fallback', err.message || err);
-      idempotencyStore.set(idempotencyKey, entry);
-    }
-  } else {
-    idempotencyStore.set(idempotencyKey, entry);
-  }
+  await writeEntry(
+    idempotencyKey,
+    {
+      status: 'processing',
+      expiresAt: Date.now() + PROCESSING_TTL
+    },
+    PROCESSING_TTL
+  );
 
   const originalJson = res.json.bind(res);
   const originalStatus = res.status.bind(res);
@@ -151,39 +159,33 @@ export const idempotencyMiddleware = async (req, res, next) => {
     return originalStatus(code);
   };
 
+  const clearProcessing = async () => {
+    await deleteEntry(idempotencyKey);
+  };
+
   res.json = async function (data) {
     if (statusCode >= 200 && statusCode < 300) {
-      const entry = {
-        status: 'completed',
-        statusCode,
-        response: data,
-        expiresAt: Date.now() + IDEMPOTENCY_TTL
-      };
-      if (redis) {
-        try {
-          await redis.set(`idempotency:${idempotencyKey}`, JSON.stringify(entry), {
-            PX: IDEMPOTENCY_TTL,
-            NX: false
-          });
-        } catch (err) {
-          console.warn('[idempotency] Redis write failed, using fallback', err.message || err);
-          idempotencyStore.set(idempotencyKey, entry);
-        }
-      } else {
-        idempotencyStore.set(idempotencyKey, entry);
-      }
+      await writeEntry(
+        idempotencyKey,
+        {
+          status: 'completed',
+          statusCode,
+          response: data,
+          expiresAt: Date.now() + IDEMPOTENCY_TTL
+        },
+        IDEMPOTENCY_TTL
+      );
     } else {
-      if (redis) {
-        try {
-          await redis.del(`idempotency:${idempotencyKey}`);
-        } catch {
-          /* ignore */
-        }
-      }
-      idempotencyStore.delete(idempotencyKey);
+      await clearProcessing();
     }
     return originalJson(data);
   };
+
+  res.on('finish', () => {
+    if (statusCode < 200 || statusCode >= 300) {
+      void clearProcessing();
+    }
+  });
 
   next();
 };
@@ -208,7 +210,8 @@ export const getIdempotencyStats = () => {
     total: idempotencyStore.size,
     processing,
     completed,
-    expired
+    expired,
+    redisConnected: useRedis()
   };
 };
 

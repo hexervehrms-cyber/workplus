@@ -13,6 +13,17 @@ import TwoFactorAuth from "../utils/twoFactor.js";
 import PasswordSecurity from "../utils/passwordSecurity.js";
 import logger from "../utils/logger.js";
 import SessionManager from "../utils/sessionManager.js";
+import redis from "../utils/redis.js";
+import JWTCache from "../utils/jwtCache.js";
+import {
+  getBearerOrCookieAccessToken,
+  clearAccessTokenCookie,
+  clearLegacyAuthCookies,
+  setAccessTokenCookie,
+} from "../utils/httpAuth.js";
+import { normalizeAuthOrgId } from "../utils/orgScopeHelpers.js";
+import { handleAuthRefresh } from "../handlers/authRefreshHandler.js";
+import { findEmployeeForSelfService } from "../utils/employeeSelfService.js";
 
 const router = express.Router();
 
@@ -53,13 +64,15 @@ router.post("/login",
         });
       }
 
-      // Log user role for debugging
-      console.log('🔍 LOGIN DEBUG:', {
-        email: user.email,
-        role: user.role,
-        roleType: typeof user.role,
-        userId: user._id
-      });
+      if (user.lockUntil && user.lockUntil > new Date()) {
+        return res.status(423).json({
+          success: false,
+          message: "Account is temporarily locked.",
+          code: "ACCOUNT_LOCKED"
+        });
+      }
+
+      // Log user login attempt
       logger.info('User login attempt', {
         email: user.email,
         role: user.role,
@@ -67,14 +80,42 @@ router.post("/login",
         roleType: typeof user.role
       });
 
+      // Check domain tenant match: if accessing from verified custom domain,
+      // ensure user belongs to that organization
+      if (req.resolvedOrgId) {
+        const userOrgId = normalizeAuthOrgId(user);
+        if (userOrgId !== req.resolvedOrgId) {
+          logger.warn('Login attempt with mismatched org', {
+            userId: user._id,
+            userOrgId,
+            resolvedOrgId: req.resolvedOrgId,
+            domain: req.resolvedCustomDomain
+          });
+          return res.status(403).json({
+            success: false,
+            message: 'Your account does not belong to this organization domain.',
+            code: 'ORG_MISMATCH'
+          });
+        }
+      }
+
       // Generate access token (short-lived)
       const sessionId = crypto.randomBytes(16).toString('hex');
+      // Prefer resolved domain org if available, otherwise use user's org
+      const orgId = req.resolvedOrgId || normalizeAuthOrgId(user);
+      if (!orgId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Account has no organization assigned. Contact your administrator.',
+          code: 'MISSING_ORG_CONTEXT'
+        });
+      }
       const token = jwt.sign(
         { 
-          userId: user._id,
+          userId: user._id.toString(),
           email: user.email,
           role: user.role,
-          orgId: user.orgId || 'system',
+          ...(orgId ? { orgId, tenantId: orgId } : {}),
           sessionId: sessionId
         },
         process.env.JWT_SECRET,
@@ -84,12 +125,12 @@ router.post("/login",
       // Generate refresh token (long-lived)
       const refreshToken = jwt.sign(
         { 
-          userId: user._id,
+          userId: user._id.toString(),
           type: 'refresh',
           sessionId: sessionId
         },
         process.env.JWT_SECRET,
-        { expiresIn: '7d' }
+        { expiresIn: '24h' }
       );
 
       // Create session in Redis for per-employee tracking
@@ -97,7 +138,7 @@ router.post("/login",
         role: user.role,
         email: user.email,
         name: user.name,
-        orgId: user.orgId || 'system',
+        orgId,
         departmentId: user.departmentId,
         permissions: user.permissions || [],
         ipAddress: req.ip,
@@ -107,12 +148,13 @@ router.post("/login",
       // Store refresh token in database
       const authToken = await AuthToken.create({
         userId: user._id,
-        orgId: user.orgId || 'system',
+        orgId,
         tokenType: 'refresh',
         token: refreshToken,
         hashedToken: crypto.createHash('sha256').update(refreshToken).digest('hex'),
         purpose: 'session_refresh',
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        maxUsage: -1,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours (aligned with Redis session TTL)
         deviceInfo: {
           userAgent: req.headers['user-agent'],
           ip: req.ip
@@ -133,18 +175,21 @@ router.post("/login",
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? 'none' : 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days for refresh token
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours for refresh token cookie
         path: '/'
       };
 
-      // Set cookies
+      // Set cookies (accessToken legacy name + wp_at for middleware / Socket cookie fallback)
       res.cookie('accessToken', token, cookieOptions);
+      setAccessTokenCookie(res, token, 15 * 60);
       res.cookie('refreshToken', refreshToken, refreshCookieOptions);
 
       await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
 
       // Get employee record if exists
-      let employee = await Employee.findOne({ userId: user._id, orgId: user.orgId || 'system' }).lean();
+      let employee = await Employee.findOne(
+        orgId ? { userId: user._id, orgId } : { userId: user._id }
+      ).lean();
 
       logger.info('User logged in successfully', {
         userId: user._id,
@@ -152,33 +197,37 @@ router.post("/login",
         role: user.role
       });
 
+      const userPayload = {
+        id: user._id,
+        userId: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar,
+        organization: user.organization,
+        tenantId: orgId,
+        orgId,
+        employeeId: employee?._id?.toString?.() || '',
+        employeeCode: employee?.employeeCode || ''
+      };
+
       res.json({
         success: true,
         message: "Login successful",
+        token,
+        user: userPayload,
         data: {
-          user: {
-            id: user._id,
-            userId: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            avatar: user.avatar,
-            organization: user.organization,
-            tenantId: user.orgId || 'system',
-            orgId: user.orgId || 'system',
-            employeeId: employee?._id || '',
-            employeeCode: employee?.employeeCode || ''
-          },
+          user: userPayload,
           token,
           refreshToken,
-          expiresIn: '24h'
+          expiresIn: '15m'
         }
       });
 
-      console.log('✅ LOGIN RESPONSE:', {
+      logger.info('User login successful', {
         email: user.email,
         role: user.role,
-        token: token.substring(0, 20) + '...'
+        userId: user._id
       });
     } catch (error) {
       logger.error('Login error', { 
@@ -218,16 +267,12 @@ router.get("/me",
         });
       }
 
-      // Get employee profile if exists
-      let employee = await Employee.findOne({ userId, orgId: userOrgId }).lean();
-
-      // If no employee record exists, create one
-      if (!employee) {
-        employee = await Employee.create({
-          userId,
-          orgId: userOrgId,
-          status: 'active'
-        });
+      const scopedOrg = userOrgId || normalizeAuthOrgId(user);
+      let employee = await findEmployeeForSelfService(userId, scopedOrg || '', {
+        createIfMissing: true,
+        allowCrossOrgFallback: true,
+      });
+      if (employee?.toObject) {
         employee = employee.toObject();
       }
       
@@ -243,7 +288,7 @@ router.get("/me",
         dateOfBirth: user.profile?.dateOfBirth || '',
         gender: user.profile?.gender || '',
         address: employee?.address || user.contact?.address?.street || '',
-        employeeId: employee?.employeeCode || '',
+        employeeId: employee?._id?.toString?.() || '',
         employeeCode: employee?.employeeCode || '',
         department: employee?.department || '',
         designation: employee?.designation || '',
@@ -280,71 +325,7 @@ router.get("/me",
  * POST /api/auth/refresh
  * Refresh access token using refresh token
  */
-router.post("/refresh",
-  asyncHandler(async (req, res) => {
-    const { refreshToken } = req.body;
-    
-    if (!refreshToken) {
-      return res.status(400).json({
-        success: false,
-        message: "Refresh token is required"
-      });
-    }
-    
-    try {
-      // Find and validate refresh token
-      const authToken = await AuthToken.findByToken(refreshToken);
-      
-      if (!authToken || !authToken.isValid()) {
-        return res.status(401).json({
-          success: false,
-          message: "Invalid or expired refresh token"
-        });
-      }
-      
-      // Get user
-      const user = await User.findById(authToken.userId);
-      
-      if (!user || !user.isActive) {
-        return res.status(401).json({
-          success: false,
-          message: "User not found or inactive"
-        });
-      }
-      
-      // Generate new access token
-      const accessToken = jwt.sign(
-        {
-          userId: user._id,
-          email: user.email,
-          role: user.role,
-          orgId: user.orgId
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: '15m' }
-      );
-      
-      // Update token usage
-      await authToken.use();
-      
-      res.json({
-        success: true,
-        data: {
-          accessToken,
-          expiresIn: 900
-        }
-      });
-      
-    } catch (error) {
-      logger.error('Token refresh error', { error: error.message });
-      
-      res.status(500).json({
-        success: false,
-        message: "Token refresh failed"
-      });
-    }
-  })
-);
+router.post("/refresh", asyncHandler(handleAuthRefresh));
 
 /**
  * POST /api/auth/logout
@@ -354,52 +335,68 @@ router.post("/logout",
   authenticate,
   auditLog('logout', 'auth'),
   asyncHandler(async (req, res) => {
-    const { refreshToken, logoutAll = false } = req.body;
+    const { refreshToken: bodyRefresh, logoutAll = false } = req.body;
     const userId = req.user.userId;
     const sessionId = req.user.sessionId;
-    
+    const cookieRefresh = req.cookies?.refreshToken;
+    const refreshToken = bodyRefresh || cookieRefresh || null;
+
+    const accessToken =
+      req.cookies?.wp_at ||
+      req.cookies?.accessToken ||
+      req.cookies?.token ||
+      getBearerOrCookieAccessToken(req) ||
+      null;
+
     try {
       if (logoutAll) {
-        // Revoke all user tokens and sessions
         await AuthToken.revokeAllUserTokens(userId, null, userId, 'user_logout_all');
-        // Invalidate all sessions for this user
         await SessionManager.invalidateAllUserSessions(userId);
-      } else if (refreshToken) {
-        // Revoke specific token
-        const authToken = await AuthToken.findByToken(refreshToken);
-        if (authToken) {
-          await authToken.revoke(userId, 'user_logout');
-        }
-        // Invalidate specific session
+      } else {
         if (sessionId) {
           await SessionManager.invalidateSession(sessionId);
         }
+        if (refreshToken) {
+          const authToken = await AuthToken.findByToken(refreshToken);
+          if (authToken) {
+            await authToken.revoke(userId, 'user_logout');
+          }
+        }
       }
-      
-      // Log logout event
+
+      if (accessToken) {
+        try {
+          await JWTCache.clearTokenCache(accessToken);
+        } catch (e) {
+          logger.warn('Logout: could not clear JWT decode cache', { error: e.message });
+        }
+      }
+
       await SecurityEvent.createEvent({
         eventType: 'logout',
         severity: 'low',
         userId: userId,
         description: logoutAll ? 'Logout from all devices' : 'Logout',
-        requestInfo: { 
-          ip: req.ip, 
-          userAgent: req.get('User-Agent') 
+        requestInfo: {
+          ip: req.ip,
+          userAgent: req.get('User-Agent'),
         },
-        orgId: req.user.orgId
+        orgId: req.user.orgId,
       });
-      
+
+      clearAccessTokenCookie(res);
+      clearLegacyAuthCookies(res);
+
       res.json({
         success: true,
-        message: "Logout successful"
+        message: "Logout successful",
       });
-      
     } catch (error) {
       logger.error('Logout error', { error: error.message, userId });
-      
+
       res.status(500).json({
         success: false,
-        message: "Logout failed"
+        message: "Logout failed",
       });
     }
   })

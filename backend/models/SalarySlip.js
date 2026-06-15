@@ -17,8 +17,31 @@ const salarySlipSchema = new mongoose.Schema(
     salaryStructureId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "SalaryStructure",
-      required: true
+      required: false,
+      default: null
     },
+    source: {
+      type: String,
+      enum: ["generated", "employee_upload"],
+      default: "generated",
+      index: true
+    },
+    uploadFileName: { type: String },
+    uploadMimeType: { type: String },
+    uploadFilePath: { type: String },
+    // GridFS storage fields (NEW - Sprint G)
+    storageKey: {
+      type: String,
+      default: null,
+      description: "Storage key for uploaded payslip in GridFS or local"
+    },
+    storageDriver: {
+      type: String,
+      enum: ['local', 'gridfs', 'mongodb'],
+      default: null,
+      description: "Storage driver used for payslip"
+    },
+    employeeNotes: { type: String },
     orgId: {
       type: String,
       required: true,

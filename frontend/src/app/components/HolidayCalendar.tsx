@@ -25,6 +25,19 @@ import {
   Save,
   FileText
 } from 'lucide-react';
+import {
+  appendOrgIdParam,
+  apiDelete,
+  apiFetchBlob,
+  apiGet,
+  apiPost,
+  apiPut,
+  clearApiCache,
+  resolveAuthOrgId,
+  resolveOrgIdForApi,
+} from '../utils/apiHelper';
+import { useAuth } from '../context/AuthContext';
+import { toast } from '../utils/portalToast';
 
 interface Holiday {
   id: string;
@@ -39,7 +52,7 @@ interface Holiday {
   createdAt: string;
 }
 
-interface HolidayCalendar {
+interface HolidayCalendarRecord {
   id: string;
   name: string;
   year: number;
@@ -53,13 +66,16 @@ interface HolidayCalendar {
 
 const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> = ({ 
   isAdmin = false, 
-  organizationId = 'ORG-001' 
+  organizationId 
 }) => {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'generate' | 'manage' | 'view'>('generate');
   const [showAddHoliday, setShowAddHoliday] = useState(false);
   const [showCalendarPreview, setShowCalendarPreview] = useState(false);
+  const [previewHolidays, setPreviewHolidays] = useState<Holiday[]>([]);
+  const [previewTitle, setPreviewTitle] = useState('');
   const [editingHoliday, setEditingHoliday] = useState<Holiday | null>(null);
-  const [calendars, setCalendars] = useState<HolidayCalendar[]>([]);
+  const [calendars, setCalendars] = useState<HolidayCalendarRecord[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [loading, setLoading] = useState(false);
@@ -78,33 +94,25 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
   });
 
   useEffect(() => {
+    if (!organizationId) {
+      setHolidays([]);
+      return;
+    }
     loadHolidays();
     loadCalendars();
   }, [organizationId, selectedYear]);
 
   const loadHolidays = async () => {
     try {
-      // Get holidays for the selected year
-      const token = localStorage.getItem('authToken');
-      if (!token) {
-        console.error('No authentication token found');
+      if (!organizationId) {
         setHolidays([]);
         return;
       }
-      const response = await fetch(`/api/holidays?year=${selectedYear}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Holidays loaded:', data);
-        setHolidays(data.data || []);
-      } else {
-        console.error('Failed to load holidays:', response.status, response.statusText);
-        setHolidays([]);
-      }
+      const data = await apiGet<{ data?: Holiday[] }>(
+        appendOrgIdParam(`holidays?year=${selectedYear}&limit=500`, user, organizationId),
+        false
+      );
+      setHolidays(data?.data || []);
     } catch (error) {
       console.error('Error loading holidays:', error);
       setHolidays([]);
@@ -114,40 +122,24 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
   const loadCalendars = async () => {
     try {
       // Get all holiday calendars
-      const token = localStorage.getItem('authToken');
-      if (!token) {
-        console.error('No authentication token found');
-        setCalendars([]);
-        return;
-      }
-      const response = await fetch(`/api/holidays/calendar/${selectedYear}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Calendars loaded:', data);
-        // Convert calendar data to calendars format
-        if (data.data && data.data.calendar) {
-          const calendarData: HolidayCalendar = {
+      const data = await apiGet<{ data?: { calendar?: Record<string, Holiday[]> } }>(
+        appendOrgIdParam(`holidays/calendar/${selectedYear}`, user, organizationId),
+        false
+      );
+      if (data?.data?.calendar) {
+          const calendarData: HolidayCalendarRecord = {
             id: `cal_${selectedYear}`,
             name: `Holiday Calendar ${selectedYear}`,
             year: selectedYear,
             organizationId,
-            holidays: data.data.calendar ? Object.values(data.data.calendar).flat() : [],
+            holidays: (data.data.calendar ? Object.values(data.data.calendar).flat() : []) as Holiday[],
             isPublished: true,
             createdBy: 'system',
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           };
           setCalendars([calendarData]);
-        } else {
-          setCalendars([]);
-        }
       } else {
-        console.error('Failed to load calendars:', response.status, response.statusText);
         setCalendars([]);
       }
     } catch (error) {
@@ -185,97 +177,70 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       return;
     }
 
-    const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-    if (!token) {
-      alert('Authentication token not found. Please log in again.');
-      return;
-    }
     try {
-      const response = await fetch(`/api/holidays/${holidayId}`, { 
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      if (response.ok) {
-        setHolidays(prev => prev.filter(h => (h._id || h.id) !== holidayId));
-        alert('Holiday deleted successfully!');
-      } else {
-        const errorData = await response.json();
-        alert(`Failed to delete holiday: ${errorData.message}`);
-      }
+      await apiDelete(appendOrgIdParam(`holidays/${holidayId}`, user, organizationId));
+      setHolidays((prev) => prev.filter((h) => (h._id || h.id) !== holidayId));
+      toast.success('Holiday deleted successfully');
     } catch (error) {
       console.error('Error deleting holiday:', error);
-      alert('Failed to delete holiday: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      toast.error(
+        'Failed to delete holiday: ' + (error instanceof Error ? error.message : 'Unknown error')
+      );
     }
   };
 
   const handleSaveHoliday = async () => {
+    const tenantOrg =
+      organizationId || resolveAuthOrgId(user) || (await resolveOrgIdForApi(user));
+    if (!tenantOrg) {
+      toast.error('Organization context is required to save holidays');
+      return;
+    }
     if (!holidayFormData.name.trim()) {
-      alert('Please enter holiday name');
+      toast.error('Please enter holiday name');
       return;
     }
     if (!holidayFormData.date) {
-      alert('Please select a date');
+      toast.error('Please select a date');
       return;
     }
-
-    const token = localStorage.getItem('authToken');
-    if (!token) {
-      alert('Authentication token not found. Please log in again.');
-      return;
-    }
-    const headers = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
 
     try {
       if (editingHoliday) {
-        // Update existing holiday - use _id if available, otherwise use id
         const holidayId = editingHoliday._id || editingHoliday.id;
-        const response = await fetch(`/api/holidays/${holidayId}`, {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify({
+        const updatedHoliday = await apiPut<{ data?: Holiday & { _id?: string } }>(
+          appendOrgIdParam(`holidays/${holidayId}`, user, tenantOrg),
+          {
+            orgId: tenantOrg,
             name: holidayFormData.name,
             date: holidayFormData.date,
             type: holidayFormData.type,
             description: holidayFormData.description,
-            isRecurring: holidayFormData.isRecurring
-          })
-        });
-        
-        if (response.ok) {
-          const updatedHoliday = await response.json();
-          setHolidays(prev => prev.map(h => 
-            (h._id || h.id) === holidayId 
-              ? { ...h, ...updatedHoliday.data, id: updatedHoliday.data._id }
+            isRecurring: holidayFormData.isRecurring,
+          }
+        );
+        setHolidays((prev) =>
+          prev.map((h) =>
+            (h._id || h.id) === holidayId
+              ? { ...h, ...updatedHoliday?.data, id: updatedHoliday?.data?._id }
               : h
-          ));
-          alert('Holiday updated successfully!');
-        } else {
-          const errorData = await response.json();
-          alert(`Failed to update holiday: ${errorData.message}`);
-        }
+          )
+        );
+        toast.success('Holiday updated successfully');
       } else {
-        // Add new holiday
-        const response = await fetch('/api/holidays', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
+        const newHolidayData = await apiPost<{ data?: Holiday & { _id?: string } }>(
+          appendOrgIdParam('holidays', user, tenantOrg),
+          {
+            orgId: tenantOrg,
             name: holidayFormData.name,
             date: holidayFormData.date,
             type: holidayFormData.type,
             description: holidayFormData.description,
-            isRecurring: holidayFormData.isRecurring
-          })
-        });
-        
-        if (response.ok) {
-          const newHolidayData = await response.json();
+            isRecurring: holidayFormData.isRecurring,
+          }
+        );
+
+        if (newHolidayData?.data) {
           const newHoliday: Holiday = {
             id: newHolidayData.data._id,
             _id: newHolidayData.data._id,
@@ -284,15 +249,14 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
             type: newHolidayData.data.type,
             description: newHolidayData.data.description,
             isRecurring: newHolidayData.data.isRecurring,
-            organizationId,
+            organizationId: tenantOrg,
             createdBy: 'admin',
             createdAt: new Date().toISOString()
           };
           setHolidays(prev => [...prev, newHoliday]);
-          alert('Holiday added successfully!');
+          toast.success('Holiday added successfully');
         } else {
-          const errorData = await response.json();
-          alert(`Failed to add holiday: ${errorData.message}`);
+          toast.error('Failed to add holiday');
         }
       }
       
@@ -305,17 +269,19 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         description: '',
         isRecurring: false
       });
-      // Reload holidays to reflect changes
+      clearApiCache('/holidays');
       loadHolidays();
     } catch (error) {
       console.error('Error saving holiday:', error);
-      alert('Failed to save holiday: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      const msg =
+        error instanceof Error ? error.message : 'Failed to save holiday';
+      toast.error(msg.includes('Route not found') ? 'Holiday API unavailable — redeploy backend or contact support.' : msg);
     }
   };
 
   const handleGenerateCalendar = async () => {
     if (!calendarName.trim()) {
-      alert('Please enter a calendar name');
+      toast.error('Please enter a calendar name');
       return;
     }
 
@@ -326,7 +292,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
     });
 
     if (holidaysForYear.length === 0) {
-      alert(`No holidays found for year ${selectedYear}. Please add holidays first.`);
+      toast.error(`No holidays found for year ${selectedYear}. Add holidays in Manage Holidays first.`);
       return;
     }
 
@@ -334,7 +300,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
     try {
       // For now, we'll just create a local calendar object
       // In a real app, you'd save this to the backend
-      const newCalendar: HolidayCalendar = {
+      const newCalendar: HolidayCalendarRecord = {
         id: `cal_${Date.now()}`,
         name: calendarName,
         year: selectedYear,
@@ -350,10 +316,11 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       setCalendars(prev => [...prev, newCalendar]);
       setCalendarName('');
       setIsPublished(false);
-      alert(`Holiday calendar for ${selectedYear} generated successfully with ${holidaysForYear.length} holidays!`);
+      toast.success(`Calendar "${calendarName}" created with ${holidaysForYear.length} holidays`);
+      setActiveTab('view');
     } catch (error) {
       console.error('Error generating calendar:', error);
-      alert('Failed to generate calendar: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      toast.error('Failed to generate calendar');
     } finally {
       setLoading(false);
     }
@@ -361,47 +328,53 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
 
   const handlePublishCalendar = async (calendarId: string) => {
     try {
-      const response = await fetch(`/api/holiday-calendars/${calendarId}/publish`, {
-        method: 'POST'
-      });
-
-      if (response.ok) {
-        setCalendars(prev => prev.map(cal => 
-          cal.id === calendarId 
+      await apiPost(
+        appendOrgIdParam(`holidays/calendars/${calendarId}/publish`, user, organizationId),
+        {}
+      );
+      setCalendars((prev) =>
+        prev.map((cal) =>
+          cal.id === calendarId
             ? { ...cal, isPublished: true, updatedAt: new Date().toISOString() }
             : cal
-        ));
-        alert('Calendar published successfully!');
-      } else {
-        alert('Failed to publish calendar');
-      }
+        )
+      );
+      toast.success('Calendar published successfully');
     } catch (error) {
       console.error('Error publishing calendar:', error);
-      alert('Failed to publish calendar');
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to publish calendar'
+      );
     }
   };
 
-  const handleViewCalendar = (calendar: HolidayCalendar) => {
+  const openCalendarPreview = (title: string, list: Holiday[]) => {
+    setPreviewTitle(title);
+    setPreviewHolidays(list);
     setShowCalendarPreview(true);
-    // You can add more logic here to show the specific calendar
+  };
+
+  const handleViewCalendar = (calendar: HolidayCalendarRecord) => {
+    openCalendarPreview(calendar.name, calendar.holidays || []);
   };
 
   const handleDownloadCalendar = async (calendarId: string) => {
     try {
-      const response = await fetch(`/api/holiday-calendars/${calendarId}/download`);
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'holiday-calendar.pdf';
-        a.click();
-      } else {
-        alert('Failed to download calendar');
-      }
+      const blob = await apiFetchBlob(
+        appendOrgIdParam(`holidays/calendars/${calendarId}/download`, user, organizationId)
+      );
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `holiday-calendar-${selectedYear}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      toast.success('Calendar downloaded');
     } catch (error) {
       console.error('Error downloading calendar:', error);
-      alert('Failed to download calendar');
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to download calendar'
+      );
     }
   };
 
@@ -449,6 +422,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
       {/* Tabs */}
       <div className="flex gap-2">
         <Button
+          type="button"
           variant={activeTab === 'generate' ? 'default' : 'outline'}
           onClick={() => setActiveTab('generate')}
           className="rounded-xl"
@@ -457,6 +431,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
           Generate Calendar
         </Button>
         <Button
+          type="button"
           variant={activeTab === 'manage' ? 'default' : 'outline'}
           onClick={() => setActiveTab('manage')}
           className="rounded-xl"
@@ -465,6 +440,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
           Manage Holidays
         </Button>
         <Button
+          type="button"
           variant={activeTab === 'view' ? 'default' : 'outline'}
           onClick={() => setActiveTab('view')}
           className="rounded-xl"
@@ -519,7 +495,8 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
             </div>
             <div className="mt-6 flex gap-2">
               <Button
-                onClick={handleGenerateCalendar}
+                type="button"
+                onClick={() => void handleGenerateCalendar()}
                 disabled={loading || !calendarName.trim()}
                 className="rounded-xl"
               >
@@ -536,8 +513,15 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
                 )}
               </Button>
               <Button
+                type="button"
                 variant="outline"
-                onClick={() => setShowCalendarPreview(true)}
+                onClick={() => {
+                  const holidaysForYear = holidays.filter((h) => {
+                    const holidayYear = new Date(h.date).getFullYear();
+                    return holidayYear === selectedYear;
+                  });
+                  openCalendarPreview(`Preview ${selectedYear}`, holidaysForYear);
+                }}
                 disabled={holidays.length === 0}
                 className="rounded-xl"
               >
@@ -627,7 +611,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
                 </SelectContent>
               </Select>
             </div>
-            <Button onClick={handleAddHoliday} className="rounded-xl">
+            <Button type="button" onClick={handleAddHoliday} className="rounded-xl">
               <Plus className="w-4 h-4 mr-2" />
               Add Holiday
             </Button>
@@ -730,6 +714,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
+                      type="button"
                       variant="outline"
                       size="sm"
                       className="rounded-xl"
@@ -847,8 +832,8 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <Card className="w-full max-w-4xl mx-4 p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-semibold">Calendar Preview</h2>
-              <Button variant="ghost" onClick={() => setShowCalendarPreview(false)}>
+              <h2 className="text-xl font-semibold">{previewTitle || 'Calendar Preview'}</h2>
+              <Button type="button" variant="ghost" onClick={() => setShowCalendarPreview(false)}>
                 <X className="w-4 h-4" />
               </Button>
             </div>
@@ -856,7 +841,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
             <div className="space-y-6">
               {/* Calendar Header */}
               <div className="text-center">
-                <h3 className="text-2xl font-bold">Holiday Calendar {selectedYear}</h3>
+                <h3 className="text-2xl font-bold">{previewTitle || `Holiday Calendar ${selectedYear}`}</h3>
                 <p className="text-muted-foreground">Organization: {organizationId}</p>
               </div>
 
@@ -865,7 +850,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
                 {Array.from({ length: 12 }, (_, monthIndex) => {
                   const monthDate = new Date(selectedYear, monthIndex, 1);
                   const monthName = monthDate.toLocaleDateString('en-US', { month: 'long' });
-                  const monthHolidays = holidays.filter(holiday => {
+                  const monthHolidays = previewHolidays.filter(holiday => {
                     const holidayDate = new Date(holiday.date);
                     return holidayDate.getMonth() === monthIndex && holidayDate.getFullYear() === selectedYear;
                   });
@@ -909,7 +894,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
               <Card className="p-4 rounded-xl bg-accent/30">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
                   <div>
-                    <p className="text-2xl font-bold text-primary">{holidays.filter(h => new Date(h.date).getFullYear() === selectedYear).length}</p>
+                    <p className="text-2xl font-bold text-primary">{previewHolidays.filter(h => new Date(h.date).getFullYear() === selectedYear).length}</p>
                     <p className="text-sm text-muted-foreground">Total Holidays</p>
                   </div>
                   <div>
@@ -917,7 +902,7 @@ const HolidayCalendar: React.FC<{ isAdmin?: boolean; organizationId?: string }> 
                     <p className="text-sm text-muted-foreground">Public Holidays</p>
                   </div>
                   <div>
-                    <p className="text-2xl font-bold text-green-600">{holidays.filter(h => h.type === 'optional' && new Date(h.date).getFullYear() === selectedYear).length}</p>
+                    <p className="text-2xl font-bold text-green-600">{previewHolidays.filter(h => h.type === 'optional' && new Date(h.date).getFullYear() === selectedYear).length}</p>
                     <p className="text-sm text-muted-foreground">Optional Holidays</p>
                   </div>
                 </div>

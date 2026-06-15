@@ -66,6 +66,8 @@
   --muted-foreground: #94A3B8;
   --border: #334155;
   --input: #334155;
+  --input-background: #1e293b;
+  --switch-background: #475569;
   --ring: #6366F1;
   --chart-1: #6366F1;
   --chart-2: #10B981;
@@ -238,5 +240,74 @@
       3px 3px 0px rgba(79, 70, 229, 0.2),
       6px 6px 0px rgba(79, 70, 229, 0.1),
       9px 9px 20px rgba(0, 0, 0, 0.15);
+  }
+
+  /* Dark mode: remap common light-only Tailwind utilities used across admin/employee pages */
+  .dark .text-gray-900,
+  .dark .text-gray-800,
+  .dark .text-gray-700 {
+    color: var(--foreground);
+  }
+
+  .dark .text-gray-600,
+  .dark .text-gray-500,
+  .dark .text-gray-400 {
+    color: var(--muted-foreground);
+  }
+
+  .dark .bg-white {
+    background-color: var(--card);
+    color: var(--card-foreground);
+  }
+
+  .dark .bg-gray-50,
+  .dark .bg-gray-100 {
+    background-color: color-mix(in srgb, var(--muted) 60%, transparent);
+  }
+
+  .dark .hover\:bg-gray-50:hover,
+  .dark .hover\:bg-gray-100:hover {
+    background-color: var(--muted);
+  }
+
+  .dark .border-gray-200,
+  .dark .border-gray-300 {
+    border-color: var(--border);
+  }
+
+  .dark .bg-green-50 {
+    background-color: color-mix(in srgb, var(--secondary) 15%, var(--card));
+  }
+
+  .dark .bg-red-50 {
+    background-color: color-mix(in srgb, var(--destructive) 12%, var(--card));
+  }
+
+  .dark .bg-blue-50,
+  .dark .bg-orange-50,
+  .dark .bg-yellow-50 {
+    background-color: color-mix(in srgb, var(--primary) 12%, var(--card));
+  }
+
+  .dark .bg-green-100,
+  .dark .bg-gray-100.text-gray-800,
+  .dark .bg-blue-100,
+  .dark .bg-yellow-100,
+  .dark .bg-red-100 {
+    background-color: var(--muted);
+    color: var(--foreground);
+  }
+
+  .dark .text-green-700,
+  .dark .text-green-800,
+  .dark .text-blue-700,
+  .dark .text-red-700 {
+    color: var(--foreground);
+  }
+
+  .dark button.bg-white,
+  .dark .export-menu button {
+    background-color: var(--card);
+    color: var(--foreground);
   }
 }

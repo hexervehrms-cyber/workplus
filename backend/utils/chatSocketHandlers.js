@@ -4,9 +4,23 @@
  */
 
 import ChatMessage from '../models/ChatMessage.js';
+import ChatGroup from '../models/ChatGroup.js';
 import User from '../models/User.js';
 import logger from './logger.js';
+import {
+  assertRecipientInOrg,
+  assertConversationAccess,
+  canAccessMessage,
+  resolveUserTenantOrg,
+} from './chatAccessHelpers.js';
 import { sendTeamsMessage } from '../config/teamsConfig.js';
+
+async function effectiveTenantId(socket) {
+  if (socket.tenantId) return socket.tenantId;
+  const resolved = await resolveUserTenantOrg(socket.userId);
+  if (resolved) socket.tenantId = resolved;
+  return resolved;
+}
 
 /**
  * Initialize chat socket handlers
@@ -15,7 +29,7 @@ export const initializeChatHandlers = (io) => {
   io.on('connection', (socket) => {
     const userId = socket.userId;
     const role = socket.role;
-    const tenantId = socket.tenantId;
+    let tenantId = socket.tenantId;
 
     logger.info(`Chat socket connected: ${socket.id} for user ${userId}`);
 
@@ -29,10 +43,88 @@ export const initializeChatHandlers = (io) => {
      */
     socket.on('chat:send_message', async (data) => {
       try {
-        const { recipientId, content, messageType = 'text', teamsIntegration } = data;
+        const {
+          recipientId,
+          content,
+          messageType = 'text',
+          teamsIntegration,
+          conversationId: groupConversationId,
+        } = data || {};
+
+        // Group chat (conversation id prefix grp_)
+        if (groupConversationId && String(groupConversationId).startsWith('grp_')) {
+          if (!content) {
+            socket.emit('chat:error', { message: 'Invalid message data' });
+            return;
+          }
+
+          const conversationId = String(groupConversationId);
+          const group = await ChatGroup.findOne({
+            conversationId,
+            orgId: tenantId,
+          }).lean();
+
+          if (!group || !group.members.some((m) => m.toString() === userId)) {
+            socket.emit('chat:error', { message: 'Not a member of this group' });
+            return;
+          }
+
+          const message = new ChatMessage({
+            senderId: userId,
+            recipientId: null,
+            conversationId,
+            messageType,
+            content: { text: content },
+            channelInfo: {
+              channelType: 'group',
+              channelId: conversationId,
+              participants: group.members,
+            },
+            metadata: {
+              teamsIntegration: teamsIntegration || {},
+            },
+            orgId: tenantId,
+            status: 'sent',
+          });
+
+          await message.save();
+          await message.populate('sender', 'name email avatar');
+
+          const basePayload = {
+            messageId: message._id,
+            senderId: message.senderId,
+            senderName: message.sender.name,
+            senderAvatar: message.sender.avatar,
+            content: message.content.text,
+            timestamp: message.createdAt,
+            conversationId: message.conversationId,
+          };
+
+          for (const mid of group.members) {
+            io.to(`user_${mid}`).emit('chat:new_message', {
+              ...basePayload,
+              status: mid.toString() === userId ? 'sent' : 'delivered',
+            });
+          }
+
+          logger.info(`Group message in ${conversationId} from ${userId}`);
+          return;
+        }
 
         if (!recipientId || !content) {
           socket.emit('chat:error', { message: 'Invalid message data' });
+          return;
+        }
+
+        tenantId = await effectiveTenantId(socket);
+        if (!tenantId) {
+          socket.emit('chat:error', { message: 'Organization context required' });
+          return;
+        }
+
+        const recipientCheck = await assertRecipientInOrg(recipientId, tenantId);
+        if (!recipientCheck.ok) {
+          socket.emit('chat:error', { message: recipientCheck.message });
           return;
         }
 
@@ -76,19 +168,26 @@ export const initializeChatHandlers = (io) => {
           }
         }
 
-        // Send admin notification via Teams if employee sends message to admin
-        if (sender.role === 'employee' && (recipient.role === 'admin' || recipient.role === 'super_admin')) {
+        // Teams ping for employee ↔ admin/hr/manager (both directions when chat is linked)
+        const staffRoles = ['admin', 'hr', 'manager', 'super_admin'];
+        const isEmployeeToStaff =
+          sender.role === 'employee' && staffRoles.includes(recipient.role);
+        const isStaffToEmployee =
+          staffRoles.includes(sender.role) && recipient.role === 'employee';
+        if (
+          (isEmployeeToStaff || isStaffToEmployee) &&
+          teamsIntegration?.enabled &&
+          teamsIntegration?.chatId
+        ) {
           try {
-            // Send Teams notification to admin
-            if (teamsIntegration?.enabled && teamsIntegration?.adminChatId) {
-              await sendTeamsMessage(
-                teamsIntegration.adminChatId,
-                `📧 New message from ${sender.name}:\n\n"${content}"\n\nReply in WorkPlus Pro Chat`
-              );
-              logger.info(`Admin notification sent to Teams for message from ${sender.name}`);
-            }
+            const direction = isEmployeeToStaff ? 'New message from' : 'Message from';
+            await sendTeamsMessage(
+              teamsIntegration.chatId,
+              `📧 ${direction} ${sender.name}:\n\n"${content}"\n\nReply in WorkPlus Pro Chat`
+            );
+            logger.info(`Teams chat notification for ${sender.name} → ${recipient.name}`);
           } catch (notificationError) {
-            logger.warn('Failed to send admin Teams notification', notificationError);
+            logger.warn('Failed to send Teams chat notification', notificationError);
           }
         }
 
@@ -133,7 +232,7 @@ export const initializeChatHandlers = (io) => {
         const { messageId } = data;
         const message = await ChatMessage.findById(messageId);
 
-        if (message) {
+        if (message && canAccessMessage(message, { userId, orgId: tenantId })) {
           await message.markAsRead(userId);
 
           // Notify sender that message was read
@@ -155,9 +254,35 @@ export const initializeChatHandlers = (io) => {
      * Emitted by: Client
      * Data: { recipientId, isTyping }
      */
-    socket.on('chat:typing', (data) => {
-      const { recipientId, isTyping } = data;
+    socket.on('chat:typing', async (data) => {
+      const { recipientId, conversationId: typingConvId, isTyping } = data || {};
 
+      if (typingConvId && String(typingConvId).startsWith('grp_')) {
+        try {
+          const group = await ChatGroup.findOne({
+            conversationId: String(typingConvId),
+            orgId: tenantId,
+          }).lean();
+          if (!group || !group.members.some((m) => m.toString() === userId)) return;
+          for (const mid of group.members) {
+            if (mid.toString() === userId) continue;
+            io.to(`user_${mid}`).emit('chat:user_typing', {
+              userId,
+              isTyping,
+              conversationId: typingConvId,
+              timestamp: new Date(),
+            });
+          }
+        } catch (e) {
+          logger.warn('chat:typing group relay failed', e);
+        }
+        return;
+      }
+
+      if (!recipientId) return;
+      if (!tenantId) return;
+      const typingCheck = await assertRecipientInOrg(recipientId, tenantId);
+      if (!typingCheck.ok) return;
       io.to(`user_${recipientId}`).emit('chat:user_typing', {
         userId,
         isTyping,
@@ -174,7 +299,29 @@ export const initializeChatHandlers = (io) => {
       try {
         const { conversationId, page = 1, limit = 50 } = data;
 
-        const messages = await ChatMessage.findConversation(conversationId, page, limit);
+        const orgId = await effectiveTenantId(socket);
+        if (!orgId) {
+          socket.emit('chat:error', { message: 'Organization context required' });
+          return;
+        }
+
+        const access = await assertConversationAccess(conversationId, userId, orgId);
+        if (!access.ok) {
+          socket.emit('chat:error', { message: access.message });
+          return;
+        }
+
+        const messages = await ChatMessage.find({
+          conversationId: String(conversationId),
+          orgId: String(orgId),
+          isDeleted: false
+        })
+          .populate('sender', 'name email avatar')
+          .populate('recipient', 'name email avatar')
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .skip((page - 1) * limit)
+          .lean();
 
         socket.emit('chat:history', {
           conversationId,
@@ -197,7 +344,23 @@ export const initializeChatHandlers = (io) => {
      */
     socket.on('chat:get_unread', async () => {
       try {
-        const unreadMessages = await ChatMessage.findUnreadForUser(userId);
+        const orgId = await effectiveTenantId(socket);
+        if (!orgId) {
+          socket.emit('chat:unread_messages', { messages: [], count: 0 });
+          return;
+        }
+        const unreadMessages = await ChatMessage.find({
+          orgId: String(orgId),
+          $or: [
+            { recipientId: userId },
+            { 'channelInfo.participants': userId }
+          ],
+          'readBy.userId': { $ne: userId },
+          isDeleted: false
+        })
+          .populate('sender', 'name email avatar')
+          .sort({ createdAt: -1 })
+          .lean();
 
         socket.emit('chat:unread_messages', {
           messages: unreadMessages,
@@ -220,6 +383,7 @@ export const initializeChatHandlers = (io) => {
         const conversations = await ChatMessage.aggregate([
           {
             $match: {
+              orgId: tenantId ? String(tenantId) : null,
               $or: [
                 { senderId: userId },
                 { recipientId: userId },
@@ -287,6 +451,11 @@ export const initializeChatHandlers = (io) => {
           return;
         }
 
+        if (!canAccessMessage(message, { userId, orgId: tenantId })) {
+          socket.emit('chat:error', { message: 'Access denied' });
+          return;
+        }
+
         if (message.senderId.toString() !== userId) {
           socket.emit('chat:error', { message: 'Not authorized to edit this message' });
           return;
@@ -294,18 +463,20 @@ export const initializeChatHandlers = (io) => {
 
         await message.editMessage(newContent);
 
-        // Notify all participants
-        io.to(`user_${message.recipientId}`).emit('chat:message_edited', {
-          messageId,
-          newContent,
-          editedAt: message.metadata.edited.editedAt
-        });
-
-        socket.emit('chat:message_edited', {
-          messageId,
-          newContent,
-          editedAt: message.metadata.edited.editedAt
-        });
+        const targets = new Set();
+        targets.add(String(message.senderId));
+        if (message.recipientId) targets.add(String(message.recipientId));
+        for (const p of message.channelInfo?.participants || []) {
+          targets.add(String(p));
+        }
+        for (const uid of targets) {
+          io.to(`user_${uid}`).emit('chat:message_edited', {
+            messageId,
+            newContent,
+            editedAt: message.metadata.edited.editedAt,
+            conversationId: message.conversationId,
+          });
+        }
 
         logger.info(`Message ${messageId} edited by ${userId}`);
       } catch (error) {
@@ -329,6 +500,11 @@ export const initializeChatHandlers = (io) => {
           return;
         }
 
+        if (String(message.orgId) !== String(tenantId)) {
+          socket.emit('chat:error', { message: 'Access denied' });
+          return;
+        }
+
         if (message.senderId.toString() !== userId && role !== 'admin' && role !== 'super_admin') {
           socket.emit('chat:error', { message: 'Not authorized to delete this message' });
           return;
@@ -339,22 +515,80 @@ export const initializeChatHandlers = (io) => {
         message.deletedBy = userId;
         await message.save();
 
-        // Notify all participants
-        io.to(`user_${message.recipientId}`).emit('chat:message_deleted', {
-          messageId,
-          deletedAt: message.deletedAt
-        });
-
-        socket.emit('chat:message_deleted', {
-          messageId,
-          deletedAt: message.deletedAt
-        });
+        const targets = new Set();
+        targets.add(String(message.senderId));
+        if (message.recipientId) targets.add(String(message.recipientId));
+        for (const p of message.channelInfo?.participants || []) {
+          targets.add(String(p));
+        }
+        for (const uid of targets) {
+          io.to(`user_${uid}`).emit('chat:message_deleted', {
+            messageId,
+            deletedAt: message.deletedAt,
+            conversationId: message.conversationId,
+          });
+        }
 
         logger.info(`Message ${messageId} deleted by ${userId}`);
       } catch (error) {
         logger.error('Error deleting message', error);
         socket.emit('chat:error', { message: 'Failed to delete message' });
       }
+    });
+
+    /**
+     * WebRTC call signaling (in-app audio/video when Teams is unavailable)
+     */
+    const relayToUser = (recipientId, event, payload) => {
+      if (!recipientId) return;
+      io.to(`user_${recipientId}`).emit(event, payload);
+    };
+
+    socket.on('call:offer', (data) => {
+      const { recipientId, sdp, withVideo, callerName } = data || {};
+      if (!recipientId || !sdp) {
+        socket.emit('chat:error', { message: 'Invalid call offer' });
+        return;
+      }
+      relayToUser(recipientId, 'call:incoming', {
+        callerId: userId,
+        callerName: callerName || 'User',
+        sdp,
+        withVideo: !!withVideo,
+      });
+    });
+
+    socket.on('call:answer', (data) => {
+      const { recipientId, sdp } = data || {};
+      if (!recipientId || !sdp) {
+        socket.emit('chat:error', { message: 'Invalid call answer' });
+        return;
+      }
+      relayToUser(recipientId, 'call:answered', {
+        answererId: userId,
+        sdp,
+      });
+    });
+
+    socket.on('call:ice-candidate', (data) => {
+      const { recipientId, candidate } = data || {};
+      if (!recipientId || !candidate) return;
+      relayToUser(recipientId, 'call:ice-candidate', {
+        fromUserId: userId,
+        candidate,
+      });
+    });
+
+    socket.on('call:end', (data) => {
+      const { recipientId } = data || {};
+      if (!recipientId) return;
+      relayToUser(recipientId, 'call:ended', { fromUserId: userId });
+    });
+
+    socket.on('call:decline', (data) => {
+      const { recipientId } = data || {};
+      if (!recipientId) return;
+      relayToUser(recipientId, 'call:declined', { fromUserId: userId });
     });
 
     /**

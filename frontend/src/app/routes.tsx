@@ -1,114 +1,27 @@
-import { createBrowserRouter, Navigate } from 'react-router';
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { createBrowserRouter, Navigate, Outlet } from 'react-router';
+import { lazy, Suspense, type ComponentType } from 'react';
+
+/** Retry dynamic import once (handles stale CDN chunks after deploy). */
+function lazyPage<T extends ComponentType<unknown>>(
+  loader: () => Promise<{ default: T }>
+) {
+  return lazy(async () => {
+    try {
+      return await loader();
+    } catch (first) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        return await loader();
+      } catch {
+        throw first;
+      }
+    }
+  });
+}
 import { MainLayout } from './layouts/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
-import { ErrorBoundary } from './components/ErrorBoundary';
-import { RouteErrorBoundary } from './components/RouteErrorBoundary';
 import Login from './pages/Login';
-import { useAuth } from './context/AuthContext';
-
-// Role-based redirect component
-function RoleBasedRedirect() {
-  const { user, loading } = useAuth();
-  const [verifying, setVerifying] = useState(true);
-  const [redirectPath, setRedirectPath] = useState<string | null>(null);
-  
-  useEffect(() => {
-    console.log('🔍 RoleBasedRedirect - Auth state changed:', { 
-      userEmail: user?.email, 
-      userRole: user?.role,
-      userRoleType: typeof user?.role,
-      loading,
-      fullUser: user
-    });
-
-    if (loading) {
-      console.log('⏳ Still loading auth, waiting...');
-      setVerifying(true);
-      return;
-    }
-
-    const verifyAndRedirect = async () => {
-      console.log('🔍 RoleBasedRedirect - Checking user:', user);
-
-      if (!user) {
-        console.log('❌ No user found, redirecting to login');
-        setRedirectPath('/login');
-        setVerifying(false);
-        return;
-      }
-
-      // Verify role is valid
-      if (!user.role) {
-        console.error('❌ User object missing role field:', user);
-        setRedirectPath('/login');
-        setVerifying(false);
-        return;
-      }
-
-      // Validate role is one of the expected values
-      const validRoles = ['super_admin', 'admin', 'hr', 'manager', 'accountant', 'employee'];
-      if (!validRoles.includes(user.role)) {
-        console.error('❌ Invalid role:', user.role, 'Type:', typeof user.role);
-        setRedirectPath('/login');
-        setVerifying(false);
-        return;
-      }
-
-      // Determine redirect path based on role - CRITICAL: Must match role exactly
-      let path = '/employee'; // Default fallback
-      
-      switch (user.role) {
-        case 'super_admin':
-          path = '/super-admin';
-          console.log('✅ Role is super_admin, redirecting to /super-admin');
-          break;
-        case 'admin':
-          path = '/admin';
-          console.log('✅ Role is admin, redirecting to /admin');
-          break;
-        case 'employee':
-          path = '/employee';
-          console.log('✅ Role is employee, redirecting to /employee');
-          break;
-        case 'hr':
-          path = '/employee';
-          console.log('✅ Role is hr, redirecting to /employee');
-          break;
-        case 'manager':
-          path = '/employee';
-          console.log('✅ Role is manager, redirecting to /employee');
-          break;
-        case 'accountant':
-          path = '/employee';
-          console.log('✅ Role is accountant, redirecting to /employee');
-          break;
-        default:
-          path = '/employee';
-          console.warn('⚠️ Unknown role, defaulting to /employee');
-      }
-
-      console.log('✅ RoleBasedRedirect - User role:', user.role, 'Redirecting to:', path);
-      setRedirectPath(path);
-      setVerifying(false);
-    };
-
-    verifyAndRedirect();
-  }, [user, loading]);
-
-  if (verifying) {
-    console.log('⏳ RoleBasedRedirect - Still verifying...');
-    return null; // Show nothing while verifying
-  }
-
-  if (!redirectPath) {
-    console.log('⚠️ No redirect path determined, going to login');
-    return <Navigate to="/login" replace />;
-  }
-
-  console.log('🔄 Navigating to:', redirectPath);
-  return <Navigate to={redirectPath} replace />;
-}
+import HomeGate from './components/landing/HomeGate';
 
 // Minimal loading fallback - no visible spinner for faster perceived performance
 const LazyLoader = () => null;
@@ -135,17 +48,18 @@ const AdminRoles = lazy(() => import('./pages/admin/Roles'));
 const LeaveRequests = lazy(() => import('./pages/admin/LeaveRequests'));
 const AttendanceAdmin = lazy(() => import('./pages/admin/Attendance'));
 const ExpensesAdmin = lazy(() => import('./pages/admin/Expenses'));
-const AnnouncementsAdmin = lazy(() => import('./pages/admin/Announcements'));
-const AdminChat = lazy(() => import('./pages/admin/Chat'));
+const AnnouncementsAdmin = lazyPage(() => import('./pages/admin/Announcements'));
+const AdminChat = lazyPage(() => import('./pages/admin/Chat'));
 const HREmployeeOnboarding = lazy(() => import('./pages/admin/EmployeeOnboarding'));
 const AdminCompanyDocs = lazy(() => import('./pages/admin/CompanyDocs'));
 const AdminHolidayCalendar = lazy(() => import('./pages/admin/HolidayCalendar'));
-const AdminPayroll = lazy(() => import('./pages/admin/Payroll'));
+const AdminPayroll = lazyPage(() => import('./pages/admin/Payroll'));
+const AdminPayrollRuns = lazy(() => import('./pages/admin/PayrollCalculation'));
 const AttendanceCalendar = lazy(() => import('./pages/admin/AttendanceCalendar'));
 const AttendanceHistory = lazy(() => import('./pages/admin/AttendanceHistory'));
 const LeaveAllocation = lazy(() => import('./pages/admin/LeaveAllocation'));
 const LeaveSettings = lazy(() => import('./pages/admin/LeaveSettings'));
-const AdminSettings = lazy(() => import('./pages/admin/Settings'));
+const AdminSettings = lazyPage(() => import('./pages/admin/Settings'));
 const AdminManagement = lazy(() => import('./pages/admin/AdminManagement'));
 
 // Sales Pages - Lazy loaded
@@ -158,38 +72,42 @@ const Calls = lazy(() => import('./pages/sales/Calls'));
 const EmployeeDashboard = lazy(() => import('./pages/employee/Dashboard'));
 const Profile = lazy(() => import('./pages/employee/Profile'));
 const Leave = lazy(() => import('./pages/employee/Leave'));
-import Calendar from './pages/employee/Calendar';
-import Attendance from './pages/employee/Attendance';
-import Performance from './pages/employee/Performance';
-import Payroll from './pages/employee/Payroll';
-import Expenses from './pages/employee/Expenses';
-import Chat from './pages/employee/Chat';
-import EmployeeOnboarding from './pages/employee/OnboardingForm';
-import EmployeeCompanyDocs from './pages/employee/CompanyDocs';
-import EmployeeSettings from './pages/employee/Settings';
+const Attendance = lazy(() => import('./pages/employee/Attendance'));
+const Performance = lazy(() => import('./pages/employee/Performance'));
+const Payroll = lazy(() => import('./pages/employee/Payroll'));
+const Expenses = lazy(() => import('./pages/employee/Expenses'));
+const Chat = lazy(() => import('./pages/employee/Chat'));
+const EmployeeOnboarding = lazy(() => import('./pages/employee/OnboardingForm'));
+const EmployeeCompanyDocs = lazy(() => import('./pages/employee/CompanyDocs'));
+const EmployeeSettings = lazy(() => import('./pages/employee/Settings'));
+const EmployeeAssets = lazy(() => import('./pages/employee/Assets'));
 
 // Public Pages
-import Onboarding from './pages/public/Onboarding';
+import OnboardingPage from './pages/public/OnboardingPage';
+import { RoleHomeRedirect, SettingsRoleRedirect } from './components/RoleHomeRedirect';
+
+/** HR users share most admin HR screens; sales/roles stay admin-only. */
+const HR_ADMIN = ['admin', 'hr'] as const;
+const ADMIN_ONLY = ['admin'] as const;
+
+const AdminSalaryStructure = lazy(() => import('./pages/admin/SalaryStructure'));
+const AdminSalaryCycle = lazy(() => import('./pages/admin/SalaryCycle'));
+const AdminBulkOperations = lazy(() => import('./pages/admin/BulkOperations'));
+const AdminAssets = lazy(() => import('./pages/admin/Assets'));
 
 const routes = [
   {
-    path: '/login',
-    element: <Login />,
-  },
-  {
-    path: '/',
-    element: (
-      <ErrorBoundary>
-        <ProtectedRoute>
-          <MainLayout />
-        </ProtectedRoute>
-      </ErrorBoundary>
-    ),
+    element: <Outlet />,
     children: [
-      { 
-        index: true, 
-        element: <RoleBasedRedirect />
-      },
+      { index: true, element: <HomeGate /> },
+      { path: 'login', element: <Login /> },
+      {
+        element: (
+          <ProtectedRoute>
+            <MainLayout />
+          </ProtectedRoute>
+        ),
+        children: [
       {
         path: 'super-admin',
         element: (
@@ -277,7 +195,7 @@ const routes = [
       {
         path: 'admin',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminDashboard />
           </ProtectedRoute>
         ),
@@ -285,7 +203,7 @@ const routes = [
       {
         path: 'admin/employees',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <Employees />
           </ProtectedRoute>
         ),
@@ -293,7 +211,7 @@ const routes = [
       {
         path: 'admin/employees/:employeeId/correspondence',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <EmployeeCorrespondence />
           </ProtectedRoute>
         ),
@@ -301,7 +219,7 @@ const routes = [
       {
         path: 'admin/company-docs',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminCompanyDocs />
           </ProtectedRoute>
         ),
@@ -309,7 +227,7 @@ const routes = [
       {
         path: 'admin/invites',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <InviteManagement />
           </ProtectedRoute>
         ),
@@ -317,7 +235,7 @@ const routes = [
       {
         path: 'admin/departments',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={['admin', 'hr']}>
             <AdminDepartments />
           </ProtectedRoute>
         ),
@@ -325,7 +243,7 @@ const routes = [
       {
         path: 'admin/roles',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <AdminRoles />
           </ProtectedRoute>
         ),
@@ -333,7 +251,7 @@ const routes = [
       {
         path: 'admin/leaves',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <LeaveRequests />
           </ProtectedRoute>
         ),
@@ -341,7 +259,7 @@ const routes = [
       {
         path: 'admin/leave-allocation',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <LeaveAllocation />
           </ProtectedRoute>
         ),
@@ -349,7 +267,7 @@ const routes = [
       {
         path: 'admin/leave-settings',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <LeaveSettings />
           </ProtectedRoute>
         ),
@@ -357,7 +275,7 @@ const routes = [
       {
         path: 'admin/holiday-calendar',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminHolidayCalendar />
           </ProtectedRoute>
         ),
@@ -365,7 +283,7 @@ const routes = [
       {
         path: 'admin/attendance',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AttendanceAdmin />
           </ProtectedRoute>
         ),
@@ -373,7 +291,7 @@ const routes = [
       {
         path: 'admin/attendance-calendar',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AttendanceCalendar />
           </ProtectedRoute>
         ),
@@ -381,7 +299,7 @@ const routes = [
       {
         path: 'admin/attendance-history',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AttendanceHistory />
           </ProtectedRoute>
         ),
@@ -389,7 +307,7 @@ const routes = [
       {
         path: 'admin/expenses',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <ExpensesAdmin />
           </ProtectedRoute>
         ),
@@ -397,15 +315,63 @@ const routes = [
       {
         path: 'admin/payroll',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminPayroll />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/payroll-runs',
+        element: (
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
+            <AdminPayrollRuns />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/salary-structure',
+        element: (
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
+            <Suspense fallback={<LazyLoader />}>
+              <AdminSalaryStructure />
+            </Suspense>
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/salary-cycle',
+        element: (
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
+            <Suspense fallback={<LazyLoader />}>
+              <AdminSalaryCycle />
+            </Suspense>
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/bulk-operations',
+        element: (
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
+            <Suspense fallback={<LazyLoader />}>
+              <AdminBulkOperations />
+            </Suspense>
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/assets',
+        element: (
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
+            <Suspense fallback={<LazyLoader />}>
+              <AdminAssets />
+            </Suspense>
           </ProtectedRoute>
         ),
       },
       {
         path: 'admin/announcements',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AnnouncementsAdmin />
           </ProtectedRoute>
         ),
@@ -413,7 +379,7 @@ const routes = [
       {
         path: 'admin/chat',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminChat />
           </ProtectedRoute>
         ),
@@ -421,15 +387,17 @@ const routes = [
       {
         path: 'admin/employee-onboarding',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
-            <HREmployeeOnboarding />
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
+            <Suspense fallback={<LazyLoader />}>
+              <HREmployeeOnboarding />
+            </Suspense>
           </ProtectedRoute>
         ),
       },
       {
         path: 'admin/sales',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <SalesDashboard />
           </ProtectedRoute>
         ),
@@ -437,7 +405,7 @@ const routes = [
       {
         path: 'admin/sales/leads',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <Leads />
           </ProtectedRoute>
         ),
@@ -445,7 +413,7 @@ const routes = [
       {
         path: 'admin/sales/deals',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <Deals />
           </ProtectedRoute>
         ),
@@ -453,7 +421,7 @@ const routes = [
       {
         path: 'admin/sales/calls',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <Calls />
           </ProtectedRoute>
         ),
@@ -461,17 +429,15 @@ const routes = [
       {
         path: 'employee',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
-            <RouteErrorBoundary>
-              <EmployeeDashboard />
-            </RouteErrorBoundary>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
+            <EmployeeDashboard />
           </ProtectedRoute>
         ),
       },
       {
         path: 'employee/profile',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Profile />
           </ProtectedRoute>
         ),
@@ -479,7 +445,7 @@ const routes = [
       {
         path: 'employee/company-docs',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <EmployeeCompanyDocs />
           </ProtectedRoute>
         ),
@@ -487,33 +453,27 @@ const routes = [
       {
         path: 'employee/leave',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Leave />
           </ProtectedRoute>
         ),
       },
       {
         path: 'employee/calendar',
-        element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
-            <Calendar />
-          </ProtectedRoute>
-        ),
+        element: <Navigate to="/employee" replace />,
       },
       {
         path: 'employee/attendance',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
-            <RouteErrorBoundary>
-              <Attendance />
-            </RouteErrorBoundary>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
+            <Attendance />
           </ProtectedRoute>
         ),
       },
       {
         path: 'employee/performance',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Performance />
           </ProtectedRoute>
         ),
@@ -521,7 +481,7 @@ const routes = [
       {
         path: 'employee/payroll',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Payroll />
           </ProtectedRoute>
         ),
@@ -529,7 +489,7 @@ const routes = [
       {
         path: 'employee/expenses',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Expenses />
           </ProtectedRoute>
         ),
@@ -537,15 +497,25 @@ const routes = [
       {
         path: 'employee/chat',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <Chat />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'employee/assets',
+        element: (
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
+            <Suspense fallback={<LazyLoader />}>
+              <EmployeeAssets />
+            </Suspense>
           </ProtectedRoute>
         ),
       },
       {
         path: 'employee/onboarding',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <EmployeeOnboarding />
           </ProtectedRoute>
         ),
@@ -554,15 +524,14 @@ const routes = [
         path: 'settings',
         element: (
           <ProtectedRoute>
-            {/* Route to appropriate settings page based on role */}
-            <EmployeeSettings />
+            <SettingsRoleRedirect />
           </ProtectedRoute>
         ),
       },
       {
         path: 'employee/settings',
         element: (
-          <ProtectedRoute requiredRole={['employee', 'hr', 'manager', 'accountant']}>
+          <ProtectedRoute requiredRole={['employee', 'manager', 'accountant']}>
             <EmployeeSettings />
           </ProtectedRoute>
         ),
@@ -570,7 +539,7 @@ const routes = [
       {
         path: 'admin/settings',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminSettings />
           </ProtectedRoute>
         ),
@@ -578,16 +547,26 @@ const routes = [
       {
         path: 'admin/admin-management',
         element: (
-          <ProtectedRoute requiredRole={['admin']}>
+          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
             <AdminManagement />
           </ProtectedRoute>
         ),
       },
+      {
+        path: '*',
+        element: (
+          <ProtectedRoute>
+            <RoleHomeRedirect />
+          </ProtectedRoute>
+        ),
+      },
+        ],
+      },
+      {
+        path: 'onboarding/:token',
+        element: <OnboardingPage />,
+      },
     ],
-  },
-  {
-    path: '/onboarding/:token',
-    element: <Onboarding />,
   },
 ];
 

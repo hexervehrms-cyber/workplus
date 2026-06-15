@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "name": "Phase 3A Verification",
+  "description": "Running Phase 3A full system verification test",
+  "version": "1",
+  "when": {
+    "type": "userTriggered"
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "",
+    "timeout": 600
+  }
+}

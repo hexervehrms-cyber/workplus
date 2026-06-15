@@ -1,25 +1,78 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { KPICard } from '../../components/KPICard';
-import InteractiveCalendar from '../../components/InteractiveCalendar';
 import ChatWidget from '../../components/ChatWidget';
-import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useAuth } from '../../context/AuthContext';
-import { TokenManager } from '../../utils/api';
-import { apiGet, buildApiUrl, clearApiCache } from '../../utils/apiHelper';
-import { clearPersistedAttendance, writePersistedAttendance } from '../../utils/attendancePersistence';
+import {
+  fetchLeaveBalanceKpiSummary,
+  formatLeaveBalanceKpi,
+} from '../../utils/leaveBalance';
+import { resolveEmployeeMongoId } from '../../utils/resolveEmployeeId';
+import {
+  apiGetSafe,
+  appendOrgIdParam,
+  clearApiCache,
+  holidaysStorageKey,
+  resolveAuthOrgId,
+} from '../../utils/apiHelper';
+import { safeLocaleTime, safeFormatTime, runSafe, authUserKey, safeArrayAccess } from '../../utils/safeUi';
+import { postAttendanceAction } from '../../utils/attendanceApi';
+import {
+  formatWeekHours,
+  readCachedWeekHours,
+  writeCachedWeekHours,
+  calendarWeekKey,
+} from '../../utils/weekHours';
+import {
+    writePersistedAttendance,
+  readPersistedAttendance,
+  clearPersistedAttendance,
+  isPayloadFresh,
+  localDayKey,
+} from '../../utils/attendancePersistence';
+
+/** Apply server liveStatus without flipping break off due to stale/partial payloads. */
+function resolveOnBreakFromServer(
+  liveStatus: Record<string, unknown> | null | undefined,
+  breaks: BreakRecord[] | undefined,
+  fallback: boolean
+): boolean {
+  // Server says explicitly on break
+  if (liveStatus?.isOnBreak === true || liveStatus?.status === 'on_break') {
+    return true;
+  }
+  
+  // Server says explicitly NOT on break
+  if (liveStatus?.isOnBreak === false) {
+    return false;
+  }
+  
+  // Check breaks array if server didn't provide explicit state
+  if (Array.isArray(breaks) && breaks.length > 0) {
+    const last = breaks[breaks.length - 1];
+    if (last?.startTime && !last?.endTime) {
+      return true;
+    }
+  }
+  
+  return fallback;
+}
 import realTimeSocket from '../../utils/realTimeSocket';
+import { onPageVisible } from '../../utils/pageVisibility';
 import { useAttendance } from '../../../context/AttendanceContext';
-import { getDynamicGreeting, getMotivationalQuote } from '../../utils/greetingUtils';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import {
   Calendar,
   Clock,
   TrendingUp,
-  LogIn,
-  LogOut,
-  Pause
+  Play,
+  Square,
+  Pause,
+  Loader2,
+  Coffee,
+  RefreshCw,
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
+import InteractiveCalendar from '../../components/InteractiveCalendar';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import {
@@ -58,10 +111,42 @@ interface BreakRecord {
   breakType?: string;
 }
 
+interface Holiday {
+  _id?: string;
+  id?: string;
+  date: string;
+  name: string;
+  description?: string;
+}
+
+interface TodayAttendanceRow {
+  checkIn?: string | Date;
+  checkOut?: string | Date;
+  hoursWorked?: number;
+  status?: string;
+  breaks?: BreakRecord[];
+}
+
+interface TodayLiveStatus {
+  status?: string;
+  isOnBreak?: boolean;
+  currentBreakDuration?: number;
+  currentHours?: number;
+  breakType?: string;
+}
+
+interface TodayAttendanceApiData {
+  attendance?: TodayAttendanceRow;
+  liveStatus?: TodayLiveStatus;
+  hoursThisWeek?: number;
+  weekKey?: string;
+}
+
 // ============================================================================
 // DEBUG UTILITY - Conditional logging based on environment
 // ============================================================================
-const DEBUG_ENABLED = import.meta.env.VITE_ENABLE_DEBUG === 'true';
+const DEBUG_ENABLED =
+  (import.meta as { env?: { VITE_ENABLE_DEBUG?: string } }).env?.VITE_ENABLE_DEBUG === 'true';
 const debug = {
   log: (...args: any[]) => DEBUG_ENABLED && console.log(...args),
   error: (...args: any[]) => DEBUG_ENABLED && console.error(...args),
@@ -85,8 +170,10 @@ const SYNC_CONFIG = {
   DEBOUNCE_MS: 1000,
   SOCKET_WAIT_MS: 1500,
   DB_SYNC_WAIT_MS: 2000,
-  PERIODIC_REFRESH_MS: 30000,
-  ACTION_TIMEOUT_MS: 8000
+  PERIODIC_REFRESH_MS: 90_000,
+  ACTION_TIMEOUT_MS: 8000,
+  WEEK_HOURS_SYNC_MS: 60_000,
+  BREAK_ACTION_GUARD_MS: 12_000,
 };
 
 function isLikelyMongoObjectId(id: string | null | undefined): boolean {
@@ -119,49 +206,39 @@ function parseTodayCheckInTime(checkInTime: string): Date | null {
 }
 
 // ============================================================================
-// DYNAMIC GREETING HEADER COMPONENT
+// STATIC GREETING (fixed at first render — no auto-rotation)
 // ============================================================================
-function DynamicGreetingHeader({ userName }: { userName: string }) {
-  const [greeting, setGreeting] = useState(getDynamicGreeting(userName));
-  const quote = getMotivationalQuote();
-
-  useEffect(() => {
-    // Update greeting every minute
-    const interval = setInterval(() => {
-      setGreeting(getDynamicGreeting(userName));
-    }, 60000);
-
-    return () => clearInterval(interval);
+function StaticGreetingHeader({ userName }: { userName: string }) {
+  const { title, subtitle } = useMemo(() => {
+    const capitalized =
+      userName.trim().charAt(0).toUpperCase() + userName.trim().slice(1) || 'Employee';
+    const hour = new Date().getHours();
+    const period =
+      hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+    return {
+      title: `${period}, ${capitalized}.`,
+      subtitle: 'Review current tasks and progress.',
+    };
   }, [userName]);
 
   return (
-    <div className="rounded-2xl p-8 flex-1">
-      <div className="space-y-3">
-        <div className="flex items-center gap-3">
-          <span className="text-5xl">{greeting.emoji}</span>
-          <h1 className="text-4xl font-bold text-slate-900">
-            {greeting.message}
-          </h1>
-        </div>
-        
-        <p className="text-lg text-slate-700">
-          {greeting.subMessage}
-        </p>
-        
-        <div className="pt-4">
-          <p className="text-sm italic text-slate-500">
-            💡 {quote}
-          </p>
-        </div>
-      </div>
+    <div className="flex-1 min-w-0 space-y-2">
+      <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-foreground">
+        {title}
+      </h1>
+      <p className="text-base md:text-lg text-muted-foreground">{subtitle}</p>
     </div>
   );
 }
 
 export default function EmployeeDashboard() {
   const { user, loading: authLoading } = useAuth();
+  const authUid = authUserKey(user);
   const { attendance: todayAttendance, updateAttendance, loadFromLocalStorage } = useAttendance();
   const [loading, setLoading] = useState(false);
+  const [attendanceBusy, setAttendanceBusy] = useState<
+    null | 'check-in' | 'check-out' | 'break-start' | 'break-end'
+  >(null);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
 
   // ============================================================================
@@ -177,6 +254,26 @@ export default function EmployeeDashboard() {
   const disableRefreshRef = useRef(false);
   const actionInProgressRef = useRef(false);
   const lastUserActivityRef = useRef(Date.now());
+  const fetchDashboardDataRef = useRef<((_force?: boolean) => Promise<void>) | null>(null);
+  const safeRefreshRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
+  const lastWeekSyncRef = useRef(0);
+  const lastWeekKeyRef = useRef<string | null>(null); // FIX #2: Track week boundaries
+  /** Completed break seconds today (closed breaks only). */
+  const completedBreakSecondsRef = useRef(0);
+  /** Total break seconds = completed + current open segment (for working-hours math). */
+  const breakSecondsRef = useRef(0);
+  /** Seconds elapsed for the current open break segment only. */
+  const currentBreakSegmentSecondsRef = useRef(0);
+  const [breakDisplaySeconds, setBreakDisplaySeconds] = useState(0);
+  const isOnBreakRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Update refs whenever state changes
   useEffect(() => {
@@ -208,15 +305,106 @@ export default function EmployeeDashboard() {
 
   const [kpiMetrics, setKpiMetrics] = useState({
     leaveBalance: "0 days",
+    leaveBalanceSubtitle: "",
     hoursThisWeek: "0h",
+    totalHours: "0h 0m",
+    breakTodayMinutes: 0,
+    weekHoursSubtitle: "Mon–Sun · check-in/out sessions",
     performance: "0%"
   });
 
-  const [holidays, setHolidays] = useState<any[]>([]);
-  const [attendanceHistory, setAttendanceHistory] = useState<any[]>([]);
-  const [breakHistory, setBreakHistory] = useState<any[]>([]);
+  /** Completed week hours before today's live session (updated on each server sync). */
+  const weekHoursExclTodayRef = useRef(0);
+
+  const applyWeekHours = useCallback((hours: number, weekKey?: string, force = false) => {
+    const key = weekKey || calendarWeekKey();
+    if (!force && key !== calendarWeekKey()) return;
+    const safe = Math.max(0, hours);
+    setKpiMetrics((prev) => ({ ...prev, hoursThisWeek: formatWeekHours(safe) }));
+    const uid = authUid;
+    writeCachedWeekHours(uid, safe);
+  }, [authUid]);
+
+  const ingestWeekHoursFromServer = useCallback(
+    (hoursThisWeek: number, weekKey?: string, todayLiveHours = 0) => {
+      // FIX #2: Only update baseline if:
+      // 1. Week boundary changed (new weekKey), OR
+      // 2. We have credible today live hours (> 0), OR
+      // 3. Baseline is empty (first sync)
+      const currentWeekKey = weekKey || calendarWeekKey();
+      const isNewWeek = lastWeekKeyRef.current !== currentWeekKey;
+      const hasCreditableTodayData = todayLiveHours > 0;
+      const needsInit = weekHoursExclTodayRef.current === 0;
+
+      if (isNewWeek || hasCreditableTodayData || needsInit) {
+        weekHoursExclTodayRef.current = Math.max(0, hoursThisWeek - todayLiveHours);
+        lastWeekKeyRef.current = currentWeekKey;
+      }
+      applyWeekHours(hoursThisWeek, weekKey, true);
+    },
+    [applyWeekHours]
+  );
+
+  const syncWeeklyHours = useCallback(async () => {
+    if (!authUid) return;
+    const now = Date.now();
+    if (now - lastWeekSyncRef.current < 15_000) return;
+    lastWeekSyncRef.current = now;
+    try {
+      clearApiCache('/attendance/today');
+      const res = await apiGetSafe<{
+        success?: boolean;
+        data?: { hoursThisWeek?: number; weekKey?: string; liveStatus?: { currentHours?: number } };
+      }>('/attendance/today', false);
+      if (!res.ok) return;
+      const data = res.data?.data ?? res.data;
+      const weekHours =
+        typeof (data as { hoursThisWeek?: number })?.hoursThisWeek === 'number'
+          ? (data as { hoursThisWeek: number }).hoursThisWeek
+          : null;
+      if (weekHours !== null) {
+        const live = (data as { liveStatus?: { currentHours?: number } }).liveStatus;
+        const todayLive =
+          typeof live?.currentHours === 'number' ? live.currentHours : 0;
+        ingestWeekHoursFromServer(
+          weekHours,
+          (data as { weekKey?: string }).weekKey,
+          todayLive
+        );
+        if (mountedRef.current) {
+          const todayLabel =
+            todayLive > 0
+              ? `${formatWeekHours(todayLive)} today · Mon–Sun total`
+              : 'Mon–Sun · from check-in/out';
+          setKpiMetrics((prev) => ({ ...prev, weekHoursSubtitle: todayLabel }));
+        }
+      }
+    } catch (err) {
+      debug.warn('syncWeeklyHours failed', err);
+    }
+  }, [authUid, ingestWeekHoursFromServer]);
+
+  useEffect(() => {
+    if (!authUid) return;
+    const cached = readCachedWeekHours(authUid);
+    if (cached) {
+      setKpiMetrics((prev) => ({ ...prev, hoursThisWeek: formatWeekHours(cached.hours) }));
+    }
+  }, [authUid]);
+
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [payrollCycleSummary, setPayrollCycleSummary] = useState<{
+    cycleStartDate: string;
+    cycleEndDate: string;
+    salaryReleaseDate: string;
+    salaryHoldUntil: string;
+    holdDays: number;
+    cycleLabel: string;
+    currency: string;
+  } | null>(null);
+  const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
+  const [breakHistory, setBreakHistory] = useState<BreakRecord[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
-  const [currentBreakDuration, setCurrentBreakDuration] = useState(0);
   const [workingHours, setWorkingHours] = useState(0);
   // ============================================================================
   // DERIVED UI STATE - Computed from attendance state
@@ -228,6 +416,10 @@ export default function EmployeeDashboard() {
   }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak]);
 
   // Debug: Log todayAttendance changes
+  useEffect(() => {
+    isOnBreakRef.current = todayAttendance.isOnBreak;
+  }, [todayAttendance.isOnBreak]);
+
   useEffect(() => {
     debug.group('[ATTENDANCE STATE]');
     debug.log('🔍 [DASHBOARD] todayAttendance changed:', {
@@ -253,8 +445,10 @@ export default function EmployeeDashboard() {
 
     const recentAction = timeSinceAction < SYNC_CONFIG.STALE_PROTECTION_MS;
     const recentSocket = timeSinceSocket < SYNC_CONFIG.SOCKET_PROTECTION_MS;
+    const onBreakGuard =
+      isOnBreakRef.current && timeSinceAction < SYNC_CONFIG.BREAK_ACTION_GUARD_MS;
 
-    if (recentAction || recentSocket) {
+    if (recentAction || recentSocket || onBreakGuard) {
       debug.log('🛡️ [STALE PROTECTION] Blocking refresh:', {
         recentAction,
         recentSocket,
@@ -288,34 +482,99 @@ export default function EmployeeDashboard() {
       setLoading(true);
 
       timeoutId = setTimeout(() => {
-        setLoading(false);
+        if (mountedRef.current) setLoading(false);
       }, SYNC_CONFIG.ACTION_TIMEOUT_MS);
 
       debug.group('[FETCH DASHBOARD]');
-      debug.log('⚡ Fetching all dashboard data in parallel...');
+      debug.log('⚡ [PHASE 4] Fetching employee summary first, then lazy-loading tables...');
 
-      const [attendanceResult, holidaysResult] = await Promise.allSettled([
-        apiGet('/attendance/today'),
-        apiGet('/holidays')
+      const tenantOrgId = resolveAuthOrgId(user);
+      
+      // PHASE 4 OPTIMIZATION: Fetch summary first for quick status display
+      const summaryResult = await apiGetSafe('/dashboard/employee/summary', false);
+      
+      if (
+        summaryResult.ok &&
+        summaryResult.data &&
+        (summaryResult.data as { success?: boolean }).success !== false
+      ) {
+        const summaryPayload = summaryResult.data as { data?: Record<string, unknown> };
+        const kpis = summaryPayload.data?.kpis || {};
+        
+        // Update attendance context with summary data
+        if (typeof kpis === 'object' && kpis !== null) {
+          updateAttendance(
+            {
+              isCheckedIn: Boolean((kpis as any).isCheckedIn),
+              checkInTime: null,
+              checkOutTime: null,
+              hoursWorked: Number((kpis as any).hoursWorkedToday) || 0,
+              status: (kpis as any).isCheckedIn ? 'present' : 'absent',
+              isOnBreak: false,
+              breakType: 'regular',
+              currentBreakDuration: 0,
+            },
+            'api'
+          );
+          
+          // Update total hours KPI from summary
+          const totalHoursLabel = (kpis as any).totalHoursLabel || '0h 0m';
+          if (mountedRef.current) {
+            setKpiMetrics((prev) => ({
+              ...prev,
+              totalHours: totalHoursLabel
+            }));
+          }
+        }
+      }
+
+      debug.log('✅ Summary loaded, now lazy-loading tables in background...');
+
+      // PHASE 4 OPTIMIZATION: Lazy-load tables/charts after KPIs
+      const holidayYear = new Date().getFullYear();
+      const holidaysUrl = appendOrgIdParam(
+        `holidays?year=${holidayYear}&limit=500`,
+        user,
+        tenantOrgId
+      );
+
+      const [attendanceResult, holidaysResult, payrollResult] = await Promise.allSettled([
+        apiGetSafe('/attendance/today', false),
+        apiGetSafe(holidaysUrl, false),
+        apiGetSafe('/payroll/employee/cycle-summary', false),
       ]);
 
-      const cachedHolidays = localStorage.getItem('cached_holidays');
+      const holidayKey = holidaysStorageKey(authUid, user?.orgId || user?.tenantId);
+      const cachedHolidays = localStorage.getItem(holidayKey);
       if (cachedHolidays) {
         try {
-          const parsed = JSON.parse(cachedHolidays);
+          const parsed = JSON.parse(cachedHolidays) as Holiday[];
           setHolidays(parsed);
         } catch (e) {
           console.warn('Failed to parse cached holidays');
         }
       }
 
-      if (holidaysResult.status === 'fulfilled' && holidaysResult.value?.success && Array.isArray(holidaysResult.value.data)) {
-        console.log('✅ Loaded', holidaysResult.value.data.length, 'holidays');
-        setHolidays(holidaysResult.value.data);
-        localStorage.setItem('cached_holidays', JSON.stringify(holidaysResult.value.data));
+      if (
+        holidaysResult.status === 'fulfilled' &&
+        holidaysResult.value.ok &&
+        holidaysResult.value.data &&
+        (holidaysResult.value.data as { success?: boolean }).success !== false
+      ) {
+        const holidayPayload = holidaysResult.value.data as { data?: Holiday[] };
+        const list: Holiday[] = Array.isArray(holidayPayload.data)
+          ? holidayPayload.data
+          : Array.isArray(holidayPayload)
+            ? (holidayPayload as Holiday[])
+            : [];
+        if (list.length > 0) {
+          console.log('✅ Loaded', list.length, 'holidays');
+          if (mountedRef.current) setHolidays(list);
+          localStorage.setItem(holidayKey, JSON.stringify(list));
+        }
       } else if (cachedHolidays) {
         try {
-          const parsed = JSON.parse(cachedHolidays);
+          const parsed = JSON.parse(cachedHolidays) as Holiday[];
           console.log('📦 Using cached holidays:', parsed.length);
           setHolidays(parsed);
         } catch (e) {
@@ -323,66 +582,145 @@ export default function EmployeeDashboard() {
         }
       }
 
+      // Handle payroll cycle summary
+      if (
+        payrollResult.status === 'fulfilled' &&
+        payrollResult.value.ok &&
+        payrollResult.value.data &&
+        (payrollResult.value.data as { success?: boolean }).success !== false
+      ) {
+        const payrollPayload = payrollResult.value.data as { data?: Record<string, unknown> };
+        const cycleData = payrollPayload.data;
+        if (cycleData && typeof cycleData === 'object') {
+          console.log('✅ Loaded payroll cycle summary');
+          if (mountedRef.current) setPayrollCycleSummary(cycleData as typeof payrollCycleSummary);
+        }
+      } else {
+        console.warn('Payroll cycle summary unavailable');
+      }
+
+      const attendanceResolved =
+        attendanceResult.status === 'fulfilled' ? attendanceResult.value : null;
+
       debug.log('📊 Attendance API Result:', {
         status: attendanceResult.status,
-        success: attendanceResult.status === 'fulfilled' ? attendanceResult.value?.success : false,
-        hasData: attendanceResult.status === 'fulfilled' ? !!attendanceResult.value?.data : false,
-        error: attendanceResult.status === 'rejected' ? attendanceResult.reason?.message : undefined
+        ok: attendanceResolved?.ok,
+        hasData: attendanceResolved?.ok ? !!(attendanceResolved.data as { data?: unknown })?.data : false,
+        error:
+          attendanceResult.status === 'rejected'
+            ? String((attendanceResult.reason as Error)?.message || attendanceResult.reason)
+            : attendanceResolved && !attendanceResolved.ok
+              ? attendanceResolved.error
+              : undefined,
       });
 
       const attendanceApiOk =
         attendanceResult.status === 'fulfilled' &&
-        attendanceResult.value &&
-        attendanceResult.value.success === true;
+        attendanceResolved?.ok === true &&
+        (attendanceResolved.data as { success?: boolean })?.success === true;
 
-      const attendanceData = attendanceApiOk ? attendanceResult.value.data : null;
+      const attendanceData: TodayAttendanceApiData | null = attendanceApiOk
+        ? ((attendanceResolved!.data as { data?: TodayAttendanceApiData }).data ?? null)
+        : null;
 
       if (!attendanceApiOk) {
         debug.warn('📊 Attendance sync skipped — no definitive server response; keeping cached/local state', {
           status: attendanceResult.status,
-          success: attendanceResult.status === 'fulfilled' ? attendanceResult.value?.success : undefined,
-          error: attendanceResult.status === 'rejected' ? String((attendanceResult.reason as Error)?.message || attendanceResult.reason) : undefined
+          error:
+            attendanceResult.status === 'rejected'
+              ? String((attendanceResult.reason as Error)?.message || attendanceResult.reason)
+              : attendanceResolved && !attendanceResolved.ok
+                ? attendanceResolved.error
+                : undefined,
         });
         if (!actionInProgressRef.current) {
           loadFromLocalStorage();
         }
       } else if (attendanceData?.attendance) {
         const attendance = attendanceData.attendance;
-        const checkInTime = attendance.checkIn
-          ? new Date(attendance.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-          : null;
-        const checkOutTime = attendance.checkOut
-          ? new Date(attendance.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-          : null;
+        const checkInTime = safeLocaleTime(attendance.checkIn);
+        const checkOutTime = safeLocaleTime(attendance.checkOut);
 
         const ls = attendanceData.liveStatus;
-        const isCurrentlyCheckedIn = ls?.status
-          ? ls.status === 'checked_in' || ls.status === 'on_break'
-          : !!attendance.checkIn && !attendance.checkOut;
+        const hasCheckOut = attendance.checkOut != null && checkOutTime != null;
+
+        let isCurrentlyCheckedIn = false;
+        if (hasCheckOut) {
+          isCurrentlyCheckedIn = false;
+        } else if (ls?.status === 'checked_out' || ls?.status === 'not_checked_in') {
+          isCurrentlyCheckedIn = false;
+        } else if (ls?.status === 'checked_in' || ls?.status === 'on_break' || ls?.status === 'in_meeting') {
+          isCurrentlyCheckedIn = true;
+        } else {
+          isCurrentlyCheckedIn = Boolean(attendance.checkIn);
+        }
 
         let calculatedIsOnBreak = false;
         let calculatedBreakType = 'regular';
         let calculatedBreakDuration = 0;
 
-        if (ls?.isOnBreak || ls?.status === 'on_break') {
-          calculatedIsOnBreak = true;
-          calculatedBreakDuration =
-            typeof ls.currentBreakDuration === 'number'
-              ? Math.round(ls.currentBreakDuration)
-              : 0;
+        let completedBreakSeconds = 0;
+        let openBreakSegmentSeconds = 0;
+        if (attendance.breaks && attendance.breaks.length > 0) {
+          for (const br of attendance.breaks as BreakRecord[]) {
+            if (!br.startTime) continue;
+            const start = new Date(br.startTime).getTime();
+            if (!Number.isFinite(start)) continue;
+            if (br.endTime) {
+              const end = new Date(br.endTime).getTime();
+              if (Number.isFinite(end) && end > start) {
+                completedBreakSeconds += Math.floor((end - start) / 1000);
+              }
+            }
+          }
+          // FIX: Use safeArrayAccess to safely get last break without throwing
+          const lastBreak = safeArrayAccess(
+            attendance.breaks,
+            attendance.breaks.length - 1,
+            {} as BreakRecord
+          );
+          if (lastBreak?.startTime && !lastBreak?.endTime) {
+            calculatedIsOnBreak = true;
+            const breakStart = new Date(lastBreak.startTime).getTime();
+            openBreakSegmentSeconds = Math.max(0, Math.floor((Date.now() - breakStart) / 1000));
+            calculatedBreakDuration = Math.round(openBreakSegmentSeconds / 60);
+            calculatedBreakType = lastBreak.breakType || lastBreak.type || 'regular';
+            currentBreakSegmentSecondsRef.current = openBreakSegmentSeconds;
+            setBreakDisplaySeconds(openBreakSegmentSeconds);
+          }
+        }
+        completedBreakSecondsRef.current = completedBreakSeconds;
+        breakSecondsRef.current = completedBreakSeconds + openBreakSegmentSeconds;
+
+        calculatedIsOnBreak = resolveOnBreakFromServer(
+          ls as Record<string, unknown> | undefined,
+          attendance.breaks as BreakRecord[] | undefined,
+          calculatedIsOnBreak
+        );
+
+        if (calculatedIsOnBreak) {
+          const fromLs = (ls as { currentBreakDuration?: number })?.currentBreakDuration;
+          if (typeof fromLs === 'number' && fromLs > 0) {
+            calculatedBreakDuration = Math.round(fromLs);
+            const segFromLs = Math.round(fromLs * 60);
+            currentBreakSegmentSecondsRef.current = Math.max(
+              currentBreakSegmentSecondsRef.current,
+              segFromLs
+            );
+            setBreakDisplaySeconds(currentBreakSegmentSecondsRef.current);
+            breakSecondsRef.current =
+              completedBreakSecondsRef.current + currentBreakSegmentSecondsRef.current;
+          }
         }
 
-        if (attendance.breaks && attendance.breaks.length > 0) {
-          const lastBreak = attendance.breaks[attendance.breaks.length - 1];
-          if (lastBreak.startTime && !lastBreak.endTime) {
-            if (!calculatedIsOnBreak) {
-              calculatedIsOnBreak = true;
-              const breakStart = new Date(lastBreak.startTime).getTime();
-              const now = new Date().getTime();
-              calculatedBreakDuration = Math.round((now - breakStart) / (1000 * 60));
-            }
-            calculatedBreakType = lastBreak.breakType || 'regular';
-          }
+        // Break duration now tracked via state only, not separate useState
+
+        const totalBreakMin =
+          typeof (ls as { totalBreakTime?: number })?.totalBreakTime === 'number'
+            ? Math.round((ls as { totalBreakTime: number }).totalBreakTime)
+            : 0;
+        if (mountedRef.current) {
+          setKpiMetrics((prev) => ({ ...prev, breakTodayMinutes: totalBreakMin }));
         }
 
         debug.log('✅ Updating attendance from API:', {
@@ -391,18 +729,20 @@ export default function EmployeeDashboard() {
           breakType: calculatedBreakType
         });
 
-        updateAttendance({
-          isCheckedIn: isCurrentlyCheckedIn,
-          checkInTime: checkInTime,
-          checkOutTime: checkOutTime,
-          hoursWorked: attendance.hoursWorked || 0,
-          status: attendance.status || 'absent',
-          isOnBreak: calculatedIsOnBreak,
-          currentBreakDuration: calculatedBreakDuration,
-          breakType: calculatedBreakType
-        });
+        if (mountedRef.current) {
+          updateAttendance({
+            isCheckedIn: isCurrentlyCheckedIn,
+            checkInTime: checkInTime,
+            checkOutTime: checkOutTime,
+            hoursWorked: (attendance.hoursWorked as number) || 0,
+            status: (attendance.status as string) || 'absent',
+            isOnBreak: calculatedIsOnBreak,
+            currentBreakDuration: calculatedBreakDuration,
+            breakType: calculatedBreakType,
+          });
+        }
 
-        const uid = user?.id ? String(user.id) : null;
+        const uid = authUid;
         writePersistedAttendance(uid, {
           checkedIn: isCurrentlyCheckedIn,
           isCheckedIn: isCurrentlyCheckedIn,
@@ -417,77 +757,132 @@ export default function EmployeeDashboard() {
           timestamp: Date.now()
         });
       } else {
-        console.log('ℹ️ Server confirmed no attendance row for today — showing Log In');
+        const uid = authUid;
+        const cached = await readPersistedAttendance(uid);
+        const hasFreshCheckedIn =
+          cached &&
+          isPayloadFresh(cached) &&
+          (cached.isCheckedIn || cached.checkedIn) &&
+          !cached.checkOutTime;
 
-        updateAttendance({
-          isCheckedIn: false,
-          checkInTime: null,
-          checkOutTime: null,
-          hoursWorked: 0,
-          status: 'absent',
-          isOnBreak: false,
-          currentBreakDuration: 0,
-          breakType: 'regular'
-        });
-
-        await clearPersistedAttendance(user?.id ? String(user.id) : null);
+        if (hasFreshCheckedIn && !attendanceApiOk) {
+          debug.warn(
+            'Attendance API failed — using short-lived local cache'
+          );
+          updateAttendance({
+            isCheckedIn: true,
+            checkInTime: cached.checkInTime || null,
+            checkOutTime: cached.checkOutTime || null,
+            hoursWorked: cached.hoursWorked || cached.currentHours || 0,
+            status: cached.status || 'present',
+            isOnBreak: cached.isOnBreak || false,
+            currentBreakDuration: cached.currentBreakDuration || 0,
+            breakType: cached.breakType || 'regular',
+          });
+        } else {
+          debug.log('ℹ️ No attendance for today — showing Check In');
+          updateAttendance({
+            isCheckedIn: false,
+            checkInTime: null,
+            checkOutTime: null,
+            hoursWorked: 0,
+            status: 'absent',
+            isOnBreak: false,
+            currentBreakDuration: 0,
+            breakType: 'regular',
+          });
+          await clearPersistedAttendance(uid);
+        }
       }
 
       if (attendanceApiOk) {
         clearApiCache('/attendance/today');
+        if (typeof attendanceData?.hoursThisWeek === 'number') {
+          const todayLive =
+            typeof attendanceData?.liveStatus?.currentHours === 'number'
+              ? attendanceData.liveStatus.currentHours
+              : 0;
+          ingestWeekHoursFromServer(
+            attendanceData.hoursThisWeek,
+            attendanceData.weekKey,
+            todayLive
+          );
+        }
       }
 
-      setKpiMetrics({
-        leaveBalance: "12 days",
-        hoursThisWeek: `${attendanceData?.liveStatus?.currentHours || 0}h`,
-        performance: "85%"
-      });
+      let leaveBalanceLabel = '0 days';
+      let leaveBalanceSubtitle = '';
+      try {
+        const empId =
+          employeeIdRef.current || (await resolveEmployeeMongoId(user));
+        if (empId) {
+          employeeIdRef.current = empId;
+          setEmployeeId(empId);
+          const now = new Date();
+          const summary = await fetchLeaveBalanceKpiSummary(
+            empId,
+            now.getFullYear(),
+            now.getMonth() + 1
+          );
+          const formatted = formatLeaveBalanceKpi(summary);
+          leaveBalanceLabel = formatted.value;
+          leaveBalanceSubtitle = formatted.subtitle;
+        }
+      } catch (err) {
+        debug.warn('Leave balance KPI fetch failed', err);
+      }
+
+      setKpiMetrics((prev) => ({
+        ...prev,
+        leaveBalance: leaveBalanceLabel,
+        leaveBalanceSubtitle,
+        performance: "0%", // Safe fallback - no performance data API
+      }));
 
       debug.groupEnd();
     } catch (err) {
       debug.error('Failed to fetch dashboard data:', err);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
-  // FIX #6: updateAttendance added to deps
-  }, [user, isRecentlyUpdated, updateAttendance, loadFromLocalStorage]);
+  }, [user, isRecentlyUpdated, updateAttendance, loadFromLocalStorage, ingestWeekHoursFromServer]);
+
+  fetchDashboardDataRef.current = fetchDashboardData;
 
   const ensureEmployeeId = async (): Promise<string | null> => {
     if (employeeIdRef.current) return employeeIdRef.current;
-
-    if (!user?.id) return null;
-    const fromUser = user.employeeId != null ? String(user.employeeId) : '';
-    if (isLikelyMongoObjectId(fromUser)) {
-      setEmployeeId(fromUser);
-      return fromUser;
+    const empId = await resolveEmployeeMongoId(user);
+    if (empId) {
+      setEmployeeId(empId);
+      employeeIdRef.current = empId;
     }
+    return empId;
+  };
 
+  const refreshLeaveBalance = useCallback(async () => {
+    if (!authUid) return;
     try {
-      const token = TokenManager.get();
-      const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        const empId = result.data?._id || result.data?.id;
-        if (empId && isLikelyMongoObjectId(String(empId))) {
-          const idStr = String(empId);
-          setEmployeeId(idStr);
-          return idStr;
-        }
+      const empId = await ensureEmployeeId();
+      if (!empId) return;
+      const now = new Date();
+      const summary = await fetchLeaveBalanceKpiSummary(
+        empId,
+        now.getFullYear(),
+        now.getMonth() + 1
+      );
+      if (mountedRef.current) {
+        const formatted = formatLeaveBalanceKpi(summary);
+        setKpiMetrics((prev) => ({
+          ...prev,
+          leaveBalance: formatted.value,
+          leaveBalanceSubtitle: formatted.subtitle,
+        }));
       }
     } catch (err) {
-      debug.error('Error fetching employee data:', err);
+      debug.warn('refreshLeaveBalance failed', err);
     }
-
-    return null;
-  };
+  }, [user]);
 
   const safeRefresh = useCallback(
     async (forceRefresh = false) => {
@@ -520,34 +915,39 @@ export default function EmployeeDashboard() {
     [isRecentlyUpdated, fetchDashboardData]
   );
 
-  // Fetch data on mount with force refresh
+  safeRefreshRef.current = safeRefresh;
+
+  // Fetch data on mount — cache hydrates via AttendanceContext when user is ready
   useEffect(() => {
-    // FIX #7: Load from localStorage FIRST to restore state immediately
-    // This ensures buttons are visible before API call completes
-    console.log('🚀 [DASHBOARD MOUNT] Loading state from localStorage first');
+    if (!authUid) {
+      // FIX #2: Reset week hours tracking on logout
+      lastWeekKeyRef.current = null;
+      weekHoursExclTodayRef.current = 0;
+      return;
+    }
     loadFromLocalStorage();
-    
-    // Then fetch from API to sync with server
-    // Use a longer delay to ensure auth context is fully initialized
     const timeoutId = setTimeout(() => {
-      console.log('🚀 [DASHBOARD MOUNT] Fetching from API to sync with server');
-      fetchDashboardData(true);
-    }, 500);
-
+      void fetchDashboardDataRef.current?.(true);
+    }, 300);
     return () => clearTimeout(timeoutId);
-  }, [fetchDashboardData, loadFromLocalStorage]);
+  }, [authUid, loadFromLocalStorage]);
 
-  // Fetch employee ID on mount
+  // Seed employeeId from auth profile (avoids 404 on strict org employee lookup)
   useEffect(() => {
-    ensureEmployeeId();
-  }, [user?.id]);
+    const fromAuth = user?.employeeId != null ? String(user.employeeId) : '';
+    if (isLikelyMongoObjectId(fromAuth)) {
+      setEmployeeId(fromAuth);
+    } else {
+      void ensureEmployeeId();
+    }
+  }, [authUid, user?.employeeId]);
 
   // ============================================================================
   // SOCKET.IO LISTENERS - FIXED: Use refs to prevent stale closures
   // ============================================================================
   useEffect(() => {
     // Match realTimeSocket: org can be orgId or tenantId; listeners only need employeeId + user session
-    if (!user?.id || !employeeIdRef.current) return;
+    if (!authUid || !employeeIdRef.current) return;
 
     debug.group('[SOCKET LISTENERS SETUP]');
     debug.log('📡 [EMPLOYEE-DASHBOARD] Setting up Socket.IO listeners with employeeId:', employeeIdRef.current);
@@ -555,10 +955,11 @@ export default function EmployeeDashboard() {
     // CRITICAL FIX: Use refs instead of state to prevent stale closures
     const handleBreakStarted = (data: any) => {
       debug.log('📡 [EMPLOYEE-DASHBOARD] break:started event received:', data);
-      // Use ref, not state - always has current value
+      if (!data?.employeeId || !employeeIdRef.current) return;
       if (String(data.employeeId) === String(employeeIdRef.current)) {
         debug.log('📡 [EMPLOYEE-DASHBOARD] Break started for current employee, updating state');
         setLastSocketEventTime(Date.now());
+        resetCurrentBreakSegment();
         updateAttendance({
           isOnBreak: true,
           breakType: data.breakType || 'regular',
@@ -569,14 +970,30 @@ export default function EmployeeDashboard() {
 
     const handleBreakEnded = (data: any) => {
       console.log('� [EMPLOYEE-DASHBOARD] break:ended event received:', data);
-      if (String(data.employeeId) === String(employeeIdRef.current)) {
-        console.log('📡 [EMPLOYEE-DASHBOARD] Break ended for current employee, updating state');
+      const matchEmployee =
+        data.employeeId && String(data.employeeId) === String(employeeIdRef.current);
+      const matchUser =
+        authUid &&
+        (String(data.userId) === authUid ||
+          String(data.attendance?.userId) === authUid);
+      if (matchEmployee || matchUser) {
         setLastSocketEventTime(Date.now());
-        updateAttendance({
-          isOnBreak: false,
-          currentBreakDuration: 0,
-          breakType: 'regular'
-        }, 'socket');
+        completedBreakSecondsRef.current = breakSecondsRef.current;
+        resetCurrentBreakSegment();
+        const ls = data.liveStatus;
+        updateAttendance(
+          {
+            isOnBreak: false,
+            currentBreakDuration: 0,
+            breakType: (ls?.breakType as string) || 'regular',
+            isCheckedIn: true,
+          },
+          'socket'
+        );
+        disableRefreshRef.current = true;
+        setTimeout(() => {
+          disableRefreshRef.current = false;
+        }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
       }
     };
 
@@ -587,9 +1004,7 @@ export default function EmployeeDashboard() {
         setLastSocketEventTime(Date.now());
         updateAttendance({
           isCheckedIn: true,
-          checkInTime: data.checkInTime
-            ? new Date(data.checkInTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-            : null
+          checkInTime: safeLocaleTime(data.checkInTime),
         }, 'socket');
       }
     };
@@ -601,8 +1016,8 @@ export default function EmployeeDashboard() {
         setLastSocketEventTime(Date.now());
         updateAttendance({
           isCheckedIn: false,
-          checkOutTime: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-          isOnBreak: false
+          checkOutTime: safeLocaleTime(new Date()) || null,
+          isOnBreak: false,
         }, 'socket');
       }
     };
@@ -610,22 +1025,33 @@ export default function EmployeeDashboard() {
     // Subscribe to events and store unsubscribe functions
     const unsubscribeBreakStarted = realTimeSocket.onBreakStarted(handleBreakStarted);
     const unsubscribeBreakEnded = realTimeSocket.onBreakEnded(handleBreakEnded);
-    realTimeSocket.on('attendance:checked_in', handleCheckedIn);
-    realTimeSocket.on('attendance:checked_out', handleCheckedOut);
+    const unsubscribeCheckedIn = realTimeSocket.on('attendance:checked_in', handleCheckedIn);
+    const unsubscribeCheckedOut = realTimeSocket.on('attendance:checked_out', handleCheckedOut);
 
     debug.groupEnd();
 
-    // CRITICAL FIX: Clean up all listeners on unmount
     return () => {
       debug.log('📡 [EMPLOYEE-DASHBOARD] Cleaning up Socket.IO listeners');
       unsubscribeBreakStarted?.();
       unsubscribeBreakEnded?.();
-      realTimeSocket.off('attendance:checked_in', handleCheckedIn);
-      realTimeSocket.off('attendance:checked_out', handleCheckedOut);
+      unsubscribeCheckedIn();
+      unsubscribeCheckedOut();
     };
-  }, [user?.id, employeeId]);
+  }, [authUid, employeeId]);
 
   // Fetch attendance history
+  const resetCurrentBreakSegment = useCallback(() => {
+    currentBreakSegmentSecondsRef.current = 0;
+    setBreakDisplaySeconds(0);
+  }, []);
+
+  const resetAllBreakTracking = useCallback(() => {
+    completedBreakSecondsRef.current = 0;
+    breakSecondsRef.current = 0;
+    currentBreakSegmentSecondsRef.current = 0;
+    setBreakDisplaySeconds(0);
+  }, []);
+
   const fetchAttendanceHistory = useCallback(async () => {
     try {
       setAttendanceLoading(true);
@@ -633,13 +1059,17 @@ export default function EmployeeDashboard() {
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-      const result = await apiGet(`/attendance?limit=30&startDate=${thirtyDaysAgo.toISOString()}`);
+      const result = await apiGetSafe<{ success?: boolean; data?: AttendanceRecord[] }>(
+        `/attendance?limit=30&startDate=${thirtyDaysAgo.toISOString()}`
+      );
 
-      if (result.success && Array.isArray(result.data)) {
-        setAttendanceHistory(result.data);
+      if (result.ok && result.data?.success && Array.isArray(result.data.data)) {
+        const rows = result.data.data;
+        if (!mountedRef.current) return;
+        setAttendanceHistory(rows);
 
         const breaks: BreakRecord[] = [];
-        result.data.forEach((record: AttendanceRecord) => {
+        rows.forEach((record: AttendanceRecord) => {
           if (record.breaks && Array.isArray(record.breaks)) {
             record.breaks.forEach((breakItem: BreakRecord) => {
               breaks.push({
@@ -659,7 +1089,7 @@ export default function EmployeeDashboard() {
     } catch (err) {
       debug.warn('Failed to fetch attendance history:', err);
     } finally {
-      setAttendanceLoading(false);
+      if (mountedRef.current) setAttendanceLoading(false);
     }
   }, []);
 
@@ -672,21 +1102,62 @@ export default function EmployeeDashboard() {
   // FIXED: Removed safeRefresh and isRecentlyUpdated from deps to prevent recreation
   // ============================================================================
   useEffect(() => {
-    if (!todayAttendance.isCheckedIn || disableRefresh) return;
+    if (!todayAttendance.isCheckedIn || disableRefresh || todayAttendance.isOnBreak) return;
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       if (Date.now() - lastUserActivityRef.current > 120_000) return;
+      if (isOnBreakRef.current) return;
 
       // Use refs directly to avoid dependency array issues
       if (!actionInProgressRef.current && !disableRefreshRef.current && !isRecentlyUpdated()) {
         debug.log('⏰ Periodic refresh triggered');
-        safeRefresh();
+        void safeRefreshRef.current?.();
       }
     }, SYNC_CONFIG.PERIODIC_REFRESH_MS);
 
     return () => clearInterval(interval);
-  }, [todayAttendance.isCheckedIn, disableRefresh]);
+  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, disableRefresh, isRecentlyUpdated]);
+
+  // Refresh KPIs from server (hours + leave balance) — single interval to reduce load
+  useEffect(() => {
+    if (!authUid) return;
+    void syncWeeklyHours();
+    void refreshLeaveBalance();
+    const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void syncWeeklyHours();
+      void refreshLeaveBalance();
+    }, SYNC_CONFIG.WEEK_HOURS_SYNC_MS);
+    const unsubLeave = realTimeSocket.onLeaveUpdate(() => {
+      void refreshLeaveBalance();
+    });
+    const unsubAlloc = realTimeSocket.on('leave_allocation_created', () => {
+      void refreshLeaveBalance();
+    });
+    const unsubAttendance = realTimeSocket.on('attendance:update', () => {
+      lastWeekSyncRef.current = 0;
+      void syncWeeklyHours();
+    });
+    return () => {
+      clearInterval(interval);
+      unsubLeave();
+      unsubAlloc();
+      unsubAttendance();
+    };
+  }, [authUid, syncWeeklyHours, refreshLeaveBalance]);
+
+  // Refresh stale KPIs once when user returns to the tab
+  useEffect(() => {
+    if (!authUid) return;
+    return onPageVisible(() => {
+      void syncWeeklyHours();
+      void refreshLeaveBalance();
+      if (todayAttendance.isCheckedIn && !disableRefresh) {
+        void safeRefresh(true);
+      }
+    });
+  }, [authUid, todayAttendance.isCheckedIn, disableRefresh, syncWeeklyHours, refreshLeaveBalance, safeRefresh]);
 
   // ============================================================================
   // TIMER SYSTEM - Track working hours, breaks, and meetings in real-time
@@ -694,46 +1165,50 @@ export default function EmployeeDashboard() {
   useEffect(() => {
     if (!todayAttendance.isCheckedIn) {
       setWorkingHours(0);
-      setCurrentBreakDuration(0);
+      resetAllBreakTracking();
       return;
     }
 
     const interval = setInterval(() => {
-      // Calculate working hours (excluding breaks and meetings)
-      if (todayAttendance.checkInTime) {
-        const checkInTime = parseTodayCheckInTime(todayAttendance.checkInTime);
-        if (!checkInTime) return;
+      // FIX #1: Pause timer when tab is hidden to prevent drift
+      if (document.visibilityState !== 'visible') return;
+      
+      if (!todayAttendance.checkInTime) return;
+      const checkInTime = parseTodayCheckInTime(todayAttendance.checkInTime);
+      if (!checkInTime) return;
 
-        const now = new Date();
-        let totalSeconds = (now.getTime() - checkInTime.getTime()) / 1000;
-        
-        // Subtract break time - accumulate all breaks taken so far
-        if (todayAttendance.isOnBreak) {
-          // Currently on break - add current break duration
-          setCurrentBreakDuration(prev => prev + 1);
-          totalSeconds -= (currentBreakDuration + 1) * 60;
-        } else {
-          // Not on break - keep current break duration as is
-          if (currentBreakDuration > 0) {
-            totalSeconds -= currentBreakDuration * 60;
-          }
-        }
-        
-        const hours_worked = totalSeconds / 3600;
-        setWorkingHours(Math.max(0, hours_worked));
+      const elapsedSec = Math.max(0, (Date.now() - checkInTime.getTime()) / 1000);
+
+      if (todayAttendance.isOnBreak) {
+        currentBreakSegmentSecondsRef.current += 1;
+        const seg = currentBreakSegmentSecondsRef.current;
+        breakSecondsRef.current = completedBreakSecondsRef.current + seg;
+        setBreakDisplaySeconds(seg);
+      } else {
+        setBreakDisplaySeconds(0);
+        breakSecondsRef.current = completedBreakSecondsRef.current;
       }
-    }, 1000); // Update every second
+
+      const workedSec = Math.max(0, elapsedSec - breakSecondsRef.current);
+      setWorkingHours(workedSec / 3600);
+    }, 1000);
 
     return () => clearInterval(interval);
-  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.checkInTime, currentBreakDuration]);
+  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, todayAttendance.checkInTime, resetAllBreakTracking]);
 
-  // Format time display (HH:MM:SS)
-  const formatTime = (seconds: number): string => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  };
+  // Live "Hours This Week" — server baseline + today's worked hours (pauses live increment on break)
+  useEffect(() => {
+    if (!todayAttendance.isCheckedIn) return;
+    const tick = () => {
+      const todayPart = workingHours;
+      applyWeekHours(weekHoursExclTodayRef.current + todayPart, calendarWeekKey(), true);
+    };
+    tick();
+    const interval = setInterval(tick, 5000);
+    return () => clearInterval(interval);
+  }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, workingHours, applyWeekHours]);
+
+  const formatTime = safeFormatTime;
 
   // ============================================================================
   // ATTENDANCE ACTION HANDLERS - Integrated from Attendance page
@@ -761,82 +1236,115 @@ export default function EmployeeDashboard() {
     
     try {
       actionInProgressRef.current = true;
+      setAttendanceBusy('break-start');
       lastActionTimeRef.current = Date.now();
 
       const resolvedEmployeeId = await ensureEmployeeId();
-      const token = TokenManager.get();
-      const idempotencyKey = `break-start-${resolvedEmployeeId || 'me'}-${Date.now()}`;
+      const day = localDayKey();
+      const idempotencyKey = `break-start-${resolvedEmployeeId || authUid || 'me'}-${day}-${Date.now()}`;
       
-      const payload: { breakType: string; notes: string; idempotencyKey: string; employeeId?: string | null } = {
+      const requestPayload: {
+        breakType: string;
+        notes: string;
+        idempotencyKey: string;
+        employeeId?: string | null;
+      } = {
         breakType,
         notes: `Break started`,
         idempotencyKey
       };
-      if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
+      if (isLikelyMongoObjectId(resolvedEmployeeId)) requestPayload.employeeId = resolvedEmployeeId;
       
       debug.log('🔄 [BREAK START] Sending request:', { breakType, employeeId: resolvedEmployeeId });
       
-      // Optimistic update - immediately show break started
+      resetCurrentBreakSegment();
       updateAttendance({
         isOnBreak: true,
         breakType: breakType,
         currentBreakDuration: 0
       }, 'action');
       
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
-      
-      try {
-        const response = await fetch(buildApiUrl('/attendance/break-start'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            'Content-Type': 'application/json',
-            'Idempotency-Key': idempotencyKey
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
+        const result = await postAttendanceAction(
+          '/attendance/break-start',
+          requestPayload,
+          idempotencyKey
+        );
 
-        if (!response.ok) {
-          let errorMessage = 'Break start failed';
-          try {
-            const error = await response.json();
-            errorMessage = error.message || errorMessage;
-          } catch (e) {
-            // Response body is not JSON
+        if (!result.ok) {
+          if (result.status === 409) {
+            toast.info('Break action is processing. Syncing…');
+            disableRefreshRef.current = true;
+            clearApiCache('/attendance/today');
+            await new Promise((r) => setTimeout(r, 2000));
+            await fetchDashboardDataRef.current?.(true);
+            setTimeout(() => {
+              disableRefreshRef.current = false;
+            }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
+            return;
           }
-          debug.error('❌ [BREAK START] API Error:', errorMessage);
-          throw new Error(errorMessage);
+          throw new Error(result.message);
         }
 
-        const result = await response.json();
         debug.log('✅ [BREAK START] Success:', result);
 
-        // Confirm optimistic update with server response
-        const liveStatus = result.data?.liveStatus;
-        if (liveStatus) {
-          updateAttendance({
-            isOnBreak: liveStatus.isOnBreak || true,
-            breakType: liveStatus.breakType || breakType,
-            currentBreakDuration: liveStatus.currentBreakDuration || 0
-          }, 'action');
+        const payload = result.data as {
+          liveStatus?: Record<string, unknown>;
+          hoursThisWeek?: number;
+          weekKey?: string;
+          attendance?: { breaks?: BreakRecord[] };
+        };
+        const liveStatus = payload?.liveStatus;
+        
+        console.log('🔍 [BREAK START] API Response:', {
+          liveStatusIsOnBreak: liveStatus?.isOnBreak,
+          liveStatusStatus: liveStatus?.status,
+          breaksLength: payload?.attendance?.breaks?.length,
+        });
+        
+        const resolvedIsOnBreak = resolveOnBreakFromServer(
+          liveStatus,
+          payload?.attendance?.breaks,
+          true  // fallback for break-start is true
+        );
+        console.log('✅ [BREAK START] resolveOnBreakFromServer returned:', resolvedIsOnBreak);
+        
+        updateAttendance(
+          {
+            isOnBreak: resolvedIsOnBreak,
+            breakType: (liveStatus?.breakType as string) || breakType,
+            currentBreakDuration:
+              typeof liveStatus?.currentBreakDuration === 'number'
+                ? Math.round(liveStatus.currentBreakDuration as number)
+                : 0,
+          },
+          'action'
+        );
+
+        if (typeof payload?.hoursThisWeek === 'number') {
+          const liveH =
+            typeof liveStatus?.currentHours === 'number'
+              ? (liveStatus.currentHours as number)
+              : 0;
+          ingestWeekHoursFromServer(payload.hoursThisWeek, payload.weekKey, liveH);
+        } else {
+          void syncWeeklyHours();
         }
 
         clearApiCache('/attendance/today');
+        disableRefreshRef.current = true;
+        // CRITICAL FIX: Do NOT call fetchAttendanceHistory immediately - let state update first
+        toast.success('Break started');
+        setLastSocketEventTime(Date.now());
         
-        // Wait for socket event before refreshing
+        // Refresh history after guard period
         setTimeout(() => {
-          void safeRefresh(true);
-        }, SYNC_CONFIG.SOCKET_WAIT_MS);
-      } finally {
-        clearTimeout(timeoutId);
-      }
+          disableRefreshRef.current = false;
+          void fetchAttendanceHistory();
+        }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
     } catch (error) {
       debug.error('❌ [BREAK START] Error:', error);
       toast.error(error instanceof Error ? error.message : 'Could not start break');
-      // Rollback optimistic update on error
+      resetCurrentBreakSegment();
       updateAttendance({
         isOnBreak: false,
         breakType: 'regular',
@@ -844,6 +1352,7 @@ export default function EmployeeDashboard() {
       }, 'action');
     } finally {
       actionInProgressRef.current = false;
+      setAttendanceBusy(null);
     }
   };
 
@@ -854,23 +1363,17 @@ export default function EmployeeDashboard() {
       return;
     }
     
-    // Prevent ending break if not on break
-    if (!todayAttendance.isOnBreak) {
-      console.log('⏸️ [BREAK END] Not on break, skipping');
-      return;
-    }
-    
     let wasOnBreak = todayAttendance.isOnBreak;
     let prevBreakType = todayAttendance.breakType;
     let prevBreakDuration = todayAttendance.currentBreakDuration;
 
     try {
       actionInProgressRef.current = true;
+      setAttendanceBusy('break-end');
       lastActionTimeRef.current = Date.now();
       
       const resolvedEmployeeId = await ensureEmployeeId();
-      const token = TokenManager.get();
-      const idempotencyKey = `break-end-${resolvedEmployeeId || 'me'}-${Date.now()}`;
+      const idempotencyKey = `break-end-${resolvedEmployeeId || authUid || 'me'}-${localDayKey()}-${Date.now()}`;
       
       const payload: { notes: string; idempotencyKey: string; employeeId?: string | null } = {
         notes: 'Break ended',
@@ -880,67 +1383,109 @@ export default function EmployeeDashboard() {
       
       debug.log('🔄 [BREAK END] Sending request:', { employeeId: resolvedEmployeeId });
       
-      // Optimistic update - immediately show break ended
+      completedBreakSecondsRef.current = breakSecondsRef.current;
+      resetCurrentBreakSegment();
       updateAttendance({
         isOnBreak: false,
         breakType: 'regular',
         currentBreakDuration: 0
       }, 'action');
       
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
-      
-      try {
-        const response = await fetch(buildApiUrl('/attendance/break-end'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            'Content-Type': 'application/json',
-            'Idempotency-Key': idempotencyKey
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
+        const result = await postAttendanceAction('/attendance/break-end', payload, idempotencyKey);
 
-        if (!response.ok) {
-          let errorMessage = 'Break end failed';
-          try {
-            const error = await response.json();
-            errorMessage = error.message || errorMessage;
-          } catch (e) {
-            // Response body is not JSON
+        if (!result.ok) {
+          if (result.status === 409) {
+            toast.info('Break action is processing. Syncing…');
+            disableRefreshRef.current = true;
+            clearApiCache('/attendance/today');
+            await new Promise((r) => setTimeout(r, 2000));
+            await fetchDashboardDataRef.current?.(true);
+            setTimeout(() => {
+              disableRefreshRef.current = false;
+            }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
+            return;
           }
-          debug.error('❌ [BREAK END] API Error:', errorMessage);
-          throw new Error(errorMessage);
+          throw new Error(result.message);
         }
 
-        const result = await response.json();
         debug.log('✅ [BREAK END] Success:', result);
 
-        // Confirm optimistic update with server response
-        const liveStatus = result.data?.liveStatus;
-        if (liveStatus) {
-          updateAttendance({
-            isOnBreak: liveStatus.isOnBreak || false,
-            breakType: liveStatus.breakType || 'regular',
-            currentBreakDuration: liveStatus.currentBreakDuration || 0
-          }, 'action');
+        const breakPayload = result.data as {
+          liveStatus?: Record<string, unknown>;
+          hoursThisWeek?: number;
+          weekKey?: string;
+          attendance?: { breaks?: BreakRecord[] };
+        };
+        const liveStatus = breakPayload?.liveStatus;
+        
+        // CRITICAL DEBUG: Log what we're receiving from the API
+        console.log('🔍 [BREAK END] API Response:', {
+          hasResult: !!result,
+          resultOk: result.ok,
+          hasData: !!breakPayload,
+          liveStatusKeys: liveStatus ? Object.keys(liveStatus) : 'undefined',
+          liveStatusIsOnBreak: liveStatus?.isOnBreak,
+          liveStatusStatus: liveStatus?.status,
+          breaksArray: breakPayload?.attendance?.breaks,
+          breaksLength: breakPayload?.attendance?.breaks?.length,
+          lastBreakEndTime: breakPayload?.attendance?.breaks?.[breakPayload.attendance.breaks.length - 1]?.endTime,
+        });
+        
+        const resolvedIsOnBreak = resolveOnBreakFromServer(
+          liveStatus,
+          breakPayload?.attendance?.breaks,
+          false
+        );
+        console.log('✅ [BREAK END] resolveOnBreakFromServer returned:', resolvedIsOnBreak);
+        
+        updateAttendance(
+          {
+            isOnBreak: resolvedIsOnBreak,
+            breakType: (liveStatus?.breakType as string) || 'regular',
+            currentBreakDuration: 0,
+            isCheckedIn: true,
+          },
+          'action'
+        );
+
+        if (typeof breakPayload?.hoursThisWeek === 'number') {
+          const liveH =
+            typeof liveStatus?.currentHours === 'number' ? liveStatus.currentHours : 0;
+          ingestWeekHoursFromServer(breakPayload.hoursThisWeek, breakPayload.weekKey, liveH);
+        } else {
+          void syncWeeklyHours();
         }
 
+        const uid = authUid;
+        writePersistedAttendance(uid, {
+          checkedIn: true,
+          isCheckedIn: true,
+          checkInTime: todayAttendance.checkInTime,
+          checkOutTime: todayAttendance.checkOutTime,
+          currentHours: todayAttendance.hoursWorked,
+          hoursWorked: todayAttendance.hoursWorked,
+          status: todayAttendance.status || 'present',
+          isOnBreak: false,
+          currentBreakDuration: 0,
+          breakType: 'regular',
+          timestamp: Date.now(),
+        });
+
         clearApiCache('/attendance/today');
+        // CRITICAL FIX: Do NOT call fetchAttendanceHistory here - it will re-fetch and potentially overwrite state
+        // Instead, wait for socket event to confirm, and refresh history separately
+        setLastSocketEventTime(Date.now());
+        disableRefreshRef.current = true;
+        toast.success('Break ended');
         
-        // Wait for socket event before refreshing
+        // Refresh history after guard period to get updated data
         setTimeout(() => {
-          void safeRefresh(true);
-        }, SYNC_CONFIG.SOCKET_WAIT_MS);
-      } finally {
-        clearTimeout(timeoutId);
-      }
+          disableRefreshRef.current = false;
+          void fetchAttendanceHistory();
+        }, SYNC_CONFIG.BREAK_ACTION_GUARD_MS);
     } catch (error) {
       debug.error('❌ [BREAK END] Error:', error);
       toast.error(error instanceof Error ? error.message : 'Could not end break');
-      // Rollback optimistic update on error - restore previous state
       updateAttendance({
         isOnBreak: wasOnBreak,
         breakType: prevBreakType || 'regular',
@@ -948,6 +1493,7 @@ export default function EmployeeDashboard() {
       }, 'action');
     } finally {
       actionInProgressRef.current = false;
+      setAttendanceBusy(null);
     }
   };
 
@@ -957,67 +1503,91 @@ export default function EmployeeDashboard() {
     
     try {
       actionInProgressRef.current = true;
+      setAttendanceBusy('check-in');
       lastActionTimeRef.current = Date.now();
 
-      const token = TokenManager.get();
-      // For employees, send minimal payload - backend extracts userId, employeeId, orgId from JWT
-      const payload: { notes: string } = {
-        notes: 'Checked in'
+      const idempotencyKey = `check-in-${authUid || 'me'}-${localDayKey()}-${Date.now()}`;
+      const payload: { notes: string; idempotencyKey: string } = {
+        notes: 'Checked in',
+        idempotencyKey
       };
-      
-      // CRITICAL FIX: Add timeout to fetch
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
-      try {
-        const response = await fetch(buildApiUrl('/attendance/check-in'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
 
-        if (!response.ok) {
-          let errorMessage = 'Check-in failed';
-          try {
-            const error = await response.json();
-            errorMessage = error.message || errorMessage;
-          } catch (e) {
-            // Response body is not JSON
+        const result = await postAttendanceAction('/attendance/check-in', payload, idempotencyKey);
+
+        if (!result.ok) {
+          if (result.status === 409) {
+            clearApiCache('/attendance/today');
+            runSafe('check-in-sync', () => fetchDashboardDataRef.current?.(true));
+            return;
           }
-          throw new Error(errorMessage);
+          throw new Error(result.message);
         }
 
-        const checkInTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const responsePayload = result.data as {
+          attendance?: Record<string, unknown>;
+          hoursThisWeek?: number;
+          weekKey?: string;
+          checkIn?: string | Date;
+          message?: string;
+        };
+        const serverAtt = (responsePayload?.attendance ?? responsePayload) as Record<
+          string,
+          unknown
+        >;
 
-        // Update state immediately
+        const checkInTime =
+          safeLocaleTime(serverAtt?.checkIn) ||
+          safeLocaleTime(new Date()) ||
+          new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+        if (typeof responsePayload?.hoursThisWeek === 'number') {
+          ingestWeekHoursFromServer(responsePayload.hoursThisWeek, responsePayload.weekKey, 0);
+        }
+
         updateAttendance({
           isCheckedIn: true,
           checkInTime: checkInTime,
-          status: 'present'
+          checkOutTime: null,
+          status: 'present',
+          isOnBreak: false,
+          currentBreakDuration: 0,
         }, 'action');
 
+        const uid = authUid;
+        writePersistedAttendance(uid, {
+          checkedIn: true,
+          isCheckedIn: true,
+          checkInTime,
+          checkOutTime: null,
+          currentHours: 0,
+          hoursWorked: 0,
+          status: 'present',
+          isOnBreak: false,
+          currentBreakDuration: 0,
+          breakType: 'regular',
+          timestamp: Date.now()
+        });
+
         clearApiCache('/attendance/today');
+        void syncWeeklyHours();
+        toast.success('Checked in successfully');
+        setLastSocketEventTime(Date.now());
+        lastActionTimeRef.current = Date.now();
         setTimeout(() => {
-          void safeRefresh(true);
-        }, 600);
-      } finally {
-        clearTimeout(timeoutId);
-      }
+          runSafe('post-check-in', () => fetchDashboardDataRef.current?.(true));
+        }, 400);
     } catch (error) {
       console.error('Check-in error:', error);
-      toast.error(error instanceof Error ? error.message : 'Check-in failed');
-      // Rollback optimistic update on error
-      updateAttendance({
-        isCheckedIn: false,
-        checkInTime: null,
-        status: 'absent'
-      }, 'action');
+      const message = error instanceof Error ? error.message : 'Check-in failed';
+      toast.error(message);
+      if (message.toLowerCase().includes('session') || message.toLowerCase().includes('token')) {
+        return;
+      }
+      clearApiCache('/attendance/today');
+      runSafe('post-check-in-error', () => fetchDashboardDataRef.current?.(true));
     } finally {
       actionInProgressRef.current = false;
+      setAttendanceBusy(null);
     }
   };
 
@@ -1027,175 +1597,227 @@ export default function EmployeeDashboard() {
     
     try {
       actionInProgressRef.current = true;
+      setAttendanceBusy('check-out');
       lastActionTimeRef.current = Date.now();
 
       const resolvedEmployeeId = await ensureEmployeeId();
-      const token = TokenManager.get();
-      const payload: { notes: string; employeeId?: string | null } = {
-        notes: 'Checked out'
+      const idempotencyKey = `check-out-${authUid || 'me'}-${localDayKey()}-${Date.now()}`;
+      const payload: { notes: string; employeeId?: string | null; idempotencyKey: string } = {
+        notes: 'Checked out',
+        idempotencyKey
       };
       if (isLikelyMongoObjectId(resolvedEmployeeId)) payload.employeeId = resolvedEmployeeId;
-      
-      // CRITICAL FIX: Add timeout to fetch
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), SYNC_CONFIG.ACTION_TIMEOUT_MS);
-      try {
-        const response = await fetch(buildApiUrl('/attendance/check-out'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
 
-        if (!response.ok) {
-          let errorMessage = 'Check-out failed';
-          try {
-            const error = await response.json();
-            errorMessage = error.message || errorMessage;
-          } catch (e) {
-            // Response body is not JSON
+        const result = await postAttendanceAction('/attendance/check-out', payload, idempotencyKey);
+
+        if (!result.ok) {
+          if (result.status === 409) {
+            clearApiCache('/attendance/today');
+            runSafe('attendance-sync', () => fetchDashboardDataRef.current?.(true));
+            return;
           }
-          throw new Error(errorMessage);
+          throw new Error(result.message);
         }
 
-        const checkOutTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const checkOutPayload = result.data as {
+          attendance?: Record<string, unknown>;
+          hoursThisWeek?: number;
+          weekKey?: string;
+        };
+        const serverAtt = (checkOutPayload?.attendance ?? checkOutPayload) as Record<string, unknown>;
+        const hoursWorked =
+          typeof serverAtt?.hoursWorked === 'number' && !Number.isNaN(serverAtt.hoursWorked)
+            ? serverAtt.hoursWorked
+            : 0;
+        const checkOutTime =
+          safeLocaleTime(serverAtt?.checkOut) ||
+          safeLocaleTime(new Date()) ||
+          new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+        if (typeof checkOutPayload?.hoursThisWeek === 'number') {
+          ingestWeekHoursFromServer(checkOutPayload.hoursThisWeek, checkOutPayload.weekKey, 0);
+        } else {
+          void syncWeeklyHours();
+        }
+        const prevCheckInTime = todayAttendance.checkInTime;
 
         // Update state immediately
         updateAttendance({
           isCheckedIn: false,
           checkOutTime: checkOutTime,
+          hoursWorked,
           isOnBreak: false,
           breakType: 'regular',
           currentBreakDuration: 0
         }, 'action');
 
+        const uid = authUid;
+        writePersistedAttendance(uid, {
+          checkedIn: false,
+          isCheckedIn: false,
+          checkInTime: prevCheckInTime,
+          checkOutTime,
+          currentHours: hoursWorked,
+          hoursWorked,
+          status: 'present',
+          isOnBreak: false,
+          currentBreakDuration: 0,
+          breakType: 'regular',
+          timestamp: Date.now()
+        });
+
         clearApiCache('/attendance/today');
+        void syncWeeklyHours();
+        const apiMessage = (checkOutPayload as { message?: string })?.message || '';
+        toast.success(
+          apiMessage.toLowerCase().includes('check in again')
+            ? 'Session ended. You can check in again anytime.'
+            : 'Checked out successfully'
+        );
+        setLastSocketEventTime(Date.now());
+        lastActionTimeRef.current = Date.now();
         setTimeout(() => {
-          void safeRefresh(true);
-        }, 600);
-      } finally {
-        clearTimeout(timeoutId);
-      }
+          runSafe('post-check-in', () => fetchDashboardDataRef.current?.(true));
+        }, 400);
     } catch (error) {
       console.error('Check-out error:', error);
       toast.error(error instanceof Error ? error.message : 'Check-out failed');
-      // Rollback optimistic update on error
-      updateAttendance({
-        isCheckedIn: true,
-        checkOutTime: null
-      }, 'action');
+      clearApiCache('/attendance/today');
+      runSafe('post-check-out-error', () => fetchDashboardDataRef.current?.(true));
     } finally {
       actionInProgressRef.current = false;
+      setAttendanceBusy(null);
     }
   };
 
   if (authLoading || !user) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
-          <p className="mt-4 text-muted-foreground">Loading dashboard...</p>
-        </div>
+      <div className="flex min-h-[40vh] items-center justify-center" role="status" aria-label="Loading">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
     );
   }
 
   return (
     <>
-      <LoadingProgressBar isLoading={loading} color="bg-blue-500" />
       <div className="p-8 space-y-8">
         {/* Welcome Header with Attendance Buttons */}
-        <div className="flex items-center justify-between mb-8">
-          <DynamicGreetingHeader userName={user?.name || 'Employee'} />
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-8 mb-2">
+          <StaticGreetingHeader userName={user?.name || 'Employee'} />
 
-          {/* Attendance Status and Action Buttons - Top Right Corner */}
-          <div className="flex flex-col items-end gap-4">
-            {/* Status Badge */}
-            {todayAttendance.isCheckedIn && (
-              <Badge 
-                className={`px-3 py-1.5 text-xs font-semibold rounded-full ${
-                  todayAttendance.isOnBreak 
-                    ? 'bg-amber-100 text-amber-700'
-                    : 'bg-emerald-100 text-emerald-700'
-                }`}
+          <div className="w-full lg:min-w-[340px] lg:max-w-[420px] shrink-0 rounded-2xl bg-muted/35 px-5 py-4 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Today&apos;s attendance
+              </p>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-9 w-9 shrink-0 border-0 shadow-none text-muted-foreground hover:text-foreground hover:bg-background/60"
+                disabled={loading || disableRefresh || !!attendanceBusy}
+                onClick={() => safeRefresh(true)}
+                title="Refresh attendance"
+                aria-label="Refresh attendance from server"
               >
-                {todayAttendance.isOnBreak 
-                  ? `● On Break (${formatTime(currentBreakDuration * 60)})`
-                  : `● Working (${formatTime(workingHours * 3600)})`}
-              </Badge>
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              </Button>
+            </div>
+
+            {todayAttendance.isCheckedIn ? (
+              <div className="space-y-1">
+                <Badge
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-full border-0 ${
+                    todayAttendance.isOnBreak
+                      ? 'bg-amber-100 text-amber-900'
+                      : 'bg-emerald-100 text-emerald-900'
+                  }`}
+                >
+                  {todayAttendance.isOnBreak
+                    ? `On break · ${formatTime(breakDisplaySeconds)}`
+                    : `Working · ${formatTime(workingHours * 3600)}`}
+                </Badge>
+                {todayAttendance.checkInTime && (
+                  <p className="text-xs text-muted-foreground">
+                    Checked in at {todayAttendance.checkInTime}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Not checked in yet today</p>
             )}
 
-            {/* Action Buttons - Professional Layout */}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-3">
               {!todayAttendance.isCheckedIn ? (
                 <Button
-                  size="sm"
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                  disabled={loading}
+                  type="button"
+                  size="default"
+                  className="h-11 flex-1 min-w-[140px] border-0 shadow-none bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl"
+                  disabled={loading || !!attendanceBusy}
                   onClick={handleCheckIn}
-                  aria-label="Check in to work"
+                  aria-label="Check in to work for today"
                 >
-                  <LogIn className="w-4 h-4 mr-1.5" />
-                  Log In
+                  {attendanceBusy === 'check-in' ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Play className="w-4 h-4 mr-2" />
+                  )}
+                  Check In
                 </Button>
               ) : (
                 <>
                   <Button
-                    size="sm"
-                    className="bg-red-600 hover:bg-red-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                    disabled={loading}
+                    type="button"
+                    size="default"
+                    className="h-11 flex-1 min-w-[120px] border-0 shadow-none bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl"
+                    disabled={loading || !!attendanceBusy}
                     onClick={handleCheckOut}
-                    aria-label="Check out from work"
+                    aria-label="Check out from work for today"
                   >
-                    <LogOut className="w-4 h-4 mr-1.5" />
-                    Log Out
+                    {attendanceBusy === 'check-out' ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Square className="w-4 h-4 mr-2" />
+                    )}
+                    Check Out
                   </Button>
 
                   {!todayAttendance.isOnBreak ? (
-                        <Button
-                          size="sm"
-                          className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                          onClick={() => handleBreakStart('regular')}
-                          disabled={loading}
-                          aria-label="Start a break"
-                        >
-                          <Pause className="w-4 h-4 mr-1.5" />
-                          Break
-                        </Button>
+                    <Button
+                      type="button"
+                      size="default"
+                      className="h-11 flex-1 min-w-[100px] border-0 shadow-none bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-xl"
+                      onClick={() => handleBreakStart('regular')}
+                      disabled={loading || !!attendanceBusy}
+                      aria-label="Start a break"
+                    >
+                      {attendanceBusy === 'break-start' ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                       ) : (
-                        <Button
-                          size="sm"
-                          className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                          onClick={handleBreakEnd}
-                          disabled={loading}
-                          aria-label="End break"
-                        >
-                          <Pause className="w-4 h-4 mr-1.5" />
-                          End Break
-                        </Button>
+                        <Coffee className="w-4 h-4 mr-2" />
                       )}
+                      Break
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="default"
+                      className="h-11 flex-1 min-w-[120px] border-0 shadow-none bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-xl"
+                      onClick={handleBreakEnd}
+                      disabled={loading || !!attendanceBusy}
+                      aria-label="End break"
+                    >
+                      {attendanceBusy === 'break-end' ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <Pause className="w-4 h-4 mr-2" />
+                      )}
+                      End Break
+                    </Button>
+                  )}
 
                 </>
               )}
-              
-              {/* Manual Refresh Button - Always visible */}
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-muted-foreground hover:text-foreground px-3 py-2 rounded-md transition-colors"
-                disabled={loading || disableRefresh}
-                onClick={() => safeRefresh(true)}
-                title="Manually refresh attendance status"
-                aria-label="Refresh attendance from server"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </Button>
             </div>
           </div>
         </div>
@@ -1205,31 +1827,93 @@ export default function EmployeeDashboard() {
           <KPICard
             title="Leave Balance"
             value={kpiMetrics.leaveBalance}
+            subtitle={kpiMetrics.leaveBalanceSubtitle || 'Available to use'}
             icon={Calendar}
             color="primary"
           />
           <KPICard
             title="Hours This Week"
             value={kpiMetrics.hoursThisWeek}
+            subtitle={
+              kpiMetrics.weekHoursSubtitle || 'Mon–Sun · working hours only (breaks excluded)'
+            }
             icon={Clock}
             color="secondary"
           />
           <KPICard
-            title="Performance"
-            value={kpiMetrics.performance}
-            change={5.2}
+            title="Total Hours"
+            value={kpiMetrics.totalHours}
+            subtitle="This month · actual working hours"
             icon={TrendingUp}
             color="secondary"
           />
         </div>
 
-        {/* Calendar and Holidays Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2">
+        {/* Payroll Cycle Summary */}
+        {payrollCycleSummary && (
+          <Card className="rounded-2xl overflow-hidden">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                    <Calendar className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-lg">Payroll Cycle</h3>
+                    <p className="text-sm text-muted-foreground">Current cycle dates</p>
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Cycle</p>
+                  <p className="text-sm font-medium">{payrollCycleSummary.cycleLabel}</p>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Hold Period</p>
+                  <p className="text-sm font-medium">
+                    {payrollCycleSummary.cycleStartDate ? 
+                      `${new Date(payrollCycleSummary.cycleStartDate).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric'
+                      })} - ${new Date(payrollCycleSummary.salaryHoldUntil).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric'
+                      })}`
+                      : 'N/A'
+                    }
+                  </p>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Payment Date</p>
+                  <p className="text-sm font-medium">
+                    {payrollCycleSummary.salaryReleaseDate ?
+                      new Date(payrollCycleSummary.salaryReleaseDate).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric'
+                      })
+                      : 'N/A'
+                    }
+                  </p>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Currency</p>
+                  <p className="text-sm font-medium">₹ {payrollCycleSummary.currency}</p>
+                </div>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {/* Apply Leave Calendar and Holidays - Side by Side Layout */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-stretch">
+          {/* Apply leave — click a day on the calendar */}
+          <div className="min-w-0">
             <InteractiveCalendar />
           </div>
 
-          <Card className="rounded-2xl overflow-hidden flex flex-col">
+          {/* Holidays */}
+          <Card className="rounded-2xl overflow-hidden flex flex-col h-full min-w-0">
             <div className="p-6 border-b border-border flex-shrink-0">
               <div>
                 <h3 className="font-semibold text-lg">Holidays</h3>
@@ -1241,54 +1925,56 @@ export default function EmployeeDashboard() {
                 </p>
               </div>
             </div>
-            <div className="p-6 space-y-3 flex-1 min-h-0">
-              {holidays && holidays.length > 0 ? (
-                <div className="space-y-3 h-full">
-                  {holidays
-                    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-                    .map((holiday) => {
-                      const holidayDate = new Date(holiday.date);
-                      const today = new Date();
-                      const isUpcoming = holidayDate >= today;
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <div className="p-6 space-y-3">
+                {holidays && holidays.length > 0 ? (
+                  <div className="space-y-3">
+                    {holidays
+                      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                      .map((holiday) => {
+                        const holidayDate = new Date(holiday.date);
+                        const today = new Date();
+                        const isUpcoming = holidayDate >= today;
 
-                      return (
-                        <div
-                          key={holiday._id || holiday.id}
-                          className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d ${isUpcoming
-                            ? 'dark:bg-green-950 dark:border-green-800 dark:text-green-200 bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300'
-                            : 'dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
-                            }`}
-                        >
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <p className="font-medium text-sm">{holiday.name}</p>
-                                {isUpcoming && (
-                                  <span className="px-2 py-1 text-xs dark:bg-green-900 dark:text-green-200 bg-green-100 text-green-700 rounded-full">
-                                    Upcoming
-                                  </span>
-                                )}
+                        return (
+                          <div
+                            key={holiday._id || holiday.id}
+                            className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d box-border w-full ${isUpcoming
+                              ? 'dark:bg-green-950 dark:border-green-800 dark:text-green-200 bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300'
+                              : 'dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
+                              }`}
+                          >
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <p className="font-medium text-sm">{holiday.name}</p>
+                                  {isUpcoming && (
+                                    <span className="px-2 py-1 text-xs dark:bg-green-900 dark:text-green-200 bg-green-100 text-green-700 rounded-full">
+                                      Upcoming
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  {holidayDate.toLocaleDateString('en-US', {
+                                    weekday: 'long',
+                                    month: 'long',
+                                    day: 'numeric',
+                                    year: 'numeric'
+                                  })}
+                                </p>
                               </div>
-                              <p className="text-xs text-muted-foreground mt-1">
-                                {holidayDate.toLocaleDateString('en-US', {
-                                  weekday: 'long',
-                                  month: 'long',
-                                  day: 'numeric',
-                                  year: 'numeric'
-                                })}
-                              </p>
                             </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              ) : (
-                <div className="text-center py-8 flex flex-col items-center justify-center h-full">
-                  <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
-                  <p className="text-muted-foreground">No holidays added yet</p>
-                </div>
-              )}
+                        );
+                      })}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 flex flex-col items-center justify-center">
+                    <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
+                    <p className="text-muted-foreground">No holidays added yet</p>
+                  </div>
+                )}
+              </div>
             </div>
           </Card>
         </div>

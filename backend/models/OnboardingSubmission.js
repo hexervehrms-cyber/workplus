@@ -32,6 +32,22 @@ const onboardingSubmissionSchema = new mongoose.Schema(
       relation: { type: String },
       phone: { type: String }
     },
+    educationDetails: {
+      tenth: {
+        schoolName: { type: String },
+        board: { type: String },
+        yearOfPassing: { type: String },
+        percentage: { type: String },
+        rollNumber: { type: String },
+      },
+      twelfth: {
+        schoolName: { type: String },
+        board: { type: String },
+        yearOfPassing: { type: String },
+        percentage: { type: String },
+        rollNumber: { type: String },
+      },
+    },
     educationalDocuments: {
       type: Map,
       of: {
@@ -46,6 +62,20 @@ const onboardingSubmissionSchema = new mongoose.Schema(
       },
       default: {}
     },
+    previousEmployment: [{
+      companyName: { type: String },
+      role: { type: String },
+      startDate: { type: String },
+      endDate: { type: String },
+      location: { type: String },
+      department: { type: String },
+      employmentType: { type: String },
+      lastDrawnSalary: { type: String },
+      responsibilities: { type: String },
+      reasonForLeaving: { type: String },
+      referenceName: { type: String },
+      referencePhone: { type: String },
+    }],
     employmentDocuments: [{
       id: { type: String },
       name: { type: String },

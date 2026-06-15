@@ -7,7 +7,8 @@ import {
   Package, Plus, Search, Edit, Trash2, Loader2, X, 
   Download, FileUp, Eye, ChevronUp, ChevronDown
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
+import { apiDelete, apiFetchBlob, apiGet } from '../../utils/apiHelper';
 
 interface Asset {
   _id: string;
@@ -56,19 +57,10 @@ export default function AssetsTable() {
   const fetchAssets = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/assets', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to fetch assets');
-
-      const data = await response.json();
-      setAssets(data.data.assets || []);
+      const data = await apiGet<{ data?: { assets?: Asset[] } }>('assets', false);
+      setAssets(data?.data?.assets || []);
     } catch (error) {
       console.error('Error fetching assets:', error);
-      toast.error('Failed to load assets');
     } finally {
       setLoading(false);
     }
@@ -103,15 +95,7 @@ export default function AssetsTable() {
 
   const handleExportCSV = async () => {
     try {
-      const response = await fetch('/api/assets/export/csv', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to export assets');
-
-      const blob = await response.blob();
+      const blob = await apiFetchBlob('assets/export/csv');
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -132,14 +116,7 @@ export default function AssetsTable() {
     if (!confirm('Are you sure you want to delete this asset?')) return;
 
     try {
-      const response = await fetch(`/api/assets/${assetId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('token')}`
-        }
-      });
-
-      if (!response.ok) throw new Error('Failed to delete asset');
+      await apiDelete(`assets/${assetId}`);
 
       setAssets(assets.filter(a => a._id !== assetId));
       toast.success('Asset deleted successfully');

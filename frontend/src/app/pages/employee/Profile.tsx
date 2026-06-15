@@ -1,4 +1,4 @@
-import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Edit, Lock, Globe, Loader, X, Upload, Download, Trash2, Check, LockOpen, Clock } from 'lucide-react';
+import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Edit, Lock, Globe, Loader, X, Upload, Download, Trash2, Check, LockOpen, Clock, Eye } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
 import { Button } from '../../components/ui/button';
@@ -10,9 +10,24 @@ import { Progress } from '../../components/ui/progress';
 import { useCurrency } from '../../context/CurrencyContext';
 import CurrencySelector from '../../components/CurrencySelector';
 import { useState, useEffect } from 'react';
-import { toast } from 'sonner';
+import { useIsMounted } from '../../hooks/useIsMounted';
+import { toast } from '../../utils/portalToast';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog';
-import { apiGet, apiPost, apiPut, apiDelete, apiUpload } from '../../utils/apiHelper';
+import {
+  apiGet,
+  apiPost,
+  apiPut,
+  apiDelete,
+  apiUpload,
+  clearApiCache,
+  resolveAuthOrgId,
+} from '../../utils/apiHelper';
+import {
+  downloadDocumentFile,
+  openDocumentInNewTab,
+} from '../../utils/documentFile';
+import { useAuth } from '../../context/AuthContext';
+import { educationalDocumentsKey } from '../../utils/userScopedStorage';
 
 // IndexedDB helper functions
 const DB_NAME = 'WorkplusDB';
@@ -107,7 +122,31 @@ interface EmployeeData {
     bankAccount?: number;
     ifscCode?: number;
   };
+  shiftTiming?: {
+    startTime?: string;
+    endTime?: string;
+    lateThreshold?: number;
+    workingDays?: string[];
+  };
 }
+
+const mapCategoryToDocumentType = (category: string): string => {
+  const map: Record<string, string> = {
+    'Letter of Intent': 'general',
+    'Offer Letter': 'offer_letter',
+    'Appointment Letter': 'general',
+    'Appraisal Letter': 'appraisal_letter',
+    'Salary Slips': 'salary_slips',
+    'Experience Letter': 'experience_letter',
+    'Relieving Letter': 'relieving_letter',
+  };
+  return map[category] || 'general';
+};
+
+const formatWorkingDays = (days?: string[]) => {
+  if (!days?.length) return 'Monday – Friday (default)';
+  return days.join(', ');
+};
 
 interface Document {
   _id: string;
@@ -116,12 +155,15 @@ interface Document {
   uploadedAt: string;
   status: string;
   filePath?: string;
+  fileName?: string;
   category?: string;
   fileBlob?: Blob;
 }
 
 export default function Profile() {
+  const { user: authUser } = useAuth();
   const { selectedCurrency, formatCurrency } = useCurrency();
+  const mounted = useIsMounted();
   const [showCurrencySelector, setShowCurrencySelector] = useState(false);
   const [employee, setEmployee] = useState<EmployeeData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -137,29 +179,42 @@ export default function Profile() {
   const [documentType, setDocumentType] = useState<'personal' | 'experience'>('personal');
   const [selectedCategory, setSelectedCategory] = useState<string>('Letter of Intent');
 
-  // Educational Documents State - Initialize from localStorage
+  const eduDocsStorageKey = educationalDocumentsKey(authUser?.id);
+
+  const defaultEducationalDocuments = {
+    '10th': {},
+    '12th': {},
+    'Graduation': {},
+    'Post Graduation': {},
+    'Diploma': {},
+    'Certificate': {},
+    'Drop out': {},
+  };
+
   const [educationalDocuments, setEducationalDocuments] = useState<{
     [key: string]: { certificate?: Document; marksheet?: Document; others?: Document };
-  }>(() => {
+  }>(defaultEducationalDocuments);
+
+  useEffect(() => {
     try {
-      const stored = localStorage.getItem('educationalDocuments');
+      const stored = localStorage.getItem(eduDocsStorageKey);
       if (stored) {
-        const parsed = JSON.parse(stored);
-        return parsed;
+        setEducationalDocuments(JSON.parse(stored));
+      } else {
+        setEducationalDocuments(defaultEducationalDocuments);
       }
     } catch (error) {
-      console.error('Error initializing educational documents from storage:', error);
+      console.error('Error loading educational documents from storage:', error);
+      setEducationalDocuments(defaultEducationalDocuments);
     }
-    return {
-      '10th': {},
-      '12th': {},
-      'Graduation': {},
-      'Post Graduation': {},
-      'Diploma': {},
-      'Certificate': {},
-      'Drop out': {}
-    };
-  });
+  }, [eduDocsStorageKey]);
+
+  useEffect(() => {
+    if (authUser?.userId || authUser?.id) {
+      void fetchEducationalDocuments();
+    }
+  }, [authUser?.userId, authUser?.id]);
+
   const [uploadingEducation, setUploadingEducation] = useState<string | null>(null);
   const [uploadingEducationType, setUploadingEducationType] = useState<'certificate' | 'marksheet' | 'others' | null>(null);
   const [submittingEducation, setSubmittingEducation] = useState(false);
@@ -192,6 +247,80 @@ export default function Profile() {
     address: ''
   });
 
+  const [shiftForm, setShiftForm] = useState({
+    shiftStartTime: '09:00',
+    shiftEndTime: '18:00',
+    lateThreshold: '0',
+    workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] as string[],
+  });
+
+  const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+  const openDocument = async (doc: Document) => {
+    if (doc._id?.startsWith('temp_') && doc.filePath?.startsWith('data:')) {
+      window.open(doc.filePath, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (!doc._id || doc._id.startsWith('temp_')) {
+      toast.error('Document is not available on the server yet');
+      return;
+    }
+    try {
+      await openDocumentInNewTab(doc._id, {
+        fileName: doc.fileName,
+        name: doc.name,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Could not open document';
+      toast.error(message);
+    }
+  };
+
+  const downloadDocument = async (doc: Document) => {
+    if (doc._id?.startsWith('temp_') && doc.filePath?.startsWith('data:')) {
+      const link = document.createElement('a');
+      link.href = doc.filePath;
+      link.download = doc.fileName || doc.name || 'document';
+      link.click();
+      return;
+    }
+    if (!doc._id || doc._id.startsWith('temp_')) {
+      toast.error('Document is not available on the server yet');
+      return;
+    }
+    try {
+      await downloadDocumentFile(doc._id, doc.fileName || doc.name);
+      toast.success('Download started');
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Could not download document';
+      toast.error(message);
+    }
+  };
+
+  const removeDocument = async (doc: Document) => {
+    if (!doc._id) {
+      toast.error('Document is not available on the server yet');
+      return;
+    }
+    try {
+      await apiDelete(`/documents/${doc._id}`);
+      try {
+        await deleteDocumentFromDB(doc._id);
+      } catch {
+        /* non-fatal */
+      }
+      await loadDocuments();
+      toast.success('Document deleted');
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to delete document'
+      );
+    }
+  };
+
   const [officialForm, setOfficialForm] = useState({
     employeeId: '',
     joiningDate: '',
@@ -199,37 +328,51 @@ export default function Profile() {
     designation: ''
   });
 
+  const loadDocuments = async () => {
+    const userId = authUser?.userId || authUser?.id;
+    if (!userId) return;
+
+    try {
+      clearApiCache(`/documents/employee/${userId}`);
+      const data = await apiGet<{
+        success?: boolean;
+        data?: Record<string, unknown>[];
+      }>(`/documents/employee/${userId}?limit=200&scope=employment`, false);
+      const list = Array.isArray(data?.data) ? data.data : [];
+      const mapped: Document[] = list.map((d: Record<string, unknown>) => ({
+        _id: String(d._id || ''),
+        name: String(d.name || d.fileName || 'Document'),
+        size: String(d.size || '—'),
+        uploadedAt: d.uploadedAt
+          ? new Date(String(d.uploadedAt)).toLocaleDateString()
+          : new Date().toLocaleDateString(),
+        status: String(d.status || 'uploaded'),
+        filePath: d.filePath ? String(d.filePath) : d.fileUrl ? String(d.fileUrl) : undefined,
+        fileName: d.fileName ? String(d.fileName) : undefined,
+        category: String(d.name || d.type || 'Document'),
+      }));
+      if (mounted.current) {
+        setDocuments(mapped.filter((d) => d._id));
+      }
+    } catch (error) {
+      console.error('Error loading documents from backend:', error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Could not load your uploaded documents'
+      );
+    }
+  };
+
   useEffect(() => {
     fetchEmployeeData();
-    
-    // Load documents from backend
-    const loadDocuments = async () => {
-      try {
-        const token = localStorage.getItem('authToken');
-        const userId = localStorage.getItem('userId');
-        
-        if (!userId) {
-          console.warn('No userId found in localStorage');
-          return;
-        }
-
-        try {
-          const data = await apiGet(`/documents/employee/${userId}`);
-          const backendDocs = data.data || [];
-          
-          setDocuments(backendDocs);
-        } catch (error) {
-          console.error('Error loading documents from backend:', error);
-        }
-      } catch (error) {
-        console.error('Error loading documents from backend:', error);
-      }
-    };
-    
-    loadDocuments();
-    // Commented out until backend endpoint is created
-    // fetchEducationalDocuments();
   }, []);
+
+  useEffect(() => {
+    if (authUser?.userId || authUser?.id) {
+      void loadDocuments();
+    }
+  }, [authUser?.userId, authUser?.id]);
 
   // Update form when employee data changes
   useEffect(() => {
@@ -248,6 +391,16 @@ export default function Profile() {
         joiningDate: employee.joiningDate ? (typeof employee.joiningDate === 'string' ? employee.joiningDate.split('T')[0] : new Date(employee.joiningDate).toISOString().split('T')[0]) : '',
         department: employee.department || '',
         designation: employee.designation || ''
+      });
+
+      const st = employee.shiftTiming || {};
+      setShiftForm({
+        shiftStartTime: st.startTime || '09:00',
+        shiftEndTime: st.endTime || '18:00',
+        lateThreshold: String(st.lateThreshold ?? 0),
+        workingDays: st.workingDays?.length
+          ? st.workingDays
+          : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
       });
     }
   }, [employee]);
@@ -293,21 +446,37 @@ export default function Profile() {
         console.warn('Educational documents exceed 5MB limit, may not persist');
       }
       
-      localStorage.setItem('educationalDocuments', serialized);
+      localStorage.setItem(eduDocsStorageKey, serialized);
     } catch (error) {
       console.error('Error saving educational documents to storage:', error);
       if (error instanceof Error && error.name === 'QuotaExceededError') {
         toast.error('Storage quota exceeded. Please delete some documents.');
       }
     }
-  }, [educationalDocuments]);
+  }, [educationalDocuments, eduDocsStorageKey]);
 
   // Fetch educational documents
   const fetchEducationalDocuments = async () => {
+    const userId = authUser?.userId || authUser?.id;
+    if (!userId) return;
     try {
-      const data = await apiGet('/employee-dashboard/documents?type=education');
+      const data = await apiGet<{
+        success?: boolean;
+        data?: unknown[] | { documents?: unknown[] };
+      }>(`/documents/employee/${userId}?limit=200&scope=education`, false);
       
-      if (data.success && data.data && Array.isArray(data.data)) {
+      // Safely normalize the response to always get an array
+      let docList: unknown[] = [];
+      if (Array.isArray(data?.data)) {
+        docList = data.data;
+      } else if (data?.data && typeof data.data === 'object' && 'documents' in data.data) {
+        const dataObj = data.data as { documents?: unknown[] };
+        if (Array.isArray(dataObj.documents)) {
+          docList = dataObj.documents;
+        }
+      }
+
+      if (data.success && docList.length >= 0) {
         // Parse and organize documents by education level and type
         const organizedDocs: {
           [key: string]: { certificate?: Document; marksheet?: Document; others?: Document };
@@ -322,7 +491,7 @@ export default function Profile() {
         };
 
         // Process each document and place it in the correct category
-        data.data.forEach((doc: any) => {
+        docList.forEach((doc: any) => {
           const docType = doc.type || '';
           // Parse type like "education_10th_certificate"
           const match = docType.match(/education_(.+)_(certificate|marksheet|others)/);
@@ -338,12 +507,13 @@ export default function Profile() {
             
             if (educationLevel) {
               const document: Document = {
-                _id: doc._id || doc.id,
+                _id: String(doc._id || doc.id || ''),
                 name: doc.name,
                 size: doc.size || 'Unknown',
                 uploadedAt: doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : 'Unknown',
                 status: doc.status || 'uploaded',
-                filePath: doc.filePath || doc.url
+                filePath: doc.filePath || doc.url,
+                fileName: doc.fileName,
               };
               
               organizedDocs[educationLevel][docTypeKey] = document;
@@ -373,8 +543,10 @@ export default function Profile() {
         lastName: employeeProfile?.lastName || profileData?.profile?.lastName || '',
         email: profileData?.email || '',
         phone: employeeProfile?.phone || profileData?.contact?.phone || '',
-        dateOfBirth: '',
-        gender: '',
+        dateOfBirth: employeeProfile?.dateOfBirth
+          ? new Date(employeeProfile.dateOfBirth).toISOString().split('T')[0]
+          : '',
+        gender: employeeProfile?.gender || '',
         address: employeeProfile?.address || profileData?.contact?.address?.street || '',
         employeeId: employeeProfile?.employeeId || employeeProfile?.employeeCode || '',
         department: employeeProfile?.department || '',
@@ -386,15 +558,23 @@ export default function Profile() {
         panNumber: employeeProfile?.panNumber || '',
         bankAccount: employeeProfile?.bankAccount || employeeProfile?.bankDetails?.accountNumber || '',
         ifscCode: employeeProfile?.ifscCode || employeeProfile?.bankDetails?.ifscCode || '',
-        sensitiveInfoLocks: employeeProfile?.sensitiveInfoLocks || {}
+        sensitiveInfoLocks: employeeProfile?.sensitiveInfoLocks || {},
+        shiftTiming: employeeProfile?.shiftTiming || {
+          startTime: '09:00',
+          endTime: '18:00',
+          lateThreshold: 0,
+          workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+        },
       };
       
       console.log('✅ Employee data fetched:', employeeData);
-      setEmployee(employeeData);
+      if (mounted.current) {
+        setEmployee(employeeData);
+      }
     } catch (error) {
       console.error('❌ Error fetching employee data:', error);
     } finally {
-      setLoading(false);
+      if (mounted.current) setLoading(false);
     }
   };
 
@@ -522,7 +702,15 @@ export default function Profile() {
         },
         employeeDetails: {
           phone: personalForm.phone.trim(),
-          address: personalForm.address.trim()
+          address: personalForm.address.trim(),
+          gender: personalForm.gender.trim(),
+          ...(personalForm.dateOfBirth ? { dateOfBirth: personalForm.dateOfBirth } : {}),
+          shiftTiming: {
+            startTime: shiftForm.shiftStartTime,
+            endTime: shiftForm.shiftEndTime,
+            lateThreshold: Number(shiftForm.lateThreshold) || 0,
+            workingDays: shiftForm.workingDays,
+          },
         }
       });
 
@@ -535,7 +723,15 @@ export default function Profile() {
           firstName: personalForm.firstName.trim(),
           lastName: personalForm.lastName.trim(),
           phone: personalForm.phone.trim(),
-          address: personalForm.address.trim()
+          address: personalForm.address.trim(),
+          gender: personalForm.gender.trim(),
+          dateOfBirth: personalForm.dateOfBirth,
+          shiftTiming: {
+            startTime: shiftForm.shiftStartTime,
+            endTime: shiftForm.shiftEndTime,
+            lateThreshold: Number(shiftForm.lateThreshold) || 0,
+            workingDays: shiftForm.workingDays,
+          },
         } : null);
 
         setIsEditingPersonal(false);
@@ -567,16 +763,22 @@ export default function Profile() {
       setUploadingFile(true);
       console.log('📤 Starting document upload:', { fileName: file.name, fileSize: file.size, category: selectedCategory });
       
-      // Validate file size (max 50MB)
-      if (file.size > 50 * 1024 * 1024) {
-        throw new Error('File size exceeds 50MB limit');
+      const orgId = resolveAuthOrgId(authUser);
+      if (!orgId) {
+        throw new Error(
+          'Organization context is missing. Please sign out, sign in again, or contact HR.'
+        );
       }
 
-      // Create FormData for file upload
+      if (file.size > 10 * 1024 * 1024) {
+        throw new Error('File size exceeds 10MB limit');
+      }
+
       const formData = new FormData();
       formData.append('document', file);
       formData.append('name', selectedCategory);
-      formData.append('type', documentType);
+      formData.append('type', mapCategoryToDocumentType(selectedCategory));
+      formData.append('orgId', orgId);
 
       console.log('📤 FormData prepared, sending to backend...');
 
@@ -586,31 +788,40 @@ export default function Profile() {
         setTimeout(() => reject(new Error('Upload timeout - please try again')), 30000)
       );
 
-      const data = await Promise.race([uploadPromise, timeoutPromise]) as any;
+      const data = await Promise.race([uploadPromise, timeoutPromise]) as {
+        success?: boolean;
+        message?: string;
+        data?: Record<string, unknown>;
+      };
       console.log('✅ Upload response:', data);
-      
-      const uploadedDoc = data.data;
 
-      if (!uploadedDoc || !uploadedDoc._id) {
+      if (data?.success === false) {
+        throw new Error(data.message || 'Upload failed');
+      }
+
+      const uploadedDoc = (data?.data || data) as Record<string, unknown>;
+      const docId = uploadedDoc?._id ? String(uploadedDoc._id) : '';
+      if (!docId) {
         throw new Error('Invalid response from server - missing document ID');
       }
 
-      // Create document object with backend data
-      const newDoc: Document = {
-        _id: uploadedDoc._id,
-        name: uploadedDoc.name,
-        size: uploadedDoc.size,
-        uploadedAt: new Date(uploadedDoc.uploadedAt).toLocaleDateString(),
-        status: uploadedDoc.status,
-        filePath: uploadedDoc.filePath,
-        category: uploadedDoc.type
+      const newEntry: Document = {
+        _id: docId,
+        name: String(uploadedDoc.name || selectedCategory),
+        size: String(uploadedDoc.size || `${(file.size / 1024).toFixed(2)} KB`),
+        uploadedAt: uploadedDoc.uploadedAt
+          ? new Date(String(uploadedDoc.uploadedAt)).toLocaleDateString()
+          : new Date().toLocaleDateString(),
+        status: String(uploadedDoc.status || 'uploaded'),
+        filePath: uploadedDoc.filePath ? String(uploadedDoc.filePath) : undefined,
+        fileName: uploadedDoc.fileName ? String(uploadedDoc.fileName) : file.name,
+        category: selectedCategory,
       };
-
-      console.log('✅ Document object created:', newDoc);
-
-      // Update state
-      setDocuments([newDoc, ...documents]);
-
+      setDocuments((prev) => {
+        const withoutDup = prev.filter((d) => d._id !== docId);
+        return [newEntry, ...withoutDup];
+      });
+      void loadDocuments();
       toast.success(`${selectedCategory} uploaded successfully`);
       
       // Reset file input
@@ -647,6 +858,24 @@ export default function Profile() {
     return Math.round((filledSlots / totalSlots) * 100);
   };
 
+  const educationLevelToDocType = (
+    educationLevel: string,
+    docType: 'certificate' | 'marksheet' | 'others'
+  ): string => {
+    const levelMap: Record<string, string> = {
+      '10th': '10th',
+      '12th': '12th',
+      Graduation: 'graduation',
+      'Post Graduation': 'post_graduation',
+      Diploma: 'diploma',
+      Certificate: 'certificate',
+      'Drop out': 'drop_out',
+    };
+    const key = levelMap[educationLevel] || educationLevel.toLowerCase().replace(/\s+/g, '_');
+    const suffix = docType === 'others' ? 'certificate' : docType;
+    return `education_${key}_${suffix}`;
+  };
+
   // Handle educational document upload
   const handleEducationDocumentUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
@@ -658,36 +887,58 @@ export default function Profile() {
 
     try {
       setUploadingFile(true);
-      
-      // Convert file to base64 for storage
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      
-      // Simulate upload delay
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Create document object
+      const orgId = resolveAuthOrgId(authUser);
+      if (!orgId) {
+        throw new Error(
+          'Organization context is missing. Please sign out, sign in again, or contact HR.'
+        );
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        throw new Error('File size exceeds 10MB limit');
+      }
+
+      const formData = new FormData();
+      formData.append('document', file);
+      formData.append('name', `${educationLevel} ${docType}`);
+      formData.append('type', educationLevelToDocType(educationLevel, docType));
+      formData.append('orgId', orgId);
+
+      const data = await apiUpload<{
+        success?: boolean;
+        message?: string;
+        data?: Record<string, unknown>;
+      }>('/documents/upload', formData);
+
+      if (data?.success === false) {
+        throw new Error(data.message || 'Upload failed');
+      }
+
+      const uploadedDoc = (data?.data || data) as Record<string, unknown>;
+      const docId = uploadedDoc?._id ? String(uploadedDoc._id) : '';
+      if (!docId) {
+        throw new Error('Invalid response from server - missing document ID');
+      }
+
       const newDoc: Document = {
-        _id: `temp_${Date.now()}`,
-        name: file.name,
-        size: `${(file.size / 1024).toFixed(2)} KB`,
-        uploadedAt: new Date().toLocaleDateString(),
-        status: 'uploaded',
-        filePath: base64 // Store base64 data
+        _id: docId,
+        name: String(uploadedDoc.name || file.name),
+        size: String(uploadedDoc.size || `${(file.size / 1024).toFixed(2)} KB`),
+        uploadedAt: uploadedDoc.uploadedAt
+          ? new Date(String(uploadedDoc.uploadedAt)).toLocaleDateString()
+          : new Date().toLocaleDateString(),
+        status: String(uploadedDoc.status || 'uploaded'),
+        filePath: uploadedDoc.filePath ? String(uploadedDoc.filePath) : undefined,
+        fileName: uploadedDoc.fileName ? String(uploadedDoc.fileName) : file.name,
       };
 
-      // Update state
       setEducationalDocuments((prev) => ({
         ...prev,
         [educationLevel]: {
           ...prev[educationLevel],
-          [docType]: newDoc
-        }
+          [docType]: newDoc,
+        },
       }));
+      void fetchEducationalDocuments();
 
       toast.success(`${educationLevel} ${docType} uploaded successfully`);
       
@@ -772,19 +1023,16 @@ export default function Profile() {
   const handleSubmitEmploymentDocuments = async () => {
     try {
       setSubmittingDocuments(true);
-      
-      // Prepare employment documents data
-      const docsData = documents.map(doc => ({
-        id: doc._id,
-        name: doc.name,
-        category: selectedCategory
-      }));
 
-      await apiPut('/profile', {
-        employmentDocuments: docsData
-      });
+      const res = await apiPost<{ updated?: number }>('/documents/submit-employment', {});
+      const updated = (res as { data?: { updated?: number } })?.data?.updated ?? 0;
 
-      toast.success('Employment documents submitted successfully');
+      await loadDocuments();
+      toast.success(
+        updated > 0
+          ? `${updated} document(s) submitted for HR review`
+          : 'Employment documents submitted successfully'
+      );
     } catch (error) {
       console.error('Error submitting employment documents:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to submit employment documents');
@@ -836,6 +1084,9 @@ export default function Profile() {
               <Button
                 size="icon"
                 className="absolute bottom-0 right-0 rounded-full w-10 h-10"
+                type="button"
+                aria-label="Edit personal information"
+                onClick={() => setIsEditingPersonal(true)}
               >
                 <Edit className="w-4 h-4" />
               </Button>
@@ -970,6 +1221,77 @@ export default function Profile() {
                   className={`mt-2 rounded-xl ${isEditingPersonal ? 'bg-background border-primary' : 'bg-muted'}`}
                   placeholder="Enter address"
                 />
+              </div>
+
+              <div className="col-span-2 border-t pt-4 mt-2">
+                <h4 className="font-semibold text-sm mb-4 flex items-center gap-2">
+                  <Clock className="w-4 h-4" />
+                  Shift Timing
+                </h4>
+                <div className="grid grid-cols-2 gap-6">
+                  <div>
+                    <Label>Shift Start Time</Label>
+                    <Input
+                      type="time"
+                      value={shiftForm.shiftStartTime}
+                      onChange={(e) => setShiftForm({ ...shiftForm, shiftStartTime: e.target.value })}
+                      disabled={!isEditingPersonal}
+                      className={`mt-2 rounded-xl ${isEditingPersonal ? 'bg-background border-primary' : 'bg-muted'}`}
+                    />
+                  </div>
+                  <div>
+                    <Label>Shift End Time</Label>
+                    <Input
+                      type="time"
+                      value={shiftForm.shiftEndTime}
+                      onChange={(e) => setShiftForm({ ...shiftForm, shiftEndTime: e.target.value })}
+                      disabled={!isEditingPersonal}
+                      className={`mt-2 rounded-xl ${isEditingPersonal ? 'bg-background border-primary' : 'bg-muted'}`}
+                    />
+                  </div>
+                  <div>
+                    <Label>Late Threshold (minutes)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={shiftForm.lateThreshold}
+                      onChange={(e) => setShiftForm({ ...shiftForm, lateThreshold: e.target.value })}
+                      disabled={!isEditingPersonal}
+                      className={`mt-2 rounded-xl ${isEditingPersonal ? 'bg-background border-primary' : 'bg-muted'}`}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Grace period after shift start before marking as late
+                    </p>
+                  </div>
+                  <div className="col-span-2">
+                    <Label>Working Days</Label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+                      {WEEK_DAYS.map((day) => (
+                        <label key={day} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={shiftForm.workingDays.includes(day)}
+                            disabled={!isEditingPersonal}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setShiftForm({
+                                  ...shiftForm,
+                                  workingDays: [...shiftForm.workingDays, day],
+                                });
+                              } else {
+                                setShiftForm({
+                                  ...shiftForm,
+                                  workingDays: shiftForm.workingDays.filter((d) => d !== day),
+                                });
+                              }
+                            }}
+                          />
+                          {day}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </Card>
@@ -1433,11 +1755,20 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0"
+                              title="View document"
                               onClick={() => {
-                                // Download functionality
-                                if (docs.certificate?.filePath) {
-                                  window.open(docs.certificate.filePath, '_blank');
-                                }
+                                if (docs.certificate) void openDocument(docs.certificate);
+                              }}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0"
+                              title="Download document"
+                              onClick={() => {
+                                if (docs.certificate) void downloadDocument(docs.certificate);
                               }}
                             >
                               <Download className="w-4 h-4" />
@@ -1446,16 +1777,22 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                              onClick={() => {
-                                // Delete functionality
+                              title="Delete document"
+                              onClick={async () => {
+                                if (!docs.certificate?._id) {
+                                  setEducationalDocuments((prev) => ({
+                                    ...prev,
+                                    [level]: { ...prev[level], certificate: undefined },
+                                  }));
+                                  toast.success('Certificate removed');
+                                  return;
+                                }
+                                await removeDocument(docs.certificate);
                                 setEducationalDocuments((prev) => ({
                                   ...prev,
-                                  [level]: {
-                                    ...prev[level],
-                                    certificate: undefined
-                                  }
+                                  [level]: { ...prev[level], certificate: undefined },
                                 }));
-                                toast.success('Certificate removed');
+                                void fetchEducationalDocuments();
                               }}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -1480,11 +1817,20 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0"
+                              title="View document"
                               onClick={() => {
-                                // Download functionality
-                                if (docs.marksheet?.filePath) {
-                                  window.open(docs.marksheet.filePath, '_blank');
-                                }
+                                if (docs.marksheet) void openDocument(docs.marksheet);
+                              }}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0"
+                              title="Download document"
+                              onClick={() => {
+                                if (docs.marksheet) void downloadDocument(docs.marksheet);
                               }}
                             >
                               <Download className="w-4 h-4" />
@@ -1493,16 +1839,22 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                              onClick={() => {
-                                // Delete functionality
+                              title="Delete document"
+                              onClick={async () => {
+                                if (!docs.marksheet?._id) {
+                                  setEducationalDocuments((prev) => ({
+                                    ...prev,
+                                    [level]: { ...prev[level], marksheet: undefined },
+                                  }));
+                                  toast.success('Marksheet removed');
+                                  return;
+                                }
+                                await removeDocument(docs.marksheet);
                                 setEducationalDocuments((prev) => ({
                                   ...prev,
-                                  [level]: {
-                                    ...prev[level],
-                                    marksheet: undefined
-                                  }
+                                  [level]: { ...prev[level], marksheet: undefined },
                                 }));
-                                toast.success('Marksheet removed');
+                                void fetchEducationalDocuments();
                               }}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -1527,11 +1879,20 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0"
+                              title="View document"
                               onClick={() => {
-                                // Download functionality
-                                if (docs.others?.filePath) {
-                                  window.open(docs.others.filePath, '_blank');
-                                }
+                                if (docs.others) void openDocument(docs.others);
+                              }}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0"
+                              title="Download document"
+                              onClick={() => {
+                                if (docs.others) void downloadDocument(docs.others);
                               }}
                             >
                               <Download className="w-4 h-4" />
@@ -1540,16 +1901,22 @@ export default function Profile() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                              onClick={() => {
-                                // Delete functionality
+                              title="Delete document"
+                              onClick={async () => {
+                                if (!docs.others?._id) {
+                                  setEducationalDocuments((prev) => ({
+                                    ...prev,
+                                    [level]: { ...prev[level], others: undefined },
+                                  }));
+                                  toast.success('Document removed');
+                                  return;
+                                }
+                                await removeDocument(docs.others);
                                 setEducationalDocuments((prev) => ({
                                   ...prev,
-                                  [level]: {
-                                    ...prev[level],
-                                    others: undefined
-                                  }
+                                  [level]: { ...prev[level], others: undefined },
                                 }));
-                                toast.success('Document removed');
+                                void fetchEducationalDocuments();
                               }}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -1717,48 +2084,32 @@ export default function Profile() {
                         </div>
                         <div className="flex items-center gap-2 ml-2">
                           <Button
+                            type="button"
                             size="sm"
                             variant="ghost"
                             className="h-8 w-8 p-0"
-                            onClick={() => {
-                              // Download functionality
-                              if (doc.filePath) {
-                                const apiUrl = (import.meta as any).env.VITE_API_URL || '';
-                                const baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
-                                let fullUrl = doc.filePath;
-                                if (doc.filePath.startsWith('/')) {
-                                  if (baseUrl.endsWith('/api')) {
-                                    fullUrl = baseUrl.slice(0, -4) + doc.filePath;
-                                  } else {
-                                    fullUrl = baseUrl + doc.filePath;
-                                  }
-                                }
-                                const link = document.createElement('a');
-                                link.href = fullUrl;
-                                link.download = doc.name;
-                                document.body.appendChild(link);
-                                link.click();
-                                document.body.removeChild(link);
-                              }
-                            }}
+                            title="View document"
+                            onClick={() => void openDocument(doc)}
+                          >
+                            <Eye className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 w-8 p-0"
+                            title="Download document"
+                            onClick={() => void downloadDocument(doc)}
                           >
                             <Download className="w-4 h-4" />
                           </Button>
                           <Button
+                            type="button"
                             size="sm"
                             variant="ghost"
                             className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                            onClick={async () => {
-                              // Delete functionality
-                              try {
-                                await apiDelete(`/documents/${doc._id}`);
-                                setDocuments(documents.filter(d => d._id !== doc._id));
-                                toast.success('Document deleted');
-                              } catch (error) {
-                                console.error('Error deleting document:', error);
-                                toast.error('Failed to delete document');
-                              }
-                            }}
+                            title="Delete document"
+                            onClick={() => void removeDocument(doc)}
                           >
                             <Trash2 className="w-4 h-4" />
                           </Button>

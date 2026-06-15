@@ -1,16 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Lock, AlertCircle, CheckCircle, Loader, Upload, Check, Download, Trash2, Camera } from 'lucide-react';
+import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Lock, AlertCircle, CheckCircle, Loader, Upload, Check, Download, Trash2, Camera, GraduationCap } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
+import { PasswordInput } from '../../components/PasswordInput';
 import { Label } from '../../components/ui/label';
 import { Separator } from '../../components/ui/separator';
 import { Progress } from '../../components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
 import { Badge } from '../../components/ui/badge';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { buildApiUrl } from '../../utils/apiHelper';
 
 interface FormData {
@@ -51,6 +52,57 @@ interface Document {
 interface EducationDocuments {
   [key: string]: { certificate?: Document; marksheet?: Document };
 }
+
+interface EducationLevelDetails {
+  schoolName: string;
+  board: string;
+  yearOfPassing: string;
+  percentage: string;
+  rollNumber: string;
+}
+
+interface EducationDetails {
+  tenth: EducationLevelDetails;
+  twelfth: EducationLevelDetails;
+}
+
+interface PreviousEmployment {
+  companyName: string;
+  role: string;
+  startDate: string;
+  endDate: string;
+  location: string;
+  department: string;
+  employmentType: string;
+  lastDrawnSalary: string;
+  responsibilities: string;
+  reasonForLeaving: string;
+  referenceName: string;
+  referencePhone: string;
+}
+
+const emptyEducationLevel = (): EducationLevelDetails => ({
+  schoolName: '',
+  board: '',
+  yearOfPassing: '',
+  percentage: '',
+  rollNumber: '',
+});
+
+const emptyPreviousJob = (): PreviousEmployment => ({
+  companyName: '',
+  role: '',
+  startDate: '',
+  endDate: '',
+  location: '',
+  department: '',
+  employmentType: '',
+  lastDrawnSalary: '',
+  responsibilities: '',
+  reasonForLeaving: '',
+  referenceName: '',
+  referencePhone: '',
+});
 
 interface OnboardingData {
   employeeEmail: string;
@@ -103,6 +155,13 @@ const OnboardingPage: React.FC = () => {
   // Employment Documents State
   const [documents, setDocuments] = useState<Document[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('Letter of Intent');
+  const educationFilesRef = useRef<Record<string, File>>({});
+  const employmentFilesRef = useRef<Record<string, File>>({});
+  const [educationDetails, setEducationDetails] = useState<EducationDetails>({
+    tenth: emptyEducationLevel(),
+    twelfth: emptyEducationLevel(),
+  });
+  const [previousEmployment, setPreviousEmployment] = useState<PreviousEmployment[]>([emptyPreviousJob()]);
 
   // Load documents from localStorage on mount
   useEffect(() => {
@@ -188,7 +247,7 @@ const OnboardingPage: React.FC = () => {
     { title: 'Profile Photo', icon: Upload },
     { title: 'Emergency Contact', icon: Phone },
     { title: 'Banking Information', icon: Lock },
-    { title: 'Educational Documents', icon: FileText },
+    { title: 'Education', icon: GraduationCap },
     { title: 'Experience Document', icon: Upload },
     { title: 'Login Credentials', icon: Lock },
     { title: 'Review & Submit', icon: CheckCircle }
@@ -322,6 +381,9 @@ const OnboardingPage: React.FC = () => {
         filePath: ''
       };
 
+      const fileKey = `${educationLevel}_${docType}`;
+      educationFilesRef.current[fileKey] = file;
+
       setEducationalDocuments((prev) => ({
         ...prev,
         [educationLevel]: {
@@ -330,7 +392,7 @@ const OnboardingPage: React.FC = () => {
         }
       }));
 
-      toast.success(`${educationLevel} ${docType} selected successfully`);
+      toast.success(`${educationLevel} ${docType} selected — will upload on submit`);
       
       if (e.target) {
         e.target.value = '';
@@ -352,8 +414,11 @@ const OnboardingPage: React.FC = () => {
 
     try {
       // Store file reference locally (will be uploaded after profile creation)
+      const docId = `temp_${Date.now()}_${Math.random()}`;
+      employmentFilesRef.current[docId] = file;
+
       const newDoc: Document = {
-        _id: `temp_${Date.now()}_${Math.random()}`,
+        _id: docId,
         name: file.name,
         size: `${(file.size / 1024).toFixed(1)} KB`,
         uploadedAt: new Date().toLocaleDateString(),
@@ -379,11 +444,12 @@ const OnboardingPage: React.FC = () => {
   };
 
   const calculateEducationProgress = () => {
-    const educationLevels = Object.keys(educationalDocuments);
+    const educationLevels = ['10th', '12th'];
     let totalSlots = educationLevels.length * 2;
     let filledSlots = 0;
 
-    Object.values(educationalDocuments).forEach((docs) => {
+    educationLevels.forEach((level) => {
+      const docs = educationalDocuments[level] || {};
       if (docs.certificate) filledSlots++;
       if (docs.marksheet) filledSlots++;
     });
@@ -393,6 +459,7 @@ const OnboardingPage: React.FC = () => {
 
   // Delete educational document
   const deleteEducationDocument = (educationLevel: string, docType: 'certificate' | 'marksheet') => {
+    delete educationFilesRef.current[`${educationLevel}_${docType}`];
     setEducationalDocuments((prev) => ({
       ...prev,
       [educationLevel]: {
@@ -401,6 +468,30 @@ const OnboardingPage: React.FC = () => {
       }
     }));
     toast.success(`${educationLevel} ${docType} removed`);
+  };
+
+  const addPreviousJob = () => {
+    setPreviousEmployment((prev) => [
+      ...prev,
+      emptyPreviousJob(),
+    ]);
+  };
+
+  const updatePreviousJob = (index: number, field: keyof PreviousEmployment, value: string) => {
+    setPreviousEmployment((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, [field]: value } : row))
+    );
+  };
+
+  const updateEducationLevel = (level: 'tenth' | 'twelfth', field: keyof EducationLevelDetails, value: string) => {
+    setEducationDetails((prev) => ({
+      ...prev,
+      [level]: { ...prev[level], [field]: value },
+    }));
+  };
+
+  const removePreviousJob = (index: number) => {
+    setPreviousEmployment((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
   };
 
   // Delete employment document
@@ -441,9 +532,18 @@ const OnboardingPage: React.FC = () => {
         return !!(formData.emergencyName && formData.emergencyRelation && formData.emergencyPhone);
       case 3: // Banking Information
         return !!(formData.aadharNumber && formData.panNumber && formData.bankAccount && formData.ifscCode);
-      case 4: // Educational Documents
-        return true; // Optional
-      case 5: // Upload Documents
+      case 4: // Education details + documents
+        return !!(
+          educationDetails.tenth.schoolName.trim() &&
+          educationDetails.tenth.board.trim() &&
+          educationDetails.tenth.yearOfPassing.trim() &&
+          educationDetails.tenth.percentage.trim() &&
+          educationDetails.twelfth.schoolName.trim() &&
+          educationDetails.twelfth.board.trim() &&
+          educationDetails.twelfth.yearOfPassing.trim() &&
+          educationDetails.twelfth.percentage.trim()
+        );
+      case 5: // Experience + documents
         return true; // Optional
       case 6: // Login Credentials
         return !!(formData.password && formData.confirmPassword && isPasswordValid(formData.password) && formData.password === formData.confirmPassword);
@@ -494,40 +594,51 @@ const OnboardingPage: React.FC = () => {
       }));
 
       const apiUrl = buildApiUrl('/onboarding/submit');
-      console.log('📤 [ONBOARDING] Submitting form:', { token: token.substring(0, 10) + '...', apiUrl });
+      const body = new FormData();
+      body.append('token', token);
+      body.append('password', formData.password);
+      body.append('firstName', formData.firstName);
+      body.append('lastName', formData.lastName);
+      body.append('phone', formData.phone);
+      body.append('dateOfBirth', formData.dateOfBirth);
+      body.append('gender', formData.gender);
+      body.append('address', formData.address);
+      body.append('aadharNumber', formData.aadharNumber);
+      body.append('panNumber', formData.panNumber);
+      body.append('bankAccount', formData.bankAccount);
+      body.append('ifscCode', formData.ifscCode);
+      body.append('emergencyName', formData.emergencyName);
+      body.append('emergencyRelation', formData.emergencyRelation);
+      body.append('emergencyPhone', formData.emergencyPhone);
+      body.append('educationalDocuments', JSON.stringify(educationData));
+      body.append('educationDetails', JSON.stringify(educationDetails));
+      body.append('employmentDocuments', JSON.stringify(docsData));
+      body.append(
+        'previousEmployment',
+        JSON.stringify(previousEmployment.filter((j) => j.companyName.trim()))
+      );
+
+      if (photoPreview) {
+        const photoBlob = await (await fetch(photoPreview)).blob();
+        body.append('avatar', photoBlob, 'profile-photo.jpg');
+      }
+
+      Object.entries(educationFilesRef.current).forEach(([key, file]) => {
+        body.append(`edu_${key}`, file);
+      });
+
+      documents.forEach((doc) => {
+        const file = employmentFilesRef.current[doc._id];
+        if (file) {
+          body.append(`document_${doc._id}`, file);
+          body.append(`document_${doc._id}_type`, selectedCategory);
+        }
+      });
 
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
         credentials: 'include',
-        body: JSON.stringify({
-          token,
-          profilePhoto: photoPreview, // Send the base64 photo
-          personalInfo: {
-            firstName: formData.firstName,
-            lastName: formData.lastName,
-            phone: formData.phone,
-            dateOfBirth: formData.dateOfBirth,
-            gender: formData.gender,
-            address: formData.address
-          },
-          sensitiveInfo: {
-            aadharNumber: formData.aadharNumber,
-            panNumber: formData.panNumber,
-            bankAccount: formData.bankAccount,
-            ifscCode: formData.ifscCode
-          },
-          emergencyContact: {
-            name: formData.emergencyName,
-            relation: formData.emergencyRelation,
-            phone: formData.emergencyPhone
-          },
-          educationalDocuments: educationData,
-          employmentDocuments: docsData,
-          password: formData.password // Include password
-        })
+        body,
       });
 
       const data = await response.json();
@@ -886,11 +997,83 @@ const OnboardingPage: React.FC = () => {
             </div>
           )}
 
-          {/* Educational Documents */}
+          {/* Education details + documents */}
           {currentSection === 4 && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-2xl font-bold mb-2">Educational Documents</h2>
+                <h2 className="text-2xl font-bold mb-2 flex items-center gap-2">
+                  <GraduationCap className="w-6 h-6 text-primary" />
+                  Education (10th & 12th)
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  Enter your school details, then upload certificates and marksheets below.
+                </p>
+              </div>
+
+              {(['tenth', 'twelfth'] as const).map((level) => {
+                const label = level === 'tenth' ? '10th Standard' : '12th Standard';
+                const data = educationDetails[level];
+                return (
+                  <Card key={level} className="p-4 space-y-4">
+                    <h3 className="font-semibold">{label}</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <Label>School / College name *</Label>
+                        <Input
+                          value={data.schoolName}
+                          onChange={(e) => updateEducationLevel(level, 'schoolName', e.target.value)}
+                          placeholder="Institution name"
+                          className="mt-2 rounded-xl"
+                        />
+                      </div>
+                      <div>
+                        <Label>Board *</Label>
+                        <Input
+                          value={data.board}
+                          onChange={(e) => updateEducationLevel(level, 'board', e.target.value)}
+                          placeholder="e.g. CBSE, ICSE, State Board"
+                          className="mt-2 rounded-xl"
+                        />
+                      </div>
+                      <div>
+                        <Label>Year of passing *</Label>
+                        <Input
+                          type="number"
+                          value={data.yearOfPassing}
+                          onChange={(e) => updateEducationLevel(level, 'yearOfPassing', e.target.value)}
+                          placeholder="e.g. 2018"
+                          className="mt-2 rounded-xl"
+                          min={1950}
+                          max={new Date().getFullYear()}
+                        />
+                      </div>
+                      <div>
+                        <Label>Percentage / CGPA *</Label>
+                        <Input
+                          value={data.percentage}
+                          onChange={(e) => updateEducationLevel(level, 'percentage', e.target.value)}
+                          placeholder="e.g. 85% or 8.5 CGPA"
+                          className="mt-2 rounded-xl"
+                        />
+                      </div>
+                      <div className="md:col-span-2">
+                        <Label>Roll number (optional)</Label>
+                        <Input
+                          value={data.rollNumber}
+                          onChange={(e) => updateEducationLevel(level, 'rollNumber', e.target.value)}
+                          placeholder="Roll / seat number"
+                          className="mt-2 rounded-xl"
+                        />
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+
+              <Separator />
+
+              <div>
+                <h2 className="text-xl font-bold mb-2">Educational Documents</h2>
                 <p className="text-sm text-muted-foreground mb-6">Upload your certificates and marksheets for each education level (Optional)</p>
               </div>
 
@@ -905,7 +1088,9 @@ const OnboardingPage: React.FC = () => {
 
               {/* Education Levels Grid */}
               <div className="space-y-4">
-                {Object.entries(educationalDocuments).map(([level, docs]) => (
+                {(['10th', '12th'] as const).map((level) => {
+                  const docs = educationalDocuments[level] || {};
+                  return (
                   <div key={level} className="border border-border rounded-xl p-4">
                     <div className="flex items-center justify-between mb-4">
                       <h4 className="font-semibold text-sm">{level}</h4>
@@ -1003,7 +1188,8 @@ const OnboardingPage: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1012,8 +1198,88 @@ const OnboardingPage: React.FC = () => {
           {currentSection === 5 && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-2xl font-bold mb-2">Upload your experience document</h2>
-                <p className="text-sm text-muted-foreground mb-6">Upload employment documents from your earlier organization (Optional)</p>
+                <h2 className="text-2xl font-bold mb-2">Previous employment (optional)</h2>
+                <p className="text-sm text-muted-foreground mb-4">Add prior companies — all fields optional</p>
+              </div>
+              {previousEmployment.map((job, index) => (
+                <Card key={index} className="p-4 space-y-3">
+                  <p className="text-sm font-medium text-muted-foreground">Previous employer #{index + 1}</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <Label>Company name</Label>
+                      <Input value={job.companyName} onChange={(e) => updatePreviousJob(index, 'companyName', e.target.value)} placeholder="Company name" className="rounded-xl" />
+                    </div>
+                    <div>
+                      <Label>Job title / role</Label>
+                      <Input value={job.role} onChange={(e) => updatePreviousJob(index, 'role', e.target.value)} placeholder="Your designation" className="rounded-xl" />
+                    </div>
+                    <div>
+                      <Label>Department</Label>
+                      <Input value={job.department} onChange={(e) => updatePreviousJob(index, 'department', e.target.value)} placeholder="e.g. Sales, Engineering" className="rounded-xl" />
+                    </div>
+                    <div>
+                      <Label>Employment type</Label>
+                      <Select value={job.employmentType || undefined} onValueChange={(v) => updatePreviousJob(index, 'employmentType', v)}>
+                        <SelectTrigger className="rounded-xl">
+                          <SelectValue placeholder="Select type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Full-time">Full-time</SelectItem>
+                          <SelectItem value="Part-time">Part-time</SelectItem>
+                          <SelectItem value="Contract">Contract</SelectItem>
+                          <SelectItem value="Internship">Internship</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Start date</Label>
+                      <Input type="date" value={job.startDate} onChange={(e) => updatePreviousJob(index, 'startDate', e.target.value)} className="rounded-xl" />
+                    </div>
+                    <div>
+                      <Label>End date</Label>
+                      <Input type="date" value={job.endDate} onChange={(e) => updatePreviousJob(index, 'endDate', e.target.value)} className="rounded-xl" />
+                    </div>
+                    <div>
+                      <Label>Work location</Label>
+                      <Input value={job.location} onChange={(e) => updatePreviousJob(index, 'location', e.target.value)} placeholder="City / country" className="rounded-xl" />
+                    </div>
+                    <div>
+                      <Label>Last drawn salary (optional)</Label>
+                      <Input value={job.lastDrawnSalary} onChange={(e) => updatePreviousJob(index, 'lastDrawnSalary', e.target.value)} placeholder="Annual CTC or monthly" className="rounded-xl" />
+                    </div>
+                    <div className="md:col-span-2">
+                      <Label>Key responsibilities</Label>
+                      <Textarea
+                        value={job.responsibilities}
+                        onChange={(e) => updatePreviousJob(index, 'responsibilities', e.target.value)}
+                        placeholder="Brief summary of your role and achievements"
+                        className="rounded-xl"
+                        rows={2}
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <Label>Reason for leaving (optional)</Label>
+                      <Input value={job.reasonForLeaving} onChange={(e) => updatePreviousJob(index, 'reasonForLeaving', e.target.value)} className="rounded-xl" />
+                    </div>
+                    <div>
+                      <Label>Reference contact name</Label>
+                      <Input value={job.referenceName} onChange={(e) => updatePreviousJob(index, 'referenceName', e.target.value)} className="rounded-xl" />
+                    </div>
+                    <div>
+                      <Label>Reference phone</Label>
+                      <Input value={job.referencePhone} onChange={(e) => updatePreviousJob(index, 'referencePhone', e.target.value)} className="rounded-xl" />
+                    </div>
+                  </div>
+                  {previousEmployment.length > 1 && (
+                    <Button type="button" variant="outline" size="sm" onClick={() => removePreviousJob(index)}>Remove</Button>
+                  )}
+                </Card>
+              ))}
+              <Button type="button" variant="secondary" onClick={addPreviousJob}>Add another company</Button>
+
+              <div>
+                <h2 className="text-2xl font-bold mb-2">Experience documents (optional)</h2>
+                <p className="text-sm text-muted-foreground mb-6">Offer letters, relieving letters, etc.</p>
               </div>
 
               {/* Document Categories Grid */}
@@ -1102,8 +1368,8 @@ const OnboardingPage: React.FC = () => {
               <div className="grid grid-cols-1 gap-6">
                 <div>
                   <Label>Password *</Label>
-                  <Input
-                    type="password"
+                  <PasswordInput
+                    autoComplete="new-password"
                     name="password"
                     value={formData.password}
                     onChange={handleInputChange}
@@ -1156,8 +1422,8 @@ const OnboardingPage: React.FC = () => {
 
                 <div>
                   <Label>Confirm Password *</Label>
-                  <Input
-                    type="password"
+                  <PasswordInput
+                    autoComplete="new-password"
                     name="confirmPassword"
                     value={formData.confirmPassword}
                     onChange={handleInputChange}
@@ -1331,11 +1597,60 @@ const OnboardingPage: React.FC = () => {
                 <Separator />
                 <div>
                   <h3 className="font-semibold mb-3 flex items-center gap-2">
+                    <GraduationCap className="w-4 h-4" />
+                    10th & 12th details
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                    {(['tenth', 'twelfth'] as const).map((level) => {
+                      const d = educationDetails[level];
+                      const title = level === 'tenth' ? '10th' : '12th';
+                      return (
+                        <div key={level} className="p-3 bg-gray-50 rounded-lg space-y-1">
+                          <p className="font-medium">{title}</p>
+                          <p><span className="text-muted-foreground">School:</span> {d.schoolName || '—'}</p>
+                          <p><span className="text-muted-foreground">Board:</span> {d.board || '—'}</p>
+                          <p><span className="text-muted-foreground">Year:</span> {d.yearOfPassing || '—'}</p>
+                          <p><span className="text-muted-foreground">Score:</span> {d.percentage || '—'}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <Separator />
+                <div>
+                  <h3 className="font-semibold mb-3 flex items-center gap-2">
+                    <Briefcase className="w-4 h-4" />
+                    Previous employment
+                  </h3>
+                  <div className="space-y-2 text-sm">
+                    {previousEmployment.filter((j) => j.companyName.trim()).length > 0 ? (
+                      previousEmployment
+                        .filter((j) => j.companyName.trim())
+                        .map((job, i) => (
+                          <div key={i} className="p-3 bg-gray-50 rounded-lg">
+                            <p className="font-medium">{job.companyName} — {job.role || 'Role not specified'}</p>
+                            {(job.startDate || job.endDate) && (
+                              <p className="text-muted-foreground">{job.startDate || '?'} to {job.endDate || 'Present'}</p>
+                            )}
+                          </div>
+                        ))
+                    ) : (
+                      <p className="text-muted-foreground italic">No previous employment added</p>
+                    )}
+                  </div>
+                </div>
+
+                <Separator />
+                <div>
+                  <h3 className="font-semibold mb-3 flex items-center gap-2">
                     <FileText className="w-4 h-4" />
                     Educational Documents
                   </h3>
                   <div className="space-y-2 text-sm">
-                    {Object.entries(educationalDocuments).map(([level, docs]) => (
+                    {(['10th', '12th'] as const).map((level) => {
+                  const docs = educationalDocuments[level] || {};
+                  return (
                       (docs.certificate || docs.marksheet) && (
                         <div key={level} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                           <span className="font-medium">{level}</span>
@@ -1345,7 +1660,8 @@ const OnboardingPage: React.FC = () => {
                           </div>
                         </div>
                       )
-                    ))}
+                    );
+                    })}
                     {Object.values(educationalDocuments).every(docs => !docs.certificate && !docs.marksheet) && (
                       <p className="text-muted-foreground italic">No educational documents uploaded</p>
                     )}

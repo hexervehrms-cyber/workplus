@@ -115,6 +115,36 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null
     },
+    // GridFS storage fields for avatar (NEW - Sprint G)
+    storageKey: {
+      type: String,
+      default: null,
+      description: "Storage key for avatar in GridFS or local storage"
+    },
+    storageDriver: {
+      type: String,
+      enum: ['local', 'gridfs', 'mongodb'],
+      default: null,
+      description: "Storage driver used for avatar (gridfs or local)"
+    },
+    avatarMimeType: {
+      type: String,
+      default: null
+    },
+    avatarSize: {
+      type: Number,
+      default: null
+    },
+    avatarUploadedAt: {
+      type: Date,
+      default: null
+    },
+    /** Org admin designation (manager, hr, accountant, etc.) */
+    adminRole: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     // Organization context
     organization: { 
       type: String,
@@ -203,6 +233,8 @@ const userSchema = new mongoose.Schema(
 // Enhanced compound indexes for enterprise features
 userSchema.index({ email: 1, isActive: 1 });
 userSchema.index({ orgId: 1, role: 1 });
+userSchema.index({ orgId: 1, isActive: 1 }); // For filtering by org and status
+userSchema.index({ orgId: 1, isActive: 1, lastLogin: -1 }); // For active users in org with recent login
 userSchema.index({ departmentId: 1, role: 1 });
 userSchema.index({ managerId: 1 });
 userSchema.index({ createdAt: -1 });

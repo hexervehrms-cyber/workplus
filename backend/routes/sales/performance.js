@@ -44,6 +44,119 @@ const getTodayEnd = () => {
   return date;
 };
 
+// GET dashboard summary (for Sales Dashboard page)
+router.get("/dashboard", async (req, res) => {
+  try {
+    const startOfDay = getTodayStart();
+    const endOfDay = getTodayEnd();
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    // Get today's calls
+    const totalCallsToday = await Call.countDocuments({
+      orgId: req.orgId,
+      callDate: { $gte: startOfDay, $lte: endOfDay }
+    });
+
+    const connectedCalls = await Call.countDocuments({
+      orgId: req.orgId,
+      status: "Connected",
+      callDate: { $gte: startOfDay, $lte: endOfDay }
+    });
+
+    // Get interested leads
+    const interestedLeads = await Lead.countDocuments({
+      orgId: req.orgId,
+      status: "Interested"
+    });
+
+    // Get today's revenue
+    const revenueDataToday = await Revenue.aggregate([
+      {
+        $match: {
+          orgId: req.orgId,
+          type: "Sale",
+          date: { $gte: startOfDay, $lte: endOfDay }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" }
+        }
+      }
+    ]);
+
+    const revenueToday = revenueDataToday[0]?.total || 0;
+
+    // Get monthly revenue
+    const revenueDataMonth = await Revenue.aggregate([
+      {
+        $match: {
+          orgId: req.orgId,
+          type: "Sale",
+          date: { $gte: startOfMonth, $lte: endOfMonth }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" }
+        }
+      }
+    ]);
+
+    const monthlyRevenue = revenueDataMonth[0]?.total || 0;
+
+    // Get sales funnel
+    const funnel = await Promise.all([
+      Lead.countDocuments({ orgId: req.orgId }),
+      Lead.countDocuments({ orgId: req.orgId, status: "Contacted" }),
+      Lead.countDocuments({ orgId: req.orgId, status: "Interested" }),
+      Deal.countDocuments({ orgId: req.orgId, stage: { $in: ["Proposal", "Negotiation"] } }),
+      Deal.countDocuments({ orgId: req.orgId, stage: "Closed Won" }),
+      Deal.countDocuments({ orgId: req.orgId, stage: "Closed Lost" })
+    ]);
+
+    // Calculate performance score (0-100)
+    let performanceScore = 0;
+    if (totalCallsToday > 0) performanceScore += Math.min(20, totalCallsToday * 2);
+    if (connectedCalls > 0) performanceScore += Math.min(20, connectedCalls * 4);
+    if (interestedLeads > 0) performanceScore += Math.min(20, interestedLeads * 2);
+    if (monthlyRevenue > 0) performanceScore += Math.min(40, Math.log(monthlyRevenue) * 5);
+    performanceScore = Math.min(100, performanceScore);
+
+    res.json({
+      success: true,
+      data: {
+        totalCallsToday,
+        connectedCalls,
+        interestedLeads,
+        revenueToday,
+        monthlyRevenue,
+        performanceScore: Math.round(performanceScore),
+        funnel: {
+          leads: funnel[0] || 0,
+          contacted: funnel[1] || 0,
+          interested: funnel[2] || 0,
+          meetings: funnel[3] || 0,
+          proposals: funnel[4] || 0,
+          closed: funnel[5] || 0
+        },
+        topPerformers: [],
+        recentActivity: []
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error fetching dashboard data",
+      error: error.message
+    });
+  }
+});
+
 // GET today's metrics
 router.get("/today", async (req, res) => {
   try {

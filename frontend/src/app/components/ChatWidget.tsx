@@ -4,7 +4,8 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { Send, MessageSquare, X, Minimize2, Maximize2, Loader2 } from 'lucide-react';
+import { Send, MessageSquare, X, Minimize2, Maximize2, Loader2, UserPlus, UsersRound } from 'lucide-react';
+import { useNavigate } from 'react-router';
 import { Card } from './ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Button } from './ui/button';
@@ -12,8 +13,9 @@ import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
 import { apiClient } from '../utils/api';
-import { SocketService } from '../utils/socket';
-import { toast } from 'sonner';
+import { socketService as chatSocket } from '../utils/socket';
+import { toast } from '../utils/portalToast';
+import { useAuth } from '../context/AuthContext';
 
 interface ChatUser {
   id: string;
@@ -42,7 +44,21 @@ interface ChatWidgetProps {
   compact?: boolean;
 }
 
+function resolveAuthUserId(user: { id?: string; userId?: string } | null | undefined): string {
+  if (!user) return '';
+  return String(user.userId || user.id || '');
+}
+
+function chatPathForRole(role?: string): string {
+  if (role === 'super_admin') return '/super-admin/chat';
+  if (role === 'admin' || role === 'hr') return '/admin/chat';
+  return '/employee/chat';
+}
+
 export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatWidgetProps) {
+  const { user: authUser } = useAuth();
+  const navigate = useNavigate();
+  const authUserId = resolveAuthUserId(authUser);
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [selectedUser, setSelectedUser] = useState<ChatUser | null>(null);
@@ -53,86 +69,120 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
   const [sending, setSending] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const socketService = useRef<SocketService | null>(null);
+  const selectedUserRef = useRef<ChatUser | null>(null);
+  selectedUserRef.current = selectedUser;
 
-  // Initialize Socket.IO connection
   useEffect(() => {
+    if (!authUserId) return;
+
+    let cancelled = false;
+
+    const onNewMessage = (data: {
+      messageId: string;
+      senderId: string;
+      senderName: string;
+      senderAvatar?: string;
+      content: string;
+      timestamp: string;
+    }) => {
+      if (cancelled) return;
+      const senderId = String(data.senderId);
+
+      if (selectedUserRef.current?.id === senderId) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            messageId: data.messageId,
+            senderId,
+            senderName: data.senderName,
+            senderAvatar: data.senderAvatar,
+            content: data.content,
+            timestamp: new Date(data.timestamp),
+            isOwn: false,
+            status: 'delivered',
+          },
+        ]);
+      } else {
+        setUsers((prev) =>
+          prev.map((u) =>
+            u.id === senderId
+              ? {
+                  ...u,
+                  unreadCount: u.unreadCount + 1,
+                  lastMessage: data.content,
+                  lastMessageTime: new Date().toLocaleTimeString(),
+                }
+              : u
+          )
+        );
+        setUnreadCount((prev) => prev + 1);
+      }
+    };
+
+    const onMessageRead = (data: { messageId: string }) => {
+      if (cancelled) return;
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.messageId === data.messageId ? { ...msg, status: 'read' } : msg
+        )
+      );
+    };
+
     const initSocket = async () => {
       try {
-        socketService.current = new SocketService();
-        const token = localStorage.getItem('authToken');
-        const user = JSON.parse(localStorage.getItem('user') || '{}');
-
-        if (token && user.id) {
-          await socketService.current.connect(user.id, user.role, user.orgId);
-
-          // Listen for new messages
-          socketService.current.on('chat:new_message', (data) => {
-            if (selectedUser?.id === data.senderId) {
-              setMessages(prev => [...prev, {
-                messageId: data.messageId,
-                senderId: data.senderId,
-                senderName: data.senderName,
-                senderAvatar: data.senderAvatar,
-                content: data.content,
-                timestamp: new Date(data.timestamp),
-                isOwn: false,
-                status: 'delivered'
-              }]);
-            } else {
-              // Update unread count for other users
-              setUsers(prev => prev.map(u =>
-                u.id === data.senderId
-                  ? { ...u, unreadCount: u.unreadCount + 1, lastMessage: data.content, lastMessageTime: new Date().toLocaleTimeString() }
-                  : u
-              ));
-              setUnreadCount(prev => prev + 1);
-            }
-          });
-
-          // Listen for message read receipts
-          socketService.current.on('chat:message_read', (data) => {
-            setMessages(prev => prev.map(msg =>
-              msg.messageId === data.messageId ? { ...msg, status: 'read' } : msg
-            ));
-          });
+        if (!chatSocket.isConnected()) {
+          await chatSocket.connect(
+            authUserId,
+            authUser?.role || 'employee',
+            authUser?.orgId || authUser?.tenantId || undefined
+          );
         }
+
+        chatSocket.on('chat:new_message', onNewMessage);
+        chatSocket.on('chat:message_read', onMessageRead);
       } catch (error) {
         console.error('Socket initialization failed:', error);
       }
     };
 
-    initSocket();
+    void initSocket();
 
     return () => {
-      if (socketService.current) {
-        socketService.current.disconnect();
-      }
+      cancelled = true;
+      chatSocket.off('chat:new_message', onNewMessage);
+      chatSocket.off('chat:message_read', onMessageRead);
     };
-  }, [selectedUser?.id]);
+  }, [authUserId, authUser?.role, authUser?.orgId, authUser?.tenantId]);
 
-  // Fetch users for chat with role-based filtering
   useEffect(() => {
     const fetchUsers = async () => {
+      if (!authUserId) {
+        setLoading(false);
+        return;
+      }
       try {
         setLoading(true);
         const response = await apiClient.get<any[]>('/chat/users');
 
         if (response.data && Array.isArray(response.data)) {
-          const formattedUsers: ChatUser[] = response.data.map((user: any) => ({
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            avatar: user.avatar,
-            isOnline: true,
-            unreadCount: 0,
-            lastMessage: '',
-            lastMessageTime: ''
-          }));
+          const myId = authUserId;
+          const hideSuperAdmin = authUser?.role !== 'super_admin';
+          const formattedUsers: ChatUser[] = response.data
+            .filter((u: any) => String(u._id || u.id) !== myId)
+            .filter((u: any) => !hideSuperAdmin || u.role !== 'super_admin')
+            .map((u: any) => ({
+              id: String(u._id || u.id),
+              name: (u.name && String(u.name).trim()) || 'User',
+              email: (u.email && String(u.email).trim()) || 'Email not on file',
+              avatar: u.avatar,
+              isOnline: true,
+              unreadCount: 0,
+              lastMessage: '',
+              lastMessageTime: '',
+            }));
 
           setUsers(formattedUsers);
-          const totalUnread = formattedUsers.reduce((sum, u) => sum + u.unreadCount, 0);
-          setUnreadCount(totalUnread);
+          setUnreadCount(0);
         }
       } catch (error) {
         console.error('Error fetching users:', error);
@@ -141,72 +191,89 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
       }
     };
 
-    fetchUsers();
-  }, []);
+    void fetchUsers();
+  }, [authUserId, authUser?.role]);
 
-  // Load messages when user is selected
   useEffect(() => {
-    if (selectedUser && socketService.current) {
-      const conversationId = [localStorage.getItem('userId'), selectedUser.id].sort().join('_');
-      socketService.current.emit('chat:get_history', {
-        conversationId,
-        page: 1,
-        limit: 20
-      });
+    if (!selectedUser?.id || !chatSocket.isConnected() || !authUserId) return;
 
-      socketService.current.on('chat:history', (data) => {
-        const formattedMessages: ChatMessage[] = data.messages.map((msg: any) => ({
-          messageId: msg._id,
-          senderId: msg.senderId,
-          senderName: msg.sender?.name || 'Unknown',
-          senderAvatar: msg.sender?.avatar,
-          content: msg.content?.text || '',
-          timestamp: new Date(msg.createdAt),
-          isOwn: msg.senderId === localStorage.getItem('userId'),
-          status: msg.status
-        }));
+    const myId = authUserId;
+    const conversationId = [myId, selectedUser.id].sort().join('_');
 
-        setMessages(formattedMessages.reverse());
-      });
+    const handleHistory = (data: { messages?: any[] }) => {
+      const formattedMessages: ChatMessage[] = (data.messages || []).map((msg: any) => ({
+        messageId: String(msg._id),
+        senderId: String(msg.senderId),
+        senderName: msg.sender?.name || 'Unknown',
+        senderAvatar: msg.sender?.avatar,
+        content: msg.content?.text || '',
+        timestamp: new Date(msg.createdAt),
+        isOwn: String(msg.senderId) === myId,
+        status: msg.status,
+      }));
 
-      // Clear unread count for selected user
-      setUsers(prev => prev.map(u =>
-        u.id === selectedUser.id ? { ...u, unreadCount: 0 } : u
-      ));
-    }
-  }, [selectedUser]);
+      setMessages(formattedMessages.reverse());
+    };
 
-  // Auto-scroll to bottom
+    chatSocket.on('chat:history', handleHistory);
+    chatSocket.emit('chat:get_history', {
+      conversationId,
+      page: 1,
+      limit: 20,
+    });
+
+    setUsers((prev) =>
+      prev.map((u) => (u.id === selectedUser.id ? { ...u, unreadCount: 0 } : u))
+    );
+
+    return () => {
+      chatSocket?.off('chat:history', handleHistory);
+    };
+  }, [selectedUser?.id, authUserId]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Handle sending message
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !selectedUser || !socketService.current) return;
+    if (!messageInput.trim() || !selectedUser || !chatSocket.isConnected() || !authUserId) return;
+
+    const myId = authUserId;
+    const text = messageInput.trim();
+    const tempId = `temp-${Date.now()}`;
 
     try {
       setSending(true);
 
-      // Send via Socket.IO for real-time delivery
-      socketService.current.emit('chat:send_message', {
+      setMessages((prev) => [
+        ...prev,
+        {
+          messageId: tempId,
+          senderId: myId,
+          senderName: authUser?.name || 'You',
+          content: text,
+          timestamp: new Date(),
+          isOwn: true,
+          status: 'sent',
+        },
+      ]);
+
+      chatSocket.emit('chat:send_message', {
         recipientId: selectedUser.id,
-        content: messageInput,
-        messageType: 'text'
+        content: text,
+        messageType: 'text',
       });
 
-      // Also send via API for persistence
       await apiClient.post('/chat/messages', {
         recipientId: selectedUser.id,
-        content: {
-          text: messageInput
-        },
-        messageType: 'text'
+        content: { text },
+        messageType: 'text',
       });
 
       setMessageInput('');
     } catch (error) {
       console.error('Error sending message:', error);
+      setMessages((prev) => prev.filter((m) => m.messageId !== tempId));
       toast.error('Failed to send message');
     } finally {
       setSending(false);
@@ -234,21 +301,32 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
 
   return (
     <Card className="fixed bottom-4 right-4 w-96 shadow-2xl flex flex-col z-50" style={{ maxHeight: '600px' }}>
-      {/* Header */}
       <div className="p-4 border-b border-border flex items-center justify-between bg-gradient-to-r from-primary/10 to-secondary/10">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-5 h-5 text-primary" />
           <h3 className="font-semibold">Messages</h3>
-          {unreadCount > 0 && (
-            <Badge variant="default" className="ml-auto">{unreadCount}</Badge>
-          )}
+          {unreadCount > 0 && <Badge variant="default" className="ml-auto">{unreadCount}</Badge>}
         </div>
         <div className="flex gap-1">
           <Button
+            type="button"
             variant="ghost"
             size="sm"
-            onClick={() => setIsMinimized(!isMinimized)}
+            title="Add contact"
+            onClick={() => navigate(`${chatPathForRole(authUser?.role)}?open=add`)}
           >
+            <UserPlus className="w-4 h-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            title="Create group"
+            onClick={() => navigate(`${chatPathForRole(authUser?.role)}?open=group`)}
+          >
+            <UsersRound className="w-4 h-4" />
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setIsMinimized(!isMinimized)}>
             {isMinimized ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
           </Button>
           <Button
@@ -267,7 +345,6 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
       {!isMinimized && (
         <>
           {!selectedUser ? (
-            // Users List
             <ScrollArea className="flex-1">
               <div className="p-2">
                 {loading ? (
@@ -275,43 +352,43 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
                     <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
                   </div>
                 ) : users.length > 0 ? (
-                  users.map((user) => (
+                  users.map((chatUser) => (
                     <button
-                      key={user.id}
-                      onClick={() => setSelectedUser(user)}
+                      key={chatUser.id}
+                      onClick={() => setSelectedUser(chatUser)}
                       className="w-full p-2 rounded-lg mb-1 text-left hover:bg-accent transition-colors"
                     >
                       <div className="flex items-center gap-2">
                         <div className="relative">
                           <Avatar className="h-8 w-8">
-                            <AvatarImage src={user.avatar} />
-                            <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
+                            <AvatarImage src={chatUser.avatar} />
+                            <AvatarFallback>{(chatUser.name || 'U').charAt(0)}</AvatarFallback>
                           </Avatar>
-                          {user.isOnline && (
+                          {chatUser.isOnline && (
                             <div className="absolute bottom-0 right-0 w-2 h-2 bg-green-500 rounded-full border border-background" />
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{user.name}</p>
-                          <p className="text-xs text-muted-foreground truncate">{user.lastMessage || user.email}</p>
+                          <p className="text-sm font-medium truncate">{chatUser.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {chatUser.lastMessage || chatUser.email}
+                          </p>
                         </div>
-                        {user.unreadCount > 0 && (
-                          <Badge variant="default" className="text-xs">{user.unreadCount}</Badge>
+                        {chatUser.unreadCount > 0 && (
+                          <Badge variant="default" className="text-xs">
+                            {chatUser.unreadCount}
+                          </Badge>
                         )}
                       </div>
                     </button>
                   ))
                 ) : (
-                  <div className="text-center py-8 text-muted-foreground text-sm">
-                    No users available
-                  </div>
+                  <div className="text-center py-8 text-muted-foreground text-sm">No users available</div>
                 )}
               </div>
             </ScrollArea>
           ) : (
-            // Chat View
             <>
-              {/* Chat Header */}
               <div className="p-3 border-b border-border flex items-center justify-between bg-accent/50">
                 <button
                   onClick={() => setSelectedUser(null)}
@@ -319,7 +396,7 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
                 >
                   <Avatar className="h-8 w-8">
                     <AvatarImage src={selectedUser.avatar} />
-                    <AvatarFallback>{selectedUser.name.charAt(0)}</AvatarFallback>
+                    <AvatarFallback>{(selectedUser.name || 'U').charAt(0)}</AvatarFallback>
                   </Avatar>
                   <div className="text-left">
                     <p className="text-sm font-medium">{selectedUser.name}</p>
@@ -328,7 +405,6 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
                 </button>
               </div>
 
-              {/* Messages */}
               <ScrollArea className="flex-1 p-3">
                 <div className="space-y-2">
                   {messages.length === 0 ? (
@@ -350,7 +426,10 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
                         >
                           <p>{message.content}</p>
                           <p className="text-xs opacity-70 mt-1">
-                            {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            {new Date(message.timestamp).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
                           </p>
                         </div>
                       </div>
@@ -360,7 +439,6 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
                 </div>
               </ScrollArea>
 
-              {/* Message Input */}
               <div className="border-t border-border bg-card p-3">
                 <div className="flex items-center gap-2">
                   <Input
@@ -370,13 +448,13 @@ export default function ChatWidget({ maxHeight = 'h-96', compact = true }: ChatW
                     onKeyPress={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
-                        handleSendMessage();
+                        void handleSendMessage();
                       }
                     }}
                     className="text-sm h-8"
                   />
                   <Button
-                    onClick={handleSendMessage}
+                    onClick={() => void handleSendMessage()}
                     disabled={!messageInput.trim() || sending}
                     size="sm"
                     className="h-8 w-8 p-0"

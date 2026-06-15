@@ -13,6 +13,8 @@ const holidaySchema = new mongoose.Schema(
     description: { type: String },
     isRecurring: { type: Boolean, default: false },
     orgId: { type: String, required: true, index: true },
+    /** Legacy alias — kept in sync with orgId for older queries */
+    organizationId: { type: String, index: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }
   },
   { timestamps: true }

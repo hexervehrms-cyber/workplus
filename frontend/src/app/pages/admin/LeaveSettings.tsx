@@ -4,8 +4,8 @@ import { Button } from '../../components/ui/button';
 import { Settings, Loader2, Save } from 'lucide-react';
 import { LeaveTypeSettingsService } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { toast } from 'sonner';
-import { Label } from '../../components/ui/label';
+import { toast } from '../../utils/portalToast';
+import { resolveAuthOrgId } from '../../utils/apiHelper';
 
 interface LeaveTypeSettings {
   _id: string;
@@ -76,19 +76,10 @@ export default function LeaveSettings() {
     try {
       setLoading(true);
       
-      let orgId = user?.orgId || user?.tenantId;
+      const orgId = resolveAuthOrgId(user);
       if (!orgId) {
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
-          try {
-            const parsedUser = JSON.parse(storedUser);
-            orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-          } catch (e) {
-            orgId = 'system';
-          }
-        } else {
-          orgId = 'system';
-        }
+        toast.error('Organization context is required.');
+        return;
       }
 
       const response = await LeaveTypeSettingsService.getSettings(orgId);
@@ -103,6 +94,9 @@ export default function LeaveSettings() {
       }
     } catch (error) {
       console.error('Error fetching leave settings:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to load leave settings'
+      );
     } finally {
       setLoading(false);
     }
@@ -126,19 +120,10 @@ export default function LeaveSettings() {
     try {
       setSaving(true);
       
-      let orgId = user?.orgId || user?.tenantId;
+      const orgId = resolveAuthOrgId(user);
       if (!orgId) {
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
-          try {
-            const parsedUser = JSON.parse(storedUser);
-            orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-          } catch (e) {
-            orgId = 'system';
-          }
-        } else {
-          orgId = 'system';
-        }
+        toast.error('Organization context is required.');
+        return;
       }
 
       const response = await LeaveTypeSettingsService.updateSettings(

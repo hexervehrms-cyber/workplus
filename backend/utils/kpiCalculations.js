@@ -1,8 +1,8 @@
 import User from "../models/User.js";
-import Employee from "../models/Employee.js";
 import Organization from "../models/Organization.js";
 import Expense from "../models/Expense.js";
 import Payslip from "../models/Payroll.js";
+import Deal from "../models/Deal.js";
 
 /**
  * Calculate real KPI change percentages based on historical data
@@ -210,6 +210,60 @@ export const calculateExpenseChange = async () => {
   }
 };
 
+/** Month-over-month % change in new open-pipeline deal value (Proposal + Negotiation). */
+export const calculatePipelineChange = async () => {
+  try {
+    const openStages = { stage: { $in: ["Proposal", "Negotiation"] } };
+    const start = new Date();
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+    const prev = new Date(start);
+    prev.setMonth(prev.getMonth() - 1);
+
+    const [curAgg, prevAgg] = await Promise.all([
+      Deal.aggregate([
+        { $match: { ...openStages, createdAt: { $gte: start } } },
+        { $group: { _id: null, total: { $sum: "$value" } } },
+      ]),
+      Deal.aggregate([
+        { $match: { ...openStages, createdAt: { $gte: prev, $lt: start } } },
+        { $group: { _id: null, total: { $sum: "$value" } } },
+      ]),
+    ]);
+    const cur = curAgg[0]?.total || 0;
+    const pre = prevAgg[0]?.total || 0;
+    if (pre === 0) return cur > 0 ? 100 : 0;
+    return ((cur - pre) / pre) * 100;
+  } catch (error) {
+    console.error("Error calculating pipeline change:", error);
+    return 0;
+  }
+};
+
+/** Month-over-month % change in organizations marked inactive (deactivation events). */
+export const calculateChurnChange = async () => {
+  try {
+    const start = new Date();
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+    const prev = new Date(start);
+    prev.setMonth(prev.getMonth() - 1);
+
+    const [lostThis, lostLast] = await Promise.all([
+      Organization.countDocuments({ isActive: false, updatedAt: { $gte: start } }),
+      Organization.countDocuments({
+        isActive: false,
+        updatedAt: { $gte: prev, $lt: start },
+      }),
+    ]);
+    if (lostLast === 0) return lostThis > 0 ? 100 : 0;
+    return ((lostThis - lostLast) / lostLast) * 100;
+  } catch (error) {
+    console.error("Error calculating churn change:", error);
+    return 0;
+  }
+};
+
 export const calculateAllKPIChanges = async () => {
   try {
     const [
@@ -217,21 +271,27 @@ export const calculateAllKPIChanges = async () => {
       organizationChange,
       userChange,
       sessionChange,
-      expenseChange
+      expenseChange,
+      pipelineChange,
+      churnChange,
     ] = await Promise.all([
       calculateRevenueChange(),
       calculateOrganizationChange(),
       calculateUserChange(),
       calculateSessionChange(),
-      calculateExpenseChange()
+      calculateExpenseChange(),
+      calculatePipelineChange(),
+      calculateChurnChange(),
     ]);
-    
+
     return {
       revenueChange: Math.round(revenueChange * 100) / 100,
       organizationChange: Math.round(organizationChange * 100) / 100,
       userChange: Math.round(userChange * 100) / 100,
       sessionChange: Math.round(sessionChange * 100) / 100,
-      expenseChange: Math.round(expenseChange * 100) / 100
+      expenseChange: Math.round(expenseChange * 100) / 100,
+      pipelineChange: Math.round(pipelineChange * 100) / 100,
+      churnChange: Math.round(churnChange * 100) / 100,
     };
   } catch (error) {
     console.error('Error calculating KPI changes:', error);
@@ -240,7 +300,9 @@ export const calculateAllKPIChanges = async () => {
       organizationChange: 0,
       userChange: 0,
       sessionChange: 0,
-      expenseChange: 0
+      expenseChange: 0,
+      pipelineChange: 0,
+      churnChange: 0,
     };
   }
 };

@@ -11,7 +11,7 @@ const CurrencyChanger: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  const popularCurrencies = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'INR', 'CAD', 'AUD', 'CHF', 'SGD'];
+  const popularCurrencies = ['INR', 'USD', 'EUR', 'GBP', 'JPY', 'CNY', 'CAD', 'AUD', 'CHF', 'SGD'];
 
   const filteredCurrencies = currencies.filter(currency =>
     currency.name.toLowerCase().includes(searchTerm.toLowerCase()) ||

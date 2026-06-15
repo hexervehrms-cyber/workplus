@@ -8,7 +8,7 @@ import { Textarea } from '../../components/ui/textarea';
 import { Separator } from '../../components/ui/separator';
 import { Progress } from '../../components/ui/progress';
 import { buildApiUrl } from '../../utils/apiHelper';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { 
   User, 
   Mail, 
@@ -180,13 +180,14 @@ export default function Onboarding() {
            setEmployeeData(data.data);
            
            // Pre-fill form with employee data
-           const nameParts = data.data.employeeName.split(' ');
+           const fullName = String(data.data?.employeeName || '').trim();
+           const nameParts = fullName ? fullName.split(/\s+/).filter(Boolean) : [];
            setFormData(prev => ({
              ...prev,
              firstName: nameParts[0] || '',
              lastName: nameParts.slice(1).join(' ') || '',
-             email: data.data.employeeEmail,
-             department: data.data.department
+             email: String(data.data?.employeeEmail || ''),
+             department: String(data.data?.department || '')
            }));
          } else {
            console.log('Validation failed:', data.message || rawText);
@@ -243,7 +244,7 @@ export default function Onboarding() {
         if (!formData.experienceYears) newErrors.experienceYears = 'Years of experience is required';
         break;
         
-      case 4: // Documents
+      case 4: { // Documents
         const requiredDocs = ['resume', 'idProof', 'educationCertificate'];
         requiredDocs.forEach(doc => {
           if (!formData[doc as keyof OnboardingData]) {
@@ -251,6 +252,7 @@ export default function Onboarding() {
           }
         });
         break;
+      }
     }
 
     setErrors(newErrors);
@@ -526,7 +528,7 @@ export default function Onboarding() {
             onChange={(e) => handleInputChange('aadharNumber', e.target.value)}
             placeholder="Enter 12-digit Aadhar number"
             className="mt-2 rounded-xl"
-            maxLength="12"
+            maxLength={12}
           />
           <p className="text-xs text-muted-foreground mt-1">12-digit unique identification number</p>
         </div>
@@ -538,7 +540,7 @@ export default function Onboarding() {
             onChange={(e) => handleInputChange('panNumber', e.target.value)}
             placeholder="Enter PAN number"
             className="mt-2 rounded-xl"
-            maxLength="10"
+            maxLength={10}
           />
           <p className="text-xs text-muted-foreground mt-1">10-character PAN</p>
         </div>
@@ -561,7 +563,7 @@ export default function Onboarding() {
             onChange={(e) => handleInputChange('ifscCode', e.target.value)}
             placeholder="Enter IFSC code"
             className="mt-2 rounded-xl"
-            maxLength="11"
+            maxLength={11}
           />
           <p className="text-xs text-muted-foreground mt-1">11-character IFSC code of your bank branch</p>
         </div>

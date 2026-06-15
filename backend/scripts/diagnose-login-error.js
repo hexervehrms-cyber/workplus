@@ -14,8 +14,15 @@ dotenv.config();
 // Import User model
 import User from '../models/User.js';
 
-const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL || 'admin@workpluspro.com';
-const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || 'Jadu@123';
+const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL;
+const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD;
+
+// Validate environment
+if (!SUPER_ADMIN_EMAIL || !SUPER_ADMIN_PASSWORD) {
+  console.error('❌ ERROR: Missing required environment variables');
+  console.error('   Set SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD in .env');
+  process.exit(1);
+}
 
 console.log('\n🔍 LOGIN ERROR DIAGNOSTIC');
 console.log('='.repeat(60));
@@ -124,7 +131,7 @@ async function testProductionLoginFlow() {
         userId: user._id,
         email: user.email,
         role: user.role,
-        tenantId: user.orgId || 'system'
+        tenantId: user.orgId
       },
       process.env.JWT_SECRET,
       { 

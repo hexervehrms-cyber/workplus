@@ -1,0 +1,80 @@
+import { apiFetch } from './apiHelper';
+
+export function receiptFilenameFromPath(receiptPath: string): string | null {
+  if (!receiptPath || typeof receiptPath !== 'string') return null;
+  const trimmed = receiptPath.trim();
+  if (!trimmed || trimmed === 'undefined') return null;
+  
+  // FIX #4: Handle both full paths and filenames safely
+  // Extract the filename from the path (last component after /)
+  const parts = trimmed.split('/').filter(Boolean);
+  if (parts.length === 0) return null;
+  
+  const filename = parts[parts.length - 1];
+  
+  // Validate filename is not empty and doesn't contain path traversal attempts
+  if (!filename || filename === '.' || filename === '..') return null;
+  
+  // Reject if filename contains path separators (security check)
+  if (filename.includes('/') || filename.includes('\\')) return null;
+  
+  return filename;
+}
+
+export async function fetchExpenseReceiptBlob(
+  receiptPath: string,
+  options?: { download?: boolean }
+): Promise<Blob> {
+  const filename = receiptFilenameFromPath(receiptPath);
+  if (!filename) {
+    throw new Error('Receipt file path is invalid');
+  }
+
+  const qs = options?.download ? '' : '?inline=1';
+  const response = await apiFetch(`/expenses/receipt/${encodeURIComponent(filename)}${qs}`, {
+    method: 'GET',
+    skipContentType: true,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(
+      (err as { message?: string }).message ||
+        `Could not load receipt (${response.status})`
+    );
+  }
+
+  return response.blob();
+}
+
+export async function openExpenseReceiptInDialog(receiptPath: string): Promise<string> {
+  const blob = await fetchExpenseReceiptBlob(receiptPath, { download: false });
+  const label = receiptFilenameFromPath(receiptPath)?.toLowerCase() || '';
+  const mime =
+    blob.type ||
+    (label.endsWith('.pdf')
+      ? 'application/pdf'
+      : label.endsWith('.png')
+        ? 'image/png'
+        : label.endsWith('.jpg') || label.endsWith('.jpeg')
+          ? 'image/jpeg'
+          : 'application/octet-stream');
+  const typed = blob.type ? blob : new Blob([blob], { type: mime });
+  return URL.createObjectURL(typed);
+}
+
+export async function downloadExpenseReceipt(
+  receiptPath: string,
+  fallbackName?: string
+): Promise<void> {
+  const blob = await fetchExpenseReceiptBlob(receiptPath, { download: true });
+  const filename = receiptFilenameFromPath(receiptPath) || fallbackName || 'receipt';
+  const blobUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+}

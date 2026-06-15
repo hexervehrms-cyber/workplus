@@ -3,7 +3,7 @@ import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { apiClient } from '../utils/api';
-import { toast } from 'sonner';
+import { toast } from '../utils/portalToast';
 import { 
   X, 
   User, 
@@ -141,7 +141,6 @@ const UserInfoModal: React.FC<UserInfoModalProps> = ({ user, isOpen, onClose }) 
       }
     } catch (error) {
       console.error('Error loading user data:', error);
-      toast.error('Failed to load user data');
     } finally {
       setLoading(false);
     }
@@ -150,7 +149,7 @@ const UserInfoModal: React.FC<UserInfoModalProps> = ({ user, isOpen, onClose }) 
   const handleDownload = (document: Document) => {
     // In production, download actual file
     console.log('Downloading document:', document);
-    alert(`Downloading ${document.fileName}`);
+    toast.info(`Downloading ${document.fileName}`);
   };
 
   const formatDate = (dateString: string) => {
@@ -295,27 +294,27 @@ const UserInfoModal: React.FC<UserInfoModalProps> = ({ user, isOpen, onClose }) 
                       <div className="space-y-3">
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Employee ID</span>
-                          <span className="font-medium">{mockOnboardingData.employeeId}</span>
+                          <span className="font-medium">{onboardingData?.employeeId || '—'}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Department</span>
-                          <span className="font-medium">{mockOnboardingData.department}</span>
+                          <span className="font-medium">{onboardingData?.department || '—'}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Designation</span>
-                          <span className="font-medium">{mockOnboardingData.designation}</span>
+                          <span className="font-medium">{onboardingData?.designation || '—'}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Employment Type</span>
-                          <span className="font-medium">{mockOnboardingData.employmentType}</span>
+                          <span className="font-medium">{onboardingData?.employmentType || '—'}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Work Location</span>
-                          <span className="font-medium">{mockOnboardingData.workLocation}</span>
+                          <span className="font-medium">{onboardingData?.workLocation || '—'}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Joining Date</span>
-                          <span className="font-medium">{formatDate(mockOnboardingData.joiningDate)}</span>
+                          <span className="font-medium">{onboardingData?.joiningDate ? formatDate(onboardingData.joiningDate) : '—'}</span>
                         </div>
                       </div>
                     </Card>
@@ -331,21 +330,21 @@ const UserInfoModal: React.FC<UserInfoModalProps> = ({ user, isOpen, onClose }) 
                       <div className="space-y-3">
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Phone</span>
-                          <span className="font-medium">{mockOnboardingData.phone}</span>
+                          <span className="font-medium">{onboardingData?.phone || '—'}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Date of Birth</span>
-                          <span className="font-medium">{formatDate(mockOnboardingData.dateOfBirth)}</span>
+                          <span className="font-medium">{onboardingData?.dateOfBirth ? formatDate(onboardingData.dateOfBirth) : '—'}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Gender</span>
-                          <span className="font-medium">{mockOnboardingData.gender}</span>
+                          <span className="font-medium">{onboardingData?.gender || '—'}</span>
                         </div>
                       </div>
                       <div className="space-y-3">
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Address</span>
-                          <span className="font-medium">{mockOnboardingData.address}</span>
+                          <span className="font-medium">{onboardingData?.address || '—'}</span>
                         </div>
                       </div>
                     </div>

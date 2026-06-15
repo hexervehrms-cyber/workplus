@@ -377,7 +377,7 @@ export default function RoleManagement() {
                 onClick={editingRole ? handleUpdateRole : handleCreateRole}
                 className="rounded-xl"
                 disabled={!((editingRole ? editingRole.name : newRole.name) && 
-                         ((editingRole ? editingRole.selectedPermissions : newRole.selectedPermissions)?.length > 0))}
+                         ((editingRole ? editingRole.selectedPermissions : newRole.selectedPermissions)?.length ?? 0) > 0)}
               >
                 {editingRole ? 'Update Role' : 'Create Role'}
               </Button>

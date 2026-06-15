@@ -1,19 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useDepartments } from '../hooks/useDepartments';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Card } from './ui/card';
-import { Copy, Check, Loader, Mail, Link as LinkIcon } from 'lucide-react';
-import { toast } from 'sonner';
-import { TokenManager } from '../utils/api';
-import { buildApiUrl } from '../utils/apiHelper';
+import { Copy, Check, Loader, Mail, Link as LinkIcon, RefreshCw, AlertCircle } from 'lucide-react';
+import { toast } from '../utils/portalToast';
+import { apiClient } from '../utils/api';
+import { apiPost } from '../utils/apiHelper';
+
+const ONBOARDING_EMAIL_TIMEOUT_MS = 90_000;
 
 interface OnboardingLinkGeneratorProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: () => void;
+  isSuperAdmin?: boolean;
 }
 
 interface GeneratedLink {
@@ -24,17 +28,67 @@ interface GeneratedLink {
   expiresAt: string;
 }
 
-const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpen, onClose, onSuccess }) => {
+interface Organization {
+  _id: string;
+  name: string;
+  isActive?: boolean;
+}
+
+const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpen, onClose, onSuccess, isSuperAdmin = false }) => {
+  const { departmentNames, loading: deptLoading, error: deptError, reload: reloadDepartments } =
+    useDepartments({ enabled: isOpen && !isSuperAdmin, seedIfEmpty: true });
+
   const [step, setStep] = useState<'form' | 'result'>('form');
   const [loading, setLoading] = useState(false);
+  const [orgLoading, setOrgLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [generatedLink, setGeneratedLink] = useState<GeneratedLink | null>(null);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
 
   const [formData, setFormData] = useState({
     employeeEmail: '',
     employeeName: '',
-    department: ''
+    department: '',
+    organizationId: ''
   });
+
+  const departmentOptions =
+    departmentNames.length > 0 ? departmentNames : ['General'];
+
+  // Load organizations for Super Admin
+  useEffect(() => {
+    if (!isOpen || !isSuperAdmin) return;
+    
+    const loadOrganizations = async () => {
+      try {
+        setOrgLoading(true);
+        const response = await apiClient.get<{ success?: boolean; data?: Organization[] }>('/organizations?limit=100');
+        if (response.success && Array.isArray(response.data)) {
+          setOrganizations(response.data.filter(org => org.isActive !== false));
+        }
+      } catch (err) {
+        console.error('Failed to load organizations:', err);
+        toast.error('Failed to load organizations');
+      } finally {
+        setOrgLoading(false);
+      }
+    };
+    
+    loadOrganizations();
+  }, [isOpen, isSuperAdmin]);
+
+  useEffect(() => {
+    if (!isOpen || isSuperAdmin) return;
+    void reloadDepartments();
+  }, [isOpen, reloadDepartments, isSuperAdmin]);
+
+  useEffect(() => {
+    if (!isOpen || isSuperAdmin || deptLoading || !formData.department) return;
+    const options = departmentNames.length > 0 ? departmentNames : ['General'];
+    if (!options.includes(formData.department)) {
+      setFormData((prev) => ({ ...prev, department: '' }));
+    }
+  }, [isOpen, deptLoading, departmentNames, formData.department, isSuperAdmin]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -52,43 +106,39 @@ const OnboardingLinkGenerator: React.FC<OnboardingLinkGeneratorProps> = ({ isOpe
   };
 
   const handleGenerateLink = async () => {
-    // Validate form
-    if (!formData.employeeEmail || !formData.employeeName || !formData.department) {
-      toast.error('Please fill in all fields');
+    // For Super Admin, organization is required
+    if (isSuperAdmin && !formData.organizationId) {
+      toast.error('Please select an organization');
       return;
     }
 
-try {
+    const department = isSuperAdmin ? (formData.department || 'General') : (formData.department || departmentOptions[0] || 'General');
+    if (!formData.employeeEmail || !formData.employeeName) {
+      toast.error('Please fill in employee email and name');
+      return;
+    }
+
+    try {
       setLoading(true);
-      const token = TokenManager.get();
 
-      const response = await fetch(buildApiUrl('/onboarding/generate-link'), {
-        method: 'POST',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData)
-      });
+      const payload: any = {
+        employeeEmail: formData.employeeEmail,
+        employeeName: formData.employeeName,
+        department,
+      };
 
-      let data;
-      try {
-        data = await response.json();
-      } catch (parseError) {
-        console.error('Parse error:', parseError);
-        throw new Error(`Server returned invalid response (${response.status})`);
+      // Super Admin can specify target organization
+      if (isSuperAdmin && formData.organizationId) {
+        payload.organizationId = formData.organizationId;
       }
 
-      if (!response.ok) {
-        throw new Error(data.message || `Failed to generate onboarding link (${response.status})`);
+      const data = await apiClient.post<GeneratedLink>('/onboarding/generate-link', payload);
+
+      if (!data?.success) {
+        throw new Error(data?.message || 'Failed to generate onboarding link');
       }
 
-      console.log('Generate link response:', data);
-      console.log('Generated link data:', data.data);
-      
-      if (!data.data || !data.data.token) {
-        console.error('Missing token in response:', data.data);
+      if (!data.data?.token) {
         throw new Error('Invalid response: missing token or onboarding URL');
       }
 
@@ -113,51 +163,49 @@ try {
   };
 
   const handleSendEmail = async () => {
-    if (!generatedLink) return;
+    if (!generatedLink?.token) {
+      toast.error('Missing onboarding token — generate the link again');
+      return;
+    }
 
     try {
       setLoading(true);
-      const token = TokenManager.get();
 
-      console.log('Sending email with data:', {
-        token: generatedLink.token,
-        employeeEmail: generatedLink.employeeEmail,
-        employeeName: generatedLink.employeeName,
-        onboardingUrl: generatedLink.onboardingUrl
-      });
-
-      const response = await fetch(buildApiUrl('/onboarding/send-email'), {
-        method: 'POST',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        },
-        credentials: 'include',
-        body: JSON.stringify({
+      const data = await apiPost<{ success?: boolean; message?: string; code?: string }>(
+        'onboarding/send-email',
+        {
           token: generatedLink.token,
           employeeEmail: generatedLink.employeeEmail,
           employeeName: generatedLink.employeeName,
-          onboardingUrl: generatedLink.onboardingUrl
-        })
-      });
+          onboardingUrl: generatedLink.onboardingUrl,
+        },
+        { timeoutMs: ONBOARDING_EMAIL_TIMEOUT_MS }
+      );
 
-      let data;
-      try {
-        data = await response.json();
-      } catch (parseError) {
-        console.error('Parse error:', parseError);
-        throw new Error(`Server returned invalid response (${response.status})`);
+      if (data?.success === false) {
+        throw new Error(data?.message || 'Failed to send email');
       }
 
-      if (!response.ok) {
-        throw new Error(data.message || `Failed to send email (${response.status})`);
-      }
-
-      toast.success('Email sent successfully!');
+      toast.success(
+        data?.message || `Onboarding email sent to ${generatedLink.employeeEmail}`
+      );
       handleSuccess();
     } catch (error) {
       console.error('Send email error:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to send email');
+      const err = error as Error & { code?: string };
+      let msg = err instanceof Error ? err.message : 'Failed to send email';
+      if (err.code === 'SMTP_NOT_CONFIGURED') {
+        msg =
+          'Email is not configured on the server. Set SMTP_HOST, SMTP_USER, and SMTP_PASS for hr@hexerve.com in Render or Admin → Notification Settings.';
+      } else if (err.code === 'EMAIL_RATE_LIMIT') {
+        msg = 'Too many emails sent recently. Wait a few minutes and try again.';
+      } else if (err.code === 'SMTP_CIRCUIT_OPEN') {
+        msg = 'Email service is temporarily busy. Wait a minute and try again.';
+      } else if (msg.includes('timed out')) {
+        msg =
+          'Email is taking longer than expected. The message may still be sent — check the candidate inbox or try again.';
+      }
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -168,7 +216,8 @@ try {
     setFormData({
       employeeEmail: '',
       employeeName: '',
-      department: ''
+      department: '',
+      organizationId: ''
     });
     setGeneratedLink(null);
     setCopied(false);
@@ -181,7 +230,7 @@ try {
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
+    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) handleClose(); }}>
       <DialogContent className="max-w-2xl rounded-2xl">
         <DialogHeader>
           <DialogTitle>Generate Onboarding Link</DialogTitle>
@@ -193,6 +242,41 @@ try {
         {step === 'form' ? (
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Organization Selector for Super Admin */}
+              {isSuperAdmin && (
+                <div className="md:col-span-2">
+                  <Label>Organization *</Label>
+                  <Select
+                    value={formData.organizationId || undefined}
+                    onValueChange={(value) => setFormData(prev => ({ ...prev, organizationId: value }))}
+                    disabled={orgLoading}
+                  >
+                    <SelectTrigger className="mt-2 rounded-xl">
+                      <SelectValue
+                        placeholder={orgLoading ? 'Loading organizations…' : 'Select organization'}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {orgLoading ? (
+                        <SelectItem value="_loading" disabled>
+                          Loading organizations…
+                        </SelectItem>
+                      ) : organizations.length === 0 ? (
+                        <SelectItem value="_empty" disabled>
+                          No organizations found
+                        </SelectItem>
+                      ) : (
+                        organizations.map((org) => (
+                          <SelectItem key={org._id} value={org._id}>
+                            {org.name}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
               <div>
                 <Label>Employee Email *</Label>
                 <Input
@@ -215,22 +299,48 @@ try {
                 />
               </div>
               <div className="md:col-span-2">
-                <Label>Department *</Label>
-                <Select value={formData.department} onValueChange={handleSelectChange}>
+                <div className="flex items-center justify-between">
+                  <Label>Department {!isSuperAdmin && '*'}</Label>
+                  {deptError && !isSuperAdmin && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => void reloadDepartments()}
+                    >
+                      <RefreshCw className="w-3 h-3 mr-1" />
+                      Retry
+                    </Button>
+                  )}
+                </div>
+                <Select
+                  value={formData.department || undefined}
+                  onValueChange={(value) => setFormData(prev => ({ ...prev, department: value }))}
+                  disabled={deptLoading || orgLoading}
+                >
                   <SelectTrigger className="mt-2 rounded-xl">
-                    <SelectValue placeholder="Select department" />
+                    <SelectValue
+                      placeholder={deptLoading ? 'Loading departments…' : 'Select department (optional)'}
+                    />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Engineering">Engineering</SelectItem>
-                    <SelectItem value="Sales">Sales</SelectItem>
-                    <SelectItem value="Marketing">Marketing</SelectItem>
-                    <SelectItem value="HR">HR</SelectItem>
-                    <SelectItem value="Finance">Finance</SelectItem>
-                    <SelectItem value="Operations">Operations</SelectItem>
-                    <SelectItem value="Support">Support</SelectItem>
-                    <SelectItem value="Other">Other</SelectItem>
+                    {deptLoading ? (
+                      <SelectItem value="_loading" disabled>
+                        Loading departments…
+                      </SelectItem>
+                    ) : (
+                      departmentOptions.map((dept) => (
+                        <SelectItem key={dept} value={dept}>
+                          {dept}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
+                {deptError && !isSuperAdmin && (
+                  <p className="text-xs text-destructive mt-1">{deptError}</p>
+                )}
               </div>
             </div>
 
@@ -246,7 +356,7 @@ try {
               </Button>
               <Button 
                 onClick={handleGenerateLink} 
-                disabled={loading}
+                disabled={loading || deptLoading || orgLoading || (isSuperAdmin && !formData.organizationId)}
                 className="rounded-xl"
               >
                 {loading ? (
@@ -332,7 +442,7 @@ try {
             </div>
 
             <div className="flex justify-end gap-3">
-              <Button variant="outline" onClick={handleSuccess} className="rounded-xl">
+              <Button variant="outline" onClick={handleSuccess} className="rounded-xl" disabled={loading}>
                 Done
               </Button>
               <Button 
@@ -361,4 +471,3 @@ try {
 };
 
 export default OnboardingLinkGenerator;
-

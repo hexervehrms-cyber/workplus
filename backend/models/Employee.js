@@ -101,6 +101,15 @@ const employeeSchema = new mongoose.Schema(
       type: String,
       trim: true
     },
+    gender: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    dateOfBirth: {
+      type: Date,
+      default: null
+    },
     address: { 
       type: String,
       trim: true
@@ -136,6 +145,7 @@ const employeeSchema = new mongoose.Schema(
     },
     orgId: {
       type: String,
+      required: true,
       index: true // Index for tenant queries
     },
     // Sensitive Information Fields
@@ -213,8 +223,8 @@ const employeeSchema = new mongoose.Schema(
 employeeSchema.index({ orgId: 1, status: 1 });
 employeeSchema.index({ orgId: 1, department: 1 });
 employeeSchema.index({ userId: 1 }, { unique: true });
-employeeSchema.index({ employeeCode: 1 }, { 
-  unique: true, 
+employeeSchema.index({ orgId: 1, employeeCode: 1 }, {
+  unique: true,
   sparse: true,
   partialFilterExpression: { employeeCode: { $exists: true, $ne: null } }
 });

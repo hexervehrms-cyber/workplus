@@ -73,7 +73,16 @@ const organizationSchema = new mongoose.Schema(
         default: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
       },
       timezone: { type: String, default: "UTC" },
-      currency: { type: String, default: "USD" },
+      currency: { type: String, default: "INR" },
+      expenseLimits: {
+        enabled: { type: Boolean, default: true },
+        defaultDailyLimit: { type: Number, default: 5000 },
+        defaultMonthlyLimit: { type: Number, default: 50000 },
+        maxSingleClaim: { type: Number, default: 25000 },
+        maxClaimAgeDays: { type: Number, default: 90 },
+        requireReceiptAbove: { type: Number, default: 500 },
+        categoryLimits: { type: mongoose.Schema.Types.Mixed, default: {} }
+      },
       dateFormat: { type: String, default: "DD/MM/YYYY" },
       allowRemoteWork: { type: Boolean, default: false },
       requireCheckInLocation: { type: Boolean, default: false },
@@ -103,6 +112,47 @@ const organizationSchema = new mongoose.Schema(
           default: ['admin', 'hr', 'manager']
         }
       }
+    },
+    // Custom domain support
+    customDomain: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      sparse: true,
+      index: true
+    },
+    customDomainStatus: {
+      type: String,
+      enum: ['not_configured', 'pending_dns', 'verified', 'failed'],
+      default: 'not_configured'
+    },
+    customDomainDnsRecords: [{
+      type: { type: String, enum: ['CNAME', 'A', 'ALIAS', 'ANAME', 'TXT'] },
+      name: String,
+      value: String,
+      status: { type: String, enum: ['pending', 'verified', 'failed'], default: 'pending' },
+      purpose: String,
+      warning: String
+    }],
+    customDomainVerificationToken: {
+      type: String,
+      select: false
+    },
+    customDomainVerifiedAt: {
+      type: Date,
+      default: null
+    },
+    customDomainLastCheckedAt: {
+      type: Date,
+      default: null
+    },
+    defaultTenantUrl: {
+      type: String,
+      default: null
+    },
+    customDomainUrl: {
+      type: String,
+      default: null
     },
     isActive: { 
       type: Boolean, 

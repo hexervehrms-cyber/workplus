@@ -596,37 +596,34 @@ class NotificationManager {
         return false;
       }
 
-      // Import nodemailer dynamically to avoid startup errors if not configured
-      const nodemailer = await import('nodemailer');
-      
-      // Create transporter
-      const transporter = nodemailer.default.createTransporter({
-        host: process.env.SMTP_HOST,
-        port: parseInt(process.env.SMTP_PORT) || 587,
-        secure: process.env.SMTP_PORT === '465', // true for 465, false for other ports
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS
-        },
-        tls: {
-          rejectUnauthorized: false // Allow self-signed certificates in development
-        }
-      });
+      const { normalizeSmtpConfig, sendSmtpMail } = await import('./smtpService.js');
+      const config = normalizeSmtpConfig(null);
+      if (!config) {
+        return false;
+      }
 
-      // Send email
-      const info = await transporter.sendMail({
+      const result = await sendSmtpMail(config, {
         from: process.env.FROM_EMAIL || process.env.SMTP_USER,
         to: emailData.to,
         subject: emailData.subject,
         html: emailData.html || emailData.message,
-        text: emailData.text || emailData.message
+        text: emailData.text || emailData.message,
       });
+
+      if (!result.success) {
+        logger.warn('Email send failed via smtpService', {
+          to: emailData.to,
+          code: result.code,
+          error: result.error,
+        });
+        return false;
+      }
 
       logger.info('Email sent successfully', {
         to: emailData.to,
         subject: emailData.subject,
         type: emailData.type,
-        messageId: info.messageId
+        messageId: result.messageId
       });
 
       return true;

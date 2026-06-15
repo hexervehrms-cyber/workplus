@@ -14,12 +14,20 @@ import { validateExpenseCreation, validateExpenseUpdate, handleValidationErrors 
 import Expense from "../models/Expense.js";
 import Employee from "../models/Employee.js";
 import { sendSuccess, sendError, sendPaginated } from "../utils/apiResponse.js";
+import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
 import logger from "../utils/logger.js";
 import EmailNotificationService from "../utils/emailNotificationService.js";
 import User from "../models/User.js";
 import { emitExpenseKPIUpdate } from "../utils/kpiUpdater.js";
 import { dashboardCache } from "../utils/dashboardCache.js";
 import { notifyAdminsOnExpenseSubmitted, resolveOrganizationSmtp } from "../utils/workflowNotifications.js";
+import Organization from "../models/Organization.js";
+import mongoose from "mongoose";
+import {
+  getOrgExpenseLimits,
+  mergeExpenseLimits,
+  validateExpenseAgainstLimits,
+} from "../utils/expenseLimits.js";
 
 // Setup __dirname for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -56,6 +64,54 @@ const receiptUpload = multer({
     }
   }
 });
+
+/**
+ * GET /api/expenses/settings
+ * Organization expense limit settings (read)
+ */
+router.get(
+  "/settings",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    if (!req.user.orgId) {
+      return sendError(res, "Organization not found", 400, "VALIDATION_ERROR");
+    }
+    const limits = await getOrgExpenseLimits(req.user.orgId);
+    return sendSuccess(res, limits, "Expense limits retrieved");
+  })
+);
+
+/**
+ * PUT /api/expenses/settings
+ * Update organization expense limits (admin / HR)
+ */
+router.put(
+  "/settings",
+  authenticate,
+  authorize("admin", "hr", "super_admin"),
+  asyncHandler(async (req, res) => {
+    const orgId = req.user.orgId;
+    if (!orgId || !mongoose.Types.ObjectId.isValid(String(orgId))) {
+      return sendError(res, "Invalid organization on account", 400, "VALIDATION_ERROR");
+    }
+
+    const org = await Organization.findById(orgId);
+    if (!org) {
+      return sendError(res, "Organization not found", 404, "NOT_FOUND");
+    }
+
+    org.settings = org.settings || {};
+    org.settings.expenseLimits = mergeExpenseLimits({
+      ...org.settings.expenseLimits,
+      ...req.body,
+      categoryLimits: req.body?.categoryLimits ?? org.settings.expenseLimits?.categoryLimits ?? {},
+    });
+    await org.save();
+
+    logger.info("Expense limits updated", { orgId, userId: req.user.userId });
+    return sendSuccess(res, org.settings.expenseLimits, "Expense limits updated");
+  })
+);
 
 /**
  * POST /api/expenses/upload-receipt
@@ -105,16 +161,37 @@ router.get(
   authenticate,
   asyncHandler(async (req, res) => {
     try {
-      const { filename } = req.params;
+      let { filename } = req.params;
+      
+      // Decode the filename from URL encoding
+      filename = decodeURIComponent(filename);
       
       // Validate filename to prevent directory traversal
-      if (filename.includes('..') || filename.includes('/')) {
+      if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
         return sendError(res, "Invalid filename", 400, "VALIDATION_ERROR");
+      }
+
+      const receiptPath = `/uploads/receipts/${filename}`;
+      const expense = await Expense.findOne({ receipt: receiptPath }).lean();
+      if (!expense) {
+        return sendError(res, "Receipt not found", 404, "NOT_FOUND");
+      }
+
+      const isOwner = String(expense.userId) === String(req.user.userId);
+      const isPrivileged = ["admin", "super_admin", "hr"].includes(req.user.role);
+      if (!isOwner && !isPrivileged) {
+        return sendError(res, "Unauthorized", 403, "FORBIDDEN");
+      }
+      if (
+        isPrivileged &&
+        req.user.role !== "super_admin" &&
+        String(expense.orgId) !== String(req.user.orgId)
+      ) {
+        return sendError(res, "Unauthorized", 403, "FORBIDDEN");
       }
 
       const filePath = path.join(__dirname, '..', 'uploads', 'receipts', filename);
       
-      // Check if file exists
       if (!fs.existsSync(filePath)) {
         return sendError(res, "Receipt not found", 404, "NOT_FOUND");
       }
@@ -130,11 +207,18 @@ router.get(
         contentType = 'image/png';
       } else if (ext === '.jpg' || ext === '.jpeg') {
         contentType = 'image/jpeg';
+      } else if (ext === '.gif') {
+        contentType = 'image/gif';
+      } else if (ext === '.webp') {
+        contentType = 'image/webp';
       }
 
-      // Set response headers
+      const inline = req.query.inline === '1' || req.query.inline === 'true';
       res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader(
+        'Content-Disposition',
+        `${inline ? 'inline' : 'attachment'}; filename="${filename}"`
+      );
 
       // Stream the file
       const fileStream = fs.createReadStream(filePath);
@@ -181,8 +265,16 @@ router.get(
         queryUserId = new mongoose.Types.ObjectId(userId);
       }
 
-      // CRITICAL: Enforce orgId validation - users can only access their organization's data
-      const query = { userId: queryUserId, orgId: req.user.orgId };
+      const orgId =
+        req.validatedOrgId ||
+        req.user.orgId ||
+        req.user.tenantId ||
+        req.user.organizationId;
+      if (!orgId || String(orgId) === 'system') {
+        return sendError(res, 'Organization context required', 400, 'MISSING_ORG_CONTEXT');
+      }
+
+      const query = { userId: queryUserId, orgId: String(orgId) };
       if (status) {
         query.status = status;
       }
@@ -237,16 +329,15 @@ router.get(
   authorize("admin", "super_admin", "hr"),
   asyncHandler(async (req, res) => {
     try {
-      const { page = 1, limit = 10, status, orgId } = req.query;
+      const { page = 1, limit = 10, status } = req.query;
       const skip = (page - 1) * limit;
 
-      // Build query
-      const query = {};
+      const scopedOrg = assertScopedOrgId(req, res);
+      if (!scopedOrg) return;
+
+      const query = { orgId: scopedOrg };
       if (status) {
         query.status = status;
-      }
-      if (orgId || req.user.role !== "super_admin") {
-        query.orgId = orgId || req.user.orgId;
       }
 
       // Get total count
@@ -297,12 +388,16 @@ router.post(
     try {
       const { title, amount, category, description, receipt, employeeName, date } = req.body;
 
-      // Additional validation for orgId
-      if (!req.user.orgId) {
+      const orgId =
+        req.validatedOrgId ||
+        req.user.orgId ||
+        req.user.tenantId ||
+        req.user.organizationId;
+      if (!orgId || String(orgId) === 'system') {
         return sendError(res, "Organization not found", 400, "VALIDATION_ERROR");
       }
 
-      const employee = await Employee.findOne({ userId: req.user.userId, orgId: req.user.orgId })
+      const employee = await Employee.findOne({ userId: req.user.userId, orgId: String(orgId) })
         .select('_id firstName lastName')
         .lean();
 
@@ -310,11 +405,23 @@ router.post(
         return sendError(res, "Employee profile not found for authenticated user", 403, "FORBIDDEN");
       }
 
+      const limitCheck = await validateExpenseAgainstLimits({
+        orgId: String(orgId),
+        employeeId: employee._id,
+        category,
+        amount: Number(amount),
+        date: date ? new Date(date) : new Date(),
+        receipt,
+      });
+      if (!limitCheck.valid) {
+        return sendError(res, limitCheck.errors.join("; "), 400, "POLICY_VIOLATION");
+      }
+
       const expense = await Expense.create({
         userId: req.user.userId,
         employeeId: employee._id,
         employeeName: employeeName || `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || req.user.name,
-        orgId: req.user.orgId,
+        orgId: String(orgId),
         title,
         amount: Number(amount),
         category,
@@ -438,6 +545,14 @@ router.put(
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 
+      if (
+        isAdmin &&
+        req.user.role !== "super_admin" &&
+        String(expense.orgId) !== String(req.user.orgId)
+      ) {
+        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      }
+
       // Update fields
       if (title !== undefined && title !== null && title !== '') expense.title = title;
       if (amount !== undefined && amount !== null && amount !== '') {
@@ -452,6 +567,21 @@ router.put(
       // Ensure amount is a number before saving
       if (expense.amount) {
         expense.amount = Number(expense.amount);
+      }
+
+      if (expense.status === 'pending') {
+        const limitCheck = await validateExpenseAgainstLimits({
+          orgId: expense.orgId,
+          employeeId: expense.employeeId,
+          category: expense.category,
+          amount: expense.amount,
+          date: expense.date,
+          receipt: expense.receipt,
+          excludeExpenseId: expense._id,
+        });
+        if (!limitCheck.valid) {
+          return sendError(res, limitCheck.errors.join('; '), 400, 'POLICY_VIOLATION');
+        }
       }
 
       await expense.save();
@@ -499,6 +629,11 @@ router.put(
       const expense = await Expense.findById(expenseId);
       if (!expense) {
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
+      }
+
+      // Verify status is pending - enforce backend status transition guard
+      if (expense.status !== "pending") {
+        return sendError(res, `Expense is already ${expense.status}`, 400, "INVALID_STATUS");
       }
 
       // Verify orgId - prevent cross-tenant access
@@ -622,6 +757,11 @@ router.put(
         return sendError(res, "Expense not found", 404, "NOT_FOUND");
       }
 
+      // Verify status is pending - enforce backend status transition guard
+      if (expense.status !== "pending") {
+        return sendError(res, `Expense is already ${expense.status}`, 400, "INVALID_STATUS");
+      }
+
       // Verify orgId - prevent cross-tenant access
       if (expense.orgId !== req.user.orgId && req.user.role !== "super_admin") {
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
@@ -728,6 +868,14 @@ router.delete(
       const isAdmin = ["admin", "super_admin", "hr"].includes(req.user.role);
       
       if (!isOwner && !isAdmin) {
+        return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
+      }
+
+      if (
+        isAdmin &&
+        req.user.role !== "super_admin" &&
+        String(expense.orgId) !== String(req.user.orgId)
+      ) {
         return sendError(res, "Unauthorized access", 403, "FORBIDDEN");
       }
 

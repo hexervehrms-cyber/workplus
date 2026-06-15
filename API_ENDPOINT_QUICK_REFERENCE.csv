@@ -1,0 +1,8 @@
+Frontend Call,Frontend Path Called,Backend Route Path,Full URL,Status,Authorization,Cache,Query Params,Response Type,Notes
+1. Summary KPI,/dashboard/super-admin/summary,GET /api/dashboard/super-admin/summary,http://api/dashboard/super-admin/summary,✅ EXISTS,super_admin,60s (HTTP),period (default: this_month),JSON,Fast KPI-only data. Hyphenated path (inconsistent)
+2. Full Stats,/dashboard/superadmin,GET /api/dashboard/superadmin,http://api/dashboard/superadmin,✅ EXISTS,super_admin,None,None,JSON,Comprehensive dashboard stats. No hyphen
+3. Growth Trends,/dashboard/superadmin/growth-trends,GET /api/dashboard/superadmin/growth-trends,http://api/dashboard/superadmin/growth-trends,✅ EXISTS,super_admin,None,months (default: 6),JSON,Monthly growth data for charts
+4. Organizations,/organizations?limit=10,GET /api/organizations,http://api/organizations?limit=10,✅ EXISTS,super_admin,None,page (1) limit (10) search status,JSON with pagination,Generic endpoint (not dashboard-specific)
+5. Live Users,/dashboard/superadmin/live-users?limit=5,GET /api/dashboard/superadmin/live-users,http://api/dashboard/superadmin/live-users?limit=5,✅ EXISTS,super_admin,None,limit (5),JSON,Real-time active users list
+UNUSED,N/A,GET /api/dashboard/superadmin/organizations,http://api/dashboard/superadmin/organizations,⚠️ NOT USED,super_admin,None,page limit search sort,JSON with pagination,Duplicate of /organizations endpoint
+UNUSED,N/A,GET /api/dashboard/superadmin/recent-activities,http://api/dashboard/superadmin/recent-activities,⚠️ NOT USED,super_admin,None,limit (20),JSON,Platform-wide activity feed

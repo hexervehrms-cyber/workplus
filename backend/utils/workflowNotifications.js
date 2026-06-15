@@ -26,15 +26,39 @@ export function buildOrganizationSmtpFromDoc(org) {
   };
 }
 
-export async function resolveOrganizationSmtp(orgId) {
-  if (!orgId || orgId === 'system' || !mongoose.Types.ObjectId.isValid(String(orgId))) {
+/** Microsoft 365 / Outlook SMTP from environment (Render, .env). */
+export function buildEnvSmtp() {
+  const host = process.env.SMTP_HOST;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!host || !user || !pass) {
     return null;
   }
-  const org = await Organization.findById(orgId).select('settings.integrations.smtp').lean();
-  return buildOrganizationSmtpFromDoc(org);
+  return {
+    host,
+    port: parseInt(String(process.env.SMTP_PORT), 10) || 587,
+    secure: String(process.env.SMTP_PORT) === '465',
+    user,
+    pass,
+    fromEmail: process.env.FROM_EMAIL || user,
+    fromName: process.env.SMTP_FROM_NAME || 'WorkPlus HR'
+  };
 }
 
-async function postTeamsMessage(org, title, text) {
+/** HR inbox for leave/expense alerts (Outlook). */
+export function getHrInboxEmail() {
+  return (process.env.HR_EMAIL || 'hr@hexerve.com').trim();
+}
+
+export async function resolveOrganizationSmtp(orgId) {
+  if (!orgId || orgId === 'system' || !mongoose.Types.ObjectId.isValid(String(orgId))) {
+    return buildEnvSmtp();
+  }
+  const org = await Organization.findById(orgId).select('settings.integrations.smtp').lean();
+  return buildOrganizationSmtpFromDoc(org) || buildEnvSmtp();
+}
+
+export async function postTeamsMessage(org, title, text) {
   const teams = org?.settings?.integrations?.teams;
   if (!teams?.enabled || !teams.webhookUrl?.trim()) return;
   try {
@@ -53,9 +77,34 @@ async function postTeamsMessage(org, title, text) {
   }
 }
 
+/**
+ * Map tenant orgId string (JWT / Employee) to Organization Mongo _id for Notification schema.
+ */
+export async function resolveOrganizationObjectId(orgId) {
+  const s = String(orgId || '').trim();
+  if (!s || s === 'system') return null;
+
+  if (mongoose.Types.ObjectId.isValid(s)) {
+    const byId = await Organization.findById(s).select('_id').lean();
+    if (byId) return byId._id;
+  }
+
+  const byCode = await Organization.findOne({ code: s.toUpperCase() })
+    .select('_id')
+    .lean();
+  if (byCode) return byCode._id;
+
+  return null;
+}
+
 async function loadOrg(orgId) {
-  if (!orgId || !mongoose.Types.ObjectId.isValid(String(orgId))) return null;
-  return Organization.findById(orgId).lean();
+  if (!orgId || orgId === 'system') return null;
+  const oid = await resolveOrganizationObjectId(orgId);
+  if (oid) return Organization.findById(oid).lean();
+  if (mongoose.Types.ObjectId.isValid(String(orgId))) {
+    return Organization.findById(orgId).lean();
+  }
+  return null;
 }
 
 async function listRoutingAdmins(org) {
@@ -84,21 +133,33 @@ export async function notifyAdminsOnLeaveSubmitted(orgId, ctx) {
     const routing = org.settings?.notificationRouting || {};
     if (routing.notifyAdminsOnLeaveSubmit === false) return;
 
-    const smtp = buildOrganizationSmtpFromDoc(org);
+    const smtp = (await resolveOrganizationSmtp(orgId)) || buildEnvSmtp();
+    if (!smtp) {
+      logger.warn('Leave submit email skipped: configure SMTP_HOST, SMTP_USER, SMTP_PASS in .env');
+    }
+
     const { leaveRequest, employeeUserId, employeeName, employeeEmail } = ctx;
+    const leaveType = leaveRequest.type || leaveRequest.leaveType || 'Leave';
     const days =
       Math.ceil(
         (new Date(leaveRequest.endDate) - new Date(leaveRequest.startDate)) /
           (1000 * 60 * 60 * 24)
       ) + 1;
 
+    const hrInbox = getHrInboxEmail();
     const admins = await listRoutingAdmins(org);
-    const targets =
-      admins.length > 0
-        ? admins
-        : process.env.HR_EMAIL
-          ? [{ _id: null, email: process.env.HR_EMAIL, name: 'HR', notificationPreferences: {} }]
-          : [];
+    const emailTargets = new Map();
+    emailTargets.set(hrInbox.toLowerCase(), {
+      _id: null,
+      email: hrInbox,
+      name: 'HR',
+      notificationPreferences: {}
+    });
+    for (const admin of admins) {
+      if (admin.email) {
+        emailTargets.set(admin.email.toLowerCase(), admin);
+      }
+    }
 
     const start = new Date(leaveRequest.startDate).toLocaleDateString('en-US', {
       day: 'numeric',
@@ -112,35 +173,38 @@ export async function notifyAdminsOnLeaveSubmitted(orgId, ctx) {
     });
 
     const htmlBody = `<p>Hello,</p>
-<p><strong>${employeeName}</strong> submitted a <strong>${leaveRequest.type}</strong> leave request (${days} day(s)).</p>
+<p><strong>${employeeName}</strong> submitted a <strong>${leaveType}</strong> leave request (${days} day(s)).</p>
 <div style="margin:12px 0;padding:12px;border-left:4px solid #667eea;background:#f8f9fc">
+<p style="margin:4px 0"><strong>Employee email:</strong> ${employeeEmail || '—'}</p>
 <p style="margin:4px 0"><strong>Dates:</strong> ${start} → ${end}</p>
 <p style="margin:4px 0"><strong>Reason:</strong> ${leaveRequest.reason || '—'}</p>
 </div>
-<p><a href="${getFrontendUrl()}/admin/leave-requests">Open leave requests in WorkPlus</a></p>`;
+<p><a href="${getFrontendUrl()}/admin/leaves">Open leave requests in WorkPlus</a></p>`;
 
-    for (const admin of targets) {
+    for (const admin of emailTargets.values()) {
       if (admin._id) {
         await EmailNotificationService.createInAppNotification({
           title: 'New leave request',
-          message: `${employeeName} submitted ${leaveRequest.type} leave (${days} day(s)).`,
+          message: `${employeeName} submitted ${leaveType} leave (${days} day(s)).`,
           type: 'leave_request',
           priority: 'high',
           recipientId: admin._id,
           senderId: employeeUserId,
           orgId,
-          actionUrl: '/admin/leave-requests',
+          actionUrl: '/admin/leaves',
           relatedEntity: { entityType: 'leave_request', entityId: leaveRequest._id }
         });
       }
-      const emailOk = admin.email && admin.notificationPreferences?.email !== false;
+      const emailOk =
+        smtp && admin.email && admin.notificationPreferences?.email !== false;
       if (emailOk) {
         await EmailNotificationService.sendEmail({
           to: admin.email,
-          replyTo: employeeEmail,
-          subject: `New leave request — ${employeeName}: ${leaveRequest.type} (${days} days)`,
+          fromName: employeeName || 'Employee',
+          replyTo: employeeEmail || undefined,
+          subject: `New leave request — ${employeeName}: ${leaveType} (${days} days)`,
           html: EmailNotificationService.getEmailTemplate(htmlBody, '📅 New leave request'),
-          text: `${employeeName} submitted ${leaveRequest.type} leave from ${start} to ${end}.`,
+          text: `${employeeName} submitted ${leaveType} leave from ${start} to ${end}.`,
           organizationSmtp: smtp
         });
       }
@@ -149,7 +213,7 @@ export async function notifyAdminsOnLeaveSubmitted(orgId, ctx) {
     await postTeamsMessage(
       org,
       'New leave request',
-      `**${employeeName}** · ${leaveRequest.type} · ${days} day(s) · ${start} – ${end}\nReason: ${leaveRequest.reason || '—'}`
+      `**${employeeName}** · ${leaveType} · ${days} day(s) · ${start} – ${end}\nReason: ${leaveRequest.reason || '—'}`
     );
   } catch (e) {
     logger.error('notifyAdminsOnLeaveSubmitted failed', { error: e.message, orgId });
@@ -215,5 +279,22 @@ export async function notifyAdminsOnExpenseSubmitted(orgId, ctx) {
     );
   } catch (e) {
     logger.error('notifyAdminsOnExpenseSubmitted failed', { error: e.message, orgId });
+  }
+}
+
+/**
+ * Post organization announcement to Microsoft Teams webhook when enabled.
+ */
+export async function notifyTeamsOnAnnouncement(orgId, title, content, audienceLabel = 'All employees') {
+  try {
+    const org = await loadOrg(orgId);
+    if (!org) return;
+    await postTeamsMessage(
+      org,
+      `📢 ${title}`,
+      `${content}\n\n_Audience: ${audienceLabel}_`
+    );
+  } catch (e) {
+    logger.error('notifyTeamsOnAnnouncement failed', { error: e.message, orgId });
   }
 }

@@ -3,8 +3,9 @@ import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Calendar, Loader2, Plus, Edit2, Trash2, Download } from 'lucide-react';
 import { LeaveAllocationService, EmployeeService } from '../../utils/api';
+import { parseBalanceApiResponse, sumRemainingDays } from '../../utils/leaveBalance';
 import { useAuth } from '../../context/AuthContext';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import {
   Dialog,
   DialogContent,
@@ -12,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../../components/ui/dialog';
+import { resolveAuthOrgId } from '../../utils/apiHelper';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
 import {
@@ -22,13 +24,14 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 
-interface LeaveAllocation {
+interface LeaveAllocationRecord {
   _id: string;
   employeeId: {
     _id: string;
     employeeCode: string;
     name: string;
     department: string;
+    userId?: { name?: string };
   };
   year: number;
   month: number;
@@ -55,6 +58,33 @@ interface Employee {
   department: string;
 }
 
+const TABLE_LEAVE_KEYS = [
+  'vacation',
+  'sickLeave',
+  'casualLeave',
+  'compensatoryOff',
+  'personal',
+  'emergency',
+] as const;
+
+function getAllocationTotal(allocations: LeaveAllocationRecord['allocations'] | undefined): number {
+  if (!allocations) return 0;
+  return LEAVE_TYPES.reduce(
+    (sum, { key }) => sum + (Number((allocations as Record<string, number>)[key]) || 0),
+    0
+  );
+}
+
+function defaultAllocationForm(): Record<string, number> {
+  return LEAVE_TYPES.reduce(
+    (acc, { key }) => {
+      acc[key] = 0;
+      return acc;
+    },
+    {} as Record<string, number>
+  );
+}
+
 const LEAVE_TYPES = [
   { key: 'vacation', label: 'Vacation' },
   { key: 'sickLeave', label: 'Sick Leave' },
@@ -72,38 +102,39 @@ const LEAVE_TYPES = [
 
 export default function LeaveAllocation() {
   const { user } = useAuth();
-  const [allocations, setAllocations] = useState<LeaveAllocation[]>([]);
+  const [allocations, setAllocations] = useState<LeaveAllocationRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [selectedAllocation, setSelectedAllocation] = useState<LeaveAllocation | null>(null);
+  const [selectedAllocation, setSelectedAllocation] = useState<LeaveAllocationRecord | null>(null);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [selectedEmployee, setSelectedEmployee] = useState('');
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
   const [formData, setFormData] = useState({
-    vacation: 0,
-    sickLeave: 0,
-    casualLeave: 0,
-    earnedLeave: 0,
-    medicalLeave: 0,
-    maternityLeave: 0,
-    paternityLeave: 0,
-    compensatoryOff: 0,
-    personal: 0,
-    emergency: 0,
-    ncns: 0,
-    sandwichLeave: 0
-  });
+    vacation: '',
+    sickLeave: '',
+    casualLeave: '',
+    earnedLeave: '',
+    medicalLeave: '',
+    maternityLeave: '',
+    paternityLeave: '',
+    compensatoryOff: '',
+    personal: '',
+    emergency: '',
+    ncns: '',
+    sandwichLeave: ''
+  } as Record<string, string | number>);
   const [yearlyFormData, setYearlyFormData] = useState({
-    casualLeave: 0,
-    earnedLeave: 0,
-    medicalLeave: 0
-  });
+    casualLeave: '',
+    earnedLeave: '',
+    medicalLeave: ''
+  } as Record<string, string | number>);
   const [showYearlyForm, setShowYearlyForm] = useState(false);
   const [selectedEmployeesForYearly, setSelectedEmployeesForYearly] = useState<string[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
+  const [availableByEmployee, setAvailableByEmployee] = useState<Record<string, number>>({});
 
   // Fetch data
   useEffect(() => {
@@ -115,26 +146,27 @@ export default function LeaveAllocation() {
       setLoading(true);
       
       // Fetch employees
-      const employeesResponse = await EmployeeService.getAllEmployees();
+      const employeesResponse = await EmployeeService.getAllEmployees(user ?? undefined);
       console.log('Employees response:', employeesResponse);
       
-      // Handle paginated response structure
-      let employeesData = [];
-      if (Array.isArray(employeesResponse)) {
-        employeesData = employeesResponse;
-      } else if (employeesResponse?.data && Array.isArray(employeesResponse.data)) {
-        employeesData = employeesResponse.data;
-      }
+      const employeesData = Array.isArray(employeesResponse) ? employeesResponse : [];
       
       console.log('Employees data:', employeesData);
       
       if (employeesData.length > 0) {
         // Map employees to ensure we have the right structure
-        const mappedEmployees = employeesData.map(emp => ({
+        const mappedEmployees = employeesData.map((emp: {
+          _id: string;
+          name?: string;
+          employeeCode?: string;
+          department?: string;
+          designation?: string;
+          userId?: { name?: string };
+        }) => ({
           _id: emp._id,
           name: emp.userId?.name || emp.name || 'Unknown',
-          employeeCode: emp.employeeCode,
-          department: emp.department,
+          employeeCode: emp.employeeCode ?? '',
+          department: emp.department ?? '',
           designation: emp.designation
         }));
         console.log('Mapped employees:', mappedEmployees);
@@ -144,36 +176,46 @@ export default function LeaveAllocation() {
         setEmployees([]);
       }
 
-      // Fetch allocations
-      // Get orgId from user or localStorage
-      let orgId = user?.orgId || user?.tenantId;
+      const orgId = resolveAuthOrgId(user);
       if (!orgId) {
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
+        toast.error('Organization context is required.');
+        setAllocations([]);
+        return;
+      }
+
+      const allocationsData = await LeaveAllocationService.getOrganizationAllocations(
+        orgId,
+        selectedYear,
+        selectedMonth > 0 ? selectedMonth : null
+      );
+
+      const rows: LeaveAllocationRecord[] = Array.isArray(allocationsData)
+        ? allocationsData
+        : [];
+      setAllocations(rows);
+
+      const balanceMonth = selectedMonth > 0 ? selectedMonth : new Date().getMonth() + 1;
+      const balanceMap: Record<string, number> = {};
+      await Promise.all(
+        rows.map(async (row) => {
+          const empId = row.employeeId?._id;
+          if (!empId) return;
           try {
-            const parsedUser = JSON.parse(storedUser);
-            orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-          } catch (e) {
-            orgId = 'system';
+            const balanceRes = await LeaveAllocationService.getEmployeeBalance(
+              empId,
+              selectedYear,
+              balanceMonth
+            );
+            if (balanceRes?.success) {
+              const parsed = parseBalanceApiResponse(balanceRes);
+              balanceMap[empId] = sumRemainingDays(parsed.balances);
+            }
+          } catch {
+            /* non-fatal */
           }
-        } else {
-          orgId = 'system';
-        }
-      }
-      
-      if (orgId) {
-        const allocationsData = await LeaveAllocationService.getOrganizationAllocations(
-          orgId,
-          selectedYear,
-          selectedMonth
-        );
-        
-        if (Array.isArray(allocationsData)) {
-          setAllocations(allocationsData);
-        } else if (allocationsData?.data) {
-          setAllocations(allocationsData.data);
-        }
-      }
+        })
+      );
+      setAvailableByEmployee(balanceMap);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -181,32 +223,38 @@ export default function LeaveAllocation() {
     }
   };
 
-  const handleOpenForm = (allocation?: LeaveAllocation) => {
+  const handleOpenForm = (allocation?: LeaveAllocationRecord) => {
     if (allocation) {
       setSelectedAllocation(allocation);
-      setSelectedEmployee(allocation.employeeId._id);
+      setSelectedEmployee(allocation.employeeId?._id || '');
       setSelectedEmployees([]);
       setIsMultiSelectMode(false);
-      setFormData(allocation.allocations);
+      // Convert numbers to string for editing
+      const formDataStr: Record<string, string | number> = {};
+      LEAVE_TYPES.forEach(({ key }) => {
+        const value = (allocation.allocations as Record<string, number>)[key];
+        formDataStr[key] = value !== undefined ? value : '';
+      });
+      setFormData(formDataStr as typeof formData);
     } else {
       setSelectedAllocation(null);
       setSelectedEmployee('');
       setSelectedEmployees([]);
       setIsMultiSelectMode(false);
       setFormData({
-        vacation: 0,
-        sickLeave: 0,
-        casualLeave: 0,
-        earnedLeave: 0,
-        medicalLeave: 0,
-        maternityLeave: 0,
-        paternityLeave: 0,
-        compensatoryOff: 0,
-        personal: 0,
-        emergency: 0,
-        ncns: 0,
-        sandwichLeave: 0
-      });
+        vacation: '',
+        sickLeave: '',
+        casualLeave: '',
+        earnedLeave: '',
+        medicalLeave: '',
+        maternityLeave: '',
+        paternityLeave: '',
+        compensatoryOff: '',
+        personal: '',
+        emergency: '',
+        ncns: '',
+        sandwichLeave: ''
+      } as typeof formData);
     }
     setShowForm(true);
   };
@@ -217,39 +265,31 @@ export default function LeaveAllocation() {
       return;
     }
 
+    const allocationMonth =
+      selectedMonth > 0 && selectedMonth <= 12
+        ? selectedMonth
+        : new Date().getMonth() + 1;
+
     try {
       setActionLoading(true);
       
-      // Get orgId from user or localStorage
-      let orgId = user?.orgId || user?.tenantId;
+      const orgId = resolveAuthOrgId(user);
       if (!orgId) {
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
-          try {
-            const parsedUser = JSON.parse(storedUser);
-            orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-          } catch (e) {
-            orgId = 'system';
-          }
-        } else {
-          orgId = 'system';
-        }
+        toast.error('Organization context is required.');
+        return;
       }
-      
-      console.log('Saving allocation:', {
-        employeeId: selectedEmployee,
-        selectedEmployees,
-        userId: user?.userId || user?.id,
-        orgId: orgId,
-        year: selectedYear,
-        month: selectedMonth,
-        allocations: formData
+
+      // Convert empty strings to 0 for submission
+      const allocationsForSubmit: Record<string, number> = {};
+      Object.entries(formData).forEach(([key, val]) => {
+        const numVal = val === '' ? 0 : parseFloat(String(val));
+        allocationsForSubmit[key] = isNaN(numVal) ? 0 : numVal;
       });
 
       if (selectedAllocation) {
         // Update existing (single employee only)
         const response = await LeaveAllocationService.updateAllocation(selectedAllocation._id, {
-          allocations: formData
+          allocations: allocationsForSubmit
         });
         console.log('Update response:', response);
         toast.success('Leave allocation updated successfully');
@@ -258,24 +298,26 @@ export default function LeaveAllocation() {
         const response = await LeaveAllocationService.bulkAllocate(
           orgId,
           selectedYear,
-          selectedMonth,
+          allocationMonth,
           selectedEmployees,
-          formData,
-          user?.userId || user?.id
+          allocationsForSubmit,
+          user?.userId || user?.id || ''
         );
-        console.log('Bulk allocate response:', response);
+        if (response && (response as { success?: boolean }).success === false) {
+          throw new Error((response as { message?: string }).message || 'Bulk allocation failed');
+        }
         toast.success(`Leave allocation created for ${selectedEmployees.length} employees`);
       } else if (selectedEmployee) {
-        // Create new for single employee
         const response = await LeaveAllocationService.createAllocation({
           employeeId: selectedEmployee,
-          userId: user?.userId || user?.id,
           orgId: orgId,
           year: selectedYear,
-          month: selectedMonth,
-          allocations: formData
+          month: allocationMonth,
+          allocations: allocationsForSubmit
         });
-        console.log('Create response:', response);
+        if (response && (response as { success?: boolean }).success === false) {
+          throw new Error((response as { message?: string }).message || 'Allocation failed');
+        }
         toast.success('Leave allocation created successfully');
       }
 
@@ -311,38 +353,34 @@ export default function LeaveAllocation() {
     try {
       setActionLoading(true);
       
-      let orgId = user?.orgId || user?.tenantId;
+      const orgId = resolveAuthOrgId(user);
       if (!orgId) {
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
-          try {
-            const parsedUser = JSON.parse(storedUser);
-            orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-          } catch (e) {
-            orgId = 'system';
-          }
-        } else {
-          orgId = 'system';
-        }
+        toast.error('Organization context is required.');
+        return;
       }
+
+      // Convert empty strings to 0 for submission
+      const casualVal = yearlyFormData.casualLeave === '' ? 0 : parseFloat(String(yearlyFormData.casualLeave));
+      const earnedVal = yearlyFormData.earnedLeave === '' ? 0 : parseFloat(String(yearlyFormData.earnedLeave));
+      const medicalVal = yearlyFormData.medicalLeave === '' ? 0 : parseFloat(String(yearlyFormData.medicalLeave));
 
       const response = await LeaveAllocationService.yearlyAllocate(
         orgId,
         selectedYear,
         selectedEmployeesForYearly,
-        yearlyFormData.casualLeave,
-        yearlyFormData.earnedLeave,
-        yearlyFormData.medicalLeave,
-        user?.userId || user?.id
+        isNaN(casualVal) ? 0 : casualVal,
+        isNaN(earnedVal) ? 0 : earnedVal,
+        isNaN(medicalVal) ? 0 : medicalVal,
+        user?.userId || user?.id || ''
       );
 
       toast.success(`Yearly leaves allocated to ${selectedEmployeesForYearly.length} employees`);
       setShowYearlyForm(false);
       setSelectedEmployeesForYearly([]);
       setYearlyFormData({
-        casualLeave: 0,
-        earnedLeave: 0,
-        medicalLeave: 0
+        casualLeave: '',
+        earnedLeave: '',
+        medicalLeave: ''
       });
       fetchData();
     } catch (error) {
@@ -409,6 +447,9 @@ export default function LeaveAllocation() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="rounded-xl">
+                <SelectItem value="0" className="rounded-lg">
+                  All months
+                </SelectItem>
                 {Array.from({ length: 12 }, (_, i) => i + 1).map(month => (
                   <SelectItem key={month} value={month.toString()} className="rounded-lg">
                     {getMonthName(month)}
@@ -430,7 +471,9 @@ export default function LeaveAllocation() {
         ) : allocations.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">
             <Calendar className="w-12 h-12 text-muted-foreground mb-4 opacity-50" />
-            <p className="text-muted-foreground">No allocations found for {getMonthName(selectedMonth)} {selectedYear}</p>
+            <p className="text-muted-foreground">
+              No allocations found for {selectedMonth > 0 ? `${getMonthName(selectedMonth)} ` : ''}{selectedYear}
+            </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -438,6 +481,7 @@ export default function LeaveAllocation() {
               <thead>
                 <tr className="border-b">
                   <th className="p-4 text-left">Employee</th>
+                  {selectedMonth === 0 ? <th className="p-4 text-left">Month</th> : null}
                   <th className="p-4 text-left">Department</th>
                   <th className="p-4 text-center">Vacation</th>
                   <th className="p-4 text-center">Sick</th>
@@ -445,6 +489,12 @@ export default function LeaveAllocation() {
                   <th className="p-4 text-center">Comp Off</th>
                   <th className="p-4 text-center">Personal</th>
                   <th className="p-4 text-center">Emergency</th>
+                  <th className="p-4 text-center font-semibold" title="Sum of all leave types allocated this month">
+                    Allocated
+                  </th>
+                  <th className="p-4 text-center font-semibold" title="Available balance (same as employee dashboard)">
+                    Available
+                  </th>
                   <th className="p-4 text-left">Actions</th>
                 </tr>
               </thead>
@@ -457,15 +507,26 @@ export default function LeaveAllocation() {
                        allocation.employeeId?.employeeCode ||
                        'Unknown'}
                     </td>
+                    {selectedMonth === 0 ? (
+                      <td className="p-4 text-sm text-muted-foreground">
+                        {getMonthName(allocation.month)} {allocation.year}
+                      </td>
+                    ) : null}
                     <td className="p-4 text-sm text-muted-foreground">
                       {allocation.employeeId?.department || '-'}
                     </td>
-                    <td className="p-4 text-center">{allocation.allocations.vacation}</td>
-                    <td className="p-4 text-center">{allocation.allocations.sickLeave}</td>
-                    <td className="p-4 text-center">{allocation.allocations.casualLeave}</td>
-                    <td className="p-4 text-center">{allocation.allocations.compensatoryOff}</td>
-                    <td className="p-4 text-center">{allocation.allocations.personal}</td>
-                    <td className="p-4 text-center">{allocation.allocations.emergency}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.vacation ?? 0}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.sickLeave ?? 0}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.casualLeave ?? 0}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.compensatoryOff ?? 0}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.personal ?? 0}</td>
+                    <td className="p-4 text-center">{allocation.allocations?.emergency ?? 0}</td>
+                    <td className="p-4 text-center font-semibold">
+                      {getAllocationTotal(allocation.allocations)}
+                    </td>
+                    <td className="p-4 text-center font-semibold text-primary">
+                      {availableByEmployee[allocation.employeeId?._id] ?? '—'}
+                    </td>
                     <td className="p-4">
                       <div className="flex gap-2">
                         <Button
@@ -496,8 +557,8 @@ export default function LeaveAllocation() {
 
       {/* Allocation Form Dialog */}
       <Dialog open={showForm} onOpenChange={setShowForm}>
-        <DialogContent className="max-w-2xl rounded-2xl border-0 shadow-2xl">
-          <DialogHeader className="pb-4">
+        <DialogContent className="flex max-h-[min(90vh,820px)] w-[min(calc(100vw-2rem),42rem)] max-w-none flex-col gap-0 overflow-hidden rounded-2xl border-0 p-0 shadow-2xl sm:max-w-none">
+          <DialogHeader className="shrink-0 border-b px-6 py-4 text-left">
             <DialogTitle className="text-xl font-bold">
               {selectedAllocation ? 'Edit Leave Allocation' : 'Add Leave Allocation'}
             </DialogTitle>
@@ -506,7 +567,7 @@ export default function LeaveAllocation() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-6">
+          <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-4">
             {/* Multi-select Toggle */}
             {!selectedAllocation && (
               <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-xl">
@@ -589,45 +650,41 @@ export default function LeaveAllocation() {
                     value={formData[leave.key as keyof typeof formData]}
                     onChange={(e) => {
                       const value = e.target.value;
-                      // Handle empty string, convert to 0
-                      const numValue = value === '' ? 0 : parseFloat(value);
-                      // Ensure we don't get NaN
-                      const finalValue = isNaN(numValue) ? 0 : numValue;
+                      // Allow empty string for user editing
                       setFormData({
                         ...formData,
-                        [leave.key]: finalValue
+                        [leave.key]: value
                       });
                     }}
                   />
                 </div>
               ))}
             </div>
+          </div>
 
-            {/* Action Buttons */}
-            <div className="flex gap-3 pt-4">
-              <Button
-                variant="outline"
-                className="flex-1 rounded-xl border-foreground/20"
-                onClick={() => setShowForm(false)}
-                disabled={actionLoading}
-              >
-                Cancel
-              </Button>
-              <Button
-                className="flex-1 rounded-xl bg-primary hover:bg-primary/90"
-                onClick={handleSaveAllocation}
-                disabled={actionLoading}
-              >
-                {actionLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  'Save Allocation'
-                )}
-              </Button>
-            </div>
+          <div className="flex shrink-0 gap-3 border-t px-6 py-4">
+            <Button
+              variant="outline"
+              className="flex-1 rounded-xl border-foreground/20"
+              onClick={() => setShowForm(false)}
+              disabled={actionLoading}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="flex-1 rounded-xl bg-primary hover:bg-primary/90"
+              onClick={handleSaveAllocation}
+              disabled={actionLoading}
+            >
+              {actionLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Save Allocation'
+              )}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -684,11 +741,9 @@ export default function LeaveAllocation() {
                   value={yearlyFormData.casualLeave}
                   onChange={(e) => {
                     const value = e.target.value;
-                    const numValue = value === '' ? 0 : parseFloat(value);
-                    const finalValue = isNaN(numValue) ? 0 : numValue;
                     setYearlyFormData({
                       ...yearlyFormData,
-                      casualLeave: finalValue
+                      casualLeave: value
                     });
                   }}
                 />
@@ -703,11 +758,9 @@ export default function LeaveAllocation() {
                   value={yearlyFormData.earnedLeave}
                   onChange={(e) => {
                     const value = e.target.value;
-                    const numValue = value === '' ? 0 : parseFloat(value);
-                    const finalValue = isNaN(numValue) ? 0 : numValue;
                     setYearlyFormData({
                       ...yearlyFormData,
-                      earnedLeave: finalValue
+                      earnedLeave: value
                     });
                   }}
                 />
@@ -722,11 +775,9 @@ export default function LeaveAllocation() {
                   value={yearlyFormData.medicalLeave}
                   onChange={(e) => {
                     const value = e.target.value;
-                    const numValue = value === '' ? 0 : parseFloat(value);
-                    const finalValue = isNaN(numValue) ? 0 : numValue;
                     setYearlyFormData({
                       ...yearlyFormData,
-                      medicalLeave: finalValue
+                      medicalLeave: value
                     });
                   }}
                 />
@@ -742,9 +793,9 @@ export default function LeaveAllocation() {
                   setShowYearlyForm(false);
                   setSelectedEmployeesForYearly([]);
                   setYearlyFormData({
-                    casualLeave: 0,
-                    earnedLeave: 0,
-                    medicalLeave: 0
+                    casualLeave: '',
+                    earnedLeave: '',
+                    medicalLeave: ''
                   });
                 }}
                 disabled={actionLoading}

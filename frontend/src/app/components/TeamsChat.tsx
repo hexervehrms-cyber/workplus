@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { MessageSquare, X, Send, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { apiPost } from '../utils/apiHelper';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 
@@ -66,15 +67,11 @@ export function TeamsChat({ isOpen, onClose }: TeamsChatProps) {
       setNewMessage('');
 
       // Send to backend to log/store
-      await fetch('/api/teams/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user?.id,
-          message: newMessage,
-          timestamp: new Date().toISOString()
-        })
-      }).catch(err => console.error('Failed to log message:', err));
+      await apiPost('teams/messages', {
+        userId: user?.id,
+        message: newMessage,
+        timestamp: new Date().toISOString(),
+      }).catch((err) => console.error('Failed to log message:', err));
     } catch (error) {
       console.error('Failed to send message:', error);
     }

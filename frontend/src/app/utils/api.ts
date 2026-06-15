@@ -6,35 +6,17 @@
 import {
   loadAccessTokenFromIndexedDB,
   getAccessTokenMirror,
+  getRefreshTokenMirror,
   setAccessTokenMirror,
   clearAccessTokenMirror
 } from './sessionAccessMirror';
-
-// API Configuration - Production Ready
-// In production, VITE_API_URL should be the full backend URL (e.g., https://workplus-backend-sg3a.onrender.com)
-// In development, it falls back to /api which uses Vite proxy
-const getApiBaseUrl = () => {
-  const apiUrl = import.meta.env.VITE_API_URL;
-  
-  // If no API URL is set, use the production backend URL as fallback if on a production domain
-  if (!apiUrl) {
-    if (typeof window !== 'undefined' && (window.location.hostname.includes('hexerve.online') || window.location.hostname.includes('vercel.app'))) {
-      return 'https://workplus-backend-sg3a.onrender.com/api';
-    }
-    return '/api';
-  }
-  
-  // Remove trailing slash if present
-  const baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
-  
-  // If it's already /api or ends with /api, return as is
-  if (baseUrl === '/api' || baseUrl.endsWith('/api')) {
-    return baseUrl;
-  }
-  
-  // Otherwise add /api prefix
-  return `${baseUrl}/api`;
-};
+import {
+  ensureAccessToken,
+  refreshAccessToken,
+  hydrateAccessToken,
+  setRefreshToken as persistRefreshToken,
+} from './sessionAuth';
+import { getApiBaseUrl } from './apiBaseUrl';
 
 const API_BASE_URL = getApiBaseUrl();
 const API_TIMEOUT = 30000; // 30 seconds
@@ -71,18 +53,28 @@ export class ApiError extends Error {
         return 'Service temporarily unavailable. Please try again in a moment.';
       case 'INVALID_TOKEN':
       case 'TOKEN_EXPIRED':
-        return 'Your session has expired. Please log in again.';
+        return 'Your session has expired. Please sign in again.';
+      case 'NO_TOKEN':
+      case 'AUTH_REQUIRED':
+      case 'AUTH_FAILED':
+        return this.message || 'Please sign in again to continue.';
       case 'UNAUTHORIZED':
         return 'Invalid credentials. Please check your email and password.';
       case 'FORBIDDEN':
-        return 'You do not have permission to perform this action.';
+      case 'INSUFFICIENT_PERMISSIONS':
+      case 'PERMISSION_DENIED':
+        return this.message || 'You do not have permission to perform this action.';
       case 'VALIDATION_ERROR':
         return this.message || 'Please check your input and try again.';
       case 'NETWORK_ERROR':
         return 'Unable to connect to server. Please check your internet connection.';
       default:
-        if (this.status === 401) return 'Invalid credentials. Please try again.';
-        if (this.status === 403) return 'Access denied.';
+        if (this.status === 401) {
+          return this.message || 'Please sign in again to continue.';
+        }
+        if (this.status === 403) {
+          return this.message || 'Access denied.';
+        }
         if (this.status === 404) return 'Resource not found.';
         if (this.status === 429) return 'Too many requests. Please wait a moment.';
         if (this.status && this.status >= 500) return 'Server error. Please try again later.';
@@ -111,12 +103,7 @@ export const TokenManager = {
   },
   
   getRefreshToken(): string | null {
-    // Refresh token is in httpOnly cookie
-    return null;
-  },
-  
-  setRefreshToken(refreshToken: string): void {
-    // Refresh token is set as httpOnly cookie by backend
+    return getRefreshTokenMirror();
   },
   
   remove(): void {
@@ -138,6 +125,10 @@ export const TokenManager = {
     clearAccessTokenMirror();
   },
 
+  setRefresh(token: string): void {
+    persistRefreshToken(token);
+  },
+
   /** Remove only access tokens (keep user + refresh) — use when session uses httpOnly access cookie. */
   clearAccessTokens(): void {
     clearAccessTokenMirror();
@@ -155,6 +146,8 @@ function isTokenExpired(token: string): boolean {
     return true;
   }
 }
+
+export { ensureAccessToken, refreshAccessToken, hydrateAccessToken };
 
 // Fetch with timeout
 async function fetchWithTimeout(url: string, options: RequestInit, timeout: number): Promise<Response> {
@@ -201,21 +194,13 @@ export class ApiClient {
     retryCount = 0
   ): Promise<ApiResponse<T>> {
     const url = this.buildUrl(endpoint);
-    let authToken = TokenManager.get();
+    let authToken = (await ensureAccessToken()) || TokenManager.get();
 
-    if (authToken && isTokenExpired(authToken)) {
-      try {
-        const refreshService = new TokenRefreshService();
-        const refreshResult = await refreshService.refreshToken();
-        if (refreshResult.success && refreshResult.data?.token) {
-          authToken = refreshResult.data.token;
-        } else {
-          TokenManager.clear();
-          throw new ApiError('Session expired', 401, 'TOKEN_EXPIRED');
-        }
-      } catch {
-        TokenManager.clear();
-        throw new ApiError('Session expired', 401, 'TOKEN_EXPIRED');
+    if (authToken && isTokenExpired(authToken) && TokenManager.getRefreshToken()) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        authToken = refreshed;
+        TokenManager.set(refreshed);
       }
     }
 
@@ -244,6 +229,13 @@ export class ApiClient {
 
       // Handle non-OK responses
       if (!response.ok) {
+        if (response.status === 401 && retryCount < MAX_RETRIES) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) {
+            TokenManager.set(refreshed);
+            return this.request<T>(endpoint, options, retryCount + 1);
+          }
+        }
         const error = new ApiError(
           data.message || data.error || `Request failed with status ${response.status}`,
           response.status,
@@ -351,17 +343,30 @@ export const apiClient = new ApiClient();
 export class AuthService {
   static async login(email: string, password: string) {
     try {
-      const response = await apiClient.post<any>('/auth/login', {
+      type LoginPayload = {
+        token?: string;
+        user?: Record<string, unknown>;
+        refreshToken?: string;
+      };
+      const response = await apiClient.post<LoginPayload>('/auth/login', {
         email: email.toLowerCase().trim(),
         password
       });
 
       console.log('Login response:', response);
 
-      // Backend returns token and user in response.data
-      const token = response.data?.token || response.token;
-      const user = response.data?.user || response.user;
-      const refreshToken = response.data?.refreshToken || response.refreshToken;
+      // Backend may return token and user in response.data or at top level
+      const root = response as ApiResponse<LoginPayload> & LoginPayload;
+      const loginPayload = response.data ?? root;
+      const token =
+        loginPayload.token ||
+        (loginPayload as LoginPayload & { data?: LoginPayload }).data?.token ||
+        root.token;
+      const user = loginPayload.user || root.user;
+      const refreshToken =
+        loginPayload.refreshToken ||
+        (loginPayload as LoginPayload & { data?: LoginPayload }).data?.refreshToken ||
+        root.data?.refreshToken;
 
       if (response.success && user) {
         // Extract role from JWT token
@@ -398,6 +403,9 @@ export class AuthService {
         if (token) {
           TokenManager.set(token);
         }
+        if (refreshToken) {
+          TokenManager.setRefresh(refreshToken);
+        }
 
         return {
           success: true,
@@ -413,15 +421,16 @@ export class AuthService {
     }
   }
 
-  static async register(userData: any) {
+  /** Requires `inviteToken` from an admin onboarding link; role/org are set server-side. */
+  static async register(userData: { name: string; email: string; password: string; inviteToken: string }) {
     try {
       const response = await apiClient.post<any>('/auth/register', userData);
 
       if (response.success && response.data) {
         TokenManager.clearAccessTokens();
         const token = response.data.token;
-        let orgId = response.data.user?.orgId || response.data.user?.tenantId || 'system';
-        if (token) {
+        let orgId = response.data.user?.orgId || response.data.user?.tenantId;
+        if (!orgId && token) {
           try {
             const tokenPayload = JSON.parse(atob(token.split('.')[1]));
             orgId = tokenPayload.orgId || orgId;
@@ -433,8 +442,7 @@ export class AuthService {
         TokenManager.setUser({
           ...u,
           id: u.id || u._id,
-          orgId: u.orgId || orgId,
-          tenantId: u.tenantId || orgId
+          ...(orgId ? { orgId: u.orgId || orgId, tenantId: u.tenantId || orgId } : {})
         });
 
         return {
@@ -453,6 +461,7 @@ export class AuthService {
 
   static async getCurrentUser() {
     try {
+      await ensureAccessToken();
       const response = await apiClient.get<any>('/auth/me');
       
       if (response.success && response.data) {
@@ -564,21 +573,19 @@ export class UserService {
 // Employee Service
 // ============================================
 export class EmployeeService {
-  static async getAllEmployees() {
-    const response = await apiClient.get<any>('/employees?simple=true');
-    console.log('getAllEmployees full response:', response);
-    
-    // Handle paginated response structure
-    if (response.data && Array.isArray(response.data)) {
-      return response.data;
+  static async getAllEmployees(orgContext?: { role?: string; orgId?: string; tenantId?: string }) {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    let url = '/employees?simple=true&limit=1000';
+    if (orgContext?.role === 'super_admin') {
+      const oid = orgContext.orgId || orgContext.tenantId;
+      if (oid && oid !== 'system') {
+        url += `&orgId=${encodeURIComponent(oid)}`;
+      }
     }
-    
-    // Fallback for direct array response
-    if (Array.isArray(response)) {
-      return response;
-    }
-    
-    return [];
+    const response = await apiGet<unknown>(url, false);
+    return extractApiList(response);
   }
 
   static async getEmployeeById(employeeId: string) {
@@ -604,6 +611,56 @@ export class EmployeeService {
   static async deleteEmployee(employeeId: string) {
     await apiClient.delete(`/employees/${employeeId}`);
     return { success: true };
+  }
+}
+
+// ============================================
+// Department Service
+// ============================================
+export interface DepartmentRecord {
+  _id: string | null;
+  name: string;
+  description?: string;
+  headName?: string;
+  code?: string;
+  employeeCount?: number;
+  isActive?: boolean;
+  source?: 'database' | 'employees';
+}
+
+export class DepartmentService {
+  static async getAll(options?: {
+    search?: string;
+    status?: 'active' | 'inactive' | 'all';
+    orgId?: string;
+  }): Promise<DepartmentRecord[]> {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    const params = new URLSearchParams();
+    if (options?.search?.trim()) params.set('search', options.search.trim());
+    if (options?.status && options.status !== 'active') params.set('status', options.status);
+    if (options?.orgId) params.set('orgId', options.orgId);
+    const qs = params.toString();
+    const response = await apiGet<unknown>(`/departments${qs ? `?${qs}` : ''}`);
+    return extractApiList<DepartmentRecord>(response);
+  }
+
+  static async getEmployeesByDepartment(
+    departmentName: string,
+    orgId?: string
+  ): Promise<unknown[]> {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    const params = new URLSearchParams({
+      department: departmentName,
+      simple: 'true',
+      limit: '500',
+    });
+    if (orgId) params.set('orgId', orgId);
+    const response = await apiGet<unknown>(`/employees?${params.toString()}`);
+    return extractApiList(response);
   }
 }
 
@@ -657,41 +714,72 @@ export class ExpenseService {
   }
 }
 
+/** Normalize list payloads from paginated or flat API responses. */
+export function extractApiList<T = unknown>(response: unknown): T[] {
+  if (Array.isArray(response)) return response as T[];
+  if (!response || typeof response !== 'object') return [];
+  const body = response as { data?: unknown };
+  if (Array.isArray(body.data)) return body.data as T[];
+  if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
+    const nested = (body.data as { data?: unknown }).data;
+    if (Array.isArray(nested)) return nested as T[];
+  }
+  return [];
+}
+
 // ============================================
 // Leave Request Service
 // ============================================
 export class LeaveRequestService {
   static async getAllLeaveRequests() {
-    const response = await apiClient.get<any>('/leave-requests');
-    // Handle paginated response
-    if (response.data?.data) {
-      return response.data.data;
-    }
-    if (Array.isArray(response.data)) {
-      return response.data;
-    }
-    return [];
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    const response = await apiGet<{ success?: boolean; data?: unknown }>(
+      '/leave-requests?limit=500',
+      false
+    );
+    return response;
   }
 
   static async getLeaveRequestsByUserId(userId: string) {
-    const response = await apiClient.get<any>(`/leave-requests/user/${userId}`);
-    // Return the full response so frontend can access response.success and response.data
-    return response;
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiGet<{ success?: boolean; data?: unknown }>(
+      `/leave-requests/user/${userId}?limit=200`,
+      false
+    );
   }
 
   static async createLeaveRequest(leaveData: any) {
-    const response = await apiClient.post<any>('/leave-requests', leaveData);
-    return response;
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; message?: string; data?: unknown }>(
+      '/leave-requests',
+      leaveData
+    );
   }
 
   static async approveLeaveRequest(requestId: string, data?: any) {
-    const response = await apiClient.patch<any>(`/leave-requests/${requestId}/approve`, data || {});
-    return response.data;
+    const { apiPatch } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPatch<{ success?: boolean; message?: string; data?: unknown }>(
+      `/leave-requests/${requestId}/approve`,
+      data || {}
+    );
   }
 
   static async rejectLeaveRequest(requestId: string, data?: any) {
-    const response = await apiClient.patch<any>(`/leave-requests/${requestId}/reject`, data || {});
-    return response.data;
+    const { apiPatch } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPatch<{ success?: boolean; message?: string; data?: unknown }>(
+      `/leave-requests/${requestId}/reject`,
+      data || {}
+    );
   }
 
   static async bulkApproveLeaveRequests(requestIds: string[]) {
@@ -716,13 +804,37 @@ export class LeaveRequestService {
     return [];
   }
 
+  static async bulkDeleteLeaveRequests(requestIds: string[]) {
+    const response = await apiClient.post<any>('/leave-requests/bulk-delete', { requestIds });
+    if (response.data?.data) {
+      return response.data.data;
+    }
+    if (Array.isArray(response.data)) {
+      return response.data;
+    }
+    return [];
+  }
+
   static async deleteLeaveRequest(requestId: string) {
-    const response = await apiClient.delete<any>(`/leave-requests/${requestId}`);
+    const { apiDelete, clearApiCache } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    const response = await apiDelete<{ success?: boolean; message?: string }>(
+      `/leave-requests/${requestId}`
+    );
+    clearApiCache('/leave-requests');
     return response;
   }
 
   static async updateLeaveRequest(requestId: string, data: any) {
-    const response = await apiClient.patch<any>(`/leave-requests/${requestId}`, data);
+    const { apiPatch, clearApiCache } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    const response = await apiPatch<{ success?: boolean; message?: string; data?: unknown }>(
+      `/leave-requests/${requestId}`,
+      data
+    );
+    clearApiCache('/leave-requests');
     return response;
   }
 
@@ -762,7 +874,10 @@ export class HolidayService {
   }
 
   static async getHolidaysByOrganization(organizationId: string) {
-    const response = await apiClient.get<any[]>(`/holidays/organization/${organizationId}`);
+    const year = new Date().getFullYear();
+    const response = await apiClient.get<any[]>(
+      `/holidays?year=${year}&limit=500&orgId=${encodeURIComponent(organizationId)}`
+    );
     return response.data || [];
   }
 
@@ -773,37 +888,38 @@ export class HolidayService {
 }
 
 // ============================================
-// Payroll Service
+// Payroll Service (legacy — use /api/salary routes via employee Payroll page)
 // ============================================
+/** @deprecated Legacy /payslips API is not mounted; use SalarySlip routes under /api/salary */
 export class PayrollService {
-  static async getAllPayslips() {
-    const response = await apiClient.get<any[]>('/payslips');
-    return response.data || [];
+  private static deprecated(): never {
+    throw new Error(
+      'PayrollService is deprecated. Use employee Payroll (/salary/slips) or admin Payroll pages instead.'
+    );
   }
 
-  static async getEmployeePayslips(employeeId: string) {
-    const response = await apiClient.get<any[]>(`/payslips/employee/${employeeId}`);
-    return response.data || [];
+  static async getAllPayslips() {
+    return PayrollService.deprecated();
+  }
+
+  static async getEmployeePayslips(_employeeId: string) {
+    return PayrollService.deprecated();
   }
 
   static async getMyPayslips() {
-    const response = await apiClient.get<any[]>('/payslips/my-payslips');
-    return response.data || [];
+    return PayrollService.deprecated();
   }
 
-  static async createPayslip(payslipData: any) {
-    const response = await apiClient.post<any>('/payslips', payslipData);
-    return response.data;
+  static async createPayslip(_payslipData: unknown) {
+    return PayrollService.deprecated();
   }
 
-  static async markPayslipAsPaid(payslipId: string) {
-    const response = await apiClient.patch<any>(`/payslips/${payslipId}/pay`, {});
-    return response.data;
+  static async markPayslipAsPaid(_payslipId: string) {
+    return PayrollService.deprecated();
   }
 
-  static async deletePayslip(payslipId: string) {
-    await apiClient.delete(`/payslips/${payslipId}`);
-    return { success: true };
+  static async deletePayslip(_payslipId: string) {
+    return PayrollService.deprecated();
   }
 }
 
@@ -857,158 +973,145 @@ export class AdvanceLoanService {
 // ============================================
 export class TokenRefreshService {
   async refreshToken(): Promise<ApiResponse<{ token: string; user: any }>> {
-    const refreshToken = TokenManager.getRefreshToken();
-
-    if (!refreshToken) {
-      throw new ApiError('No refresh token available', 401, 'NO_REFRESH_TOKEN');
-    }
-
-    const url = `${getApiBaseUrl()}/security/auth/refresh-token`;
-    const REFRESH_TIMEOUT = 15000;
-
-    try {
-      const response = await fetchWithTimeout(
-        url,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken })
-        },
-        REFRESH_TIMEOUT
-      );
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        TokenManager.clear();
-        throw new ApiError(
-          data.message || 'Token refresh failed',
-          response.status,
-          data.code
-        );
-      }
-
-      if (data.data?.accessToken) {
-        TokenManager.set(data.data.accessToken);
-      }
-      if (data.data?.user) {
-        TokenManager.setUser(data.data.user);
-      }
-
+    const accessToken = await refreshAccessToken();
+    if (accessToken) {
+      TokenManager.set(accessToken);
       return {
-        success: !!data.success,
-        data: data.data?.accessToken
-          ? { token: data.data.accessToken as string, user: data.data.user }
-          : undefined,
-        message: data.message
+        success: true,
+        data: { token: accessToken, user: TokenManager.getUser() },
       };
-    } catch (error) {
-      if (error instanceof ApiError) {
-        throw error;
-      }
-      throw new ApiError('Unable to refresh session', 0, 'NETWORK_ERROR');
     }
+    throw new ApiError('Unable to refresh session', 401, 'AUTH_REQUIRED');
   }
 }
 
 export class LeaveAllocationService {
   static async getEmployeeAllocations(employeeId: string, year?: number, month?: number) {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
     let endpoint = `/leave-allocation/employee/${employeeId}`;
     if (year && month) {
       endpoint += `?year=${year}&month=${month}`;
     }
-    const response = await apiClient.get<any>(endpoint);
-    return response.data;
+    return apiGet(endpoint, false);
   }
 
-  static async getOrganizationAllocations(orgId: string, year?: number, month?: number, status?: string) {
+  static async getOrganizationAllocations(
+    orgId: string,
+    year?: number,
+    month?: number | null,
+    status?: string
+  ) {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
     let endpoint = `/leave-allocation/organization/${orgId}`;
-    const params = new URLSearchParams();
+    const params = new URLSearchParams({ limit: '500' });
     if (year) params.append('year', year.toString());
-    if (month) params.append('month', month.toString());
+    if (month != null && month > 0) params.append('month', month.toString());
     if (status) params.append('status', status);
-    
-    if (params.toString()) {
-      endpoint += `?${params.toString()}`;
-    }
-    
-    const response = await apiClient.get<any>(endpoint);
-    return response.data;
+    endpoint += `?${params.toString()}`;
+    const response = await apiGet<unknown>(endpoint, false);
+    return extractApiList(response);
   }
 
   static async createAllocation(data: any) {
-    const response = await apiClient.post<any>('/leave-allocation', data);
-    return response;
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; message?: string; data?: unknown }>(
+      '/leave-allocation',
+      data
+    );
   }
 
   static async updateAllocation(allocationId: string, data: any) {
-    const response = await apiClient.patch<any>(`/leave-allocation/${allocationId}`, data);
-    return response.data;
+    const { apiPatch } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPatch<{ success?: boolean; message?: string; data?: unknown }>(
+      `/leave-allocation/${allocationId}`,
+      data
+    );
   }
 
   static async deleteAllocation(allocationId: string) {
-    const response = await apiClient.delete<any>(`/leave-allocation/${allocationId}`);
-    return response.data;
+    const { apiDelete } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiDelete<{ success?: boolean; message?: string }>(
+      `/leave-allocation/${allocationId}`
+    );
   }
 
   static async getEmployeeBalance(employeeId: string, year?: number, month?: number) {
+    const { apiGet } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
     let endpoint = `/leave-allocation/balance/${employeeId}`;
     const params = new URLSearchParams();
     if (year) params.append('year', year.toString());
     if (month) params.append('month', month.toString());
-    
+
     if (params.toString()) {
       endpoint += `?${params.toString()}`;
     }
-    
-    const response = await apiClient.get<any>(endpoint);
-    // Return the entire response so frontend can access response.success and response.data
-    return response;
+
+    return apiGet<{ success?: boolean; data?: unknown }>(endpoint, false);
   }
 
   static async deductLeaves(employeeId: string, leaveType: string, days: number, leaveRequestId?: string) {
-    const response = await apiClient.post<any>('/leave-allocation/deduct', {
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; data?: unknown }>('/leave-allocation/deduct', {
       employeeId,
       leaveType,
       days,
-      leaveRequestId
+      leaveRequestId,
     });
-    return response.data;
   }
 
   static async restoreLeaves(employeeId: string, leaveType: string, days: number, leaveRequestId?: string) {
-    const response = await apiClient.post<any>('/leave-allocation/restore', {
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; data?: unknown }>('/leave-allocation/restore', {
       employeeId,
       leaveType,
       days,
-      leaveRequestId
+      leaveRequestId,
     });
-    return response.data;
   }
 
   static async bulkAllocate(orgId: string, year: number, month: number, employees: string[], allocations: any, allocatedBy: string) {
-    const response = await apiClient.post<any>('/leave-allocation/bulk-allocate', {
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; data?: unknown }>('/leave-allocation/bulk-allocate', {
       orgId,
       year,
       month,
       employees,
       allocations,
-      allocatedBy
+      allocatedBy,
     });
-    return response.data;
   }
 
   static async yearlyAllocate(orgId: string, year: number, employees: string[], casualLeave: number, earnedLeave: number, medicalLeave: number, allocatedBy: string) {
-    const response = await apiClient.post<any>('/leave-allocation/yearly-allocate', {
+    const { apiPost } = await import('./apiHelper');
+    const { ensureAccessToken } = await import('./sessionAuth');
+    await ensureAccessToken();
+    return apiPost<{ success?: boolean; data?: unknown }>('/leave-allocation/yearly-allocate', {
       orgId,
       year,
       employees,
       casualLeave,
       earnedLeave,
       medicalLeave,
-      allocatedBy
+      allocatedBy,
     });
-    return response;
   }
 }
 

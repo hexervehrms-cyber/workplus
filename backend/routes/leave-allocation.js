@@ -11,8 +11,26 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { paginationMiddleware } from '../middleware/pagination.js';
 import idempotencyMiddleware from '../middleware/idempotency.js';
 import logger from '../utils/logger.js';
+import {
+  LEAVE_BALANCE_KEYS,
+  allocationHasBalance,
+  resolveLeaveAllocation,
+} from '../utils/leaveBalanceHelpers.js';
+import { authorize } from '../middleware/auth.js';
+import { assertEmployeeSelfOrPrivileged } from '../utils/employeeAccessHelpers.js';
+import { scopedOrgId } from '../utils/leaveAccessHelpers.js';
+import { isSuperAdmin } from '../utils/orgScopeHelpers.js';
 
 const router = express.Router();
+
+async function requireAllocationAccess(req, res, employeeId) {
+  const access = await assertEmployeeSelfOrPrivileged(req, employeeId);
+  if (!access.ok) {
+    res.status(access.status).json({ success: false, message: access.message });
+    return false;
+  }
+  return true;
+}
 
 // Apply pagination middleware
 router.use(paginationMiddleware);
@@ -42,6 +60,7 @@ const getLeaveFieldName = (leaveType) => {
  */
 router.get('/employee/:employeeId', asyncHandler(async (req, res) => {
   const { employeeId } = req.params;
+  if (!(await requireAllocationAccess(req, res, employeeId))) return;
   const { year, month } = req.query;
 
   const query = { employeeId };
@@ -90,8 +109,28 @@ router.get('/employee/:employeeId', asyncHandler(async (req, res) => {
  * GET /api/leave-allocation/organization/:orgId
  * Get all leave allocations for organization
  */
-router.get('/organization/:orgId', asyncHandler(async (req, res) => {
-  const { orgId } = req.params;
+router.get('/organization/:orgId', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+  const { orgId: orgIdParam } = req.params;
+  const tenantOrg = scopedOrgId(req);
+  if (!tenantOrg && !isSuperAdmin(req)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
+    });
+  }
+  const orgId =
+    isSuperAdmin(req) && orgIdParam ? String(orgIdParam) : String(tenantOrg || orgIdParam);
+  if (
+    !isSuperAdmin(req) &&
+    tenantOrg &&
+    String(orgIdParam) !== String(tenantOrg)
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot access leave allocations for another organization',
+    });
+  }
   const { page, limit, skip } = req.pagination;
   const { year, month, status } = req.query;
 
@@ -130,7 +169,7 @@ router.get('/organization/:orgId', asyncHandler(async (req, res) => {
  * POST /api/leave-allocation
  * Create or update leave allocation for employee
  */
-router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/', authorize('super_admin', 'admin', 'hr'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const {
     employeeId,
     userId,
@@ -141,27 +180,50 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     notes
   } = req.body;
 
-  // Validate required fields
-  if (!employeeId || !userId || !orgId || !year || !month || !allocations) {
+  const tenantOrg = scopedOrgId(req);
+  if (!tenantOrg) {
     return res.status(400).json({
       success: false,
-      message: 'All fields are required',
-      received: {
-        employeeId: !!employeeId,
-        userId: !!userId,
-        orgId: !!orgId,
-        year: !!year,
-        month: !!month,
-        allocations: !!allocations
-      }
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
     });
   }
+  if (
+    req.user.role !== 'super_admin' &&
+    String(orgId) !== String(tenantOrg)
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot create leave allocation for another organization',
+    });
+  }
+
+  const monthNum = parseInt(String(month), 10);
+  const yearNum = parseInt(String(year), 10);
+  if (!employeeId || !orgId || !yearNum || !monthNum || monthNum < 1 || monthNum > 12 || !allocations) {
+    return res.status(400).json({
+      success: false,
+      message: 'employeeId, orgId, year, month (1-12), and allocations are required',
+    });
+  }
+
+  const employee = await Employee.findById(employeeId).select('userId orgId').lean();
+  if (!employee?.userId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Employee not found or missing user account',
+    });
+  }
+
+  const employeeUserId = employee.userId;
+  const allocatorId = req.user.userId || req.user.id;
 
   // Check if allocation already exists
   let allocation = await LeaveAllocation.findOne({
     employeeId,
-    year,
-    month
+    orgId: String(tenantOrg),
+    year: yearNum,
+    month: monthNum,
   });
 
   if (allocation) {
@@ -169,7 +231,7 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     allocation.allocations = allocations;
     allocation.notes = notes;
     allocation.status = 'allocated';
-    allocation.allocatedBy = userId;
+    allocation.allocatedBy = allocatorId;
     allocation.allocatedDate = new Date();
     await allocation.save();
 
@@ -190,14 +252,14 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   // Create new allocation
   allocation = await LeaveAllocation.create({
     employeeId,
-    userId,
-    orgId,
-    year,
-    month,
+    userId: employeeUserId,
+    orgId: String(tenantOrg),
+    year: yearNum,
+    month: monthNum,
     allocations,
     notes,
     status: 'allocated',
-    allocatedBy: userId,
+    allocatedBy: allocatorId,
     allocatedDate: new Date()
   });
 
@@ -224,8 +286,12 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
  * GET /api/leave-allocation/:id
  * Get single leave allocation
  */
-router.get('/:id', asyncHandler(async (req, res) => {
-  const allocation = await LeaveAllocation.findById(req.params.id)
+router.get('/:id', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+  const tenantOrg = scopedOrgId(req);
+  const allocation = await LeaveAllocation.findOne({
+    _id: req.params.id,
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
+  })
     .populate({
       path: 'employeeId',
       select: 'employeeCode name department designation userId',
@@ -254,11 +320,15 @@ router.get('/:id', asyncHandler(async (req, res) => {
  * PATCH /api/leave-allocation/:id
  * Update leave allocation
  */
-router.patch('/:id', asyncHandler(async (req, res) => {
+router.patch('/:id', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { allocations, notes, status } = req.body;
+  const tenantOrg = scopedOrgId(req);
 
-  const allocation = await LeaveAllocation.findById(id);
+  const allocation = await LeaveAllocation.findOne({
+    _id: id,
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
+  });
 
   if (!allocation) {
     return res.status(404).json({
@@ -281,6 +351,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 
   await allocation.save();
 
+  if (req.emitLeaveUpdate) {
+    req.emitLeaveUpdate('allocation_created', allocation, allocation.orgId);
+  }
+
   logger.info('Leave allocation updated', {
     allocationId: id
   });
@@ -296,10 +370,14 @@ router.patch('/:id', asyncHandler(async (req, res) => {
  * DELETE /api/leave-allocation/:id
  * Delete leave allocation
  */
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const tenantOrg = scopedOrgId(req);
 
-  const allocation = await LeaveAllocation.findByIdAndDelete(id);
+  const allocation = await LeaveAllocation.findOneAndDelete({
+    _id: id,
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
+  });
 
   if (!allocation) {
     return res.status(404).json({
@@ -326,67 +404,59 @@ router.delete('/:id', asyncHandler(async (req, res) => {
  */
 router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
   const { employeeId } = req.params;
+  if (!(await requireAllocationAccess(req, res, employeeId))) return;
   const { year, month } = req.query;
 
   const now = new Date();
   let currentYear = year ? parseInt(year) : now.getFullYear();
   let currentMonth = month ? parseInt(month) : now.getMonth() + 1;
 
-  // Get allocation for specified month
-  const allocation = await LeaveAllocation.findOne({
+  const { allocation, resolvedMonth, resolvedYear } = await resolveLeaveAllocation(
+    LeaveAllocation,
     employeeId,
-    year: currentYear,
-    month: currentMonth
-  });
+    currentYear,
+    currentMonth
+  );
 
-  if (!allocation) {
+  const buildBreakdown = (allocDoc) => {
+    const breakdown = {};
+    for (const key of LEAVE_BALANCE_KEYS) {
+      const allocated = allocDoc?.allocations?.[key] || 0;
+      const carried = allocDoc?.carriedForward?.[key] || 0;
+      const used = allocDoc?.used?.[key] || 0;
+      const pending = allocDoc?.pending?.[key] || 0;
+      const total = allocated + carried;
+      breakdown[key] = {
+        allocated,
+        carried,
+        used,
+        pending,
+        total,
+        remaining: Math.max(0, total - used - pending),
+      };
+    }
+    return breakdown;
+  };
+
+  if (!allocation || !allocationHasBalance(allocation)) {
     return res.json({
       success: true,
-      data: {
-        vacation: 0,
-        sickLeave: 0,
-        casualLeave: 0,
-        earnedLeave: 0,
-        medicalLeave: 0,
-        maternityLeave: 0,
-        paternityLeave: 0,
-        compensatoryOff: 0,
-        personal: 0,
-        emergency: 0,
-        ncns: 0,
-        sandwichLeave: 0
-      }
+      hasAllocation: false,
+      data: buildBreakdown(null),
+      resolvedYear: currentYear,
+      resolvedMonth: currentMonth,
     });
-  }
-
-  const leaveKeys = [
-    'vacation',
-    'sickLeave',
-    'casualLeave',
-    'earnedLeave',
-    'medicalLeave',
-    'maternityLeave',
-    'paternityLeave',
-    'compensatoryOff',
-    'personal',
-    'emergency',
-    'ncns',
-    'sandwichLeave'
-  ];
-
-  const balance = {};
-  for (const key of leaveKeys) {
-    const allocated = allocation.allocations?.[key] || 0;
-    const carried = allocation.carriedForward?.[key] || 0;
-    const used = allocation.used?.[key] || 0;
-    const pending = allocation.pending?.[key] || 0;
-    balance[key] = allocated + carried - used - pending;
   }
 
   res.json({
     success: true,
-    data: balance,
-    allocation
+    hasAllocation: true,
+    data: buildBreakdown(allocation),
+    allocation,
+    resolvedYear: resolvedYear ?? currentYear,
+    resolvedMonth: resolvedMonth ?? currentMonth,
+    balanceSourceMonth:
+      resolvedMonth && resolvedMonth !== currentMonth ? resolvedMonth : undefined,
   });
 }));
 
@@ -403,6 +473,8 @@ router.post('/deduct', asyncHandler(async (req, res) => {
       message: 'employeeId, leaveType, and days are required'
     });
   }
+
+  if (!(await requireAllocationAccess(req, res, employeeId))) return;
 
   const fieldName = getLeaveFieldName(leaveType);
   if (!fieldName) {
@@ -474,6 +546,8 @@ router.post('/restore', asyncHandler(async (req, res) => {
     });
   }
 
+  if (!(await requireAllocationAccess(req, res, employeeId))) return;
+
   const fieldName = getLeaveFieldName(leaveType);
   if (!fieldName) {
     return res.status(400).json({
@@ -521,8 +595,22 @@ router.post('/restore', asyncHandler(async (req, res) => {
  * POST /api/leave-allocation/yearly-allocate
  * Allocate yearly leaves (Casual, Earned, Medical) to employees
  */
-router.post('/yearly-allocate', idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/yearly-allocate', authorize('super_admin', 'admin', 'hr'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { orgId, year, employees, casualLeave, earnedLeave, medicalLeave, allocatedBy } = req.body;
+  const tenantOrg = scopedOrgId(req);
+  if (!tenantOrg) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
+    });
+  }
+  if (req.user.role !== 'super_admin' && String(orgId) !== String(tenantOrg)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot yearly-allocate for another organization',
+    });
+  }
 
   if (!orgId || !year || !employees || !allocatedBy) {
     return res.status(400).json({
@@ -534,15 +622,25 @@ router.post('/yearly-allocate', idempotencyMiddleware, asyncHandler(async (req, 
   const results = [];
   const errors = [];
 
+  const yearNum = parseInt(String(year), 10);
+  const allocatorId = allocatedBy || req.user.userId || req.user.id;
+
   for (const employeeId of employees) {
     try {
       // For yearly allocation, we allocate to January (month 1)
       const month = 1;
       
+      const employee = await Employee.findById(employeeId).select('userId').lean();
+      if (!employee?.userId) {
+        errors.push({ employeeId, success: false, error: 'Employee user not found' });
+        continue;
+      }
+
       let allocation = await LeaveAllocation.findOne({
         employeeId,
-        year,
-        month
+        orgId: String(tenantOrg),
+        year: yearNum,
+        month,
       });
 
       if (allocation) {
@@ -559,15 +657,16 @@ router.post('/yearly-allocate', idempotencyMiddleware, asyncHandler(async (req, 
         allocation.allocations.medicalLeave = (allocation.allocations.medicalLeave || 0) + (medicalLeave || 0);
         
         allocation.status = 'allocated';
-        allocation.allocatedBy = allocatedBy;
+        allocation.allocatedBy = allocatorId;
         allocation.allocatedDate = new Date();
         await allocation.save();
       } else {
         // Create new allocation
         allocation = await LeaveAllocation.create({
           employeeId,
-          orgId,
-          year,
+          userId: employee.userId,
+          orgId: String(tenantOrg),
+          year: yearNum,
           month,
           allocations: {
             vacation: 0,
@@ -589,7 +688,7 @@ router.post('/yearly-allocate', idempotencyMiddleware, asyncHandler(async (req, 
             medicalLeave: medicalLeave || 0
           },
           status: 'allocated',
-          allocatedBy,
+          allocatedBy: allocatorId,
           allocatedDate: new Date()
         });
       }
@@ -629,42 +728,67 @@ router.post('/yearly-allocate', idempotencyMiddleware, asyncHandler(async (req, 
  * POST /api/leave-allocation/bulk-allocate
  * Bulk allocate leaves to multiple employees
  */
-router.post('/bulk-allocate', idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.post('/bulk-allocate', authorize('super_admin', 'admin', 'hr'), idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { orgId, year, month, employees, allocations, allocatedBy } = req.body;
-
-  if (!orgId || !year || !month || !employees || !allocations || !allocatedBy) {
+  const tenantOrg = scopedOrgId(req);
+  if (!tenantOrg) {
     return res.status(400).json({
       success: false,
-      message: 'All fields are required'
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
+    });
+  }
+  if (req.user.role !== 'super_admin' && String(orgId) !== String(tenantOrg)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot bulk-allocate for another organization',
     });
   }
 
+  const monthNum = parseInt(String(month), 10);
+  const yearNum = parseInt(String(year), 10);
+  if (!orgId || !yearNum || !monthNum || monthNum < 1 || monthNum > 12 || !employees || !allocations) {
+    return res.status(400).json({
+      success: false,
+      message: 'orgId, year, month (1-12), employees, and allocations are required'
+    });
+  }
+
+  const allocatorId = allocatedBy || req.user.userId || req.user.id;
   const results = [];
   const errors = [];
 
   for (const employeeId of employees) {
     try {
+      const employee = await Employee.findById(employeeId).select('userId').lean();
+      if (!employee?.userId) {
+        errors.push({ employeeId, success: false, error: 'Employee user not found' });
+        continue;
+      }
+
       let allocation = await LeaveAllocation.findOne({
         employeeId,
-        year,
-        month
+        orgId: String(tenantOrg),
+        year: yearNum,
+        month: monthNum,
       });
 
       if (allocation) {
         allocation.allocations = allocations;
         allocation.status = 'allocated';
-        allocation.allocatedBy = allocatedBy;
+        allocation.allocatedBy = allocatorId;
         allocation.allocatedDate = new Date();
         await allocation.save();
       } else {
         allocation = await LeaveAllocation.create({
           employeeId,
-          orgId,
-          year,
-          month,
+          userId: employee.userId,
+          orgId: String(tenantOrg),
+          year: yearNum,
+          month: monthNum,
           allocations,
           status: 'allocated',
-          allocatedBy,
+          allocatedBy: allocatorId,
           allocatedDate: new Date()
         });
       }

@@ -4,6 +4,8 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { authenticate, authorize } from '../middleware/auth.js';
 import Organization from '../models/Organization.js';
 import logger from '../utils/logger.js';
+import { userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
+import { invalidateSmtpTransports } from '../utils/smtpService.js';
 
 const router = express.Router();
 
@@ -37,8 +39,8 @@ router.get(
   authenticate,
   authorize('admin', 'hr', 'super_admin'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user.orgId;
-    if (!mongoose.Types.ObjectId.isValid(String(orgId))) {
+    const orgId = userOrgIdFromReq(req);
+    if (!orgId || !mongoose.Types.ObjectId.isValid(String(orgId))) {
       return res.status(400).json({ success: false, message: 'Invalid organization on account' });
     }
 
@@ -120,6 +122,10 @@ router.patch(
 
     org.markModified('settings');
     await org.save();
+
+    if (integrations?.smtp) {
+      invalidateSmtpTransports();
+    }
 
     logger.info('Notification integrations updated', { orgId, by: req.user.userId });
 

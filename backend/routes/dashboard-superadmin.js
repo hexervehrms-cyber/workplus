@@ -1,6 +1,7 @@
 import express from "express";
 import mongoose from "mongoose";
 import { asyncHandler } from "../middleware/errorHandler.js";
+import { authorize } from "../middleware/auth.js";
 import User from "../models/User.js";
 import Employee from "../models/Employee.js";
 import Organization from "../models/Organization.js";
@@ -9,10 +10,13 @@ import Attendance from "../models/Attendance.js";
 import LeaveRequest from "../models/LeaveRequest.js";
 import Expense from "../models/Expense.js";
 import Payslip from "../models/Payroll.js";
+import Revenue from "../models/Revenue.js";
 import { calculateAllKPIChanges } from "../utils/kpiCalculations.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
+
+router.use(authorize("super_admin"));
 
 /**
  * GET /api/dashboard/superadmin
@@ -450,35 +454,197 @@ router.get("/superadmin/growth-trends", asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /api/dashboard/superadmin/recent-activities
- * Get recent platform-wide activities
+ * GET /api/superadmin/live-activity
+ * Get live platform activity with pagination and filters
  */
-router.get("/superadmin/recent-activities", asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit) || 20;
+router.get("/superadmin/live-activity", asyncHandler(async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
+  const { search, organizationId, action, dateFrom, dateTo } = req.query;
+
+  // Build query filter
+  const filter = {};
   
-  const activities = await ActivityLog.find({
-    severity: { $in: ['medium', 'high', 'critical'] }
-  })
-  .populate('userId', 'name email')
-  .sort({ createdAt: -1 })
-  .limit(limit)
-  .lean();
+  if (organizationId) {
+    filter.orgId = organizationId;
+  }
   
-  // Format activities for frontend
+  if (action) {
+    filter.action = action;
+  }
+  
+  if (dateFrom || dateTo) {
+    filter.createdAt = {};
+    if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
+    if (dateTo) {
+      const endDate = new Date(dateTo);
+      endDate.setHours(23, 59, 59, 999);
+      filter.createdAt.$lte = endDate;
+    }
+  }
+  
+  if (search) {
+    filter.$or = [
+      { 'userId': { $regex: search, $options: 'i' } },
+      { 'action': { $regex: search, $options: 'i' } },
+      { 'entity.entityName': { $regex: search, $options: 'i' } },
+      { 'errorMessage': { $regex: search, $options: 'i' } }
+    ];
+  }
+
+  // Get total count for pagination
+  const total = await ActivityLog.countDocuments(filter);
+  
+  // Fetch activities with pagination
+  const activities = await ActivityLog.find(filter)
+    .populate('userId', 'name email organization')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+
+  // Get statistics
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const todayFilter = { ...filter, createdAt: { $gte: today } };
+  const actionsToday = await ActivityLog.countDocuments(todayFilter);
+  
+  const activeUsersResult = await ActivityLog.aggregate([
+    { $match: filter },
+    { $group: { _id: '$userId', count: { $sum: 1 } } },
+    { $group: { _id: null, activeUsers: { $sum: 1 } } }
+  ]);
+  const activeUsers = activeUsersResult[0]?.activeUsers || 0;
+  
+  const organizationsResult = await ActivityLog.aggregate([
+    { $match: filter },
+    { $group: { _id: '$orgId', count: { $sum: 1 } } },
+    { $group: { _id: null, organizations: { $sum: 1 } } }
+  ]);
+  const organizations = organizationsResult[0]?.organizations || 0;
+  
+  // Calculate growth rate based on previous period
+  const lastPeriodStart = new Date(today);
+  lastPeriodStart.setDate(lastPeriodStart.getDate() - 1);
+  const lastPeriodEnd = new Date(lastPeriodStart);
+  lastPeriodEnd.setDate(lastPeriodEnd.getDate() - 1);
+  lastPeriodEnd.setHours(0, 0, 0, 0);
+  
+  const lastPeriodFilter = {
+    ...filter,
+    createdAt: { $gte: lastPeriodEnd, $lt: lastPeriodStart }
+  };
+  const lastPeriodCount = await ActivityLog.countDocuments(lastPeriodFilter);
+  const growthRate = lastPeriodCount > 0 ? ((actionsToday - lastPeriodCount) / lastPeriodCount) * 100 : 0;
+
+  // Format activities for response
   const formattedActivities = activities.map(activity => ({
     id: activity._id,
-    type: activity.action,
-    description: getActivityDescription(activity),
-    user: activity.userId?.name || 'System',
-    timestamp: activity.createdAt,
-    severity: activity.severity,
-    icon: getActivityIcon(activity.action),
-    orgId: activity.orgId
+    userId: activity.userId?._id,
+    userName: activity.userId?.name || 'System',
+    userEmail: activity.userId?.email || 'system@platform.local',
+    userRole: activity.userId?.role || 'system',
+    organizationId: activity.orgId,
+    action: activity.action,
+    module: activity.entity?.entityType || 'system',
+    description: activity.entity?.entityName || activity.details?.description || activity.action,
+    ipAddress: activity.ipAddress,
+    userAgent: activity.userAgent,
+    createdAt: activity.createdAt,
+    status: activity.success ? 'success' : 'failed',
+    severity: activity.severity
   }));
+
+  res.json({
+    success: true,
+    data: {
+      activities: formattedActivities,
+      stats: {
+        activeUsers,
+        organizations,
+        actionsToday,
+        growthRate: Math.round(growthRate * 100) / 100
+      },
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    }
+  });
+}));
+
+/**
+ * DELETE /api/superadmin/live-activity/:id
+ * Delete a single activity log
+ */
+router.delete("/superadmin/live-activity/:id", authorize("super_admin"), asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid activity ID"
+    });
+  }
+  
+  const activity = await ActivityLog.findByIdAndDelete(id);
+  
+  if (!activity) {
+    return res.status(404).json({
+      success: false,
+      message: "Activity log not found"
+    });
+  }
   
   res.json({
     success: true,
-    data: formattedActivities
+    message: "Activity log deleted successfully"
+  });
+}));
+
+/**
+ * POST /api/superadmin/live-activity/bulk-delete
+ * Bulk delete activity logs
+ */
+router.post("/superadmin/live-activity/bulk-delete", authorize("super_admin"), asyncHandler(async (req, res) => {
+  const { activityIds } = req.body;
+  
+  if (!Array.isArray(activityIds) || activityIds.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Activity IDs must be a non-empty array"
+    });
+  }
+  
+  // Validate all IDs
+  const validIds = activityIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+  
+  if (validIds.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "No valid activity IDs provided"
+    });
+  }
+  
+  // Delete activities
+  const result = await ActivityLog.deleteMany({
+    _id: { $in: validIds }
+  });
+  
+  const skipped = activityIds.length - validIds.length;
+  
+  res.json({
+    success: true,
+    data: {
+      requested: activityIds.length,
+      deleted: result.deletedCount,
+      skipped: skipped,
+      errors: []
+    }
   });
 }));
 
@@ -544,5 +710,304 @@ function getActivityIcon(action) {
   
   return iconMap[action] || 'activity';
 }
+
+/**
+ * GET /api/dashboard/superadmin/analytics
+ * Get analytics for Super Admin with optional organization filter
+ * Supports pagination for top organizations
+ */
+router.get("/superadmin/analytics", asyncHandler(async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
+  const { orgId, search, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+
+  // Validate orgId if provided
+  if (orgId && !mongoose.Types.ObjectId.isValid(orgId)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid organization ID"
+    });
+  }
+
+  // If orgId provided, validate organization exists
+  if (orgId) {
+    const org = await Organization.findById(orgId);
+    if (!org) {
+      return res.status(404).json({
+        success: false,
+        message: "Organization not found"
+      });
+    }
+  }
+
+  // Build filters
+  const orgFilter = orgId ? { orgId: orgId.toString() } : {};
+  const allOrgFilter = orgId ? { _id: orgId } : { isActive: true };
+
+  try {
+    // Calculate KPIs
+    const totalOrganizations = orgId 
+      ? 1 
+      : await Organization.countDocuments({ isActive: true });
+
+    const totalAdmins = await User.countDocuments({
+      role: { $in: ['admin', 'hr', 'manager'] },
+      isActive: true,
+      deletedAt: { $exists: false },
+      ...orgFilter
+    });
+
+    const totalEmployees = await Employee.countDocuments({
+      isActive: true,
+      ...orgFilter
+    });
+
+    // Calculate monthly revenue
+    const currentMonth = new Date();
+    currentMonth.setDate(1);
+    currentMonth.setHours(0, 0, 0, 0);
+    
+    const nextMonth = new Date(currentMonth);
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+    const monthlyRevenueResult = await Revenue.aggregate([
+      {
+        $match: {
+          date: {
+            $gte: currentMonth,
+            $lt: nextMonth
+          },
+          type: 'Sale',
+          ...orgFilter
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" }
+        }
+      }
+    ]);
+
+    const monthlyRevenue = monthlyRevenueResult[0]?.total || 0;
+
+    // Get top organizations
+    let topOrganizations = [];
+    let totalOrgsForPagination = 0;
+
+    if (!orgId) {
+      // Aggregation pipeline for top organizations
+      totalOrgsForPagination = await Organization.countDocuments({ isActive: true });
+
+      const sortMap = {
+        'createdAt': 'createdAt',
+        'name': 'name',
+        'employees': 'employeeCount',
+        'revenue': 'monthlyRevenue'
+      };
+
+      const sortField = sortMap[sortBy] || 'createdAt';
+      const sortDirection = sortOrder === 'asc' ? 1 : -1;
+
+      let orgsQuery = Organization.find({ isActive: true }).lean();
+      
+      if (search) {
+        orgsQuery = orgsQuery.where('name').regex(new RegExp(search, 'i'));
+      }
+
+      const baseOrgs = await orgsQuery.sort({ [sortField]: sortDirection }).skip(skip).limit(limit);
+
+      // Enrich with stats for each organization
+      topOrganizations = await Promise.all(
+        baseOrgs.map(async (org) => {
+          const empCount = await Employee.countDocuments({
+            orgId: org._id.toString(),
+            isActive: true
+          });
+
+          const adminCount = await User.countDocuments({
+            orgId: org._id.toString(),
+            role: { $in: ['admin', 'hr', 'manager'] },
+            isActive: true,
+            deletedAt: { $exists: false }
+          });
+
+          const revenueResult = await Revenue.aggregate([
+            {
+              $match: {
+                orgId: new mongoose.Types.ObjectId(org._id.toString()),
+                date: {
+                  $gte: currentMonth,
+                  $lt: nextMonth
+                },
+                type: 'Sale'
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: "$amount" }
+              }
+            }
+          ]);
+
+          return {
+            _id: org._id,
+            name: org.name,
+            code: org.code,
+            email: org.email,
+            employeeCount: empCount,
+            adminCount: adminCount,
+            monthlyRevenue: revenueResult[0]?.total || 0,
+            status: org.isActive ? 'Active' : 'Inactive',
+            createdAt: org.createdAt,
+            isActive: org.isActive
+          };
+        })
+      );
+    } else {
+      // Single organization view
+      const org = await Organization.findById(orgId).lean();
+      if (org) {
+        const empCount = await Employee.countDocuments({
+          orgId: orgId.toString(),
+          isActive: true
+        });
+
+        const adminCount = await User.countDocuments({
+          orgId: orgId.toString(),
+          role: { $in: ['admin', 'hr', 'manager'] },
+          isActive: true,
+          deletedAt: { $exists: false }
+        });
+
+        topOrganizations = [{
+          _id: org._id,
+          name: org.name,
+          code: org.code,
+          email: org.email,
+          employeeCount: empCount,
+          adminCount: adminCount,
+          monthlyRevenue: monthlyRevenue,
+          status: org.isActive ? 'Active' : 'Inactive',
+          createdAt: org.createdAt,
+          isActive: org.isActive
+        }];
+        
+        totalOrgsForPagination = 1;
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        kpis: {
+          totalAdmins,
+          totalOrganizations,
+          totalEmployees,
+          monthlyRevenue
+        },
+        topOrganizations,
+        pagination: {
+          page,
+          limit,
+          total: totalOrgsForPagination,
+          pages: Math.ceil(totalOrgsForPagination / limit)
+        }
+      }
+    });
+  } catch (error) {
+    logger.error('Error fetching super-admin analytics:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to load analytics'
+    });
+  }
+}));
+
+/**
+ * GET /api/dashboard/superadmin/summary
+ * Optimized summary endpoint for super admin dashboard KPI cards
+ * Returns only critical data needed for KPI rendering
+ * 60 second cache
+ */
+router.get("/superadmin/summary", asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'public, max-age=60');
+  
+  const { period = 'this_month' } = req.query;
+  
+  try {
+    // Get total organizations
+    const totalOrganizations = await Organization.countDocuments({ isActive: true });
+    
+    // Get active organizations (with activity in last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const activeOrganizations = await Organization.countDocuments({
+      isActive: true,
+      updatedAt: { $gte: thirtyDaysAgo }
+    });
+    
+    // Get total admins across all organizations
+    const totalAdmins = await User.countDocuments({ 
+      role: { $in: ['admin', 'super_admin'] },
+      isActive: true 
+    });
+    
+    // Get total employees across all organizations
+    const totalEmployees = await Employee.countDocuments({ status: 'active' });
+    
+    // Get current month revenue (sum of all payroll costs)
+    const currentMonth = new Date();
+    currentMonth.setDate(1);
+    currentMonth.setHours(0, 0, 0, 0);
+    
+    const nextMonth = new Date(currentMonth);
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+    
+    const monthlyRevenueResult = await Payslip.aggregate([
+      {
+        $match: {
+          month: currentMonth.getMonth() + 1,
+          year: currentMonth.getFullYear(),
+          status: { $in: ['generated', 'paid'] }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$netSalary" }
+        }
+      }
+    ]);
+    
+    const monthlyRevenue = monthlyRevenueResult[0]?.total || 0;
+    
+    // Get live sessions (users active in last 30 minutes)
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    const systemActivity = await User.countDocuments({
+      lastLogin: { $gte: thirtyMinutesAgo },
+      isActive: true
+    });
+    
+    const summary = {
+      kpis: {
+        totalOrganizations,
+        activeOrganizations,
+        totalAdmins,
+        totalEmployees,
+        monthlyRevenue,
+        systemActivity
+      },
+      lastUpdated: new Date().toISOString()
+    };
+    
+    res.json({ success: true, data: summary });
+  } catch (error) {
+    console.error('Error fetching super-admin summary:', error);
+    res.status(500).json({ success: false, message: 'Failed to load dashboard summary' });
+  }
+}));
 
 export default router;

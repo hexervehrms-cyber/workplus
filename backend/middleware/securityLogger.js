@@ -40,7 +40,7 @@ export const logAuthEvent = (eventType, severity = 'medium') => {
           
           // Extract user info if available
           const userId = req.user?.userId || req.body?.userId || null;
-          const orgId = req.user?.orgId || 'system';
+          const orgId = req.validatedOrgId || req.user?.orgId || null;
           
           // Create security event
           await SecurityEvent.createEvent({
@@ -260,7 +260,7 @@ export const logSuspiciousActivity = (activityType, riskScore = 50) => {
           headers: sanitizeHeaders(req.headers)
         },
         riskScore: riskScore,
-        orgId: req.user?.orgId || 'system'
+        orgId: req.validatedOrgId || req.user?.orgId || null
       });
     } catch (error) {
       logger.error('Suspicious activity logging failed', {

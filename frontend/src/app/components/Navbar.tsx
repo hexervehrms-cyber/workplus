@@ -15,9 +15,10 @@ import {
 } from './ui/dropdown-menu';
 import { Badge } from './ui/badge';
 import CurrencyChanger from './CurrencyChanger';
-import { useState, useEffect } from 'react';
-import { toast } from 'sonner';
-import { buildApiUrl } from '../utils/apiHelper';
+import { useState, useEffect, useRef } from 'react';
+import { toast } from '../utils/portalToast';
+import { apiRequest } from '../utils/apiHelper';
+import { socketService } from '../utils/socket';
 
 interface Notification {
   _id: string;
@@ -31,61 +32,73 @@ interface Notification {
   readAt?: string;
 }
 
+function profilePathForRole(role: string | undefined): string {
+  switch (role) {
+    case 'admin':
+    case 'hr':
+      return '/admin/settings';
+    case 'super_admin':
+      return '/super-admin';
+    case 'employee':
+    case 'manager':
+    case 'accountant':
+      return '/employee/profile';
+    default:
+      return '/employee/profile';
+  }
+}
+
 export function Navbar() {
   const { theme, toggleTheme } = useTheme();
-  const { user, logout } = useAuth();
+  const { user, logout, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Fetch notifications
   const fetchNotifications = async () => {
     try {
-      setLoading(true);
-      
-      const response = await fetch(buildApiUrl('/notifications?limit=10&status=all'), {
-        credentials: 'include',  // ✅ Send httpOnly cookies
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
+      if (mountedRef.current) setLoading(true);
+      const result = await apiRequest<{
+        success?: boolean;
+        data?: { notifications?: Notification[]; unreadCount?: number };
+      }>('/notifications?limit=10&status=all');
 
-      if (response.ok) {
-        const result = await response.json();
-        if (result.success && result.data) {
-          setNotifications(result.data.notifications || []);
-          setUnreadCount(result.data.unreadCount || 0);
-        }
-      } else if (response.status === 401) {
-        // Unauthorized - user session expired
-        console.warn('Notifications: Session expired');
+      if (mountedRef.current && result?.success && result.data) {
+        setNotifications(result.data.notifications || []);
+        setUnreadCount(result.data.unreadCount || 0);
       }
     } catch (error) {
-      console.error('Failed to fetch notifications:', error);
+      const msg = error instanceof Error ? error.message : '';
+      if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('token')) {
+        console.warn('Notifications: Session expired');
+      } else {
+        console.error('Failed to fetch notifications:', error);
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   };
 
   // Mark notification as read
   const markAsRead = async (notificationId: string) => {
     try {
-      const response = await fetch(buildApiUrl(`/notifications/${notificationId}/read`), {
-        method: 'PATCH',
-        credentials: 'include',  // ✅ Send httpOnly cookies
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        // Update local state
-        setNotifications(prev => 
-          prev.map(n => n._id === notificationId ? { ...n, isRead: true, readAt: new Date().toISOString() } : n)
-        );
-        setUnreadCount(prev => Math.max(0, prev - 1));
-      }
+      await apiRequest(`/notifications/${notificationId}/read`, { method: 'PATCH' });
+      setNotifications((prev) =>
+        prev.map((n) =>
+          n._id === notificationId ? { ...n, isRead: true, readAt: new Date().toISOString() } : n
+        )
+      );
+      setUnreadCount((prev) => Math.max(0, prev - 1));
     } catch (error) {
       console.error('Failed to mark notification as read:', error);
     }
@@ -94,24 +107,28 @@ export function Navbar() {
   // Mark all as read
   const markAllAsRead = async () => {
     try {
-      const response = await fetch(buildApiUrl('/notifications/mark-all-read'), {
-        method: 'PATCH',
-        credentials: 'include',  // ✅ Send httpOnly cookies
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        setNotifications(prev => 
-          prev.map(n => ({ ...n, isRead: true, readAt: new Date().toISOString() }))
-        );
-        setUnreadCount(0);
-        toast.success('All notifications marked as read');
-      }
+      await apiRequest('/notifications/mark-all-read', { method: 'PATCH' });
+      setNotifications((prev) =>
+        prev.map((n) => ({ ...n, isRead: true, readAt: new Date().toISOString() }))
+      );
+      setUnreadCount(0);
+      toast.success('All notifications marked as read');
     } catch (error) {
       console.error('Failed to mark all as read:', error);
       toast.error('Failed to mark all as read');
+    }
+  };
+
+  // Clear all notifications
+  const clearAllNotifications = async () => {
+    try {
+      await apiRequest('/notifications/clear-all', { method: 'DELETE' });
+      setNotifications([]);
+      setUnreadCount(0);
+      toast.success('Notifications cleared');
+    } catch (error) {
+      console.error('Failed to clear notifications:', error);
+      toast.error('Failed to clear notifications');
     }
   };
 
@@ -131,18 +148,34 @@ export function Navbar() {
         case 'leave_request':
         case 'leave_approved':
         case 'leave_rejected':
-          navigate(user?.role === 'employee' ? '/employee/leave' : '/admin/leaves');
+          navigate(
+            user?.role === 'employee' || user?.role === 'manager' || user?.role === 'accountant'
+              ? '/employee/leave'
+              : '/admin/leaves'
+          );
           break;
         case 'expense_submitted':
         case 'expense_approved':
         case 'expense_rejected':
-          navigate(user?.role === 'employee' ? '/employee/expenses' : '/admin/expenses');
+          navigate(
+            user?.role === 'employee' || user?.role === 'manager' || user?.role === 'accountant'
+              ? '/employee/expenses'
+              : '/admin/expenses'
+          );
           break;
         case 'payroll_generated':
-          navigate(user?.role === 'employee' ? '/employee/payroll' : '/admin/payroll');
+          navigate(
+            user?.role === 'employee' || user?.role === 'manager' || user?.role === 'accountant'
+              ? '/employee/payroll'
+              : '/admin/payroll'
+          );
           break;
         case 'attendance_reminder':
-          navigate('/employee/attendance');
+          navigate(
+            user?.role === 'employee' || user?.role === 'manager' || user?.role === 'accountant'
+              ? '/employee/attendance'
+              : '/admin/attendance'
+          );
           break;
         default:
           break;
@@ -169,18 +202,71 @@ export function Navbar() {
     return 'bg-muted';
   };
 
-  // Fetch notifications on mount and every 30 seconds
+  // Fetch notifications only when authenticated (avoids 401 before token hydrate)
   useEffect(() => {
-    fetchNotifications();
-    const interval = setInterval(fetchNotifications, 30000); // Refresh every 30 seconds
-    return () => clearInterval(interval);
-  }, []);
+    if (authLoading || !user) return;
+
+    void (async () => {
+      const { ensureAccessToken } = await import('../utils/sessionAuth');
+      await ensureAccessToken();
+      fetchNotifications();
+    })();
+    const interval = setInterval(fetchNotifications, 30000);
+
+    const onSocketNotification = (payload: {
+      id?: string;
+      _id?: string;
+      title?: string;
+      message?: string;
+      type?: string;
+      priority?: string;
+      createdAt?: string;
+      actionUrl?: string;
+    }) => {
+      const id = payload.id || payload._id;
+      if (!id || !payload.title) {
+        fetchNotifications();
+        return;
+      }
+      if (!mountedRef.current) return;
+      setNotifications((prev) => {
+        if (prev.some((n) => n._id === String(id))) return prev;
+        const entry: Notification = {
+          _id: String(id),
+          title: payload.title!,
+          message: payload.message || '',
+          type: payload.type || 'announcement',
+          priority: payload.priority || 'medium',
+          isRead: false,
+          createdAt: payload.createdAt || new Date().toISOString(),
+          actionUrl: payload.actionUrl
+        };
+        return [entry, ...prev].slice(0, 10);
+      });
+      setUnreadCount((c) => c + 1);
+    };
+
+    socketService.on('notification', onSocketNotification);
+    socketService.on('notification:received', onSocketNotification);
+
+    const onRefresh = () => {
+      void fetchNotifications();
+    };
+    window.addEventListener('notifications:refresh', onRefresh);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('notifications:refresh', onRefresh);
+      socketService.off('notification', onSocketNotification);
+      socketService.off('notification:received', onSocketNotification);
+    };
+  }, [user, authLoading]);
 
   return (
     <header className="h-16 border-b border-border bg-card/50 backdrop-blur-xl sticky top-0 z-40">
       <div className="h-full px-6 flex items-center justify-between gap-4">
         {/* Search */}
-        <div className="flex-1 max-w-md">
+        <div className="flex-1 max-w-md min-w-0">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
@@ -191,16 +277,18 @@ export function Navbar() {
         </div>
 
         {/* Right Actions */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
           {/* Currency Changer */}
-          <CurrencyChanger />
+          <div className="shrink-0">
+            <CurrencyChanger />
+          </div>
           
           {/* Theme Toggle */}
           <Button
             variant="ghost"
             size="icon"
             onClick={toggleTheme}
-            className="rounded-xl"
+            className="rounded-xl shrink-0 text-foreground hover:bg-muted"
           >
             {theme === 'light' ? (
               <Moon className="w-5 h-5" />
@@ -209,14 +297,20 @@ export function Navbar() {
             )}
           </Button>
 
-          {/* Notifications */}
+          {/* Notifications - Bell always visible, badge only when unreadCount > 0 */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="rounded-xl relative">
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="relative rounded-xl shrink-0 text-foreground hover:bg-muted"
+                aria-label="Notifications"
+                title="Notifications"
+              >
                 <Bell className="w-5 h-5" />
                 {unreadCount > 0 && (
-                  <span className="absolute top-1 right-1 w-5 h-5 bg-destructive text-white text-xs rounded-full flex items-center justify-center">
-                    {unreadCount > 9 ? '9+' : unreadCount}
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-destructive text-white text-xs rounded-full flex items-center justify-center font-semibold">
+                    {unreadCount > 99 ? '99+' : unreadCount}
                   </span>
                 )}
               </Button>
@@ -224,16 +318,28 @@ export function Navbar() {
             <DropdownMenuContent align="end" className="w-96">
               <div className="flex items-center justify-between px-4 py-2">
                 <DropdownMenuLabel className="p-0">Notifications</DropdownMenuLabel>
-                {unreadCount > 0 && (
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="h-auto py-1 px-2 text-xs"
-                    onClick={markAllAsRead}
-                  >
-                    Mark all read
-                  </Button>
-                )}
+                <div className="flex gap-2">
+                  {unreadCount > 0 && (
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-auto py-1 px-2 text-xs"
+                      onClick={markAllAsRead}
+                    >
+                      Mark all read
+                    </Button>
+                  )}
+                  {notifications.length > 0 && (
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-auto py-1 px-2 text-xs text-destructive"
+                      onClick={clearAllNotifications}
+                    >
+                      Clear all
+                    </Button>
+                  )}
+                </div>
               </div>
               <DropdownMenuSeparator />
               <div className="max-h-[400px] overflow-y-auto">
@@ -274,9 +380,17 @@ export function Navbar() {
                     <Button 
                       variant="ghost" 
                       className="w-full text-sm"
-                      onClick={() => navigate('/notifications')}
+                      onClick={() => {
+                        const home =
+                          user?.role === 'super_admin'
+                            ? '/super-admin'
+                            : user?.role === 'admin' || user?.role === 'hr'
+                              ? '/admin'
+                              : '/employee';
+                        navigate(home);
+                      }}
                     >
-                      View all notifications
+                      Back to dashboard
                     </Button>
                   </div>
                 </>
@@ -287,7 +401,7 @@ export function Navbar() {
           {/* User Menu */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="rounded-xl gap-3 h-auto py-2 px-3">
+              <Button variant="ghost" className="rounded-xl gap-3 h-auto py-2 px-3 shrink-0">
                 <Avatar className="w-8 h-8">
                   <AvatarImage src={user?.avatar} />
                   <AvatarFallback>{user?.name?.charAt(0)}</AvatarFallback>
@@ -302,7 +416,7 @@ export function Navbar() {
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>My Account</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => navigate('/employee/profile')}>
+              <DropdownMenuItem onClick={() => navigate(profilePathForRole(user?.role))}>
                 <User className="w-4 h-4 mr-2" />
                 Profile
               </DropdownMenuItem>

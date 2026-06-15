@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { toast } from '../utils/portalToast';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -15,6 +16,7 @@ import {
   Building2,
   User
 } from 'lucide-react';
+import { apiGet } from '../utils/apiHelper';
 
 interface Document {
   id: string;
@@ -58,11 +60,10 @@ const EmployeeDocuments: React.FC<{ employeeId?: string }> = ({ employeeId = 'EM
 
       // Fetch from existing documents endpoint
       try {
-        const response = await fetch(`/api/documents/employee/${employeeId}`);
-        const data = await response.json();
-        
-        console.log('Documents from /api/documents/employee:', data);
-        
+        const data = await apiGet<{ data?: Document[] }>(
+          `/documents/employee/${employeeId}`,
+          false
+        );
         if (Array.isArray(data?.data)) {
           allDocuments.push(...data.data);
         }
@@ -70,20 +71,11 @@ const EmployeeDocuments: React.FC<{ employeeId?: string }> = ({ employeeId = 'EM
         console.warn('Error loading documents from /api/documents/employee:', error);
       }
 
-      // Fetch from onboarding documents endpoint
       try {
-        const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-        console.log('Fetching from /api/onboarding/documents/employee with token:', !!token);
-        
-        const response = await fetch(`/api/onboarding/documents/employee/${employeeId}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-        const data = await response.json();
-        
-        console.log('Documents from /api/onboarding/documents/employee:', data);
-        
+        const data = await apiGet<{ data?: Document[] }>(
+          `/onboarding/documents/employee/${employeeId}`,
+          false
+        );
         if (Array.isArray(data?.data)) {
           allDocuments.push(...data.data);
         }
@@ -104,14 +96,14 @@ const EmployeeDocuments: React.FC<{ employeeId?: string }> = ({ employeeId = 'EM
   const handleDownload = (document: Document) => {
     // In a real implementation, this would download the actual file
     // For demo purposes, we'll show an alert
-    alert(`Downloading ${document.fileName}`);
+    toast.info(`Downloading ${document.fileName}`);
     console.log('Download document:', document);
   };
 
   const handleView = (document: Document) => {
     // In a real implementation, this would open the document in a new tab
     // For demo purposes, we'll show an alert
-    alert(`Viewing ${document.fileName}`);
+    toast.info(`Opening ${document.fileName}`);
     console.log('View document:', document);
   };
 

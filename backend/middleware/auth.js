@@ -4,6 +4,7 @@ import User from "../models/User.js";
 import logger from "../utils/logger.js";
 import { getBearerOrCookieAccessToken } from "../utils/httpAuth.js";
 import JWTCache from "../utils/jwtCache.js";
+import { normalizeAuthOrgId } from "../utils/orgScopeHelpers.js";
 
 /**
  * Authentication middleware
@@ -40,16 +41,6 @@ export const authenticate = asyncHandler(async (req, res, next) => {
   }
   
   try {
-    // Check if token is blacklisted
-    const isBlacklisted = await JWTCache.isTokenBlacklisted(token);
-    if (isBlacklisted) {
-      return res.status(401).json({
-        success: false,
-        message: "Token has been revoked. Please log in again.",
-        code: "TOKEN_REVOKED"
-      });
-    }
-
     // Try to get from cache first (must still match verified JWT subject — legacy keys used token.substring(0,20) and collided)
     let cachedData = await JWTCache.getTokenCache(token);
     if (cachedData?.userData?.role) {
@@ -68,16 +59,68 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     }
 
     if (cachedData?.userData?.role) {
+      const freshUser = await User.findById(cachedData.userData.userId)
+        .select('orgId tenantId organizationId role isActive lockUntil name email departmentId permissions')
+        .lean();
+
+      if (!freshUser) {
+        await JWTCache.clearTokenCache(token);
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid token. User not found.',
+          code: 'USER_NOT_FOUND'
+        });
+      }
+
+      if (!freshUser.isActive) {
+        await JWTCache.clearTokenCache(token);
+        return res.status(401).json({
+          success: false,
+          message: 'Account is deactivated.',
+          code: 'ACCOUNT_DEACTIVATED'
+        });
+      }
+
+      if (freshUser.lockUntil && freshUser.lockUntil > new Date()) {
+        return res.status(423).json({
+          success: false,
+          message: 'Account is temporarily locked.',
+          code: 'ACCOUNT_LOCKED'
+        });
+      }
+
+      const authOrg = normalizeAuthOrgId(freshUser);
+      if (!authOrg && freshUser.role !== 'super_admin') {
+        await JWTCache.clearTokenCache(token);
+        return res.status(403).json({
+          success: false,
+          message: 'Organization context required. Please log in again.',
+          code: 'MISSING_ORG_CONTEXT'
+        });
+      }
+
+      const userData = {
+        userId: freshUser._id,
+        email: freshUser.email,
+        name: freshUser.name,
+        role: freshUser.role,
+        orgId: authOrg,
+        departmentId: freshUser.departmentId,
+        permissions: freshUser.permissions || cachedData.userData.permissions || [],
+        sessionId: cachedData.userData.sessionId
+      };
+      await JWTCache.cacheToken(token, freshUser._id, userData);
+
       req.user = {
-        userId: cachedData.userData.userId,
-        email: cachedData.userData.email,
-        name: cachedData.userData.name,
-        role: cachedData.userData.role,
-        orgId: cachedData.userData.orgId || 'system',
-        tenantId: cachedData.userData.orgId || 'system',
-        departmentId: cachedData.userData.departmentId,
-        permissions: cachedData.userData.permissions || [],
-        sessionId: cachedData.userData.sessionId,
+        userId: userData.userId,
+        email: userData.email,
+        name: userData.name,
+        role: userData.role,
+        orgId: authOrg,
+        tenantId: authOrg,
+        departmentId: userData.departmentId,
+        permissions: userData.permissions,
+        sessionId: userData.sessionId,
         fromCache: true
       };
       return next();
@@ -134,12 +177,13 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     }
     
     // Prepare user data for caching
+    const authOrg = normalizeAuthOrgId(user);
     const userData = {
       userId: user._id,
       email: user.email,
       name: user.name,
       role: user.role,
-      orgId: user.orgId || 'system',
+      orgId: authOrg,
       departmentId: user.departmentId,
       permissions: user.permissions || [],
       sessionId: decoded.sessionId

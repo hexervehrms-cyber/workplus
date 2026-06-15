@@ -1,15 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, Mail, Phone, MapPin, Calendar, Briefcase, FileText, Upload, Check, AlertCircle, Lock } from 'lucide-react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Input } from './ui/input';
+import { PasswordInput } from './PasswordInput';
 import { Label } from './ui/label';
 import { Separator } from './ui/separator';
 import { Progress } from './ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Textarea } from './ui/textarea';
 import { Checkbox } from './ui/checkbox';
+import { toast } from '../utils/portalToast';
 
 interface FormData {
   // Personal Information
@@ -21,6 +23,7 @@ interface FormData {
   gender: string;
   address: string;
   avatar: File | null;
+  password: string;
   
   // Official Information
   employeeId: string;
@@ -55,6 +58,16 @@ const OnboardingForm: React.FC<{
   onSubmit?: (data: any) => void;
 }> = ({ isHRMode = false, employeeId = '', onSubmit }) => {
   const [currentSection, setCurrentSection] = useState(0);
+  const [token, setToken] = useState<string>('');
+  
+  // Extract token from URL on mount
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlToken = urlParams.get('token') || window.location.pathname.split('/').pop();
+    if (urlToken) {
+      setToken(urlToken);
+    }
+  }, []);
   const [formData, setFormData] = useState<FormData>({
     firstName: '',
     lastName: '',
@@ -64,6 +77,7 @@ const OnboardingForm: React.FC<{
     gender: '',
     address: '',
     avatar: null,
+    password: '',
     employeeId: employeeId,
     joiningDate: '',
     department: '',
@@ -111,12 +125,12 @@ const OnboardingForm: React.FC<{
     const maxSize = 5 * 1024 * 1024; // 5MB
 
     if (!allowedTypes.includes(file.type)) {
-      alert('Please upload a valid image file (JPEG, PNG, or GIF)');
+      toast.error('Please upload a valid image file (JPEG, PNG, or GIF)');
       return;
     }
 
     if (file.size > maxSize) {
-      alert('Image size should be less than 5MB');
+      toast.error('Image size should be less than 5MB');
       return;
     }
 
@@ -133,8 +147,13 @@ const OnboardingForm: React.FC<{
     let filledFields = 0;
     const totalFields = Object.keys(formData).length;
     
-    Object.values(formData).forEach(value => {
-      if (value.trim() !== '') filledFields++;
+    Object.values(formData).forEach((value) => {
+      if (value == null) return;
+      if (typeof value === 'string') {
+        if (value.trim() !== '') filledFields++;
+        return;
+      }
+      if (value instanceof File) filledFields++;
     });
 
     const uploadedFiles = documents.filter(doc => doc.file !== null).length;
@@ -144,6 +163,48 @@ const OnboardingForm: React.FC<{
   };
 
   const handleNext = () => {
+    // Validate current section before allowing navigation
+    const errors: string[] = [];
+
+    switch (currentSection) {
+      case 0: // Personal Information
+        if (!formData.firstName.trim()) errors.push('First name is required');
+        if (!formData.lastName.trim()) errors.push('Last name is required');
+        if (!formData.email.trim()) errors.push('Email is required');
+        if (!formData.phone.trim()) errors.push('Phone number is required');
+        if (!formData.dateOfBirth) errors.push('Date of birth is required');
+        if (!formData.gender) errors.push('Gender is required');
+        if (!formData.address.trim()) errors.push('Address is required');
+        if (!isHRMode && !formData.password) errors.push('Password is required');
+        break;
+      case 1: // Official Information - only validate employeeId if not in HR mode or if explicitly filled
+        if (!isHRMode && !formData.employeeId.trim()) errors.push('Employee ID is required');
+        break;
+      case 2: // Emergency Contact
+        if (!formData.emergencyName.trim()) errors.push('Emergency contact name is required');
+        if (!formData.emergencyRelation.trim()) errors.push('Relationship is required');
+        if (!formData.emergencyPhone.trim()) errors.push('Emergency contact number is required');
+        break;
+      case 3: // Banking Information
+        if (!formData.aadharNumber.trim()) errors.push('Aadhar number is required');
+        if (!formData.panNumber.trim()) errors.push('PAN number is required');
+        if (!formData.bankAccount.trim()) errors.push('Bank account number is required');
+        if (!formData.ifscCode.trim()) errors.push('IFSC code is required');
+        break;
+      case 4: // Documents Upload
+        const requiredDocs = documents.filter(doc => doc.required && !doc.file);
+        if (requiredDocs.length > 0) {
+          errors.push(`Please upload required documents: ${requiredDocs.map(d => d.name).join(', ')}`);
+        }
+        break;
+    }
+
+    if (errors.length > 0) {
+      toast.error(errors[0]);
+      return;
+    }
+
+    // Move to next section
     if (currentSection < sections.length - 1) {
       setCurrentSection(currentSection + 1);
     }
@@ -156,18 +217,84 @@ const OnboardingForm: React.FC<{
   };
 
   const handleSubmit = async () => {
+    // Validate all required fields before submission
+    const errors: string[] = [];
+
+    // Personal Information validation
+    if (!formData.firstName.trim()) errors.push('First name is required');
+    if (!formData.lastName.trim()) errors.push('Last name is required');
+    if (!formData.email.trim()) errors.push('Email is required');
+    if (!formData.phone.trim()) errors.push('Phone number is required');
+    if (!formData.dateOfBirth) errors.push('Date of birth is required');
+    if (!formData.gender) errors.push('Gender is required');
+    if (!formData.address.trim()) errors.push('Address is required');
+    if (!isHRMode && !formData.password) errors.push('Password is required');
+
+    // Official Information validation - only enforce employeeId in non-HR mode
+    if (!isHRMode && !formData.employeeId.trim()) errors.push('Employee ID is required');
+
+    // Emergency Contact validation
+    if (!formData.emergencyName.trim()) errors.push('Emergency contact name is required');
+    if (!formData.emergencyRelation.trim()) errors.push('Relationship is required');
+    if (!formData.emergencyPhone.trim()) errors.push('Emergency contact number is required');
+
+    // Banking Information validation
+    if (!formData.aadharNumber.trim()) errors.push('Aadhar number is required');
+    if (!formData.panNumber.trim()) errors.push('PAN number is required');
+    if (!formData.bankAccount.trim()) errors.push('Bank account number is required');
+    if (!formData.ifscCode.trim()) errors.push('IFSC code is required');
+
+    // Documents validation
+    const requiredDocs = documents.filter(doc => doc.required && !doc.file);
+    if (requiredDocs.length > 0) {
+      errors.push(`Please upload required documents: ${requiredDocs.map(d => d.name).join(', ')}`);
+    }
+
+    if (errors.length > 0) {
+      toast.error(errors[0]);
+      return;
+    }
+
     // Create FormData for file uploads
     const formDataToSend = new FormData();
     
-    // Add all form fields
-    Object.keys(formData).forEach(key => {
-      if (key === 'avatar' && formData[key]) {
-        // Handle avatar file separately
-        formDataToSend.append('avatar', formData[key]);
-      } else if (key !== 'avatar') {
-        formDataToSend.append(key, formData[key]);
+    // Add token (public invite flow only)
+    if (token && !isHRMode) {
+      formDataToSend.append('token', token);
+    }
+
+    // Password required for self-service onboarding only
+    if (!isHRMode) {
+      if (!formData.password) {
+        toast.error('Password is required');
+        return;
       }
-    });
+      formDataToSend.append('password', formData.password);
+    }
+    
+    // Add personal info fields
+    formDataToSend.append('firstName', formData.firstName);
+    formDataToSend.append('lastName', formData.lastName);
+    formDataToSend.append('phone', formData.phone);
+    formDataToSend.append('dateOfBirth', formData.dateOfBirth);
+    formDataToSend.append('gender', formData.gender);
+    formDataToSend.append('address', formData.address);
+    
+    // Add sensitive info fields
+    formDataToSend.append('aadharNumber', formData.aadharNumber);
+    formDataToSend.append('panNumber', formData.panNumber);
+    formDataToSend.append('bankAccount', formData.bankAccount);
+    formDataToSend.append('ifscCode', formData.ifscCode);
+    
+    // Add emergency contact fields
+    formDataToSend.append('emergencyName', formData.emergencyName);
+    formDataToSend.append('emergencyRelation', formData.emergencyRelation);
+    formDataToSend.append('emergencyPhone', formData.emergencyPhone);
+    
+    // Add avatar if present
+    if (formData.avatar) {
+      formDataToSend.append('avatar', formData.avatar);
+    }
     
     // Add documents
     documents.forEach((doc, index) => {
@@ -311,6 +438,19 @@ const OnboardingForm: React.FC<{
             placeholder="Enter complete address"
             rows={3}
           />
+        </div>
+        <div className="col-span-2">
+          <Label>Password * (For Login)</Label>
+          <PasswordInput 
+            autoComplete="new-password"
+            value={formData.password} 
+            onChange={(e) => handleInputChange('password', e.target.value)}
+            className="mt-2 rounded-xl" 
+            placeholder="Enter a secure password (minimum 6 characters)"
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            You'll use this password to log in to your account
+          </p>
         </div>
       </div>
     </Card>
@@ -671,6 +811,7 @@ const OnboardingForm: React.FC<{
       {/* Navigation */}
       <div className="flex items-center justify-between">
         <Button 
+          type="button"
           variant="outline" 
           onClick={handlePrevious}
           disabled={currentSection === 0}
@@ -681,7 +822,7 @@ const OnboardingForm: React.FC<{
         
         <div className="flex gap-2">
           {currentSection === sections.length - 1 ? (
-            <Button 
+            <Button type="button"
               onClick={handleSubmit}
               className="rounded-xl bg-green-600 hover:bg-green-700"
             >
@@ -689,7 +830,7 @@ const OnboardingForm: React.FC<{
               Submit Form
             </Button>
           ) : (
-            <Button onClick={handleNext} className="rounded-xl">
+            <Button type="button" onClick={handleNext} className="rounded-xl">
               Next Section
             </Button>
           )}

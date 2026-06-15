@@ -9,8 +9,11 @@ import { Badge } from './ui/badge';
 import DocumentReader from './DocumentReader';
 import DigitalDocumentGenerator from './DigitalDocumentGenerator';
 import DocumentTracking from './DocumentTracking';
-import { apiClient } from '../utils/api';
-import { toast } from 'sonner';
+import { apiClient, TokenManager } from '../utils/api';
+import { apiGet, apiPost, buildFileUrl } from '../utils/apiHelper';
+import { downloadCompanyGeneratedDocument } from '../utils/documentFile';
+import { useAuth } from '../context/AuthContext';
+import { toast } from '../utils/portalToast';
 import { 
   FileText, 
   Download, 
@@ -54,7 +57,9 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
   isAdmin = false, 
   isSuperAdmin = false 
 }) => {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'view' | 'manage' | 'generate' | 'tracking'>('view');
+  const [uploading, setUploading] = useState(false);
   const [documents, setDocuments] = useState<CompanyDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -73,9 +78,17 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
   const [showDocumentReader, setShowDocumentReader] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState<CompanyDocument | null>(null);
   const [acknowledgments, setAcknowledgments] = useState<Record<string, any>>({});
-  const [employeeId] = useState('EMP001'); // In real app, this would come from auth context
-  const [employeeName] = useState('John Doe'); // In real app, this would come from auth context
   const [editingDocument, setEditingDocument] = useState<CompanyDocument | null>(null);
+
+  const mapUiStatusToApi = (uiStatus: string) => {
+    if (uiStatus === 'Archived') return 'acknowledged';
+    return 'generated';
+  };
+
+  const mapApiStatusToUi = (apiStatus?: string): CompanyDocument['status'] => {
+    if (apiStatus === 'acknowledged') return 'Archived';
+    return 'Published';
+  };
   const [showEditModal, setShowEditModal] = useState(false);
 
   const categories = [
@@ -99,29 +112,84 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
   ];
 
   useEffect(() => {
-    loadDocuments();
-  }, [organizationId]);
+    const org = user?.orgId || user?.tenantId;
+    if (org && !organizationId) {
+      setOrganizationId(String(org));
+    }
+  }, [user?.orgId, user?.tenantId, organizationId]);
+
+  useEffect(() => {
+    if (organizationId || user?.orgId || user?.tenantId || isSuperAdmin) {
+      loadDocuments();
+    }
+  }, [organizationId, user?.orgId, user?.tenantId]);
 
   const loadDocuments = async () => {
     try {
       setLoading(true);
-      
-      // Fetch documents from API - get generated documents from organization
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const orgId = organizationId || 'ORG-001';
-      
-      const response = await fetch(`/api/documents/organization/${orgId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
+
+      const orgId = organizationId || user?.orgId || user?.tenantId;
+      if (!orgId) {
+        setDocuments([]);
+        return;
+      }
+
+      try {
+        const result = await apiGet<{ data?: unknown[] }>(
+          `documents/organization/${encodeURIComponent(orgId)}`,
+          false
+        );
+        const documentsList = result?.data || [];
+        const mapRow = (d: Record<string, unknown>): CompanyDocument => ({
+          id: String(d.id || d._id || ''),
+          title: String(d.title || 'Untitled'),
+          description: String(d.description || ''),
+          category: String(d.category || d.documentType || 'Other'),
+          content: String(d.content || d.description || ''),
+          organizationId: String(d.organizationId || orgId),
+          createdBy: String(d.createdBy || 'admin'),
+          createdAt: String(d.createdAt || new Date().toISOString()),
+          updatedAt: String(d.updatedAt || new Date().toISOString()),
+          status: mapApiStatusToUi(String(d.status || '')),
+          documentUrl: d.fileUrl ? buildFileUrl(String(d.fileUrl)) : '',
+          fileName: String(d.fileName || d.title || 'document'),
+          fileSize: String(d.fileSize || '—'),
+          downloadCount: 0,
+          isPublic: true,
+        });
+
+        const mapped: CompanyDocument[] = (Array.isArray(documentsList) ? documentsList : []).map(
+          mapRow
+        );
+
+        if (!isAdmin && !isSuperAdmin && user?.employeeId) {
+          try {
+            const issuedJson = await apiGet<{ data?: unknown[] }>(
+              `documents/issued/${encodeURIComponent(String(user.employeeId))}`,
+              false
+            );
+            const issuedList = issuedJson?.data || [];
+            if (issuedList) {
+              const issuedMapped = (Array.isArray(issuedList) ? issuedList : []).map(
+                (d: Record<string, unknown>) =>
+                  mapRow({
+                    ...d,
+                    id: String(d.id || d._id || ''),
+                    fileUrl: d.fileUrl,
+                    content: d.description || d.title,
+                  })
+              );
+              const byId = new Map<string, CompanyDocument>();
+              [...mapped, ...issuedMapped].forEach((doc) => byId.set(doc.id, doc));
+              setDocuments([...byId.values()]);
+            }
+          } catch {
+            setDocuments(mapped);
+          }
+        } else {
+          setDocuments(mapped);
         }
-      });
-      
-      if (response.ok) {
-        const result = await response.json();
-        // Extract data from the API response format { success, message, data, timestamp }
-        const documentsList = result.data || [];
-        setDocuments(Array.isArray(documentsList) ? documentsList : []);
-      } else {
+      } catch {
         setDocuments([]);
       }
       
@@ -139,20 +207,18 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
 
   const loadAcknowledgments = async () => {
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const user = JSON.parse(localStorage.getItem('user') || '{}');
-      const currentEmployeeId = user.id || employeeId;
-      
-      // Fetch acknowledgments from API
-      const response = await fetch(`/api/documents/acknowledgments/employee/${currentEmployeeId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      if (response.ok) {
-        const result = await response.json();
-        const acks = result.data || [];
+      const currentEmployeeId = user?.userId || user?.id;
+      if (!currentEmployeeId) {
+        setAcknowledgments({});
+        return;
+      }
+
+      const result = await apiGet<{ data?: unknown[] }>(
+        `documents/acknowledgments/employee/${currentEmployeeId}`,
+        false
+      );
+      const acks = result?.data || [];
+      if (acks) {
         
         // Convert array to object keyed by documentId for easy lookup
         const acknowledgementsMap: Record<string, any> = {};
@@ -162,9 +228,6 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         
         console.log('📄 [ACKNOWLEDGMENTS] Loaded:', acknowledgementsMap);
         setAcknowledgments(acknowledgementsMap);
-      } else {
-        console.warn('📄 [ACKNOWLEDGMENTS] Failed to load, using empty state');
-        setAcknowledgments({});
       }
     } catch (error) {
       console.error('Error loading acknowledgments:', error);
@@ -173,70 +236,65 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
   };
 
   const handleReadDocument = (document: CompanyDocument) => {
+    // FIX #4: Validate document before opening reader
+    if (!document.id) {
+      toast.error('Document ID is missing - cannot open document');
+      return;
+    }
+    
     setSelectedDocument(document);
     setShowDocumentReader(true);
   };
 
   const handleAcknowledgmentSubmit = async (documentId: string, accepted: boolean, ipAddress: string) => {
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const user = JSON.parse(localStorage.getItem('user') || '{}');
-      const currentEmployeeId = user.id || employeeId;
-      const currentEmployeeName = user.name || employeeName;
-      
-      console.log('📄 [ACKNOWLEDGMENT] Submitting:', { documentId, employeeId: currentEmployeeId, accepted });
-      
-      // Submit to API
-      const response = await fetch('/api/documents/acknowledgments', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
+      const currentEmployeeId = user?.userId || user?.id;
+      const currentEmployeeName = user?.name;
+      const orgId = organizationId || user?.orgId || user?.tenantId;
+
+      if (!currentEmployeeId || !orgId) {
+        toast.error('Missing user or organization context');
+        return;
+      }
+
+      const result = await apiPost<{ data?: Record<string, unknown> }>(
+        'documents/acknowledgments',
+        {
           documentId,
           employeeId: currentEmployeeId,
-          employeeName: currentEmployeeName,
-          organizationId: organizationId || 'ORG-001',
+          employeeName: currentEmployeeName || 'Employee',
+          organizationId: String(orgId),
           acknowledgedAt: new Date().toISOString(),
           ipAddress: ipAddress,
-          accepted: accepted
-        }),
-      });
+          accepted: accepted,
+        }
+      );
 
-      if (response.ok) {
-        const result = await response.json();
-        console.log('📄 [ACKNOWLEDGMENT] Success:', result);
-        
-        // Extract acknowledgment from response (result.data contains the acknowledgment)
-        const newAcknowledgment = result.data || {
-          id: `ack_${Date.now()}`,
-          documentId,
-          employeeId: currentEmployeeId,
-          employeeName: currentEmployeeName,
-          acknowledgedAt: new Date().toISOString(),
-          status: 'Completed',
-          accepted
-        };
-        
-        // Update acknowledgments state immediately
-        setAcknowledgments(prev => ({
-          ...prev,
-          [documentId]: newAcknowledgment
-        }));
-        
-        console.log('📄 [ACKNOWLEDGMENT] State updated successfully');
-        
-        toast.success('Document acknowledged successfully');
-        
-        // Close the document reader modal
-        setShowDocumentReader(false);
-        setSelectedDocument(null);
-      } else {
-        const errorData = await response.json();
-        console.error('📄 [ACKNOWLEDGMENT] Error:', errorData);
-        toast.error(errorData.message || 'Failed to acknowledge document');
-      }
+      // Use response data if available, otherwise create acknowledgment object
+      const acknowledgedData = result?.data || {
+        id: `ack_${Date.now()}`,
+        documentId,
+        employeeId: currentEmployeeId,
+        employeeName: currentEmployeeName,
+        acknowledgedAt: new Date().toISOString(),
+        status: 'Completed',
+        accepted,
+      };
+
+      // Update local acknowledgments state with the new acknowledgment keyed by documentId
+      setAcknowledgments((prev) => ({
+        ...prev,
+        [documentId]: acknowledgedData,
+      }));
+
+      toast.success('Document acknowledged successfully');
+      
+      // Close reader and clear selection
+      setShowDocumentReader(false);
+      setSelectedDocument(null);
+      
+      // Refresh acknowledgments to ensure persistence on page reload
+      await loadAcknowledgments();
     } catch (error) {
       console.error('Error submitting acknowledgment:', error);
       toast.error('Error submitting acknowledgment');
@@ -250,13 +308,13 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
       title: newDocument.title,
       description: newDocument.description || '',
       category: newDocument.category || 'Other',
-      content: newDocument.content,
+      content: newDocument.content || newDocument.description || '',
       organizationId: newDocument.organizationId,
       createdBy: newDocument.createdBy || 'admin',
       createdAt: newDocument.createdAt || new Date().toISOString(),
       updatedAt: newDocument.updatedAt || new Date().toISOString(),
-      status: 'Published' as const, // Map from "generated" to "Published"
-      documentUrl: newDocument.fileUrl || '',
+      status: mapApiStatusToUi(String(newDocument.status || '')),
+      documentUrl: newDocument.fileUrl ? buildFileUrl(String(newDocument.fileUrl)) : '',
       fileName: newDocument.fileName || newDocument.title,
       fileSize: newDocument.fileSize || '0 KB',
       downloadCount: 0,
@@ -276,43 +334,85 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
       return;
     }
 
-    if (isSuperAdmin && !organizationId) {
-      setError('Organization ID is required for super admin');
+    const orgId = organizationId || user?.orgId || user?.tenantId;
+    if (!orgId) {
+      setError('Organization ID is required');
       return;
     }
 
     setError('');
-    
-    // In production, upload to API
-    const newDocument: CompanyDocument = {
-      id: `doc_${Date.now()}`,
-      title: formData.title,
-      description: formData.description,
-      category: formData.category,
-      organizationId: organizationId || 'ORG-001',
-      createdBy: isSuperAdmin ? 'super_admin' : 'admin',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      status: 'Draft',
-      documentUrl: `/documents/${selectedFile.name}`,
-      fileName: selectedFile.name,
-      fileSize: `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`,
-      downloadCount: 0,
-      isPublic: formData.isPublic
-    };
+    setUploading(true);
 
-    setDocuments(prev => [newDocument, ...prev]);
-    setShowUploadForm(false);
-    setFormData({ title: '', description: '', category: '', isPublic: true });
-    setSelectedFile(null);
-    
-    alert('Document uploaded successfully!');
+    try {
+      const uploadData = new FormData();
+      uploadData.append('file', selectedFile);
+      uploadData.append('title', formData.title);
+      uploadData.append('description', formData.description || '');
+      uploadData.append('category', formData.category);
+      uploadData.append('organizationId', String(orgId));
+      uploadData.append('isPublic', String(formData.isPublic));
+
+      const res = await apiClient.upload<Record<string, unknown>>(
+        '/documents/company-upload',
+        uploadData
+      );
+
+      const raw = (res.data || res) as Record<string, unknown>;
+      const newDocument: CompanyDocument = {
+        id: String(raw.id || raw._id || `doc_${Date.now()}`),
+        title: String(raw.title || formData.title),
+        description: String(raw.description || formData.description),
+        category: String(raw.category || formData.category),
+        organizationId: String(raw.organizationId || orgId),
+        createdBy: String(raw.createdBy || user?.role || 'admin'),
+        createdAt: String(raw.createdAt || new Date().toISOString()),
+        updatedAt: String(raw.updatedAt || new Date().toISOString()),
+        status: 'Published',
+        documentUrl: raw.fileUrl ? buildFileUrl(String(raw.fileUrl)) : '',
+        content: String(raw.description || formData.description || ''),
+        fileName: String(raw.fileName || selectedFile.name),
+        fileSize: String(raw.fileSize || `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`),
+        downloadCount: 0,
+        isPublic: formData.isPublic,
+      };
+
+      setDocuments((prev) => [newDocument, ...prev]);
+      setShowUploadForm(false);
+      setFormData({ title: '', description: '', category: '', isPublic: true });
+      setSelectedFile(null);
+      toast.success('Document uploaded successfully');
+    } catch (err) {
+      console.error('Upload failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to upload document');
+      toast.error('Failed to upload document');
+    } finally {
+      setUploading(false);
+    }
   };
 
-  const handleDownload = (document: CompanyDocument) => {
-    // In production, download actual file
-    alert(`Downloading ${document.fileName}`);
-    console.log('Download document:', document);
+  const handleDownload = async (doc: CompanyDocument) => {
+    // FIX #4: Ensure we have a document ID before attempting download
+    if (!doc.id) {
+      toast.error('Document ID is missing');
+      return;
+    }
+
+    try {
+      // FIX #4: Use authenticated endpoint for company documents
+      await downloadCompanyGeneratedDocument(doc.id, doc.fileName || doc.title);
+      return;
+    } catch (e) {
+      console.error('Download failed:', e);
+      
+      // FIX #4: Show specific error message
+      if (e instanceof Error && e.message.includes('404')) {
+        toast.error('Document file not found on server');
+      } else if (e instanceof Error && e.message.includes('403')) {
+        toast.error('You do not have permission to download this document');
+      } else {
+        toast.error(e instanceof Error ? e.message : 'Failed to download document');
+      }
+    }
   };
 
   const handleDelete = async (documentId: string) => {
@@ -321,32 +421,33 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
     }
 
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch(`/api/documents/generated/${documentId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (response.ok) {
-        setDocuments(prev => prev.filter(doc => doc.id !== documentId));
-        toast.success('Document deleted successfully');
-      } else {
-        toast.error('Failed to delete document');
-      }
+      await apiClient.delete(`/documents/generated/${documentId}`);
+      setDocuments((prev) => prev.filter((doc) => doc.id !== documentId));
+      toast.success('Document deleted successfully');
     } catch (error) {
       console.error('Error deleting document:', error);
-      toast.error('Error deleting document');
+      toast.error('Failed to delete document');
     }
   };
 
   const handleStatusChange = async (documentId: string, newStatus: string) => {
-    setDocuments(prev => prev.map(doc => 
-      doc.id === documentId 
-        ? { ...doc, status: newStatus as 'Published' | 'Draft' | 'Archived', updatedAt: new Date().toISOString() }
-        : doc
-    ));
+    const uiStatus = newStatus as CompanyDocument['status'];
+    try {
+      await apiClient.put(`/documents/generated/${documentId}`, {
+        status: mapUiStatusToApi(uiStatus),
+      });
+      setDocuments((prev) =>
+        prev.map((doc) =>
+          doc.id === documentId
+            ? { ...doc, status: uiStatus, updatedAt: new Date().toISOString() }
+            : doc
+        )
+      );
+      toast.success('Document status updated');
+    } catch (error) {
+      console.error('Error updating document status:', error);
+      toast.error('Failed to update document status');
+    }
   };
 
   const handleEditDocument = (document: CompanyDocument) => {
@@ -358,28 +459,23 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
     if (!editingDocument) return;
 
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch(`/api/documents/generated/${editingDocument.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          title: editingDocument.title,
-          description: editingDocument.description,
-          content: editingDocument.content,
-          category: editingDocument.category,
-          status: editingDocument.status
-        })
+      const response = await apiClient.put(`/documents/generated/${editingDocument.id}`, {
+        title: editingDocument.title,
+        description: editingDocument.description,
+        content: editingDocument.content,
+        category: editingDocument.category,
+        status: mapUiStatusToApi(editingDocument.status),
       });
 
-      if (response.ok) {
-        const result = await response.json();
-        const updatedDoc = result.data || editingDocument;
-        setDocuments(prev => prev.map(doc => 
-          doc.id === editingDocument.id ? updatedDoc : doc
-        ));
+      if (response.success) {
+        const updatedDoc = (response.data as CompanyDocument) || editingDocument;
+        setDocuments((prev) =>
+          prev.map((doc) =>
+            doc.id === editingDocument.id
+              ? { ...doc, ...updatedDoc, status: editingDocument.status }
+              : doc
+          )
+        );
         setShowEditModal(false);
         setEditingDocument(null);
         toast.success('Document updated successfully');
@@ -610,9 +706,18 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
                   </div>
                 )}
                 <div className="flex gap-2">
-                  <Button onClick={handleUpload} className="rounded-xl">
-                    <Upload className="w-4 h-4 mr-2" />
-                    Upload Document
+                  <Button onClick={handleUpload} className="rounded-xl" disabled={uploading}>
+                    {uploading ? (
+                      <span className="flex items-center gap-2">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        Uploading…
+                      </span>
+                    ) : (
+                      <>
+                        <Upload className="w-4 h-4 mr-2" />
+                        Upload Document
+                      </>
+                    )}
                   </Button>
                   <Button variant="outline" onClick={() => setShowUploadForm(false)} className="rounded-xl">
                     Cancel
@@ -632,7 +737,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
       {/* Generate Tab */}
       {activeTab === 'generate' && (isAdmin || isSuperAdmin) && (
         <DigitalDocumentGenerator
-          organizationId={organizationId || 'ORG-001'}
+          organizationId={organizationId || user?.orgId || user?.tenantId || ''}
           createdBy={isSuperAdmin ? 'super_admin' : 'admin'}
           onDocumentGenerated={handleDocumentGenerated}
         />
@@ -752,22 +857,26 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
                           Pending
                         </Badge>
                       )}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="rounded-xl"
-                        onClick={() => handleReadDocument(document)}
-                      >
-                        <Eye className="w-4 h-4" />
-                      </Button>
                     </>
                   )}
+                  
+                  {/* FIX #4: Add View button for all users (including admin) */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="rounded-xl"
+                    onClick={() => handleReadDocument(document)}
+                    title="View document"
+                  >
+                    <Eye className="w-4 h-4" />
+                  </Button>
                   
                   <Button
                     variant="outline"
                     size="sm"
                     className="rounded-xl"
                     onClick={() => handleDownload(document)}
+                    title="Download document"
                   >
                     <Download className="w-4 h-4" />
                   </Button>
@@ -845,7 +954,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         isOpen={showDocumentReader}
         onClose={() => setShowDocumentReader(false)}
         onSubmit={handleAcknowledgmentSubmit}
-        employeeId={employeeId}
+        employeeId={String(user?.userId || user?.id || '')}
         isAlreadyAcknowledged={selectedDocument ? !!acknowledgments[selectedDocument.id] : false}
       />
 

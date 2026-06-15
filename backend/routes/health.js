@@ -1,164 +1,60 @@
 /**
- * Health Check & Monitoring Routes
- * Used by load balancers and monitoring systems
+ * Health Check Routes
+ * Simple health check endpoints for monitoring and uptime checks
  */
 
 import express from 'express';
+import { asyncHandler } from '../middleware/errorHandler.js';
 import mongoose from 'mongoose';
-import os from 'os';
-import { connectionMonitor } from '../utils/connectionMonitor.js';
-import redis from '../utils/redis.js';
+import { getDBStatus } from '../config/db.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
 /**
  * GET /health
- * Basic health check for load balancers
+ * Basic health check (no auth required)
  */
-router.get('/', (req, res) => {
-  const health = {
-    status: 'ok',
+router.get('/', asyncHandler(async (req, res) => {
+  const mongoStatus = mongoose.connection.readyState;
+  const isConnected = mongoStatus === 1;
+
+  res.json({
+    success: true,
+    status: isConnected ? 'healthy' : 'degraded',
+    database: getDBStatus(),
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    environment: process.env.NODE_ENV || 'development'
-  };
-  
-  res.status(200).json(health);
-});
+    service: 'WorkPlus Backend'
+  });
+}));
 
 /**
- * GET /health/detailed
- * Detailed health check with database and system info
+ * GET /health/db
+ * Database connection test
  */
-router.get('/detailed', async (req, res) => {
+router.get('/db', asyncHandler(async (req, res) => {
   try {
-    const dbConnected = mongoose.connection.readyState === 1;
-    const redisConnected = redis.isRedisConnected();
-    
-    const health = {
-      status: dbConnected ? 'healthy' : 'degraded',
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      environment: process.env.NODE_ENV || 'development',
-      database: {
-        connected: dbConnected,
-        readyState: mongoose.connection.readyState,
-        host: mongoose.connection.host || 'unknown'
-      },
-      cache: {
-        redis: {
-          connected: redisConnected,
-          configured: !!process.env.REDIS_URL
-        }
-      },
-      system: {
-        memory: {
-          total: os.totalmem(),
-          free: os.freemem(),
-          used: os.totalmem() - os.freemem(),
-          percentUsed: ((os.totalmem() - os.freemem()) / os.totalmem() * 100).toFixed(2) + '%'
-        },
-        cpu: {
-          cores: os.cpus().length,
-          loadAverage: os.loadavg()
-        }
-      },
-      node: {
-        version: process.version,
-        pid: process.pid
+    const mongoStatus = mongoose.connection.readyState;
+    const isConnected = mongoStatus === 1;
+
+    res.json({
+      success: isConnected,
+      status: isConnected ? 'connected' : 'disconnected',
+      readyState: mongoStatus,
+      connection: {
+        host: mongoose.connection.host || 'N/A',
+        port: mongoose.connection.port || 'N/A',
+        name: mongoose.connection.name || 'N/A'
       }
-    };
-    
-    const statusCode = dbConnected ? 200 : 503;
-    res.status(statusCode).json(health);
-  } catch (error) {
-    res.status(503).json({
-      status: 'unhealthy',
-      error: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-/**
- * GET /health/ready
- * Readiness check - used by Kubernetes
- */
-router.get('/ready', async (req, res) => {
-  try {
-    // Check database connection
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({
-        ready: false,
-        reason: 'Database not connected'
-      });
-    }
-    
-    // Check memory usage
-    const memUsage = (os.totalmem() - os.freemem()) / os.totalmem();
-    if (memUsage > 0.9) {
-      return res.status(503).json({
-        ready: false,
-        reason: 'Memory usage too high'
-      });
-    }
-    
-    res.status(200).json({
-      ready: true,
-      timestamp: new Date().toISOString()
     });
   } catch (error) {
-    res.status(503).json({
-      ready: false,
-      error: error.message
+    logger.error('Health check DB error', { error: error.message });
+    res.status(500).json({
+      success: false,
+      status: 'error',
+      message: error.message
     });
   }
-});
-
-/**
- * GET /health/live
- * Liveness check - used by Kubernetes
- */
-router.get('/live', (req, res) => {
-  res.status(200).json({
-    alive: true,
-    timestamp: new Date().toISOString()
-  });
-});
-
-/**
- * GET /health/metrics
- * Detailed metrics for monitoring systems
- */
-router.get('/metrics', (req, res) => {
-  const connectionStatus = connectionMonitor.getStatus();
-  const metrics = connectionMonitor.getMetrics();
-  const redisConnected = redis.isRedisConnected();
-  
-  res.status(200).json({
-    timestamp: new Date().toISOString(),
-    connection: connectionStatus,
-    cache: {
-      redis: {
-        connected: redisConnected,
-        configured: !!process.env.REDIS_URL
-      }
-    },
-    metrics,
-    system: {
-      memory: {
-        total: os.totalmem(),
-        free: os.freemem(),
-        used: os.totalmem() - os.freemem(),
-        percentUsed: ((os.totalmem() - os.freemem()) / os.totalmem() * 100).toFixed(2)
-      },
-      cpu: {
-        cores: os.cpus().length,
-        loadAverage: os.loadavg()
-      },
-      uptime: process.uptime()
-    }
-  });
-});
+}));
 
 export default router;

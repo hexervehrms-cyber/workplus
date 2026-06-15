@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useAuth } from '../../context/AuthContext';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Loader, Download, Eye, Calendar, TrendingUp, DollarSign } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { apiGet } from '../../utils/apiHelper';
+import { authUserKey } from '../../utils/safeUi';
 
 interface KPIData {
   currentAmount: number;
@@ -25,28 +27,42 @@ interface SalaryHistory {
 }
 
 export default function PayrollDashboard() {
+  const { user } = useAuth();
+  const fetchGenRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [kpiData, setKpiData] = useState<KPIData | null>(null);
   const [salaryHistory, setSalaryHistory] = useState<SalaryHistory[]>([]);
   const [employeeType, setEmployeeType] = useState<'intern' | 'employee'>('employee');
 
-  useEffect(() => {
-    fetchPayrollData();
-  }, []);
-
-  const fetchPayrollData = async () => {
+  const fetchPayrollData = useCallback(async () => {
+    const gen = ++fetchGenRef.current;
     try {
       setLoading(true);
-      const data = await apiGet('/payroll/employee/dashboard');
-      setKpiData(data.data.kpiData);
-      setSalaryHistory(data.data.salaryHistory);
-      setEmployeeType(data.data.employeeType);
+      const data = await apiGet('/payroll/employee/dashboard', false);
+      if (gen !== fetchGenRef.current) return;
+      if (data.success && data.data) {
+        setKpiData(data.data.kpiData);
+        setSalaryHistory(data.data.salaryHistory || []);
+        setEmployeeType(data.data.employeeType || 'employee');
+      } else {
+        setKpiData(null);
+        setSalaryHistory([]);
+        toast.error(data.message || 'Failed to load payroll dashboard');
+      }
     } catch (error) {
       console.error('Error fetching payroll data:', error);
+      setKpiData(null);
+      setSalaryHistory([]);
+      toast.error('Failed to load payroll dashboard');
     } finally {
-      setLoading(false);
+      if (gen === fetchGenRef.current) setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!authUserKey(user)) return;
+    void fetchPayrollData();
+  }, [user?.userId, user?.id, fetchPayrollData]);
 
   if (loading) {
     return (
@@ -55,6 +71,20 @@ export default function PayrollDashboard() {
           <Loader className="w-8 h-8 animate-spin" />
           <p className="text-muted-foreground"></p>
         </div>
+      </div>
+    );
+  }
+
+  if (!kpiData) {
+    return (
+      <div className="p-8 space-y-4">
+        <h1 className="text-3xl font-bold text-foreground">Payroll Dashboard</h1>
+        <Card className="p-6 rounded-2xl">
+          <p className="text-muted-foreground">
+            Payroll data could not be loaded. This usually means no approved salary structure is on file yet, or your
+            account is not linked to an employee profile. Contact HR if this persists.
+          </p>
+        </Card>
       </div>
     );
   }
@@ -77,7 +107,7 @@ export default function PayrollDashboard() {
                 {employeeType === 'intern' ? 'Your Stipend' : 'Your Salary'}
               </p>
               <h3 className="text-2xl font-bold">
-                ₹{kpiData?.currentAmount.toLocaleString()}
+                ₹{(kpiData?.currentAmount ?? 0).toLocaleString()}
               </h3>
             </div>
             <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -93,13 +123,13 @@ export default function PayrollDashboard() {
         </Card>
 
         {/* Previous Salary/Stipend Card */}
-        {kpiData?.previousAmount > 0 && (
+        {(kpiData?.previousAmount ?? 0) > 0 && (
           <Card className="p-6 rounded-2xl border-l-4 border-l-muted">
             <div className="flex items-start justify-between mb-4">
               <div>
                 <p className="text-sm text-muted-foreground mb-1">Previous Amount</p>
                 <h3 className="text-2xl font-bold">
-                  ₹{kpiData?.previousAmount.toLocaleString()}
+                  ₹{(kpiData?.previousAmount ?? 0).toLocaleString()}
                 </h3>
               </div>
               <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
@@ -107,10 +137,10 @@ export default function PayrollDashboard() {
               </div>
             </div>
             <div className="text-xs text-muted-foreground">
-              <p>Increment: ₹{(kpiData?.currentAmount - kpiData?.previousAmount).toLocaleString()}</p>
+              <p>Increment: ₹{((kpiData?.currentAmount ?? 0) - (kpiData?.previousAmount ?? 0)).toLocaleString()}</p>
               <p>
                 Increase: {(
-                  ((kpiData?.currentAmount - kpiData?.previousAmount) / kpiData?.previousAmount) *
+                  (((kpiData?.currentAmount ?? 0) - (kpiData?.previousAmount ?? 0)) / (kpiData?.previousAmount ?? 1)) *
                   100
                 ).toFixed(1)}%
               </p>
@@ -126,7 +156,7 @@ export default function PayrollDashboard() {
                 {employeeType === 'intern' ? 'Per Day Stipend' : 'Per Day Salary'}
               </p>
               <h3 className="text-2xl font-bold">
-                ₹{kpiData?.perDayAmount.toLocaleString()}
+                ₹{(kpiData?.perDayAmount ?? 0).toLocaleString()}
               </h3>
             </div>
             <div className="w-10 h-10 rounded-lg bg-green-500/10 flex items-center justify-center">

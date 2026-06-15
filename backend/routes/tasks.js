@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import Task from "../models/Task.js";
 import User from "../models/User.js";
+import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
 
 const router = express.Router();
 
@@ -11,7 +12,8 @@ const router = express.Router();
  * Get tasks with filtering and pagination
  */
 router.get("/", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const userId = req.user?.userId;
   const userRole = req.user?.role;
   
@@ -95,7 +97,8 @@ router.get("/", asyncHandler(async (req, res) => {
  * Get tasks assigned to current user
  */
 router.get("/my-tasks", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const userId = req.user?.userId;
   const { status, priority, overdue } = req.query;
   
@@ -131,7 +134,8 @@ router.get("/my-tasks", asyncHandler(async (req, res) => {
  * Get task statistics for dashboard
  */
 router.get("/dashboard-stats", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const userId = req.user?.userId;
   const userRole = req.user?.role;
   
@@ -179,7 +183,8 @@ router.get("/dashboard-stats", asyncHandler(async (req, res) => {
  */
 router.get("/:id", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const userId = req.user?.userId;
   const userRole = req.user?.role;
   
@@ -226,7 +231,8 @@ router.get("/:id", asyncHandler(async (req, res) => {
  * Create new task
  */
 router.post("/", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const userId = req.user?.userId;
   
   const {
@@ -382,7 +388,8 @@ router.post("/", asyncHandler(async (req, res) => {
  */
 router.put("/:id", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const userId = req.user?.userId;
   const userRole = req.user?.role;
   
@@ -498,7 +505,8 @@ router.put("/:id", asyncHandler(async (req, res) => {
  */
 router.delete("/:id", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const userId = req.user?.userId;
   const userRole = req.user?.role;
   
@@ -548,7 +556,8 @@ router.delete("/:id", asyncHandler(async (req, res) => {
  */
 router.post("/:id/comments", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const userId = req.user?.userId;
   const { content } = req.body;
   

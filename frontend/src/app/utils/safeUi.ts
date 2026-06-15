@@ -1,0 +1,150 @@
+/** Shared UI-safe helpers — avoid throws from bad API/date data. */
+
+export function safeLocaleTime(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  const d = new Date(value as string | number | Date);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+}
+
+export function safeFormatTime(seconds: number): string {
+  const s = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const secs = Math.floor(s % 60);
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+export function hasCheckOutValue(checkOut: unknown): boolean {
+  return safeLocaleTime(checkOut) != null;
+}
+
+/** Format currency without throwing when API returns null/undefined/strings. */
+export function safeFormatInr(value: unknown): string {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return '0';
+  return n.toLocaleString('en-IN');
+}
+
+/** Coerce API list payloads to arrays (paginated wrappers sometimes nest data). */
+export function ensureArray<T>(value: unknown): T[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    if (Array.isArray(obj.data)) return obj.data as T[];
+    if (Array.isArray(obj.items)) return obj.items as T[];
+    if (Array.isArray(obj.results)) return obj.results as T[];
+  }
+  return [];
+}
+
+/** Safe table cell text — never throw when API returns objects/null. */
+export function safeCell(value: unknown): string {
+  if (value == null || value === '') return '—';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'object') {
+    const o = value as Record<string, unknown>;
+    if (typeof o.name === 'string') return o.name;
+    if (typeof o.label === 'string') return o.label;
+  }
+  return '—';
+}
+
+/** Initials from a display name — never throws. */
+export function safeInitials(name: unknown, fallback = '?'): string {
+  const raw = typeof name === 'string' ? name.trim() : '';
+  if (!raw) return fallback;
+  const parts = raw.split(/\s+/).filter(Boolean);
+  if (!parts.length) return fallback;
+  return parts
+    .map((p) => p[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+/** Capitalize status/type strings safely. */
+export function safeTitleCase(value: unknown, fallback = '—'): string {
+  const s = String(value ?? '').trim();
+  if (!s) return fallback;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Name on nested assignment.userId (object or missing). */
+export function assigneeDisplayName(assignedTo: unknown): string {
+  if (!assignedTo || typeof assignedTo !== 'object') return '—';
+  const a = assignedTo as {
+    userId?: { name?: string } | string;
+    name?: string;
+  };
+  if (a.userId && typeof a.userId === 'object' && a.userId.name) {
+    return a.userId.name;
+  }
+  if (typeof a.userId === 'string' && a.userId) return a.userId;
+  if (a.name) return a.name;
+  return '—';
+}
+
+/** Stable auth subject id from context user (supports `userId` or `id`). */
+export function authUserKey(
+  user: { id?: string; userId?: string } | null | undefined
+): string | null {
+  const key = user?.userId || user?.id;
+  return key != null && String(key) !== '' ? String(key) : null;
+}
+
+/** Run async work without bubbling rejections to the error boundary. */
+export function runSafe(
+  label: string,
+  fn: () => void | Promise<void>
+): void {
+  void Promise.resolve()
+    .then(fn)
+    .catch((err) => {
+      console.warn(`[${label}]`, err);
+    });
+}
+
+/** Safe array indexing — never throw on out-of-bounds or non-array. */
+export function safeArrayAccess<T>(
+  arr: unknown,
+  index: number,
+  fallback: T
+): T {
+  if (!Array.isArray(arr)) return fallback;
+  if (index < 0 || index >= arr.length) return fallback;
+  const item = arr[index];
+  return item != null ? (item as T) : fallback;
+}
+
+/** Safe nested property access using dot notation — never throw. */
+export function safePropertyAccess<T>(
+  obj: unknown,
+  path: string,
+  fallback: T
+): T {
+  if (!obj || typeof obj !== 'object') return fallback;
+  const parts = path.split('.');
+  let current: any = obj;
+  for (const part of parts) {
+    if (current == null || typeof current !== 'object') return fallback;
+    current = current[part];
+  }
+  return current != null ? (current as T) : fallback;
+}
+
+/** Safe string split operation — never throw on non-string. */
+export function safeStringSplit(
+  value: unknown,
+  separator: string,
+  fallback: string[] = []
+): string[] {
+  if (typeof value !== 'string') return fallback;
+  try {
+    return value.split(separator);
+  } catch {
+    return fallback;
+  }
+}

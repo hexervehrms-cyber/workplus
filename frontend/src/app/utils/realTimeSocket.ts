@@ -1,297 +1,294 @@
-import { io, Socket } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
 import { TokenManager } from './api';
+import { socketService } from './socket';
+import { authUserKey } from './safeUi';
 
 class RealTimeSocket {
   private socket: Socket | null = null;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectDelay = 1000;
-  private isConnecting = false;
-  private connectionAttempted = false;
+  private usesSharedSocket = false;
+  private dashboardListenersReady = false;
+  private sharedAttachTimer: ReturnType<typeof setInterval> | null = null;
+  /** Handlers registered on the shared socket — removed individually on teardown */
+  private dashboardSocketHandlers = new Map<string, (...args: unknown[]) => void>();
 
   constructor() {
     // Don't connect immediately - wait for user to be available
     // Connection will be triggered when needed
   }
 
+  private authUser: { id: string; role: string; orgId?: string; tenantId?: string } | null = null;
+
+  /**
+   * Connect using authenticated user from AuthContext (TokenManager.getUser is not populated).
+   */
+  connectFromAuth(user: {
+    id?: string;
+    userId?: string;
+    role: string;
+    orgId?: string;
+    tenantId?: string;
+  }) {
+    const id = authUserKey(user);
+    if (!id) return;
+    const normalized = {
+      id,
+      role: user.role,
+      orgId: user.orgId,
+      tenantId: user.tenantId,
+    };
+    this.authUser = normalized;
+
+    const tryAttachShared = (): boolean => {
+      const shared = socketService.getSocket();
+      if (socketService.isConnected() && shared) {
+        this.attachSharedSocket(shared, normalized);
+        return true;
+      }
+      return false;
+    };
+
+    if (tryAttachShared()) return;
+
+    if (this.sharedAttachTimer) {
+      clearInterval(this.sharedAttachTimer);
+    }
+    let attempts = 0;
+    this.sharedAttachTimer = setInterval(() => {
+      attempts += 1;
+      if (tryAttachShared() || attempts >= 75) {
+        if (this.sharedAttachTimer) {
+          clearInterval(this.sharedAttachTimer);
+          this.sharedAttachTimer = null;
+        }
+      }
+    }, 200);
+  }
+
+  private disconnectPrivateSocket() {
+    if (this.socket && !this.usesSharedSocket) {
+      this.teardownDashboardListeners();
+      this.socket.removeAllListeners();
+      this.socket.disconnect();
+      this.socket = null;
+    }
+  }
+
+  private attachSharedSocket(socket: Socket, user: { id: string; role: string; orgId?: string; tenantId?: string }) {
+    if (this.sharedAttachTimer) {
+      clearInterval(this.sharedAttachTimer);
+      this.sharedAttachTimer = null;
+    }
+    // New Socket.IO instance (reconnect / new session): drop old handlers so we do not leak on the dead socket
+    if (this.socket && this.socket !== socket) {
+      this.teardownDashboardListeners();
+    }
+    this.disconnectPrivateSocket();
+    this.usesSharedSocket = true;
+    this.socket = socket;
+    this.authUser = user;
+    if (!this.dashboardListenersReady) {
+      this.setupDashboardListeners();
+    }
+  }
+
   /**
    * Lazy connect - only connect when user data is available
    */
   private ensureConnected() {
-    if (this.socket?.connected || this.isConnecting) {
+    if (this.socket?.connected) {
       return;
     }
 
-    const user = TokenManager.getUser();
-    const token = TokenManager.get() || '';
-
-    if (!user?.id) {
-      // User not yet loaded, skip connection
+    const user = this.authUser || TokenManager.getUser();
+    const id = authUserKey(
+      user as { id?: string; userId?: string } | null | undefined
+    );
+    if (!id) {
       return;
     }
 
-    // Only attempt connection once per session
-    if (this.connectionAttempted && !this.socket) {
-      return;
-    }
-
-    this.connectionAttempted = true;
-    this.connect(user, token);
-  }
-
-  private connect(user: any, token: string) {
-    if (this.isConnecting || this.socket?.connected) {
-      return;
-    }
-
-    this.isConnecting = true;
-
-    if (!token) {
-      console.log('🔐 [SOCKET] No Bearer token in storage — relying on httpOnly session cookie (withCredentials)');
-    }
-
-    console.log('🔐 [SOCKET] User data from TokenManager:', user);
-
-    // In production, VITE_SOCKET_URL should be the full backend URL
-    // In development, use window.location.origin or env variable
-    const socketUrl = import.meta.env.VITE_SOCKET_URL || 
-                       import.meta.env.VITE_API_URL ||
-                       (import.meta.env.PROD ? 'https://workplus-backend-sg3a.onrender.com' : window.location.origin);
-
-    // Connect to the server with JWT token
-    this.socket = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      auth: {
-        token
-      },
-      withCredentials: true
-    });
-
-    // Handle connection
-    this.socket.on('connect', () => {
-      console.log('✅ Socket connected:', this.socket?.id);
-      this.isConnecting = false;
-      this.reconnectAttempts = 0;
-      
-      // Get orgId from user or localStorage
-      let orgId = user.orgId || user.tenantId || 'system';
-      
-      // If still not found, try to get from localStorage
-      if (!orgId || orgId === 'undefined') {
-        try {
-          const storedUser = localStorage.getItem('user');
-          if (storedUser) {
-            const parsedUser = JSON.parse(storedUser);
-            orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-          }
-        } catch (e) {
-          console.warn('Could not parse stored user');
-        }
-      }
-      
-      // Ensure orgId is always a valid string
-      if (!orgId || orgId === 'undefined' || orgId === 'null') {
-        orgId = 'system';
-      }
-      
-      console.log('🔐 Authenticating with:', { userId: user.id, role: user.role, orgId });
-      
-      // Authenticate with user details
-      this.socket?.emit('authenticate', {
-        userId: user.id,
-        role: user.role,
-        tenantId: orgId
+    const shared = socketService.getSocket();
+    if (socketService.isConnected() && shared) {
+      this.attachSharedSocket(shared, {
+        id,
+        role: (user as { role: string }).role,
+        orgId: (user as { orgId?: string }).orgId,
+        tenantId: (user as { tenantId?: string }).tenantId,
       });
-    });
+      return;
+    }
 
-    // Handle authentication response
-    this.socket.on('authenticated', (data) => {
-      console.log('✅ Socket authenticated:', data);
-      
-      // Join organization room for real-time updates
-      if (data.orgId) {
-        this.socket?.emit('join_org_room', { orgId: data.orgId });
-        console.log('📍 Joined org room:', `tenant_${data.orgId}`);
-      }
-    });
-
-    this.socket.on('auth_error', (error) => {
-      console.error('❌ Socket authentication failed:', error);
-      this.isConnecting = false;
-    });
-
-    // Handle disconnection
-    this.socket.on('disconnect', (reason) => {
-      console.warn('⚠️ Socket disconnected:', reason);
-      this.isConnecting = false;
-      
-      if (reason === 'io server disconnect') {
-        // Server disconnected, try to reconnect
-        this.handleReconnect();
-      }
-    });
-
-    // Handle connection errors
-    this.socket.on('connect_error', (error) => {
-      console.error('❌ Socket connection error:', error);
-      this.isConnecting = false;
-      this.handleReconnect();
-    });
-
-    // Set up dashboard update listeners
-    this.setupDashboardListeners();
+    if (!this.authUser) {
+      this.connectFromAuth(
+        user as {
+          id?: string;
+          userId?: string;
+          role: string;
+          orgId?: string;
+          tenantId?: string;
+        }
+      );
+    }
   }
 
-  private handleReconnect() {
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts++;
-      const delay = Math.min(
-        this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1) + Math.random() * 500,
-        30_000
-      );
-      console.log(`🔄 Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts}) in ${Math.round(delay)}ms...`);
-      
-      setTimeout(() => {
-        this.socket?.connect();
-      }, delay);
-    } else {
-      console.error('❌ Max reconnection attempts reached');
+  private teardownDashboardListeners() {
+    if (!this.socket) return;
+    this.dashboardSocketHandlers.forEach((handler, event) => {
+      this.socket?.off(event, handler);
+    });
+    this.dashboardSocketHandlers.clear();
+    this.dashboardListenersReady = false;
+  }
+
+  private bindDashboardEvent(event: string, handler: (...args: unknown[]) => void) {
+    if (!this.socket) return;
+    const existing = this.dashboardSocketHandlers.get(event);
+    if (existing) {
+      this.socket.off(event, existing);
     }
+    this.dashboardSocketHandlers.set(event, handler);
+    this.socket.on(event, handler);
   }
 
   private setupDashboardListeners() {
-    if (!this.socket) return;
+    if (!this.socket || this.dashboardListenersReady) return;
 
     // Dashboard data updates
-    this.socket.on('dashboard_update', (data) => {
+    this.bindDashboardEvent('dashboard_update', (data) => {
       console.log('📊 Dashboard update received:', data);
       this.notifyDashboardUpdate(data);
     });
 
     // Activity feed updates
-    this.socket.on('activity_update', (activity) => {
+    this.bindDashboardEvent('activity_update', (activity) => {
       console.log('📝 Activity update received:', activity);
       this.notifyActivityUpdate(activity);
     });
 
+    this.bindDashboardEvent('activity:update', (payload) => {
+      const activity = (payload as { activity?: unknown })?.activity ?? payload;
+      this.notifyActivityUpdate(activity);
+    });
+
     // Employee updates
-    this.socket.on('employee_created', (employee) => {
+    this.bindDashboardEvent('employee_created', (employee) => {
       console.log('👤 Employee created:', employee);
       this.notifyEmployeeUpdate('created', employee);
     });
 
-    this.socket.on('employee_updated', (employee) => {
+    this.bindDashboardEvent('employee_updated', (employee) => {
       console.log('👤 Employee updated:', employee);
       this.notifyEmployeeUpdate('updated', employee);
     });
 
     // Leave request updates
-    this.socket.on('leave_created', (leave) => {
+    this.bindDashboardEvent('leave_created', (leave) => {
       console.log('📅 Leave request created:', leave);
       this.notifyLeaveUpdate('created', leave);
     });
 
-    this.socket.on('leave_updated', (leave) => {
+    this.bindDashboardEvent('leave_updated', (leave) => {
       console.log('📅 Leave request updated:', leave);
       this.notifyLeaveUpdate('updated', leave);
     });
 
-    this.socket.on('leave:update', (data) => {
+    this.bindDashboardEvent('leave:update', (data) => {
       console.log('📅 Leave update event:', data);
-      this.notifyLeaveUpdate(data.action, data.leaveRequest);
+      const d = data as { action?: string; leaveRequest?: unknown };
+      this.notifyLeaveUpdate(d.action || 'updated', d.leaveRequest);
+    });
+
+    this.bindDashboardEvent('leave_allocation_created', (data) => {
+      console.log('📅 Leave allocation created:', data);
+      const d = data as { leave?: unknown };
+      this.notifyLeaveUpdate('allocation_created', d?.leave || data);
     });
 
     // Expense updates
-    this.socket.on('expense:created', (expense) => {
+    this.bindDashboardEvent('expense:created', (expense) => {
       console.log('💰 Expense created:', expense);
       this.notifyExpenseUpdate('created', expense);
     });
 
-    this.socket.on('expense:updated', (expense) => {
+    this.bindDashboardEvent('expense:updated', (expense) => {
       console.log('💰 Expense updated:', expense);
       this.notifyExpenseUpdate('updated', expense);
     });
 
-    this.socket.on('expense:deleted', (expense) => {
+    this.bindDashboardEvent('expense:deleted', (expense) => {
       console.log('💰 Expense deleted:', expense);
       this.notifyExpenseUpdate('deleted', expense);
     });
 
     // Attendance updates
-    this.socket.on('attendance:update', (data) => {
+    this.bindDashboardEvent('attendance:update', (data) => {
       console.log('⏰ Attendance update received:', data);
-      this.notifyAttendanceUpdate(data.attendance || data);
+      const d = data as { attendance?: unknown };
+      this.notifyAttendanceUpdate(d.attendance || data);
     });
 
     // Check-in updates
-    this.socket.on('attendance:checked_in', (data) => {
+    this.bindDashboardEvent('attendance:checked_in', (data) => {
       console.log('🔓 [SOCKET] Employee checked in:', data);
-      this.notifyAttendanceUpdate({ type: 'checked_in', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'checked_in', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'checked_in', data });
     });
 
     // System notifications
-    this.socket.on('notification', (notification) => {
+    this.bindDashboardEvent('notification', (notification) => {
       console.log('🔔 Notification received:', notification);
       this.notifySystemNotification(notification);
     });
 
     // Break updates
-    this.socket.on('break:started', (data) => {
+    this.bindDashboardEvent('break:started', (data) => {
       console.log('☕ [SOCKET] Break started:', data);
       this.notifyBreakStarted(data);
-      this.notifyAttendanceUpdate({ type: 'break_started', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'break_started', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'break_started', data });
     });
 
-    this.socket.on('break:ended', (data) => {
+    this.bindDashboardEvent('break:ended', (data) => {
       console.log('☕ [SOCKET] Break ended:', data);
       this.notifyBreakEnded(data);
-      this.notifyAttendanceUpdate({ type: 'break_ended', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'break_ended', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'break_ended', data });
     });
 
     // Meeting updates
-    this.socket.on('meeting:started', (data) => {
+    this.bindDashboardEvent('meeting:started', (data) => {
       console.log('📞 [SOCKET] Meeting started:', data);
       this.notifyMeetingStarted(data);
-      this.notifyAttendanceUpdate({ type: 'meeting_started', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'meeting_started', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'meeting_started', data });
     });
 
-    this.socket.on('meeting:ended', (data) => {
+    this.bindDashboardEvent('meeting:ended', (data) => {
       console.log('📞 [SOCKET] Meeting ended:', data);
       this.notifyMeetingEnded(data);
-      this.notifyAttendanceUpdate({ type: 'meeting_ended', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'meeting_ended', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'meeting_ended', data });
     });
 
     // Check-out updates
-    this.socket.on('attendance:checked_out', (data) => {
+    this.bindDashboardEvent('attendance:checked_out', (data) => {
       console.log('🚪 [SOCKET] Employee checked out:', data);
-      this.notifyAttendanceUpdate({ type: 'checked_out', ...data });
-      // Trigger dashboard refresh
+      this.notifyAttendanceUpdate({ type: 'checked_out', ...(data as object) });
       this.notifyDashboardUpdate({ type: 'dashboard_refresh', reason: 'checked_out', data });
     });
 
     // KPI updates
-    this.socket.on('kpi:update', (data) => {
+    this.bindDashboardEvent('kpi:update', (data) => {
       console.log('📊 [SOCKET] KPI update event received from server:', data);
-      console.log('📊 [SOCKET] Full data structure:', JSON.stringify(data, null, 2));
-      console.log('📊 [SOCKET] KPI onBreak value:', data?.kpis?.onBreak);
-      console.log('📊 [SOCKET] KPI activeUsers value:', data?.kpis?.activeUsers);
-      
-      // Notify dashboard with the KPI data
       this.notifyKPIUpdate(data);
       this.notifyDashboardUpdate({ type: 'kpi_update', data });
-      
-      console.log('📊 [SOCKET] Dashboard update callbacks count:', this.dashboardUpdateCallbacks.length);
     });
+
+    this.bindDashboardEvent('holiday:update', () => {
+      this.notifyDashboardUpdate({ type: 'holiday_refresh' });
+    });
+
+    this.dashboardListenersReady = true;
   }
 
   // Dashboard update callbacks
@@ -520,7 +517,30 @@ class RealTimeSocket {
 
   // Disconnect
   disconnect() {
+    if (this.sharedAttachTimer) {
+      clearInterval(this.sharedAttachTimer);
+      this.sharedAttachTimer = null;
+    }
+    this.dashboardUpdateCallbacks = [];
+    this.activityUpdateCallbacks = [];
+    this.employeeUpdateCallbacks = [];
+    this.leaveUpdateCallbacks = [];
+    this.attendanceUpdateCallbacks = [];
+    this.expenseUpdateCallbacks = [];
+    this.notificationCallbacks = [];
+    this.breakStartedCallbacks = [];
+    this.breakEndedCallbacks = [];
+    this.meetingStartedCallbacks = [];
+    this.meetingEndedCallbacks = [];
+    this.kpiUpdateCallbacks = [];
+    if (this.usesSharedSocket) {
+      this.teardownDashboardListeners();
+      this.usesSharedSocket = false;
+      this.socket = null;
+      return;
+    }
     if (this.socket) {
+      this.teardownDashboardListeners();
       this.socket.disconnect();
       this.socket = null;
     }
@@ -532,12 +552,52 @@ class RealTimeSocket {
     return this.socket;
   }
 
-  // Add .on() and .off() methods for compatibility
-  on(event: string, callback: (...args: any[]) => void) {
+  // Add .on() and .off() methods for compatibility (returns unsubscribe for useEffect cleanup)
+  on(event: string, callback: (...args: any[]) => void): () => void {
     this.ensureConnected();
-    if (this.socket) {
-      this.socket.on(event, callback);
+
+    let attachedSocket: Socket | null = null;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const tryRegister = () => {
+      if (attachedSocket) return;
+      const s: Socket | null =
+        (this.socket?.connected ? this.socket : null) ||
+        (socketService.isConnected() ? socketService.getSocket() : null);
+      if (s?.connected) {
+        s.on(event, callback);
+        attachedSocket = s;
+        if (intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+      }
+    };
+
+    tryRegister();
+
+    if (!attachedSocket) {
+      intervalId = setInterval(tryRegister, 200);
+      timeoutId = setTimeout(() => {
+        if (intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+      }, 15000);
     }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+      if (timeoutId) clearTimeout(timeoutId);
+      if (attachedSocket) {
+        attachedSocket.off(event, callback);
+      }
+    };
   }
 
   off(event: string, callback: (...args: any[]) => void) {

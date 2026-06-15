@@ -58,12 +58,11 @@ import Session from "./models/Session.js";
 
 // Import middleware
 import { errorHandler, requestIdMiddleware, asyncHandler } from "./middleware/errorHandler.js";
+import { createAuthenticatedUploadsHandler } from "./middleware/authenticatedUploads.js";
 import { tenantMiddleware, subscriptionMiddleware } from "./middleware/tenant.js";
+import { domainResolver, ensureDomainTenantMatch } from "./middleware/domainResolver.js";
 import fileValidator from "./middleware/fileValidator.js";
-// Rate limiter disabled for now
-const loginLimiter = (req, res, next) => next();
-const registerLimiter = (req, res, next) => next();
-// import { loginLimiter, registerLimiter } from "./middleware/rateLimiter.js";
+import { registerLimiter } from "./middleware/rateLimiter.js";
 
 // Import logger
 import logger from "./utils/logger.js";
@@ -80,6 +79,8 @@ import seedSuperAdmin from "./seeders/superAdminSeeder.js";
 
 // Import socket handlers
 import { initializeChatHandlers } from "./utils/chatSocketHandlers.js";
+import { attachSocketIoRedisAdapter } from "./utils/socketIoScale.js";
+import { apiTrafficLimiter, uploadTrafficLimiter } from "./middleware/trafficGuard.js";
 
 // Import routes
 import dashboardRoutes from "./routes/dashboard.js";
@@ -94,6 +95,7 @@ import leaveRoutes from "./routes/leave.js";
 import leaveAllocationRoutes from "./routes/leave-allocation.js";
 import leaveTypeSettingsRoutes from "./routes/leave-type-settings.js";
 import usersRoutes from "./routes/users.js";
+import departmentsRoutes from "./routes/departments.js";
 import holidaysRoutes from "./routes/holidays.js";
 import profileRoutes from "./routes/profile.js";
 import rolesRoutes from "./routes/roles.js";
@@ -101,18 +103,26 @@ import chatRoutes from "./routes/chat.js";
 import currencyRoutes from "./routes/currency.js";
 import onboardingRoutes from "./routes/onboarding.js";
 import salaryRoutes from "./routes/salary.js";
+import salaryCycleRoutes from "./routes/salary-cycle.js";
+import fnfRoutes from "./routes/fnf.js";
 import payrollRoutes from "./routes/payroll.js";
 import organizationNotificationSettingsRoutes from "./routes/organizationNotificationSettings.js";
+import adminBulkOperationsRoutes from "./routes/admin-bulk-operations.js";
 import announcementsRoutes from "./routes/announcements.js";
 import notificationsRoutes from "./routes/notifications.js";
 import tasksRoutes from "./routes/tasks.js";
 import organizationsRoutes from "./routes/organizations.js";
+import assetsRoutes from "./routes/assets.js";
+import employeeDashboardRoutes from "./routes/employee-dashboard.js";
+import authRoutes from "./routes/auth.js";
+import { handleAuthRefresh } from "./handlers/authRefreshHandler.js";
 
 // Import sales routes
 import callsRoutes from "./routes/sales/calls.js";
 import leadsRoutes from "./routes/sales/leads.js";
 import dealsRoutes from "./routes/sales/deals.js";
 import performanceRoutes from "./routes/sales/performance.js";
+import performanceEmployeeRoutes from "./routes/performance-employee.js";
 import revenueRoutes from "./routes/sales/revenue.js";
 
 // Setup __dirname for ES modules (must be before dotenv.config)
@@ -146,14 +156,40 @@ const validateEnvironment = () => {
     'secret',
     'your-secret-key',
     'your-secure-jwt-secret-key-minimum-32-characters-long-change-this',
-    'workplus-pro-production-jwt-secret-key-32-chars-minimum-2024'
+    'workplus-pro-production-jwt-secret-key-32-chars-minimum-2024',
+    'change-me',
+    'change_me',
+    'default',
+    'password',
+    'test',
+    'demo',
+    'your_random_64_char_hex_string'
   ];
   
-  if (defaultSecrets.includes(jwtSecret) || jwtSecret.length < 32) {
-    console.error('❌ CRITICAL SECURITY ERROR: JWT_SECRET must be set to a secure value (minimum 32 characters)');
-    console.error('   Current JWT_SECRET length:', jwtSecret.length);
-    console.error('   Please set a strong, unique JWT_SECRET in your environment variables');
+  // Check length
+  if (!jwtSecret || jwtSecret.length < 32) {
+    console.error('❌ CRITICAL SECURITY ERROR: JWT_SECRET is missing or too short (minimum 32 characters)');
+    console.error('   Current JWT_SECRET:', jwtSecret ? `${jwtSecret.length} chars` : 'NOT SET');
+    console.error('   ➜ Generate a new secret: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    console.error('   ➜ Add to .env: JWT_SECRET=<generated_secret>');
     process.exit(1);
+  }
+  
+  // Check for obvious default patterns (case-insensitive)
+  const secretLower = jwtSecret.toLowerCase();
+  const hasObviousDefault = defaultSecrets.some(s => secretLower.includes(s.toLowerCase()));
+  
+  if (hasObviousDefault || jwtSecret.includes('workplus') || jwtSecret.includes('-') || /^[a-z-]+$/.test(jwtSecret)) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('❌ CRITICAL SECURITY ERROR IN PRODUCTION: JWT_SECRET appears to use a default or weak pattern');
+      console.error('   Do NOT use dictionary words, hyphens, or obvious patterns');
+      console.error('   ➜ Generate a new secret: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+      console.error('   ➜ Deploy with new secret to production immediately');
+      process.exit(1);
+    } else {
+      console.warn('⚠️  WARNING (Development): JWT_SECRET appears to use a default pattern');
+      console.warn('   ➜ For production, generate: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    }
   }
 
   console.log('✅ Environment validation passed');
@@ -173,6 +209,9 @@ validateEnvironment();
 // ============================================================================
 
 const app = express();
+
+// Render / reverse proxy — required for rate limits and client IP
+app.set('trust proxy', 1);
 
 // Create HTTP server for Socket.IO
 const server = createServer(app);
@@ -237,6 +276,12 @@ const io = new Server(server, {
   transports: ['websocket', 'polling'],
   pingInterval: 25000,
   pingTimeout: 60000,
+  maxHttpBufferSize: 1e6,
+  perMessageDeflate: { threshold: 1024 },
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000,
+    skipMiddlewares: true,
+  },
 });
 
 // Make io globally accessible for routes
@@ -266,12 +311,19 @@ app.use(morgan('combined', {
 // Request ID middleware
 app.use(requestIdMiddleware);
 
+// Domain Resolver Middleware (resolve custom domains to organizations)
+// Must be early, after basic middleware, before auth
+app.use(domainResolver);
+
 // Cookie parser middleware (for HTTP-only cookies)
 app.use(cookieParser());
 
 // Body parsing with size limits
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+// Serve static assets (logo, images, etc.)
+app.use('/assets', express.static(path.join(__dirname, 'public', 'assets')));
 
 // ============================================================================
 // REAL-TIME EMITTER MIDDLEWARE
@@ -401,8 +453,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// Static files
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Uploaded files — require auth; access controlled by path (receipts, documents, avatars, chat)
+app.use(
+  "/uploads",
+  authenticate,
+  asyncHandler(createAuthenticatedUploadsHandler(path.join(__dirname, "uploads")))
+);
 
 // ============================================================================
 // MULTER CONFIGURATION
@@ -484,6 +540,12 @@ app.get("/api/health", asyncHandler(async (req, res) => {
     timestamp: new Date().toISOString()
   });
 }));
+
+// Session refresh (also on auth router) — early registration for Render deploys
+app.post("/api/auth/refresh", asyncHandler(handleAuthRefresh));
+app.options("/api/auth/refresh", (_req, res) => {
+  res.sendStatus(204);
+});
 
 app.get("/api/health/db", asyncHandler(async (req, res) => {
   try {
@@ -573,21 +635,244 @@ app.use("/health", healthRoutes);
 // ============================================================================
 
 // Import auth middleware
-import { authenticate } from "./middleware/auth.js";
+import { authenticate, authorize } from "./middleware/auth.js";
+import { validateOrgId } from "./middleware/orgIdValidation.js";
+import {
+  normalizeAuthOrgId,
+  socketTenantIdFromDecoded
+} from "./utils/orgScopeHelpers.js";
 
-// Dashboard routes (with authentication)
-app.use("/api/dashboard", authenticate, dashboardRoutes);
-app.use("/api/dashboard", authenticate, dashboardSuperAdminRoutes);
-app.use("/api/dashboard", authenticate, dashboardEmployeeRoutes);
+/** Authenticated API routes that require a real tenant org (non–super_admin). */
+const authedTenant = [authenticate, validateOrgId];
+
+// Registration: invite-only (OnboardingLink token), role fixed to employee — no client-supplied role/orgId
+app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) => {
+  const { name, email, password, inviteToken } = req.body;
+
+  if (!name || !email || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "Name, email and password are required"
+    });
+  }
+
+  if (!inviteToken || typeof inviteToken !== 'string') {
+    return res.status(400).json({
+      success: false,
+      message: 'A valid invite token is required to register',
+      code: 'INVITE_REQUIRED'
+    });
+  }
+
+  const invite = await OnboardingLink.findOne({ token: inviteToken.trim() });
+  if (!invite) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or expired invite',
+      code: 'INVALID_INVITE'
+    });
+  }
+  if (invite.isUsed) {
+    return res.status(400).json({
+      success: false,
+      message: 'This invite has already been used',
+      code: 'INVITE_USED'
+    });
+  }
+  if (invite.expiresAt && new Date(invite.expiresAt) < new Date()) {
+    return res.status(400).json({
+      success: false,
+      message: 'This invite has expired',
+      code: 'INVITE_EXPIRED'
+    });
+  }
+
+  const emailNorm = email.toLowerCase().trim();
+  const inviteEmail = String(invite.employeeEmail || '').toLowerCase().trim();
+  if (inviteEmail && inviteEmail !== emailNorm) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email does not match the invite',
+      code: 'INVITE_EMAIL_MISMATCH'
+    });
+  }
+
+  const inviteOrgId = String(invite.organizationId || '').trim();
+  if (!inviteOrgId || inviteOrgId === 'ORG-DEFAULT') {
+    return res.status(400).json({
+      success: false,
+      message: 'Invite is missing a valid organization',
+      code: 'INVALID_INVITE_ORG'
+    });
+  }
+
+  const existingUser = await User.findOne({ email: emailNorm });
+  if (existingUser) {
+    return res.status(400).json({
+      success: false,
+      message: "User already exists"
+    });
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const user = await User.create({
+    name,
+    email: emailNorm,
+    password: hashedPassword,
+    role: 'employee',
+    organization: invite.organizationName || 'WorkPlus Inc.',
+    orgId: inviteOrgId,
+    tenantId: inviteOrgId
+  });
+
+  const authOrg = normalizeAuthOrgId(user);
+  if (!authOrg) {
+    await User.deleteOne({ _id: user._id });
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid organization on invite',
+      code: 'MISSING_ORG_CONTEXT'
+    });
+  }
+
+  invite.isUsed = true;
+  await invite.save();
+
+  const token = jwt.sign(
+    {
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      tenantId: authOrg,
+      orgId: authOrg
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: '24h' }
+  );
+
+  setAccessTokenCookie(res, token, 24 * 60 * 60);
+
+  const userData = {
+    id: user._id.toString(),
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    avatar: user.avatar || null,
+    organization: user.organization || 'WorkPlus Inc.'
+  };
+
+  io.to(`tenant_${authOrg}`).emit('employee_created', { ...userData, orgId: authOrg, tenantId: authOrg });
+
+  res.status(201).json({
+    success: true,
+    message: "Registration successful",
+    data: {
+      user: userData,
+      token: token
+    }
+  });
+}));
+
+// Production traffic guard (skipped in dev unless ENABLE_TRAFFIC_GUARD=true)
+app.use("/api", apiTrafficLimiter);
+app.use("/api/documents", uploadTrafficLimiter);
+app.use("/api/profile", uploadTrafficLimiter);
+
+app.use("/api/auth", authRoutes);
+
+// Create Admin (Super Admin only) — must stay on main app so it is not shadowed by the auth router
+app.post("/api/auth/create-admin", asyncHandler(async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ success: false, message: "No token provided" });
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (jwtError) {
+    return res.status(401).json({ success: false, message: "Invalid or expired token" });
+  }
+
+  if (decoded.role !== 'super_admin') {
+    return res.status(403).json({ success: false, message: "Only super admin can create admin accounts" });
+  }
+
+  const { name, email, password, organization, orgId } = req.body;
+
+  if (!name || !email || !password) {
+    return res.status(400).json({ success: false, message: "Name, email and password are required" });
+  }
+
+  const emailNorm = email.toLowerCase().trim();
+  const existingUser = await User.findOne({ email: emailNorm });
+  if (existingUser) {
+    return res.status(400).json({ success: false, message: "User already exists with this email" });
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const adminOrgId = orgId || decoded.tenantId || decoded.orgId;
+  if (!adminOrgId || String(adminOrgId) === 'system') {
+    return res.status(400).json({
+      success: false,
+      message: 'Valid orgId is required when creating an admin',
+      code: 'MISSING_ORG_CONTEXT'
+    });
+  }
+
+  const user = await User.create({
+    name,
+    email: emailNorm,
+    password: hashedPassword,
+    role: 'admin',
+    organization: organization || 'WorkPlus Inc.',
+    orgId: String(adminOrgId)
+  });
+
+  res.status(201).json({
+    success: true,
+    message: "Admin user created successfully",
+    data: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      organization: user.organization
+    }
+  });
+}));
+
+// Dashboard routes (with authentication and role-based authorization)
+// Admin/HR dashboard - organization-specific metrics
+app.use("/api/dashboard", ...authedTenant, authorize('admin', 'hr'), dashboardRoutes);
+// Super Admin dashboard - platform-wide metrics
+app.use("/api/dashboard", ...authedTenant, authorize('super_admin'), dashboardSuperAdminRoutes);
+// Employee dashboard - self-service employee data only
+app.use("/api/dashboard", ...authedTenant, authorize('employee', 'manager', 'accountant'), dashboardEmployeeRoutes);
+app.use("/api/employee-dashboard", ...authedTenant, authorize('employee', 'manager', 'accountant'), employeeDashboardRoutes);
 
 // ============================================================================
 // PUBLIC CLEANUP ENDPOINTS (for testing/development)
 // ============================================================================
 
-// Cleanup endpoint to delete all leave requests - PROTECTED with authentication
-app.delete("/api/leave-requests/cleanup/all", authenticate, asyncHandler(async (req, res) => {
+// Cleanup endpoint — super_admin only; disabled in production unless explicitly enabled
+app.delete("/api/leave-requests/cleanup/all", ...authedTenant, authorize("super_admin"), asyncHandler(async (req, res) => {
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_LEAVE_CLEANUP !== "true") {
+    return res.status(403).json({
+      success: false,
+      message: "Leave cleanup is disabled in production",
+    });
+  }
   try {
-    const result = await LeaveRequest.deleteMany({});
+    const orgFilter =
+      req.user.role === "super_admin" && req.query.orgId
+        ? { orgId: String(req.query.orgId) }
+        : req.user.orgId
+          ? { orgId: String(req.user.orgId) }
+          : {};
+    const result = await LeaveRequest.deleteMany(orgFilter);
     logger.info('All leave requests deleted', { deletedCount: result.deletedCount });
     res.json({
       success: true,
@@ -611,77 +896,163 @@ app.delete("/api/leave-requests/cleanup/all", authenticate, asyncHandler(async (
 // ============================================================================
 
 // Profile routes (with authentication)
-app.use("/api/profile", authenticate, profileRoutes);
+app.use("/api/profile", ...authedTenant, profileRoutes);
 
 // Employees routes (with authentication)
-app.use("/api/employees", authenticate, employeesRoutes);
+app.use("/api/employees", ...authedTenant, employeesRoutes);
+
+// Document status (legacy path; registered before /api/documents router so it is reachable)
+app.patch("/api/documents/:id/status", ...authedTenant, asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ message: "Invalid document ID" });
+  }
+
+  const existing = await Document.findById(id);
+  if (!existing) {
+    return res.status(404).json({ message: "Document not found" });
+  }
+
+  const privileged = ["admin", "hr", "super_admin"].includes(req.user.role);
+  const isOwner = String(existing.userId) === String(req.user.userId);
+  if (!isOwner && !privileged) {
+    return res.status(403).json({ message: "Unauthorized access" });
+  }
+  if (
+    req.user.role !== "super_admin" &&
+    String(existing.orgId) !== String(req.user.orgId)
+  ) {
+    return res.status(403).json({ message: "Unauthorized access" });
+  }
+
+  const document = await Document.findByIdAndUpdate(id, { status }, { new: true });
+  res.json(document);
+}));
 
 // Documents routes (with authentication)
-app.use("/api/documents", authenticate, documentsRoutes);
+app.use("/api/documents", ...authedTenant, documentsRoutes);
 
 // Announcements routes (with authentication)
-app.use("/api/announcements", authenticate, announcementsRoutes);
+app.use("/api/announcements", ...authedTenant, announcementsRoutes);
 
 // In-app notifications (navbar, etc.)
-app.use("/api/notifications", authenticate, notificationsRoutes);
+app.use("/api/notifications", ...authedTenant, notificationsRoutes);
 
 // Tasks routes (with authentication)
-app.use("/api/tasks", authenticate, tasksRoutes);
+app.use("/api/tasks", ...authedTenant, tasksRoutes);
 
 // Organizations routes (with authentication)
-app.use("/api/organizations", authenticate, organizationsRoutes);
+app.use("/api/organizations", ...authedTenant, organizationsRoutes);
+
+// Asset management (assignments, photos, import/export)
+app.use("/api/assets", ...authedTenant, assetsRoutes);
 
 // Expenses routes (with authentication)
-app.use("/api/expenses", authenticate, expensesRoutes);
+app.use("/api/expenses", ...authedTenant, expensesRoutes);
 
 // Attendance routes (with authentication)
-app.use("/api/attendance", authenticate, attendanceRoutes);
+app.use("/api/attendance", ...authedTenant, attendanceRoutes);
 
 // Attendance History routes (with authentication)
-app.use("/api/attendance-history", authenticate, attendanceHistoryRoutes);
+app.use("/api/attendance-history", ...authedTenant, attendanceHistoryRoutes);
 
 // Leave routes (with authentication)
-app.use("/api/leave-requests", authenticate, leaveRoutes);
+app.use("/api/leave-requests", ...authedTenant, leaveRoutes);
 
 // Leave allocation routes (with authentication)
-app.use("/api/leave-allocation", authenticate, leaveAllocationRoutes);
+app.use("/api/leave-allocation", ...authedTenant, leaveAllocationRoutes);
 
 // Leave type settings routes (with authentication)
-app.use("/api/leave-type-settings", authenticate, leaveTypeSettingsRoutes);
+app.use("/api/leave-type-settings", ...authedTenant, leaveTypeSettingsRoutes);
 
 // Holidays routes (with authentication)
-app.use("/api/holidays", authenticate, holidaysRoutes);
+app.use("/api/holidays", ...authedTenant, holidaysRoutes);
 
 // Users routes (with authentication)
-app.use("/api/users", authenticate, usersRoutes);
+app.use("/api/users", ...authedTenant, usersRoutes);
+app.use("/api/departments", ...authedTenant, departmentsRoutes);
 
 // Roles routes (with authentication)
-app.use("/api/roles", authenticate, rolesRoutes);
+app.use("/api/roles", ...authedTenant, rolesRoutes);
 
 // Onboarding routes (mixed authentication - some public, some protected)
-app.use("/api/onboarding", onboardingRoutes);
+// Use multer for file uploads on onboarding routes
+app.use("/api/onboarding", upload.any(), onboardingRoutes);
 
 // Sales routes (with authentication)
-app.use("/api/sales/calls", authenticate, callsRoutes);
-app.use("/api/sales/leads", authenticate, leadsRoutes);
-app.use("/api/sales/deals", authenticate, dealsRoutes);
-app.use("/api/sales/performance", authenticate, performanceRoutes);
-app.use("/api/sales/revenue", authenticate, revenueRoutes);
+app.use("/api/sales/calls", ...authedTenant, callsRoutes);
+app.use("/api/sales/leads", ...authedTenant, leadsRoutes);
+app.use("/api/sales/deals", ...authedTenant, dealsRoutes);
+app.use("/api/sales/performance", ...authedTenant, performanceRoutes);
+app.use("/api/performance", ...authedTenant, performanceEmployeeRoutes);
+app.use("/api/sales/revenue", ...authedTenant, revenueRoutes);
 
 // Chat routes (with authentication)
-app.use("/api/chat", authenticate, chatRoutes);
+app.use("/api/chat", ...authedTenant, chatRoutes);
 
 // Currency routes (with authentication)
-app.use("/api/currency", authenticate, currencyRoutes);
+app.use("/api/currency", ...authedTenant, currencyRoutes);
 
 // Salary routes (with authentication)
-app.use("/api/salary", authenticate, salaryRoutes);
+app.use("/api/salary", ...authedTenant, salaryRoutes);
+
+// Salary cycle & FNF (HR / admin)
+app.use(
+  "/api/salary-cycle",
+  ...authedTenant,
+  authorize("super_admin", "admin", "hr"),
+  salaryCycleRoutes
+);
+app.use("/api/fnf", ...authedTenant, authorize("super_admin", "admin", "hr"), fnfRoutes);
 
 // Payroll routes (with authentication)
-app.use("/api/payroll", authenticate, payrollRoutes);
+app.use("/api/payroll", ...authedTenant, payrollRoutes);
 
 // Admin: org notification integrations (SMTP + Teams) and routing
 app.use("/api/admin", organizationNotificationSettingsRoutes);
+app.use("/api/admin/bulk", adminBulkOperationsRoutes);
+
+// Experience / HR document bundle for a user (authenticated)
+app.get("/api/experience-documents/:userId", ...authedTenant, asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(userId)) {
+    return res.status(400).json({ message: "Invalid user ID" });
+  }
+
+  const privileged = ["admin", "hr", "super_admin", "manager"].includes(req.user.role);
+  const isSelf = String(userId) === String(req.user.userId);
+  if (!isSelf && !privileged) {
+    return res.status(403).json({ message: "Unauthorized access" });
+  }
+
+  if (privileged && req.user.role !== "super_admin" && !isSelf) {
+    const targetUser = await User.findById(userId).select("orgId").lean();
+    if (targetUser?.orgId && String(targetUser.orgId) !== String(req.user.orgId)) {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+  }
+
+  const experienceTypes = [
+    "experience_letter",
+    "offer_letter",
+    "relieving_letter",
+    "appraisal_letter",
+    "salary_slips",
+    "bank_statement"
+  ];
+
+  const docQuery = { userId, type: { $in: experienceTypes } };
+  if (req.user.role !== "super_admin") {
+    docQuery.orgId = String(req.user.orgId);
+  }
+
+  const documents = await Document.find(docQuery).sort({ uploadedAt: -1 });
+
+  res.json(documents);
+}));
 
 // ============================================================================
 // SOCKET.IO SETUP
@@ -716,69 +1087,65 @@ io.on('connection', (socket) => {
     // Store decoded token info on socket
     socket.userId = decoded.userId;
     socket.role = decoded.role;
-    socket.tenantId = decoded.tenantId || 'system';
+    socket.tenantId = socketTenantIdFromDecoded(decoded);
     socket.email = decoded.email;
 
-    // Handle user authentication with JWT
+    if (!socket.tenantId && socket.userId) {
+      User.findById(socket.userId)
+        .select('orgId tenantId organizationId role')
+        .lean()
+        .then((u) => {
+          const resolved = normalizeAuthOrgId(u);
+          if (resolved) {
+            socket.tenantId = resolved;
+            logger.info(`Socket tenant resolved from user record`, { userId: socket.userId });
+          }
+        })
+        .catch(() => {});
+    }
+
+    // Session setup — identity comes only from verified JWT (connection), not client payload
     socket.on('authenticate', async (data) => {
       let sessionError = null;
       try {
-        const { userId, role, tenantId } = data;
-        
-        console.log('🔐 Authenticate event received:', { userId, role, tenantId });
-        
+        const userId = socket.userId;
+        const role = socket.role;
+        const tenantId = socket.tenantId;
+
         if (!userId || !role) {
-          logger.warn(`Invalid authentication data from ${socket.id}`);
-          socket.emit('auth_error', { message: 'Invalid authentication data', code: 'INVALID_AUTH_DATA' });
+          logger.warn(`Socket authenticate without JWT identity: ${socket.id}`);
+          socket.emit('auth_error', { message: 'Invalid session', code: 'INVALID_AUTH_DATA' });
           socket.disconnect(true);
           return;
         }
 
-        // Store user info on socket
-        socket.userId = userId;
-        socket.role = role;
-        socket.tenantId = tenantId || 'system';
+        if (data?.userId && String(data.userId) !== String(userId)) {
+          logger.warn(`Socket identity spoof attempt: ${socket.id}`);
+          socket.emit('auth_error', { message: 'Identity mismatch', code: 'IDENTITY_MISMATCH' });
+          socket.disconnect(true);
+          return;
+        }
 
-        // Create or update session record with proper error handling
+        // Allow multiple tabs/devices per user (sibling sockets are not disconnected)
+
         try {
-          console.log('📝 Updating session for user:', userId);
-          
-          // Try to find existing session from login
-          let session = await Session.findOne({
+          const { attachSocketToSession, countActiveSocketUsers } = await import(
+            './utils/sessionPresence.js'
+          );
+          const session = await attachSocketToSession({
             userId,
-            orgId: tenantId || 'system',
-            isActive: true,
-            socketId: null // Session created during login without socketId
-          }).catch(err => {
-            throw new Error(`Failed to query session: ${err.message}`);
+            orgId: tenantId,
+            role,
+            socketId: socket.id,
+            userAgent: socket.handshake.headers['user-agent'],
+            ipAddress: socket.handshake.address,
           });
-          
-          if (session) {
-            // Update existing session with socketId
-            session.socketId = socket.id;
-            session.connectTime = new Date();
-            await session.save().catch(err => {
-              throw new Error(`Failed to save session: ${err.message}`);
-            });
-            console.log('✅ Session updated with socketId:', session._id);
-            logger.info(`Session updated for user ${userId}`, { sessionId: session._id, socketId: socket.id });
-          } else {
-            // Create new session if not found (fallback)
-            session = await Session.create({
-              userId,
-              orgId: tenantId || 'system',
-              socketId: socket.id,
-              role,
-              isActive: true,
-              connectTime: new Date()
-            }).catch(err => {
-              throw new Error(`Failed to create session: ${err.message}`);
-            });
-            console.log('✅ New session created:', session._id);
-            logger.info(`New session created for user ${userId}`, { sessionId: session._id });
-          }
-          
           socket.sessionId = session._id;
+          logger.info(`Socket attached to session`, {
+            sessionId: session._id,
+            socketId: socket.id,
+            socketCount: session.socketIds?.length,
+          });
         } catch (err) {
           sessionError = err;
           console.error('❌ Session update error:', err.message);
@@ -790,21 +1157,20 @@ io.on('connection', (socket) => {
         // Join role-based rooms
         socket.join(`role_${role}`);
         
-        // Join tenant room - ALWAYS join with 'system' as fallback
-        const finalTenantId = tenantId || 'system';
-        socket.join(`tenant_${finalTenantId}`);
-        console.log(`📍 Socket joined room: tenant_${finalTenantId}`);
+        if (tenantId) {
+          socket.join(`tenant_${tenantId}`);
+          console.log(`📍 Socket joined room: tenant_${tenantId}`);
+        }
 
-        // Join user-specific room
         socket.join(`user_${userId}`);
 
-        // Join management room for admins and super admins
         if (role === 'admin' || role === 'super_admin') {
           socket.join('management');
           socket.join(`admin_${userId}`);
           socket.join('role_admin');
-          socket.join(`role_admin_${finalTenantId}`);
-          console.log(`📍 Admin joined rooms: management, admin_${userId}, role_admin, role_admin_${finalTenantId}`);
+          if (tenantId) {
+            socket.join(`role_admin_${tenantId}`);
+          }
         }
 
         // Join employee room
@@ -829,12 +1195,13 @@ io.on('connection', (socket) => {
 
         // Emit dashboard update to all admins in the tenant
         try {
-          const activeCount = await Session.countDocuments({
-            orgId: tenantId || 'system',
-            isActive: true
-          });
-          
-          io.to(`tenant_${tenantId || 'system'}`).emit('dashboard_update', {
+          if (!tenantId) {
+            return;
+          }
+          const { countActiveSocketUsers } = await import('./utils/sessionPresence.js');
+          const activeCount = await countActiveSocketUsers(tenantId);
+
+          io.to(`tenant_${tenantId}`).emit('dashboard_update', {
             type: 'active_users_updated',
             data: {
               activeUsers: activeCount,
@@ -1081,9 +1448,26 @@ io.on('connection', (socket) => {
       }
     });
 
-    // Join/Leave room handlers
+    // Join/Leave room handlers — whitelist rooms per JWT identity
+    const canJoinRoom = (room) => {
+      if (!room || typeof room !== 'string' || room.length > 128) return false;
+      const uid = String(socket.userId || '');
+      const tenant = String(socket.tenantId || '');
+      if (room === `user_${uid}`) return true;
+      if (tenant && room === `tenant_${tenant}`) return true;
+      if (['admin', 'hr', 'manager', 'super_admin'].includes(socket.role)) {
+        if (room === 'management') return true;
+        if (tenant && room.startsWith(`tenant_${tenant}`)) return true;
+      }
+      return false;
+    };
+
     socket.on('join', (room) => {
       try {
+        if (!canJoinRoom(room)) {
+          logger.warn(`Socket join denied for ${socket.userId}: ${room}`);
+          return;
+        }
         socket.join(room);
         logger.debug(`User ${socket.userId} joined room: ${room}`);
       } catch (error) {
@@ -1109,13 +1493,13 @@ io.on('connection', (socket) => {
           tenantId: socket.tenantId
         });
 
-        // Mark session as inactive
         if (socket.sessionId) {
           try {
-            await Session.findByIdAndUpdate(socket.sessionId, {
-              isActive: false
-            });
-            logger.info(`Session marked inactive: ${socket.sessionId}`);
+            const { detachSocketFromSession, countActiveSocketUsers } = await import(
+              './utils/sessionPresence.js'
+            );
+            await detachSocketFromSession(socket.sessionId, socket.id);
+            logger.info(`Socket detached from session: ${socket.sessionId}`);
           } catch (sessionError) {
             logger.warn(`Failed to update session: ${sessionError.message}`);
           }
@@ -1123,12 +1507,13 @@ io.on('connection', (socket) => {
 
         // Emit dashboard update to all admins in the tenant
         try {
-          const tenantId = socket.tenantId || 'system';
-          const activeCount = await Session.countDocuments({
-            orgId: tenantId,
-            isActive: true
-          });
-          
+          const tenantId = socket.tenantId;
+          if (!tenantId) {
+            return;
+          }
+          const { countActiveSocketUsers } = await import('./utils/sessionPresence.js');
+          const activeCount = await countActiveSocketUsers(tenantId);
+
           io.to(`tenant_${tenantId}`).emit('dashboard_update', {
             type: 'active_users_updated',
             data: {
@@ -1166,223 +1551,6 @@ io.on('error', (error) => {
 });
 
 // ============================================================================
-// AUTHENTICATION ROUTES
-// ============================================================================
-
-// Handle preflight for login
-app.options("/api/auth/login", cors(corsOptions));
-
-app.post("/api/auth/login", loginLimiter, asyncHandler(async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    // Validate input
-    if (!email || !password) {
-      console.error("LOGIN ERROR: Missing email or password");
-      return res.status(400).json({ 
-        success: false, 
-        message: "Email and password are required",
-        code: "MISSING_CREDENTIALS"
-      });
-    }
-
-    // Find user by email (must be active — same rules as JWT-protected routes)
-    const user = await User.findOne({ email: email.toLowerCase().trim(), isActive: true }).select('+password');
-    if (!user) {
-      console.error(`LOGIN ERROR: User not found or inactive - ${email}`);
-      return res.status(401).json({ 
-        success: false, 
-        message: "Invalid credentials",
-        code: "INVALID_CREDENTIALS"
-      });
-    }
-
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      console.error(`LOGIN ERROR: Invalid password for ${email}`);
-      return res.status(401).json({ 
-        success: false, 
-        message: "Invalid credentials",
-        code: "INVALID_CREDENTIALS"
-      });
-    }
-
-    if (user.lockUntil && user.lockUntil > new Date()) {
-      return res.status(423).json({
-        success: false,
-        message: "Account is temporarily locked.",
-        code: "ACCOUNT_LOCKED"
-      });
-    }
-
-    const orgId = user.orgId || 'system';
-
-    // Access token — claims must satisfy authenticate middleware + attendance (userId, orgId)
-    const token = jwt.sign(
-      { 
-        userId: user._id.toString(),
-        email: user.email,
-        role: user.role,
-        orgId,
-        tenantId: orgId
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    logger.info('User logged in successfully', {
-      userId: user._id,
-      email: user.email,
-      role: user.role
-    });
-
-    const employee = await Employee.findOne({ userId: user._id, orgId }).lean();
-
-    clearLegacyAuthCookies(res);
-    clearAccessTokenCookie(res);
-    // httpOnly access cookie (Bearer still accepted for API clients)
-    setAccessTokenCookie(res, token, 24 * 60 * 60);
-
-    // Return standardized response (token in body optional for legacy tools; prefer cookie for browsers)
-    return res.status(200).json({
-      success: true,
-      message: "Login successful",
-      token: token,
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        avatar: user.avatar || null,
-        organization: user.organization || 'WorkPlus Inc.',
-        tenantId: orgId,
-        orgId,
-        employeeId: employee?._id?.toString?.() || '',
-        employeeCode: employee?.employeeCode || ''
-      }
-    });
-
-  } catch (error) {
-    console.error("LOGIN ERROR:", error);
-    logger.error('Login endpoint error', {
-      error: error.message,
-      stack: error.stack
-    });
-    
-    return res.status(500).json({
-      success: false,
-      message: "Server error during login",
-      code: "LOGIN_ERROR"
-    });
-  }
-}));
-
-app.post("/api/auth/register", registerLimiter, asyncHandler(async (req, res) => {
-  const { name, email, password, role, organization } = req.body;
-
-  if (!name || !email || !password) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "Name, email and password are required" 
-    });
-  }
-
-  const existingUser = await User.findOne({ email });
-  if (existingUser) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "User already exists" 
-    });
-  }
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-  const user = await User.create({
-    name,
-    email,
-    password: hashedPassword,
-    role: role || 'employee',
-    organization: organization || 'WorkPlus Inc.'
-  });
-
-  const token = jwt.sign(
-    { 
-      userId: user._id.toString(),
-      email: user.email,
-      role: user.role,
-      tenantId: user.orgId || 'system',
-      orgId: user.orgId || 'system'
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '24h' }
-  );
-
-  setAccessTokenCookie(res, token, 24 * 60 * 60);
-
-  const userData = {
-    id: user._id.toString(),
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    avatar: user.avatar || null,
-    organization: user.organization || 'WorkPlus Inc.'
-  };
-
-  io.emit('employee_created', userData);
-
-  res.status(201).json({
-    success: true,
-    message: "Registration successful",
-    data: {
-      user: userData,
-      token: token
-    }
-  });
-}));
-
-// Same JWT rules as /api/attendance/* (Bearer + verify + active user)
-app.get("/api/auth/me", authenticate, asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user.userId).lean();
-  if (!user) {
-    return res.status(401).json({
-      success: false,
-      message: "User not found",
-      code: "USER_NOT_FOUND"
-    });
-  }
-
-  const orgId = user.orgId || req.user.orgId || 'system';
-  const employee = await Employee.findOne({ userId: user._id, orgId }).lean();
-
-  res.json({
-    success: true,
-    data: {
-      _id: user._id,
-      id: user._id,
-      userId: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      avatar: user.avatar || null,
-      organization: user.organization || 'WorkPlus Inc.',
-      tenantId: orgId,
-      orgId,
-      employeeId: employee?._id,
-      employeeCode: employee?.employeeCode
-    }
-  });
-}));
-
-app.post("/api/auth/logout", authenticate, asyncHandler(async (req, res) => {
-  clearAccessTokenCookie(res);
-  clearLegacyAuthCookies(res);
-  res.json({
-    success: true,
-    message: "Logout successful"
-  });
-}));
-
-// ============================================================================
 // DOCUMENT ROUTES
 // ============================================================================
 
@@ -1405,21 +1573,32 @@ app.use(errorHandler);
 
 const gracefulShutdown = async (signal) => {
   logger.info(`${signal} received. Starting graceful shutdown...`);
-  
+
+  const forceExit = setTimeout(() => {
+    logger.error('Graceful shutdown timed out — forcing exit');
+    process.exit(1);
+  }, 15_000);
+  forceExit.unref();
+
   try {
-    // Close server
-    server.close(() => {
-      logger.info('HTTP server closed');
+    await new Promise((resolve) => {
+      server.close(() => {
+        logger.info('HTTP server closed');
+        resolve();
+      });
     });
 
-    // Close Socket.IO
-    io.close();
-    logger.info('Socket.IO closed');
+    await new Promise((resolve) => {
+      io.close(() => {
+        logger.info('Socket.IO closed');
+        resolve();
+      });
+    });
 
-    // Close database connection
     await mongoose.connection.close();
     logger.info('Database connection closed');
 
+    clearTimeout(forceExit);
     process.exit(0);
   } catch (error) {
     logger.error(`Error during shutdown: ${error.message}`);
@@ -1440,8 +1619,11 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error(`Unhandled Rejection at ${promise}: ${reason}`);
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection', {
+    reason: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+  });
 });
 
 // ============================================================================
@@ -1472,6 +1654,7 @@ const startServer = async () => {
     await redis.initializeRedis();
     if (redis.isRedisConnected()) {
       logger.info('✅ Redis connected successfully');
+      await attachSocketIoRedisAdapter(io);
     } else {
       logger.warn('⚠️  Redis not available - caching disabled');
     }
@@ -1494,125 +1677,3 @@ const startServer = async () => {
 startServer();
 
 export { app, server, io };
-
-
-// ============================================================================
-// ADDITIONAL ROUTES (Preserved from original)
-// ============================================================================
-
-// Create Admin (Super Admin only)
-app.post("/api/auth/create-admin", asyncHandler(async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ success: false, message: "No token provided" });
-  }
-
-  const token = authHeader.replace('Bearer ', '');
-  
-  let decoded;
-  try {
-    decoded = jwt.verify(token, process.env.JWT_SECRET);
-  } catch (jwtError) {
-    return res.status(401).json({ success: false, message: "Invalid or expired token" });
-  }
-
-  if (decoded.role !== 'super_admin') {
-    return res.status(403).json({ success: false, message: "Only super admin can create admin accounts" });
-  }
-
-  const { name, email, password, organization, orgId } = req.body;
-
-  if (!name || !email || !password) {
-    return res.status(400).json({ success: false, message: "Name, email and password are required" });
-  }
-
-  const existingUser = await User.findOne({ email });
-  if (existingUser) {
-    return res.status(400).json({ success: false, message: "User already exists with this email" });
-  }
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-  const user = await User.create({
-    name,
-    email,
-    password: hashedPassword,
-    role: 'admin',
-    organization: organization || 'WorkPlus Inc.',
-    orgId: orgId || decoded.tenantId || 'system'
-  });
-
-  res.status(201).json({
-    success: true,
-    message: "Admin user created successfully",
-    data: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      organization: user.organization
-    }
-  });
-}));
-
-// Get experience documents
-app.get("/api/experience-documents/:userId", asyncHandler(async (req, res) => {
-  const { userId } = req.params;
-  
-  if (!mongoose.Types.ObjectId.isValid(userId)) {
-    return res.status(400).json({ message: "Invalid user ID" });
-  }
-
-  const experienceTypes = [
-    "experience_letter", 
-    "offer_letter", 
-    "relieving_letter", 
-    "appraisal_letter", 
-    "salary_slips", 
-    "bank_statement"
-  ];
-  
-  const documents = await Document.find({ 
-    userId, 
-    type: { $in: experienceTypes } 
-  }).sort({ uploadedAt: -1 });
-  
-  res.json(documents);
-}));
-
-// Update document status
-app.patch("/api/documents/:id/status", asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
-  
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({ message: "Invalid document ID" });
-  }
-  
-  const document = await Document.findByIdAndUpdate(
-    id, 
-    { status }, 
-    { new: true }
-  );
-  
-  if (!document) {
-    return res.status(404).json({ message: "Document not found" });
-  }
-  
-  res.json(document);
-}));
-
-
-// Generate employee document
-// NOTE: This endpoint is now handled by the documents router at POST /api/documents/digital-generate
-
-// Get all documents for an employee
-// NOTE: This endpoint is now handled by the documents router at GET /api/documents/employee/:employeeId
-
-// Get documents for organization
-// NOTE: This endpoint is now handled by the documents router at GET /api/documents/organization/:organizationId
-
-// Get document by ID
-// NOTE: This endpoint is now handled by the documents router at GET /api/documents/generated/:documentId
-
-// Delete document
-// NOTE: This endpoint is now handled by the documents router at DELETE /api/documents/generated/:documentId

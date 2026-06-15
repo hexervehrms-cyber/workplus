@@ -21,9 +21,20 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { LeaveRequestService } from '../../utils/api';
-import { buildApiUrl } from '../../utils/apiHelper';
+import {
+  apiDelete,
+  apiGet,
+  apiPost,
+  appendOrgIdParam,
+  getBearerToken,
+  holidaysStorageKey,
+  resolveAuthOrgId,
+  resolveOrgIdForApi,
+} from '../../utils/apiHelper';
 import { useAuth } from '../../context/AuthContext';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
+import { buildAndSubmitLeaveRequest, formatLocalDateString } from '../../utils/leaveSubmit';
+import realTimeSocket from '../../utils/realTimeSocket';
 
 interface LeaveRequest {
   _id: string;
@@ -68,43 +79,40 @@ export default function Calendar() {
   // Fetch leave requests and holidays
   useEffect(() => {
     const fetchData = async () => {
-      if (!user?.id) return;
+      const authUserId = user?.userId || user?.id;
+      if (!authUserId) return;
       
       try {
         setLoading(true);
         
         // Fetch leave requests
-        const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
+        const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
         if (leaveResponse.success && leaveResponse.data) {
           setLeaveHistory(leaveResponse.data);
         }
 
         // Fetch holidays with proper error handling
-        const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+        const token = getBearerToken();
         if (!token) {
           console.warn('No auth token found for holiday fetch');
           return;
         }
 
-        const holidayResponse = await fetch(buildApiUrl('/holidays'), {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (holidayResponse.ok) {
-          const holidayData = await holidayResponse.json();
-          if (holidayData.success && Array.isArray(holidayData.data)) {
-            console.log('✅ Loaded holidays:', holidayData.data.length, 'holidays');
-            setHolidays(holidayData.data);
-            // Cache holidays for offline access
-            localStorage.setItem('cached_holidays', JSON.stringify(holidayData.data));
-          }
+        const holidayYear = new Date().getFullYear();
+        const holidayData = await apiGet<{ success?: boolean; data?: unknown[] }>(
+          appendOrgIdParam(`holidays?year=${holidayYear}&limit=500`, user, resolveAuthOrgId(user)),
+          false
+        );
+        if (holidayData?.success && Array.isArray(holidayData.data)) {
+          console.log('✅ Loaded holidays:', holidayData.data.length, 'holidays');
+          setHolidays(holidayData.data);
+          const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
+          localStorage.setItem(hKey, JSON.stringify(holidayData.data));
         } else {
-          console.warn('Holiday fetch failed with status:', holidayResponse.status);
+          console.warn('Holiday fetch returned no data');
           // Try to use cached holidays
-          const cachedHolidays = localStorage.getItem('cached_holidays');
+          const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
+          const cachedHolidays = localStorage.getItem(hKey);
           if (cachedHolidays) {
             try {
               const parsed = JSON.parse(cachedHolidays);
@@ -125,45 +133,32 @@ export default function Calendar() {
     fetchData();
   }, [user]);
 
-  // Listen for real-time holiday updates via Socket.IO
+  // Listen for real-time holiday updates via Socket.IO (sync subscribe so cleanup always runs)
   useEffect(() => {
     const refreshHolidays = async () => {
       try {
-        const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+        const token = getBearerToken();
         if (!token) return;
 
-        const holidayResponse = await fetch(buildApiUrl('/holidays'), {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (holidayResponse.ok) {
-          const holidayData = await holidayResponse.json();
-          if (holidayData.success && Array.isArray(holidayData.data)) {
-            console.log('✅ Real-time holiday update:', holidayData.data.length, 'holidays');
-            setHolidays(holidayData.data);
-            // Cache holidays for offline access
-            localStorage.setItem('cached_holidays', JSON.stringify(holidayData.data));
-          }
+        const holidayYear = new Date().getFullYear();
+        const holidayData = await apiGet<{ success?: boolean; data?: unknown[] }>(
+          appendOrgIdParam(`holidays?year=${holidayYear}&limit=500`, user, resolveAuthOrgId(user)),
+          false
+        );
+        if (holidayData?.success && Array.isArray(holidayData.data)) {
+          setHolidays(holidayData.data);
+          const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
+          localStorage.setItem(hKey, JSON.stringify(holidayData.data));
         }
       } catch (error) {
         console.error('Error refreshing holidays:', error);
       }
     };
 
-    // Import socket dynamically to avoid circular dependencies
-    import('../../utils/realTimeSocket').then((module) => {
-      const socket = module.default;
-      if (socket) {
-        socket.on('holiday:update', refreshHolidays);
-        
-        return () => {
-          socket.off('holiday:update', refreshHolidays);
-        };
-      }
-    });
+    const unsubscribe = realTimeSocket.on('holiday:update', refreshHolidays);
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   // Get days in month
@@ -259,7 +254,7 @@ export default function Calendar() {
 
   // Open leave form
   const openLeaveForm = (day: Date) => {
-    const dateStr = day.toISOString().split('T')[0];
+    const dateStr = formatLocalDateString(day);
     setSelectedDate(dateStr);
     setFormData({
       type: '',
@@ -272,45 +267,36 @@ export default function Calendar() {
 
   // Submit leave request
   const handleSubmitLeave = async () => {
-    if (!user?.id || !formData.type || !formData.startDate || !formData.endDate || !formData.reason) {
-      toast.error('Please fill in all required fields');
+    const authUserId = String(user?.userId || user?.id || '');
+    const result = await buildAndSubmitLeaveRequest(user, {
+      type: formData.type,
+      startDate: formData.startDate,
+      endDate: formData.endDate,
+      reason: formData.reason,
+    });
+
+    if (!result.ok) {
+      let msg = result.error || 'Failed to submit leave request';
+      if (msg.toLowerCase().includes('route not found')) {
+        msg = 'Leave API unavailable — redeploy backend or sign in again.';
+      }
+      toast.error(msg);
       return;
     }
 
-    try {
-      const employeeId = user.employeeId || user.id;
-      const orgId = user.orgId || 'system';
+    toast.success('Leave request submitted — pending admin approval');
+    setShowLeaveForm(false);
+    setFormData({ type: '', startDate: '', endDate: '', reason: '' });
 
-      const startDate = new Date(formData.startDate);
-      const endDate = new Date(formData.endDate);
-
-      const leaveData = {
-        userId: user.id,
-        employeeId: employeeId,
-        leaveType: formData.type,
-        startDate: startDate.toISOString(),
-        endDate: endDate.toISOString(),
-        reason: formData.reason,
-        orgId: orgId
-      };
-
-      const response = await LeaveRequestService.createLeaveRequest(leaveData);
-      
-      if (response.success) {
-        toast.success('Leave request submitted successfully');
-        setShowLeaveForm(false);
-        setFormData({ type: '', startDate: '', endDate: '', reason: '' });
-        
-        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
-        if (updatedLeaves.success && updatedLeaves.data) {
-          setLeaveHistory(updatedLeaves.data);
-        }
-      } else {
-        toast.error(response.message || 'Failed to submit leave request');
-      }
-    } catch (error) {
-      console.error('Error submitting leave request:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to submit leave request');
+    if (authUserId) {
+      const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
+      const raw = updatedLeaves as { success?: boolean; data?: LeaveRequest[] | { data?: LeaveRequest[] } };
+      const list = Array.isArray(raw?.data)
+        ? raw.data
+        : Array.isArray((raw?.data as { data?: LeaveRequest[] })?.data)
+          ? (raw.data as { data: LeaveRequest[] }).data
+          : [];
+      if (list.length > 0) setLeaveHistory(list);
     }
   };
 
@@ -322,43 +308,34 @@ export default function Calendar() {
     }
 
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      
-      const response = await fetch('/api/holidays', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          date: holidayForm.date,
-          name: holidayForm.name,
-          description: holidayForm.description,
-          type: 'public'
-        })
+      const orgId =
+        resolveAuthOrgId(user) || (await resolveOrgIdForApi(user));
+      if (!orgId) {
+        toast.error('Organization context is required to add holidays');
+        return;
+      }
+      await apiPost(appendOrgIdParam('holidays', user, orgId), {
+        orgId,
+        organizationId: orgId,
+        date: holidayForm.date,
+        name: holidayForm.name,
+        description: holidayForm.description,
+        type: 'public',
       });
 
-      if (response.ok) {
-        toast.success('Holiday added successfully');
-        setShowHolidayForm(false);
-        setHolidayForm({ date: '', name: '', description: '' });
-        
-        // Refresh holidays
-        const holidayResponse = await fetch('/api/holidays', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
+      toast.success('Holiday added successfully');
+      setShowHolidayForm(false);
+      setHolidayForm({ date: '', name: '', description: '' });
 
-        if (holidayResponse.ok) {
-          const holidayData = await holidayResponse.json();
-          if (holidayData.success && Array.isArray(holidayData.data)) {
-            setHolidays(holidayData.data);
-          }
-        }
-      } else {
-        toast.error('Failed to add holiday');
+      const holidayYear = holidayForm.date
+        ? new Date(holidayForm.date).getFullYear()
+        : new Date().getFullYear();
+      const holidayData = await apiGet<{ success?: boolean; data?: unknown[] }>(
+        appendOrgIdParam(`holidays?year=${holidayYear}&limit=500`, user, orgId),
+        false
+      );
+      if (holidayData?.success && Array.isArray(holidayData.data)) {
+        setHolidays(holidayData.data);
       }
     } catch (error) {
       console.error('Error adding holiday:', error);
@@ -371,22 +348,9 @@ export default function Calendar() {
     if (!window.confirm('Are you sure you want to delete this holiday?')) return;
 
     try {
-      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      
-      const response = await fetch(`/api/holidays/${holidayId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        toast.success('Holiday deleted successfully');
-        setHolidays(holidays.filter(h => (h._id || h.id) !== holidayId));
-      } else {
-        toast.error('Failed to delete holiday');
-      }
+      await apiDelete(`holidays/${holidayId}`);
+      toast.success('Holiday deleted successfully');
+      setHolidays(holidays.filter((h) => (h._id || h.id) !== holidayId));
     } catch (error) {
       console.error('Error deleting holiday:', error);
       toast.error('Failed to delete holiday');

@@ -1,8 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Pause, Calendar, Loader } from 'lucide-react';
-import { buildApiUrl } from '../../utils/apiHelper';
-import { TokenManager } from '../../utils/api';
-import { readPersistedAttendance, isPayloadFresh } from '../../utils/attendancePersistence';
+import { Calendar, Loader } from 'lucide-react';
+import { apiGet } from '../../utils/apiHelper';
+import { extractApiList } from '../../utils/api';
+import { safeLocaleTime, hasCheckOutValue, safeTitleCase } from '../../utils/safeUi';
+import {
+  readPersistedAttendance,
+  isPayloadFresh,
+  clearPersistedAttendance,
+  writePersistedAttendance,
+} from '../../utils/attendancePersistence';
 import realTimeSocket from '../../utils/realTimeSocket';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -22,6 +28,56 @@ interface AttendanceRecord {
 
 const HISTORY_PAGE_SIZE = 10;
 
+function formatActivityAction(action: string): string {
+  const labels: Record<string, string> = {
+    attendance_checkin: 'Checked in',
+    attendance_checkout: 'Checked out',
+    attendance_break_start: 'Break started',
+    attendance_break_end: 'Break ended',
+  };
+  return labels[action] || action.replace(/_/g, ' ');
+}
+
+function statusFromActivityAction(action: string): string {
+  if (action.includes('break_start')) return 'break';
+  if (action.includes('break_end')) return 'working';
+  if (action.includes('checkout')) return 'working';
+  return 'working';
+}
+
+function buildActivityLogsFromAttendance(att: any) {
+  if (!att) return [];
+  type Row = { id: string; action: string; time: string; status: string; sortKey: number };
+  const rows: Row[] = [];
+  const pushRow = (id: string, action: string, d: string | Date, status: string) => {
+    const dt = new Date(d);
+    rows.push({
+      id,
+      action,
+      time: dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      status,
+      sortKey: dt.getTime(),
+    });
+  };
+  if (att.checkIn) pushRow(`in-${att._id}`, 'Checked in', att.checkIn, 'working');
+  if (Array.isArray(att.breaks)) {
+    att.breaks.forEach((b: any, i: number) => {
+      if (b.startTime) {
+        pushRow(`bs-${att._id}-${i}`, `Break started (${b.breakType || 'regular'})`, b.startTime, 'break');
+      }
+      if (b.endTime) {
+        pushRow(`be-${att._id}-${i}`, 'Break ended', b.endTime, 'working');
+      }
+    });
+  }
+  if (att.checkOut) pushRow(`out-${att._id}`, 'Checked out', att.checkOut, 'working');
+  rows.sort((a, b) => b.sortKey - a.sortKey);
+  return rows.map(({ sortKey, ...rest }) => ({
+    ...rest,
+    date: new Date(sortKey).toLocaleDateString('en-GB'),
+  }));
+}
+
 function isLikelyMongoObjectId(id: string | null | undefined): boolean {
   return !!id && /^[a-f\d]{24}$/i.test(id);
 }
@@ -33,39 +89,68 @@ export default function Attendance() {
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
   const [filteredAttendance, setFilteredAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [currentHours, setCurrentHours] = useState(0);
   const [employeeId, setEmployeeId] = useState<string | null>(null);
-  const [activityLogs, setActivityLogs] = useState<Array<{
-    id: string;
-    action: string;
-    time: string;
-    status: string;
-  }>>([]);
+  const [activityLogs, setActivityLogs] = useState<
+    Array<{
+      id: string;
+      action: string;
+      time: string;
+      date: string;
+      status: string;
+    }>
+  >([]);
   const [filterStartDate, setFilterStartDate] = useState<string>('');
   const [filterEndDate, setFilterEndDate] = useState<string>('');
   const [filterLoading, setFilterLoading] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyTotalPages, setHistoryTotalPages] = useState(1);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [activityPage, setActivityPage] = useState(1);
+  const PAGE_SIZE = 10;
 
-  // Load activity logs from localStorage on mount
-  useEffect(() => {
-    const today = new Date().toDateString();
-    const storedLogs = localStorage.getItem(`activityLogs_${today}`);
-    if (storedLogs) {
-      try {
-        setActivityLogs(JSON.parse(storedLogs));
-      } catch (e) {
-        console.warn('Failed to parse stored activity logs');
+  const fetchEmployeeActivityLogs = useCallback(async () => {
+    try {
+      const response = await apiGet<{ success?: boolean; data?: unknown }>(
+        `/attendance/activity-logs/me?limit=2000&t=${Date.now()}`,
+        false
+      );
+      const rows = extractApiList<{
+        _id: string;
+        action: string;
+        timestamp: string;
+        details?: { breakType?: string };
+      }>(response);
+      if (response?.success !== false && rows.length > 0) {
+        const mapped = rows
+          .map((log: { _id: string; action: string; timestamp: string; details?: { breakType?: string } }) => {
+            const ts = new Date(log.timestamp);
+            const breakLabel =
+              log.action.includes('break') && log.details?.breakType
+                ? ` (${log.details.breakType})`
+                : '';
+            return {
+              id: String(log._id),
+              action: `${formatActivityAction(log.action)}${breakLabel}`,
+              time: ts.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+              date: ts.toLocaleDateString('en-GB'),
+              status: statusFromActivityAction(log.action),
+              sortKey: ts.getTime(),
+            };
+          })
+          .sort((a, b) => b.sortKey - a.sortKey);
+        setActivityLogs(mapped.map(({ sortKey: _s, ...rest }) => rest));
+        return;
       }
+    } catch (error) {
+      console.warn('Activity logs API unavailable, using today record', error);
     }
-  }, []);
-
-  // Fetch employee ID
+    const att = todayData?.attendance;
+    setActivityLogs(buildActivityLogsFromAttendance(att));
+  }, [todayData]);
   const fetchEmployeeId = async () => {
     try {
-      if (!user?.id) return;
+      const authUserId = user?.userId || user?.id;
+      if (!authUserId) return null;
       if ((user as any)?.employeeId) {
         const eid = String((user as any).employeeId);
         if (isLikelyMongoObjectId(eid)) {
@@ -73,115 +158,168 @@ export default function Attendance() {
           return eid;
         }
       }
-      const token = TokenManager.get();
-      const response = await fetch(buildApiUrl(`/employees/user/${user.id}`), {
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.data?._id && isLikelyMongoObjectId(data.data._id)) {
-          setEmployeeId(data.data._id);
-          return data.data._id;
-        }
+      const data = await apiGet<{ data?: { _id?: string } }>(
+        `employees/user/${authUserId}`,
+        false
+      );
+      if (data?.data?._id && isLikelyMongoObjectId(data.data._id)) {
+        setEmployeeId(data.data._id);
+        return data.data._id;
       }
-      setEmployeeId(user.id);
-      return user.id;
+      setEmployeeId(null);
+      return null;
     } catch (error) {
       console.error('Error fetching employee:', error);
-      setEmployeeId(user?.id || null);
-      return user?.id || null;
+      setEmployeeId(null);
+      return null;
     }
   };
 
-  // Fetch today's attendance — server liveStatus is source of truth for check-in and break
+  const applyCachedCheckedIn = useCallback(
+    async (uid: string | null) => {
+      const cached = await readPersistedAttendance(uid);
+      const hasFreshCheckedIn =
+        cached &&
+        isPayloadFresh(cached) &&
+        (cached.isCheckedIn || cached.checkedIn) &&
+        !cached.checkOutTime;
+
+      if (!hasFreshCheckedIn) return false;
+
+      syncAttendance(
+        {
+          isCheckedIn: true,
+          checkInTime: cached.checkInTime || null,
+          checkOutTime: cached.checkOutTime || null,
+          hoursWorked: cached.hoursWorked || cached.currentHours || 0,
+          status: cached.status || 'present',
+          isOnBreak: cached.isOnBreak || false,
+          breakType: cached.breakType || 'regular',
+          currentBreakDuration: cached.currentBreakDuration || 0,
+        },
+        'api'
+      );
+      return true;
+    },
+    [syncAttendance]
+  );
+
+  // Fetch today's attendance — server liveStatus is source of truth; cache fills orgId-mismatch gaps
   const fetchTodayAttendance = useCallback(async () => {
+    const uid = user?.id ? String(user.id) : null;
+
     try {
-      const token = TokenManager.get();
-      const response = await fetch(buildApiUrl('/attendance/today'), {
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
+      const data = await apiGet<{ data?: { attendance?: any; liveStatus?: any } }>('attendance/today', false);
+      const payload = data?.data;
+      setTodayData(payload);
+
+      const att = payload?.attendance;
+      if (!att) {
+        const kept = await applyCachedCheckedIn(uid);
+        if (!kept) {
+          syncAttendance(
+            {
+              isCheckedIn: false,
+              checkInTime: null,
+              checkOutTime: null,
+              hoursWorked: 0,
+              status: 'absent',
+              isOnBreak: false,
+              breakType: 'regular',
+              currentBreakDuration: 0,
+            },
+            'api'
+          );
+          await clearPersistedAttendance(uid);
         }
-      });
+        return;
+      }
 
-      if (!response.ok) throw new Error('Failed to fetch attendance');
+      const ls = payload?.liveStatus;
+      const checkInTime = safeLocaleTime(att.checkIn);
+      const checkOutTime = safeLocaleTime(att.checkOut);
 
-      const data = await response.json();
-      console.log('Fetched today attendance:', data.data);
+      const hasCheckOut = hasCheckOutValue(att.checkOut);
+      let isCheckedInNow = false;
+      if (hasCheckOut) {
+        isCheckedInNow = false;
+      } else if (ls?.status === 'checked_out' || ls?.status === 'not_checked_in') {
+        isCheckedInNow = false;
+      } else if (
+        ls?.status === 'checked_in' ||
+        ls?.status === 'on_break' ||
+        ls?.status === 'in_meeting'
+      ) {
+        isCheckedInNow = true;
+      } else {
+        isCheckedInNow = Boolean(att.checkIn);
+      }
 
-      setTodayData(data.data);
+      let isOnBreak = Boolean(ls?.isOnBreak || ls?.status === 'on_break');
+      let breakType = (ls?.breakType as string) || 'regular';
+      if (Array.isArray(att.breaks) && att.breaks.length > 0) {
+        const lastBreak = att.breaks[att.breaks.length - 1];
+        if (lastBreak?.startTime && !lastBreak?.endTime) {
+          isOnBreak = true;
+          breakType = lastBreak.breakType || 'regular';
+        }
+      }
 
-      const liveStatus = data.data?.liveStatus?.status;
-      const isCheckedInNow =
-        liveStatus === 'checked_in' || liveStatus === 'on_break' || liveStatus === 'in_meeting';
-      const isOnBreak = !!data.data?.liveStatus?.isOnBreak;
-      const breakTypeFromApi = (data.data?.liveStatus?.breakType as string) || 'regular';
-      const hours = data.data?.liveStatus?.currentHours || 0;
+      const hours = att.hoursWorked ?? ls?.currentHours ?? 0;
 
-      const att = data.data?.attendance;
-      const checkInTime = att?.checkIn
-        ? new Date(att.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-        : null;
-      const checkOutTime = att?.checkOut
-        ? new Date(att.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-        : null;
-
-      setCurrentHours(hours);
       syncAttendance(
         {
           isCheckedIn: isCheckedInNow,
           checkInTime,
           checkOutTime,
-          hoursWorked: att?.hoursWorked ?? hours,
-          status: att?.status || liveStatus || 'absent',
+          hoursWorked: hours,
+          status: att.status || ls?.status || 'absent',
           isOnBreak,
-          breakType: isOnBreak ? breakTypeFromApi : 'regular',
-          currentBreakDuration: 0
+          breakType: isOnBreak ? breakType : 'regular',
+          currentBreakDuration:
+            typeof ls?.currentBreakDuration === 'number' ? Math.round(ls.currentBreakDuration) : 0,
         },
         'api'
       );
+
+      void writePersistedAttendance(uid, {
+        checkedIn: isCheckedInNow,
+        isCheckedIn: isCheckedInNow,
+        checkInTime,
+        checkOutTime,
+        hoursWorked: hours,
+        currentHours: hours,
+        status: att.status || ls?.status || 'absent',
+        isOnBreak,
+        breakType,
+        currentBreakDuration:
+          typeof ls?.currentBreakDuration === 'number' ? Math.round(ls.currentBreakDuration) : 0,
+        timestamp: Date.now(),
+      });
     } catch (error) {
       console.error('Error fetching attendance:', error);
+      await applyCachedCheckedIn(uid);
     } finally {
       setLoading(false);
     }
-  }, [user?.id, syncAttendance]);
+  }, [user?.id, syncAttendance, applyCachedCheckedIn]);
 
   // Fetch attendance history (paginated)
   const fetchAttendanceHistoryPage = useCallback(
-    async (page: number, append: boolean) => {
+    async (page: number) => {
       try {
-        if (append) setHistoryLoadingMore(true);
-        const token = TokenManager.get();
-        const response = await fetch(
-          buildApiUrl(`/attendance?limit=${HISTORY_PAGE_SIZE}&page=${page}`),
-          {
-            credentials: 'include',
-            headers: {
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-              'Content-Type': 'application/json'
-            }
-          }
+        setHistoryLoadingMore(true);
+        const data = await apiGet<{ data?: AttendanceRecord[]; pagination?: { pages?: number } }>(
+          `attendance?limit=${HISTORY_PAGE_SIZE}&page=${page}`,
+          false
         );
-
-        if (!response.ok) {
-          console.warn('Failed to fetch history:', response.status);
-          return;
-        }
-        const data = await response.json();
-        const list: AttendanceRecord[] = data.data || [];
-        setAttendanceHistory((prev) => (append ? [...prev, ...list] : list));
-        const pages = data.pagination?.pages;
+        const list: AttendanceRecord[] = data?.data || [];
+        setAttendanceHistory(list);
+        const pages = data?.pagination?.pages;
         if (typeof pages === 'number' && pages > 0) {
           setHistoryTotalPages(pages);
         } else {
-          setHistoryTotalPages(list.length < HISTORY_PAGE_SIZE ? page : page + 1);
+          setHistoryTotalPages(Math.max(1, Math.ceil(list.length / HISTORY_PAGE_SIZE)));
         }
         setHistoryPage(page);
       } catch (error) {
@@ -194,17 +332,25 @@ export default function Attendance() {
   );
 
   const fetchAttendanceHistory = useCallback(async () => {
-    await fetchAttendanceHistoryPage(1, false);
+    await fetchAttendanceHistoryPage(1);
   }, [fetchAttendanceHistoryPage]);
 
-  const loadMoreHistory = () => {
-    if (historyPage >= historyTotalPages || historyLoadingMore) return;
-    void fetchAttendanceHistoryPage(historyPage + 1, true);
+  const handleHistoryPrevious = () => {
+    if (historyPage > 1) {
+      void fetchAttendanceHistoryPage(historyPage - 1);
+    }
+  };
+
+  const handleHistoryNext = () => {
+    if (historyPage < historyTotalPages) {
+      void fetchAttendanceHistoryPage(historyPage + 1);
+    }
   };
 
   // Handle filter submission
   const handleFilterSubmit = () => {
     setFilterLoading(true);
+    setHistoryPage(1); // Reset to page 1 when filtering
     
     try {
       let filtered = attendanceHistory;
@@ -237,6 +383,7 @@ export default function Attendance() {
   const handleFilterReset = () => {
     setFilterStartDate('');
     setFilterEndDate('');
+    setHistoryPage(1); // Reset to page 1 when clearing filters
     setFilteredAttendance(attendanceHistory);
   };
 
@@ -245,220 +392,18 @@ export default function Attendance() {
     setFilteredAttendance(attendanceHistory);
   }, [attendanceHistory]);
 
-  // Add activity log
-  const addActivityLog = (action: string, status: string) => {
-    const newLog = {
-      id: Date.now().toString(),
-      action,
-      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      status
-    };
-    setActivityLogs(prev => {
-      const updated = [newLog, ...prev];
-      // Save to localStorage
-      const today = new Date().toDateString();
-      localStorage.setItem(`activityLogs_${today}`, JSON.stringify(updated));
-      return updated;
-    });
-  };
-
-  // Get orgId
-  const getOrgId = () => {
-    let orgId = user?.orgId;
-    if (!orgId) {
-      const storedUser = localStorage.getItem('user');
-      if (storedUser) {
-        try {
-          const parsedUser = JSON.parse(storedUser);
-          orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-        } catch (e) {
-          console.warn('Could not parse stored user');
-        }
-      }
-    }
-    return orgId || 'system';
-  };
-
-  // Break Start
-  const handleBreakStart = async (kind: 'regular' = 'regular') => {
-    // Prevent starting break if not checked in
-    if (!liveAttendance.isCheckedIn) {
-      console.log('⏸️ [BREAK START] Not checked in, cannot start break');
-      alert('Please check in first before starting a break');
-      return;
-    }
-    
-    // Prevent starting break if already on break
-    if (liveAttendance.isOnBreak) {
-      console.log('⏸️ [BREAK START] Already on break, skipping');
-      return;
-    }
-    
-    try {
-      setActionLoading(true);
-      
-      // Optimistic update
-      syncAttendance(
-        {
-          isOnBreak: true,
-          breakType: kind,
-          currentBreakDuration: 0
-        },
-        'action'
-      );
-      
-      const token = TokenManager.get();
-      const payload: any = {
-        breakType: kind,
-        notes: `Break started`
-      };
-      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
-      if (getOrgId()) payload.orgId = getOrgId();
-      
-      const response = await fetch(buildApiUrl('/attendance/break-start'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Break start failed');
-      }
-
-      const result = await response.json();
-      const liveStatus = result.data?.liveStatus;
-      
-      // Confirm with server response
-      if (liveStatus) {
-        syncAttendance(
-          {
-            isOnBreak: liveStatus.isOnBreak || true,
-            breakType: liveStatus.breakType || kind,
-            currentBreakDuration: liveStatus.currentBreakDuration || 0
-          },
-          'action'
-        );
-      }
-      
-      addActivityLog('Started Break', 'break');
-    } catch (error) {
-      console.error('Break start error:', error);
-      // Rollback on error
-      syncAttendance(
-        {
-          isOnBreak: false,
-          breakType: 'regular',
-          currentBreakDuration: 0
-        },
-        'action'
-      );
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  // Break End
-  const handleBreakEnd = async () => {
-    // Prevent ending break if not on break
-    if (!liveAttendance.isOnBreak) {
-      console.log('⏸️ [BREAK END] Not on break, skipping');
-      return;
-    }
-    
-    const wasOnBreak = liveAttendance.isOnBreak;
-    const prevBreakType = liveAttendance.breakType;
-    
-    try {
-      setActionLoading(true);
-      
-      // Optimistic update
-      syncAttendance(
-        {
-          isOnBreak: false,
-          breakType: 'regular',
-          currentBreakDuration: 0
-        },
-        'action'
-      );
-      
-      const token = TokenManager.get();
-      const payload: any = {
-        notes: 'Break ended'
-      };
-      if (isLikelyMongoObjectId(employeeId)) payload.employeeId = employeeId;
-      if (getOrgId()) payload.orgId = getOrgId();
-      
-      const response = await fetch(buildApiUrl('/attendance/break-end'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      const responseData = await response.json();
-      if (!response.ok) {
-        throw new Error(responseData.message || 'Break end failed');
-      }
-
-      const liveStatus = responseData?.data?.liveStatus;
-      
-      // Confirm with server response
-      if (liveStatus) {
-        syncAttendance(
-          {
-            isOnBreak: liveStatus.isOnBreak || false,
-            breakType: liveStatus.breakType || 'regular',
-            currentBreakDuration: liveStatus.currentBreakDuration || 0
-          },
-          'action'
-        );
-      }
-      
-      addActivityLog('Ended Break', 'working');
-    } catch (error) {
-      console.error('Break end error:', error);
-      // Rollback on error
-      syncAttendance(
-        {
-          isOnBreak: wasOnBreak,
-          breakType: prevBreakType || 'regular'
-        },
-        'action'
-      );
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  // Update hours every second when checked in
-  useEffect(() => {
-    if (!liveAttendance.isCheckedIn || !todayData?.attendance?.checkIn) return;
-
-    const interval = setInterval(() => {
-      const checkInTime = new Date(todayData.attendance.checkIn);
-      const now = new Date();
-      const hours = (now.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
-      setCurrentHours(hours);
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [liveAttendance.isCheckedIn, todayData]);
-
   // Single subscription: refresh from API (context is updated in fetchTodayAttendance)
   useEffect(() => {
     const unsub = realTimeSocket.onAttendanceUpdate(() => {
       void fetchTodayAttendance();
+      void fetchEmployeeActivityLogs();
     });
     return () => unsub();
-  }, [fetchTodayAttendance]);
+  }, [fetchTodayAttendance, fetchEmployeeActivityLogs]);
+
+  useEffect(() => {
+    void fetchEmployeeActivityLogs();
+  }, [todayData, fetchEmployeeActivityLogs]);
 
   // Refresh today's attendance periodically while checked in
   useEffect(() => {
@@ -466,14 +411,14 @@ export default function Attendance() {
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      if (!liveAttendance.isCheckedIn && !liveAttendance.isOnBreak) return;
+      if (!liveAttendance.isCheckedIn) return;
 
       console.log('⏰ [ATTENDANCE] Periodic refresh triggered');
       fetchTodayAttendance();
     }, 30000); // Refresh every 30 seconds while checked in or on break
 
     return () => clearInterval(interval);
-  }, [employeeId, fetchTodayAttendance, liveAttendance.isCheckedIn, liveAttendance.isOnBreak]);
+  }, [employeeId, fetchTodayAttendance, liveAttendance.isCheckedIn]);
 
   // Initial load only — hydrate from IndexedDB / local cache, then API
   useEffect(() => {
@@ -481,7 +426,6 @@ export default function Attendance() {
       const uid = user?.id ? String(user.id) : null;
       const payload = await readPersistedAttendance(uid);
       if (payload && isPayloadFresh(payload)) {
-        setCurrentHours(payload.currentHours || payload.hoursWorked || 0);
         setLoading(false);
       }
 
@@ -489,6 +433,7 @@ export default function Attendance() {
       if (empId) {
         await fetchTodayAttendance();
         await fetchAttendanceHistory();
+        await fetchEmployeeActivityLogs();
       }
     })();
   }, [user?.id, fetchTodayAttendance]);
@@ -506,45 +451,19 @@ export default function Attendance() {
         </Card>
       ) : (
         <>
-
-          {/* Break and Meeting Actions */}
-          {liveAttendance.isCheckedIn && (
-            <Card className="rounded-2xl overflow-hidden">
-              <div className="p-6 border-b border-border">
-                <h3 className="font-semibold text-lg">Actions</h3>
-                <p className="text-sm text-muted-foreground">Manage your break and meeting status</p>
-              </div>
-              <div className="p-6">
-                <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
-                  <Button
-                    variant={liveAttendance.isOnBreak ? "destructive" : "outline"}
-                    size="lg"
-                    className="rounded-xl"
-                    onClick={
-                      liveAttendance.isOnBreak
-                        ? handleBreakEnd
-                        : () => handleBreakStart('regular')
-                    }
-                    disabled={actionLoading}
-                  >
-                    <Pause className="w-5 h-5 mr-2" />
-                    {liveAttendance.isOnBreak ? 'End Break' : 'Start Break'}
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          )}
-
           {/* Activity Logs */}
           <Card className="rounded-2xl overflow-hidden">
             <div className="p-6 border-b border-border">
               <h3 className="font-semibold text-lg">Live Activity Logs</h3>
-              <p className="text-sm text-muted-foreground">Today's attendance activities</p>
+              <p className="text-sm text-muted-foreground">
+                All your check-ins, breaks, and check-outs (full history)
+              </p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-muted/50">
                   <tr>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Date</th>
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Time</th>
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Action</th>
                     <th className="px-6 py-4 text-left text-sm font-medium text-muted-foreground">Status</th>
@@ -553,13 +472,14 @@ export default function Attendance() {
                 <tbody className="divide-y divide-border">
                   {activityLogs.length === 0 ? (
                     <tr>
-                      <td colSpan={3} className="px-6 py-4 text-center text-muted-foreground">
+                      <td colSpan={4} className="px-6 py-4 text-center text-muted-foreground">
                         No activities yet
                       </td>
                     </tr>
                   ) : (
-                    activityLogs.map((log) => (
+                    activityLogs.slice((activityPage - 1) * PAGE_SIZE, activityPage * PAGE_SIZE).map((log) => (
                       <tr key={log.id} className="hover:bg-accent/50 transition-colors">
+                        <td className="px-6 py-4 text-sm text-muted-foreground">{log.date || '—'}</td>
                         <td className="px-6 py-4 text-sm font-medium">{log.time}</td>
                         <td className="px-6 py-4 text-sm">{log.action}</td>
                         <td className="px-6 py-4">
@@ -569,7 +489,7 @@ export default function Attendance() {
                             log.status === 'meeting' ? 'outline' :
                             'default'
                           }>
-                            {log.status.charAt(0).toUpperCase() + log.status.slice(1)}
+                            {safeTitleCase(log.status, '—')}
                           </Badge>
                         </td>
                       </tr>
@@ -578,6 +498,37 @@ export default function Attendance() {
                 </tbody>
               </table>
             </div>
+            {activityLogs.length > 0 && (
+              <div className="p-4 border-t border-border flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Page {activityPage} of {Math.max(1, Math.ceil(activityLogs.length / PAGE_SIZE))}
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg"
+                    disabled={activityPage <= 1}
+                    onClick={() => setActivityPage(prev => Math.max(1, prev - 1))}
+                    aria-label="Previous page"
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg"
+                    disabled={activityPage >= Math.ceil(activityLogs.length / PAGE_SIZE)}
+                    onClick={() => setActivityPage(prev => Math.min(Math.ceil(activityLogs.length / PAGE_SIZE), prev + 1))}
+                    aria-label="Next page"
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
           </Card>
 
           {/* Attendance History */}
@@ -676,7 +627,7 @@ export default function Attendance() {
                         </td>
                         <td className="px-6 py-4">
                           <Badge variant={record.status === 'present' ? 'default' : 'secondary'}>
-                            {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
+                            {safeTitleCase(record.status, '—')}
                           </Badge>
                         </td>
                       </tr>
@@ -685,16 +636,30 @@ export default function Attendance() {
                 </tbody>
               </table>
             </div>
-            {!filterStartDate && !filterEndDate && historyPage < historyTotalPages && (
-              <div className="p-4 border-t border-border flex justify-center">
+            <div className="p-4 border-t border-border flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">
+                Page {historyPage} of {historyTotalPages}
+              </p>
+              <div className="flex gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   className="rounded-lg"
-                  onClick={loadMoreHistory}
-                  disabled={historyLoadingMore}
-                  aria-label="Load more attendance history"
+                  disabled={historyPage <= 1 || historyLoadingMore}
+                  onClick={handleHistoryPrevious}
+                  aria-label="Previous page"
+                >
+                  Previous
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg"
+                  disabled={historyPage >= historyTotalPages || historyLoadingMore}
+                  onClick={handleHistoryNext}
+                  aria-label="Next page"
                 >
                   {historyLoadingMore ? (
                     <>
@@ -702,11 +667,11 @@ export default function Attendance() {
                       Loading…
                     </>
                   ) : (
-                    'Load more'
+                    'Next'
                   )}
                 </Button>
               </div>
-            )}
+            </div>
           </Card>
         </>
       )}

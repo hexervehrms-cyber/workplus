@@ -1,6 +1,7 @@
 import express from "express";
 import mongoose from "mongoose";
 import { asyncHandler } from "../middleware/errorHandler.js";
+import { authenticate } from "../middleware/auth.js";
 import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import LeaveRequest from "../models/LeaveRequest.js";
@@ -13,6 +14,16 @@ import Session from "../models/Session.js";
 import { dashboardCache } from "../utils/dashboardCache.js";
 import { dashboardMonitor } from "../utils/dashboardMonitor.js";
 import { dashboardStatsBreaker, dashboardQuickStatsBreaker } from "../utils/circuitBreaker.js";
+import {
+  buildOrgIdFilter,
+  countOrgEmployees,
+  getFinancialTotals,
+} from "../utils/dashboardKpiHelpers.js";
+import {
+  buildOrgIdFlexible,
+  countEmployeesCurrentlyOnBreak,
+} from "../utils/attendanceQueryHelpers.js";
+import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
 
 // Import specialized dashboard routes
 import superAdminRoutes from "./dashboard-superadmin.js";
@@ -68,11 +79,52 @@ function getDateRange(filterType, customStartDate, customEndDate) {
   return { startDate, endDate };
 }
 
-function getDayBounds(baseDate = new Date()) {
-  const start = new Date(baseDate);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
+function getDayBounds(baseDate = new Date(), timezone = 'Asia/Kolkata') {
+  // The Attendance.date field is stored as UTC midnight (00:00:00 UTC).
+  // For India timezone (UTC+5:30), midnight in India = previous day 18:30 UTC.
+  // 
+  // Example: 
+  // - June 12, 2026 India local date = June 12, 2026 00:00 Asia/Kolkata
+  //   = June 11, 2026 18:30:00 UTC
+  // - June 13, 2026 India local date = June 13, 2026 00:00 Asia/Kolkata
+  //   = June 12, 2026 18:30:00 UTC
+  //
+  // Since Attendance.date stores UTC midnight, we need to:
+  // 1. Get the timezone-local date parts
+  // 2. Create UTC midnight for that local date
+  // 3. Subtract timezone offset to get the actual UTC boundary
+  
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  
+  const parts = formatter.formatToParts(baseDate);
+  const year = parseInt(parts.find(p => p.type === 'year')?.value || '2024', 10);
+  const month = parseInt(parts.find(p => p.type === 'month')?.value || '01', 10) - 1;
+  const day = parseInt(parts.find(p => p.type === 'day')?.value || '01', 10);
+  
+  // UTC midnight for this local date
+  const startUtcMidnight = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+  const endUtcMidnight = new Date(Date.UTC(year, month, day + 1, 0, 0, 0, 0));
+  
+  // For Asia/Kolkata (UTC+5:30), local midnight = UTC previous day 18:30
+  // So we need to subtract 5.5 hours from the UTC midnight to get the stored date value
+  const timezoneOffsets = {
+    'Asia/Kolkata': 5.5 * 60 * 60 * 1000,      // UTC+5:30
+    'America/New_York': -5 * 60 * 60 * 1000,   // UTC-5 (EST)
+    'America/Los_Angeles': -8 * 60 * 60 * 1000, // UTC-8 (PST)
+    'Europe/London': 0,                         // UTC (GMT in winter, BST in summer - simplified)
+  };
+  
+  const offset = timezoneOffsets[timezone] || 0;
+  
+  // Subtract offset to get the UTC timestamp that represents local midnight
+  const start = new Date(startUtcMidnight.getTime() - offset);
+  const end = new Date(endUtcMidnight.getTime() - offset);
+  
   return { start, end };
 }
 
@@ -88,13 +140,14 @@ router.get("/stats", asyncHandler(async (req, res) => {
   res.set('Expires', '0');
   
   const startTime = Date.now();
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const { filterType = 'month', startDate, endDate } = req.query;
   
   try {
     // Check cache first (30 second TTL for stats)
     const cacheKey = { filterType, startDate, endDate };
-    const cachedStats = dashboardCache.get('/dashboard/stats', orgId, cacheKey);
+    const cachedStats = await dashboardCache.getAsync('/dashboard/stats', orgId, cacheKey);
     if (cachedStats) {
       const responseTime = Date.now() - startTime;
       dashboardMonitor.recordMetric('/dashboard/stats', orgId, responseTime, true, true);
@@ -112,63 +165,36 @@ router.get("/stats", asyncHandler(async (req, res) => {
       const now = new Date();
       
       // OPTIMIZATION: Use single aggregation pipeline for expenses and payroll
+      const orgFilter = buildOrgIdFilter(orgId);
       const [
         totalEmployees,
-        financialData,
+        financialTotals,
         attendanceStats,
         loggedInEmployees,
         onLeaveCount
       ] = await Promise.all([
-        Employee.countDocuments({ orgId, status: 'active' }).lean(),
-        // Combined financial aggregation
-        Expense.aggregate([
-          {
-            $facet: {
-              expenses: [
-                {
-                  $match: {
-                    orgId,
-                    date: { $gte: rangeStart, $lt: rangeEnd },
-                    status: { $in: ['approved', 'rejected'] }
-                  }
-                },
-                { $group: { _id: null, total: { $sum: "$amount" } } }
-              ],
-              payroll: [
-                {
-                  $match: {
-                    orgId: new mongoose.Types.ObjectId(orgId),
-                    createdAt: { $gte: rangeStart, $lt: rangeEnd },
-                    status: { $in: ['draft', 'pending', 'paid'] }
-                  }
-                },
-                { $group: { _id: null, total: { $sum: "$netPay" } } }
-              ]
-            }
-          }
-        ]),
+        countOrgEmployees(orgId),
+        getFinancialTotals(orgId, rangeStart, rangeEnd),
         Attendance.aggregate([
           {
             $match: {
-              orgId,
+              ...orgFilter,
               date: { $gte: rangeStart, $lt: rangeEnd },
               status: 'present'
             }
           },
           { $group: { _id: null, avgHours: { $avg: "$hoursWorked" } } }
         ]),
-        Session.countDocuments({ orgId, isActive: true, role: 'employee' }).lean(),
+        Session.countDocuments({ ...orgFilter, isActive: true, role: 'employee' }).lean(),
         LeaveRequest.countDocuments({
-          orgId,
+          ...orgFilter,
           status: 'approved',
           startDate: { $lte: now },
           endDate: { $gte: now }
         }).lean()
       ]);
       
-      const thisMonthExpenses = financialData[0]?.expenses[0]?.total || 0;
-      const thisMonthPayroll = financialData[0]?.payroll[0]?.total || 0;
-      const totalCost = thisMonthExpenses + thisMonthPayroll;
+      const { thisMonthExpenses, thisMonthPayroll, totalCost } = financialTotals;
       const avgHours = attendanceStats[0]?.avgHours || 0;
       const avgProductivity = Math.min(100, Math.round((avgHours / 8) * 100));
       
@@ -216,7 +242,8 @@ router.get("/stats", asyncHandler(async (req, res) => {
  * Get expense trends for charts
  */
 router.get("/expense-trends", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   
   // Get last 6 months of expense data
   const sixMonthsAgo = new Date();
@@ -270,7 +297,8 @@ router.get("/expense-trends", asyncHandler(async (req, res) => {
  * OPTIMIZED: Use lean() and single aggregation pipeline
  */
 router.get("/recent-leave-requests", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const limit = parseInt(req.query.limit) || 10;
   
   const leaveRequests = await LeaveRequest.aggregate([
@@ -342,14 +370,17 @@ router.get("/recent-leave-requests", asyncHandler(async (req, res) => {
  * OPTIMIZED: Use aggregation pipeline instead of find + populate
  */
 router.get("/todays-attendance", asyncHandler(async (req, res) => {
-  const userOrgId = req.user?.orgId || 'system';
+  const userOrgId = assertScopedOrgId(req, res);
+  if (!userOrgId) return;
   
   const { start: today, end: tomorrow } = getDayBounds();
+
+  const orgMatch = buildOrgIdFlexible(userOrgId);
 
   const todaysAttendance = await Attendance.aggregate([
     {
       $match: {
-        orgId: userOrgId,
+        ...orgMatch,
         date: { $gte: today, $lt: tomorrow }
       }
     },
@@ -412,7 +443,8 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
  * Get department-wise statistics
  */
 router.get("/department-stats", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   
   const departmentStats = await Employee.aggregate([
     {
@@ -448,7 +480,8 @@ router.get("/department-stats", asyncHandler(async (req, res) => {
  * Get recent system activities
  */
 router.get("/recent-activities", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const limit = parseInt(req.query.limit) || 20;
   
   // This would typically come from an ActivityLog model
@@ -519,13 +552,14 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
   res.set('Expires', '0');
   
   const startTime = Date.now();
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   const { filterType = 'month', startDate, endDate } = req.query;
   
   try {
     // Check cache first (20 second TTL for quick-stats - more frequent updates)
     const cacheKey = { filterType, startDate, endDate };
-    const cachedStats = dashboardCache.get('/dashboard/quick-stats', orgId, cacheKey);
+    const cachedStats = await dashboardCache.getAsync('/dashboard/quick-stats', orgId, cacheKey);
     if (cachedStats) {
       const responseTime = Date.now() - startTime;
       dashboardMonitor.recordMetric('/dashboard/quick-stats', orgId, responseTime, true, true);
@@ -543,33 +577,37 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
       
       const now = new Date();
       const { start: startOfDay, end: endOfDay } = getDayBounds(now);
+      const orgMatch = buildOrgIdFlexible(orgId);
       
       // OPTIMIZATION: Use faceted aggregation to get multiple stats in one query
       const [
         totalEmployees,
         attendanceStats,
+        onBreakToday,
         leaveExpenseStats,
         salesStats
       ] = await Promise.all([
-        Employee.countDocuments({ orgId, status: 'active' }).lean(),
+        countOrgEmployees(orgId),
         // Attendance stats in one aggregation
+        // Count employees who are currently logged in TODAY (checked in, not checked out)
         Attendance.aggregate([
           {
             $facet: {
               presentToday: [
                 {
                   $match: {
-                    orgId,
+                    ...orgMatch,
                     date: { $gte: startOfDay, $lt: endOfDay },
                     status: 'present'
                   }
                 },
                 { $count: 'count' }
               ],
+              // Logged in: TODAY's attendance with checkIn but no checkOut (currently active session)
               activeUsers: [
                 {
                   $match: {
-                    orgId,
+                    ...orgMatch,
                     date: { $gte: startOfDay, $lt: endOfDay },
                     checkIn: { $exists: true, $ne: null },
                     $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
@@ -577,24 +615,10 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
                 },
                 { $count: 'count' }
               ],
-              onBreakToday: [
-                {
-                  $match: {
-                    orgId,
-                    date: { $gte: startOfDay, $lt: endOfDay },
-                    breaks: {
-                      $elemMatch: {
-                        startTime: { $exists: true },
-                        endTime: { $exists: false }
-                      }
-                    }
-                  }
-                },
-                { $count: 'count' }
-              ]
             }
           }
         ]),
+        countEmployeesCurrentlyOnBreak(Attendance, orgMatch, startOfDay, endOfDay),
         // Leave and expense stats in one aggregation
         LeaveRequest.aggregate([
           {
@@ -641,7 +665,6 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
       // Extract values from aggregation results
       const presentToday = attendanceStats[0]?.presentToday[0]?.count || 0;
       const activeUsers = attendanceStats[0]?.activeUsers[0]?.count || 0;
-      const onBreakToday = attendanceStats[0]?.onBreakToday[0]?.count || 0;
       const pendingLeaves = leaveExpenseStats[0]?.pendingLeaves[0]?.count || 0;
       const onLeaveToday = leaveExpenseStats[0]?.onLeaveToday[0]?.count || 0;
       const totalBonus = salesStats[0]?.bonus[0]?.total || 0;
@@ -731,9 +754,20 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
 /**
  * POST /api/dashboard/test-kpi-emit
  * Test endpoint to manually trigger KPI update emission (for debugging)
+ * GATED: Only available in development environment
  */
 router.post("/test-kpi-emit", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  // Gate: Only available in development
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({
+      success: false,
+      message: 'Not found',
+      code: 'NOT_FOUND'
+    });
+  }
+  
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   
   // Import emitKPIUpdate
   const { emitKPIUpdate } = await import('../utils/kpiUpdater.js');
@@ -756,7 +790,8 @@ router.post("/test-kpi-emit", asyncHandler(async (req, res) => {
  * Get weekly productivity data for admin dashboard
  */
 router.get("/weekly-productivity", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   
   // Get current week date range
   const today = new Date();
@@ -849,7 +884,8 @@ router.get("/health", asyncHandler(async (req, res) => {
  * Clear dashboard cache (admin only)
  */
 router.post("/cache/clear", asyncHandler(async (req, res) => {
-  const orgId = req.user?.orgId || 'system';
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
   
   dashboardCache.invalidateOrg(orgId);
   
@@ -871,6 +907,167 @@ router.post("/circuit-breaker/reset", asyncHandler(async (req, res) => {
     success: true,
     message: 'Circuit breakers reset'
   });
+}));
+
+/**
+ * GET /api/dashboard/admin/summary
+ * Optimized summary endpoint for admin dashboard KPI cards
+ * Returns only critical data needed for KPI rendering
+ * 15-30 second cache
+ */
+router.get("/admin/summary", asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'public, max-age=30');
+  
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
+  const { period = 'this_month' } = req.query;
+  
+  try {
+    const cacheKey = `dashboard:admin:${orgId}:${period}`;
+    const cachedSummary = await dashboardCache.getAsync('/dashboard/admin/summary', orgId, { period });
+    if (cachedSummary) {
+      return res.json({ success: true, data: cachedSummary, cached: true });
+    }
+    
+    const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(String(period));
+    const now = new Date();
+    const { start: startOfDay, end: endOfDay } = getDayBounds(now);
+    const orgMatch = buildOrgIdFlexible(orgId);
+    
+    const [
+      totalEmployees,
+      financialTotals,
+      todayStats,
+      onLeaveCount,
+      loggedInCount,
+      onBreakCount
+    ] = await Promise.all([
+      countOrgEmployees(orgId),
+      getFinancialTotals(orgId, rangeStart, rangeEnd),
+      Attendance.countDocuments({ ...orgMatch, date: { $gte: startOfDay, $lt: endOfDay }, status: 'present' }),
+      LeaveRequest.countDocuments({
+        orgId,
+        status: 'approved',
+        startDate: { $lte: now },
+        endDate: { $gte: now }
+      }),
+      Attendance.countDocuments({
+        ...orgMatch,
+        date: { $gte: startOfDay, $lt: endOfDay },
+        checkIn: { $exists: true, $ne: null },
+        $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
+      }),
+      countEmployeesCurrentlyOnBreak(Attendance, orgMatch, startOfDay, endOfDay)
+    ]);
+    
+    const summary = {
+      kpis: {
+        totalEmployees,
+        loggedInEmployees: loggedInCount,
+        onBreak: onBreakCount,
+        onLeave: onLeaveCount,
+        thisMonthExpense: financialTotals.thisMonthExpenses,
+        thisMonthPayroll: financialTotals.thisMonthPayroll,
+        totalCost: financialTotals.totalCost,
+        presentToday: todayStats,
+        avgProductivity: 75 // Placeholder - can add real calc if needed
+      },
+      lastUpdated: new Date().toISOString()
+    };
+    
+    dashboardCache.set('/dashboard/admin/summary', orgId, summary, { period }, 30000);
+    
+    res.json({ success: true, data: summary });
+  } catch (error) {
+    console.error('Error fetching admin summary:', error);
+    res.status(500).json({ success: false, message: 'Failed to load dashboard summary' });
+  }
+}));
+
+/**
+ * GET /api/dashboard/employee/summary
+ * Optimized summary endpoint for employee dashboard
+ * Returns only critical data: today's status, pending leaves, latest payslip, total hours this month
+ */
+router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'public, max-age=20');
+  
+  const userId = req.user?.userId;
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId || !userId) return;
+  
+  try {
+    const cachedSummary = await dashboardCache.getAsync('/dashboard/employee/summary', orgId, { userId });
+    if (cachedSummary) {
+      return res.json({ success: true, data: cachedSummary, cached: true });
+    }
+    
+    const { start: startOfDay, end: endOfDay } = getDayBounds();
+    const userIdMatch = { userId: new mongoose.Types.ObjectId(userId) };
+    
+    // Get current month boundaries for total hours calculation
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    monthStart.setHours(0, 0, 0, 0);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    monthEnd.setHours(0, 0, 0, 0);
+    
+    const [
+      todayAttendance,
+      pendingLeaveCount,
+      latestPayslip,
+      monthAttendanceRecords
+    ] = await Promise.all([
+      Attendance.findOne({
+        ...userIdMatch,
+        date: { $gte: startOfDay, $lt: endOfDay }
+      }).select('checkIn checkOut status hoursWorked breaks').lean(),
+      LeaveRequest.countDocuments({
+        userId: new mongoose.Types.ObjectId(userId),
+        status: 'pending'
+      }),
+      Payslip.findOne({
+        userId: new mongoose.Types.ObjectId(userId)
+      }).sort({ createdAt: -1 }).select('month year status netPay').lean(),
+      Attendance.find({
+        ...userIdMatch,
+        date: { $gte: monthStart, $lt: monthEnd }
+      }).select('hoursWorked').lean()
+    ]);
+    
+    // Calculate total hours for current month
+    let totalMonthHours = 0;
+    if (Array.isArray(monthAttendanceRecords)) {
+      totalMonthHours = monthAttendanceRecords.reduce((sum, record) => {
+        return sum + (typeof record.hoursWorked === 'number' ? record.hoursWorked : 0);
+      }, 0);
+    }
+    
+    // Convert decimal hours to label format (e.g., 12.5 => "12h 30m")
+    const hoursInt = Math.floor(totalMonthHours);
+    const minutesFloat = (totalMonthHours - hoursInt) * 60;
+    const minutesInt = Math.round(minutesFloat);
+    const totalHoursLabel = `${hoursInt}h ${minutesInt}m`;
+    
+    const summary = {
+      kpis: {
+        isCheckedIn: Boolean(todayAttendance?.checkIn && !todayAttendance?.checkOut),
+        pendingLeaves: pendingLeaveCount,
+        latestPayslipStatus: latestPayslip?.status || 'not_available',
+        hoursWorkedToday: todayAttendance?.hoursWorked || 0,
+        totalHoursMinutes: Math.round(totalMonthHours * 60),
+        totalHoursLabel: totalHoursLabel
+      },
+      lastUpdated: new Date().toISOString()
+    };
+    
+    dashboardCache.set('/dashboard/employee/summary', orgId, summary, { userId }, 20000);
+    
+    res.json({ success: true, data: summary });
+  } catch (error) {
+    console.error('Error fetching employee summary:', error);
+    res.status(500).json({ success: false, message: 'Failed to load dashboard summary' });
+  }
 }));
 
 export default router;

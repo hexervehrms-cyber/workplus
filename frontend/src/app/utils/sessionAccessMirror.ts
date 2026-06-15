@@ -7,6 +7,11 @@ const DB_NAME = 'workplus-session';
 const DB_VERSION = 1;
 const STORE = 'auth';
 const KEY_ACCESS = 'accessToken';
+const KEY_REFRESH = 'refreshToken';
+/** Non-secret hint so bootstrap knows a session may exist in IndexedDB */
+const SESSION_HINT_KEY = 'wp_session_hint';
+
+let memoryRefreshToken: string | null = null;
 
 let memoryAccessToken: string | null = null;
 
@@ -29,16 +34,34 @@ export async function loadAccessTokenFromIndexedDB(): Promise<void> {
     const db = await openDb();
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, 'readonly');
-      const g = tx.objectStore(STORE).get(KEY_ACCESS);
-      g.onsuccess = () => {
-        memoryAccessToken = typeof g.result === 'string' && g.result.length > 0 ? g.result : null;
-        resolve();
+      const accessReq = tx.objectStore(STORE).get(KEY_ACCESS);
+      const refreshReq = tx.objectStore(STORE).get(KEY_REFRESH);
+      let pending = 2;
+      const done = () => {
+        pending -= 1;
+        if (pending <= 0) resolve();
       };
-      g.onerror = () => reject(g.error);
+      accessReq.onsuccess = () => {
+        memoryAccessToken =
+          typeof accessReq.result === 'string' && accessReq.result.length > 0
+            ? accessReq.result
+            : null;
+        done();
+      };
+      refreshReq.onsuccess = () => {
+        memoryRefreshToken =
+          typeof refreshReq.result === 'string' && refreshReq.result.length > 0
+            ? refreshReq.result
+            : null;
+        done();
+      };
+      accessReq.onerror = () => reject(accessReq.error);
+      refreshReq.onerror = () => reject(refreshReq.error);
     });
     db.close();
   } catch {
     memoryAccessToken = null;
+    memoryRefreshToken = null;
   }
 }
 
@@ -63,12 +86,70 @@ async function persistAccessToken(token: string | null): Promise<void> {
   }
 }
 
+function setSessionHint(active: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (active) localStorage.setItem(SESSION_HINT_KEY, '1');
+    else localStorage.removeItem(SESSION_HINT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function hasSessionHint(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(SESSION_HINT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export function setAccessTokenMirror(token: string | null): void {
   memoryAccessToken = token && token.length > 0 ? token : null;
   void persistAccessToken(memoryAccessToken);
+  if (memoryAccessToken) {
+    setSessionHint(true);
+    void import('./clientSessionSync').then(({ broadcastTokenUpdated }) => {
+      broadcastTokenUpdated();
+    });
+  }
+}
+
+export function getRefreshTokenMirror(): string | null {
+  return memoryRefreshToken;
+}
+
+async function persistRefreshToken(token: string | null): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      const store = tx.objectStore(STORE);
+      if (token) store.put(token, KEY_REFRESH);
+      else store.delete(KEY_REFRESH);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  } catch {
+    /* ignore */
+  }
+}
+
+export function setRefreshTokenMirror(token: string | null): void {
+  memoryRefreshToken = token && token.length > 0 ? token : null;
+  void persistRefreshToken(memoryRefreshToken);
+  if (memoryRefreshToken) setSessionHint(true);
 }
 
 export function clearAccessTokenMirror(): void {
   memoryAccessToken = null;
+  memoryRefreshToken = null;
+  setSessionHint(false);
   void persistAccessToken(null);
+  void persistRefreshToken(null);
+  void import('./clientSessionSync').then(({ broadcastUserSessionCleared }) => {
+    broadcastUserSessionCleared();
+  });
 }

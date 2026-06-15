@@ -3,13 +3,21 @@
  * Calculates and emits real-time KPI updates to admin dashboard
  */
 
-import Employee from '../models/Employee.js';
 import Attendance from '../models/Attendance.js';
 import LeaveRequest from '../models/LeaveRequest.js';
 import Expense from '../models/Expense.js';
-import Payslip from '../models/Payroll.js';
 import Session from '../models/Session.js';
 import logger from './logger.js';
+import { dashboardCache } from './dashboardCache.js';
+import {
+  buildOrgIdFilter,
+  countOrgEmployees,
+  getFinancialTotals,
+} from './dashboardKpiHelpers.js';
+import {
+  buildOrgIdFlexible,
+  countEmployeesCurrentlyOnBreak,
+} from './attendanceQueryHelpers.js';
 
 /**
  * Calculate and emit real-time KPI updates
@@ -31,49 +39,50 @@ export const emitKPIUpdate = async (io, orgId, triggerType, triggerData = {}) =>
     endOfDay.setDate(endOfDay.getDate() + 1);
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const orgFilter = buildOrgIdFilter(orgId);
+    const orgMatch = buildOrgIdFlexible(orgId);
 
     // Calculate KPIs in parallel for better performance
     const [
       totalEmployees,
+      financialTotals,
       presentToday,
       pendingLeaves,
       pendingExpenses,
       activeUsers,
       onLeaveToday,
       onBreakToday,
-      thisMonthExpenses,
-      thisMonthPayroll,
       avgProductivity
     ] = await Promise.all([
-      // Total employees
-      Employee.countDocuments({ orgId, status: 'active' }),
+      countOrgEmployees(orgId),
+      getFinancialTotals(orgId, startOfMonth, endOfMonth),
       
       // Present today
-      Attendance.countDocuments({ 
-        orgId, 
+      Attendance.countDocuments({
+        ...orgFilter,
         date: { $gte: startOfDay, $lt: endOfDay },
         status: 'present'
       }),
       
       // Pending leaves
-      LeaveRequest.countDocuments({ orgId, status: 'pending' }),
+      LeaveRequest.countDocuments({ ...orgFilter, status: 'pending' }),
       
       // Pending expenses
-      Expense.countDocuments({ orgId, status: 'pending' }),
+      Expense.countDocuments({ ...orgFilter, status: 'pending' }),
       
       // Active users (checked in today but not checked out)
-      Attendance.countDocuments({ 
-        orgId, 
+      Attendance.countDocuments({
+        ...orgFilter,
         date: { $gte: startOfDay, $lt: endOfDay },
         checkIn: { $exists: true, $ne: null },
-        checkOut: { $exists: false }
+        $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
       }),
       
       // Employees on leave today
       LeaveRequest.aggregate([
         {
           $match: {
-            orgId,
+            ...orgFilter,
             status: 'approved',
             startDate: { $lte: now },
             endDate: { $gte: now }
@@ -90,57 +99,14 @@ export const emitKPIUpdate = async (io, orgId, triggerType, triggerData = {}) =>
         }
       ]),
       
-      // Employees on break today
-      Attendance.countDocuments({
-        orgId,
-        date: { $gte: startOfDay, $lt: endOfDay },
-        'breaks': {
-          $elemMatch: {
-            startTime: { $exists: true },
-            endTime: { $exists: false }
-          }
-        }
-      }),
-      
-      // This month expenses
-      Expense.aggregate([
-        {
-          $match: {
-            orgId,
-            date: { $gte: startOfMonth, $lt: endOfMonth },
-            status: { $in: ['approved', 'paid'] }
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            total: { $sum: '$amount' }
-          }
-        }
-      ]),
-      
-      // This month payroll
-      Payslip.aggregate([
-        {
-          $match: {
-            orgId,
-            createdAt: { $gte: startOfMonth, $lt: endOfMonth },
-            status: { $in: ['draft', 'pending', 'paid'] }
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            total: { $sum: '$netPay' }
-          }
-        }
-      ]),
+      // Employees currently on break (latest break open)
+      countEmployeesCurrentlyOnBreak(Attendance, orgMatch, startOfDay, endOfDay),
       
       // Average productivity
       Attendance.aggregate([
         {
           $match: {
-            orgId,
+            ...orgFilter,
             date: { $gte: startOfMonth, $lt: endOfMonth },
             status: 'present'
           }
@@ -157,9 +123,9 @@ export const emitKPIUpdate = async (io, orgId, triggerType, triggerData = {}) =>
     // Process results
     const attendanceRate = totalEmployees > 0 ? Math.round((presentToday / totalEmployees) * 100) : 0;
     const onLeave = onLeaveToday[0]?.total || 0;
-    const monthlyExpenses = thisMonthExpenses[0]?.total || 0;
-    const monthlyPayroll = thisMonthPayroll[0]?.total || 0;
-    const totalCost = monthlyExpenses + monthlyPayroll;
+    const monthlyExpenses = financialTotals.thisMonthExpenses;
+    const monthlyPayroll = financialTotals.thisMonthPayroll;
+    const totalCost = financialTotals.totalCost;
     const productivity = Math.min(100, Math.round(((avgProductivity[0]?.avgHours || 0) / 8) * 100));
 
     // Prepare KPI update payload
@@ -202,6 +168,8 @@ export const emitKPIUpdate = async (io, orgId, triggerType, triggerData = {}) =>
       io.to(room).emit('kpi:update', kpiUpdate);
       console.log(`📊 [KPI-UPDATER] Emitted kpi:update to room: ${room}`);
     });
+
+    dashboardCache.invalidateOrg(String(orgId));
 
     console.log('📊 [KPI-UPDATER] KPI update emitted successfully', { 
       orgId, 

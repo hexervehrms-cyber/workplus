@@ -142,3 +142,44 @@ export const validateObjectId = [
   param('id').isMongoId().withMessage('Invalid ID format'),
   handleValidationErrors
 ];
+
+/** Reject MongoDB operator keys in body/query (NoSQL injection guard). */
+export const preventNoSQLInjection = (req, res, next) => {
+  const hasOperatorKeys = (value) => {
+    if (value == null || typeof value !== 'object') return false;
+    for (const key of Object.keys(value)) {
+      if (key.startsWith('$') || key.includes('.')) return true;
+      if (hasOperatorKeys(value[key])) return true;
+    }
+    return false;
+  };
+  if (hasOperatorKeys(req.body) || hasOperatorKeys(req.query)) {
+    return res.status(400).json({ success: false, message: 'Invalid request payload' });
+  }
+  next();
+};
+
+/** Shallow trim for string fields in JSON body. */
+export const sanitizeInput = (req, res, next) => {
+  if (req.body && typeof req.body === 'object') {
+    for (const [key, val] of Object.entries(req.body)) {
+      if (typeof val === 'string') req.body[key] = val.trim();
+    }
+  }
+  next();
+};
+
+/** Apply express-validator rule arrays from schemas, or no-op. */
+export const validateBody = (rules) => (Array.isArray(rules) ? rules : [(req, res, next) => next()]);
+
+export const validateQuery = (rules) => (Array.isArray(rules) ? rules : [(req, res, next) => next()]);
+
+export const validateFileUpload = (_options = {}) => (req, res, next) => next();
+
+/** Named rule sets used by employee-dashboard routes. */
+export const schemas = {
+  employeeProfile: validateProfileUpdate,
+  checkIn: validateAttendanceCheckIn,
+  leaveRequest: validateLeaveRequest,
+  expense: validateExpenseCreation,
+};

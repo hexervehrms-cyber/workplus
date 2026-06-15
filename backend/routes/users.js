@@ -8,6 +8,7 @@ import User from "../models/User.js";
 import Role from "../models/Role.js";
 import Employee from "../models/Employee.js";
 import Department from "../models/Department.js";
+import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
 
 const router = express.Router();
 
@@ -19,19 +20,25 @@ router.get("/",
   authorize('super_admin', 'admin', 'hr'),
   auditLog('view_users', 'users'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || 'system';
     const userRole = req.user?.role;
     
     const {
       role,
       department,
-      isActive = true,
       search,
       page = 1,
       limit = 50
     } = req.query;
+
+    const isActiveParam = req.query.isActive;
     
-    let filter = { orgId, deletedAt: null };
+    // Build base filter: super_admin sees all organizations, others see only their own
+    let filter = { deletedAt: null };
+    if (userRole !== 'super_admin') {
+      const orgId = assertScopedOrgId(req, res);
+      if (!orgId) return;
+      filter.orgId = orgId;
+    }
     
     // Role-based filtering
     if (userRole !== 'super_admin') {
@@ -39,7 +46,12 @@ router.get("/",
       filter.role = { $ne: 'super_admin' };
     }
     
-    if (isActive !== undefined) filter.isActive = isActive === 'true';
+    // Default: active users only. Pass isActive=false to list inactive.
+    if (isActiveParam === undefined || isActiveParam === '') {
+      filter.isActive = true;
+    } else {
+      filter.isActive = isActiveParam === 'true' || isActiveParam === true;
+    }
     if (role) filter.role = role;
     if (department) filter.departmentId = department;
     
@@ -86,7 +98,8 @@ router.get("/stats",
   requirePermission('users', 'read'),
   auditLog('view_user_stats', 'users'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     
     const [
       totalUsers,
@@ -132,7 +145,8 @@ router.get("/:id",
   auditLog('view_user_details', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userRole = req.user?.role;
     
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -186,7 +200,8 @@ router.post("/",
   authorize('super_admin', 'admin', 'hr'),
   auditLog('create_user', 'user'),
   asyncHandler(async (req, res) => {
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
     
@@ -200,7 +215,8 @@ router.post("/",
       managerId,
       profile = {},
       contact = {},
-      isActive = true
+      isActive = true,
+      adminRole,
     } = req.body;
     
     // Validate required fields
@@ -233,21 +249,40 @@ router.post("/",
       });
     }
     
-    // Role validation - users can't create roles higher than their own
+    const targetRoleKey = String(role || 'employee').toLowerCase();
+
+    if (userRole !== 'super_admin' && targetRoleKey === 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only super admin can create super admin accounts',
+        code: 'INSUFFICIENT_PERMISSIONS'
+      });
+    }
+
+    // Role validation — org admin/HR may create peer admin accounts
     if (userRole !== 'super_admin') {
-      const currentUserRole = await Role.findOne({ 
-        name: userRole.toUpperCase(), 
-        orgId 
+      const currentUserRole = await Role.findOne({
+        name: userRole.toUpperCase(),
+        orgId
       });
-      const targetRole = await Role.findOne({ 
-        name: role.toUpperCase(), 
-        orgId 
+      const targetRole = await Role.findOne({
+        name: role.toUpperCase(),
+        orgId
       });
-      
-      if (targetRole && currentUserRole && targetRole.level >= currentUserRole.level) {
+
+      const creatorCanAddOrgAdmin =
+        ['admin', 'hr'].includes(userRole) && targetRoleKey === 'admin';
+
+      if (
+        !creatorCanAddOrgAdmin &&
+        targetRole &&
+        currentUserRole &&
+        targetRole.level > currentUserRole.level
+      ) {
         return res.status(403).json({
           success: false,
-          message: "Cannot create user with role equal to or higher than your own"
+          message: 'Cannot create user with role higher than your own',
+          code: 'INSUFFICIENT_PERMISSIONS'
         });
       }
     }
@@ -300,11 +335,12 @@ router.post("/",
       roleId: validatedRoleId,
       departmentId: departmentId || null,
       managerId: managerId || null,
+      adminRole: adminRole ? String(adminRole).trim().toLowerCase() : null,
       profile: {
         ...profile,
         firstName: profile.firstName?.trim(),
         lastName: profile.lastName?.trim(),
-        title: profile.title?.trim()
+        title: profile.title?.trim() || (adminRole ? String(adminRole).trim() : undefined),
       },
       contact,
       isActive,
@@ -339,7 +375,8 @@ router.put("/:id",
   auditLog('update_user', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
     
@@ -382,7 +419,8 @@ router.put("/:id",
       profile,
       contact,
       isActive,
-      preferences
+      preferences,
+      adminRole,
     } = req.body;
     
     // Update basic fields
@@ -446,10 +484,10 @@ router.put("/:id",
           orgId 
         });
         
-        if (targetRole && currentUserRole && targetRole.level >= currentUserRole.level) {
+        if (targetRole && currentUserRole && targetRole.level > currentUserRole.level) {
           return res.status(403).json({
             success: false,
-            message: "Cannot assign role equal to or higher than your own"
+            message: "Cannot assign role higher than your own"
           });
         }
       }
@@ -475,6 +513,11 @@ router.put("/:id",
     if (departmentId !== undefined) user.departmentId = departmentId;
     if (managerId !== undefined) user.managerId = managerId;
     if (isActive !== undefined) user.isActive = isActive;
+    if (adminRole !== undefined) {
+      user.adminRole = adminRole ? String(adminRole).trim().toLowerCase() : null;
+      if (!user.profile) user.profile = {};
+      user.profile.title = adminRole ? String(adminRole).trim() : user.profile.title;
+    }
     
     // Update nested objects
     if (profile) {
@@ -514,7 +557,8 @@ router.delete("/:id",
   auditLog('delete_user', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
     
@@ -554,6 +598,24 @@ router.delete("/:id",
       });
     }
     
+    // Check if this is the last super_admin
+    if (user.role === 'super_admin') {
+      const otherSuperAdmins = await User.countDocuments({
+        role: 'super_admin',
+        _id: { $ne: id },
+        deletedAt: null,
+        isActive: true
+      });
+      
+      if (otherSuperAdmins === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Cannot delete the last remaining Super Admin",
+          code: "LAST_SUPER_ADMIN"
+        });
+      }
+    }
+    
     // Soft delete
     user.deletedAt = new Date();
     user.deletedBy = userId;
@@ -563,6 +625,113 @@ router.delete("/:id",
     res.json({
       success: true,
       message: "User deleted successfully"
+    });
+  })
+);
+
+/**
+ * POST /api/users/bulk-delete
+ * Bulk delete users (soft delete with safety checks)
+ */
+router.post("/bulk-delete",
+  authorize('super_admin'),
+  auditLog('bulk_delete_users', 'users'),
+  asyncHandler(async (req, res) => {
+    const { userIds } = req.body;
+    const userId = req.user?.userId;
+    
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "userIds must be a non-empty array"
+      });
+    }
+    
+    // Validate all IDs are valid ObjectIds
+    const invalidIds = userIds.filter(id => !mongoose.Types.ObjectId.isValid(id));
+    if (invalidIds.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "One or more invalid user IDs"
+      });
+    }
+    
+    // Remove duplicates
+    const uniqueUserIds = [...new Set(userIds)];
+    
+    // Get all users to delete
+    const users = await User.find({
+      _id: { $in: uniqueUserIds },
+      deletedAt: null
+    });
+    
+    const deleted = [];
+    const skipped = [];
+    const errors = [];
+    
+    // Process each user
+    for (const user of users) {
+      let skipReason = null;
+      
+      // Check: Cannot delete self
+      if (user._id.toString() === userId) {
+        skipReason = 'Cannot delete your own account';
+      }
+      
+      // Check: Cannot delete last super_admin
+      if (!skipReason && user.role === 'super_admin') {
+        const otherActiveSuperAdmins = await User.countDocuments({
+          role: 'super_admin',
+          _id: { $ne: user._id },
+          deletedAt: null,
+          isActive: true
+        });
+        
+        if (otherActiveSuperAdmins === 0) {
+          skipReason = 'Cannot delete the last remaining Super Admin';
+        }
+      }
+      
+      if (skipReason) {
+        skipped.push({
+          userId: user._id,
+          email: user.email,
+          reason: skipReason
+        });
+        continue;
+      }
+      
+      // Perform soft delete
+      try {
+        user.deletedAt = new Date();
+        user.deletedBy = userId;
+        user.isActive = false;
+        await user.save();
+        
+        deleted.push({
+          userId: user._id,
+          email: user.email,
+          name: user.name
+        });
+      } catch (err) {
+        errors.push({
+          userId: user._id,
+          email: user.email,
+          error: err.message
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        requested: uniqueUserIds.length,
+        deleted: deleted.length,
+        skipped: skipped.length,
+        deletedUsers: deleted,
+        skippedUsers: skipped,
+        errors: errors
+      }
     });
   })
 );
@@ -578,7 +747,8 @@ router.post("/:id/reset-password",
   auditLog('reset_user_password', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const { newPassword, forceChange = true } = req.body;
     
     if (!newPassword || newPassword.length < 6) {
@@ -648,7 +818,8 @@ router.post("/:id/permissions",
   auditLog('grant_user_permission', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const userId = req.user?.userId;
     const { module, actions, scope = 'own', expiresAt } = req.body;
     
@@ -697,7 +868,8 @@ router.delete("/:id/permissions",
   auditLog('revoke_user_permission', 'user'),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = req.user?.orgId || 'system';
+    const orgId = assertScopedOrgId(req, res);
+    if (!orgId) return;
     const { module, actions, scope } = req.body;
     
     if (!module) {

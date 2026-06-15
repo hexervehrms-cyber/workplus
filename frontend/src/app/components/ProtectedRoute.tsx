@@ -3,7 +3,6 @@
  * Features: Role-based access, loading states, redirect handling
  */
 
-import { useEffect, useState } from 'react';
 import { Navigate, useLocation } from 'react-router';
 import { useAuth, useRoleRedirect } from '../context/AuthContext';
 import { Loader2 } from 'lucide-react';
@@ -22,16 +21,6 @@ export function ProtectedRoute({
   const { user, loading: authLoading } = useAuth();
   const location = useLocation();
   const roleRedirect = useRoleRedirect();
-  const [slowAuthHint, setSlowAuthHint] = useState(false);
-
-  useEffect(() => {
-    if (!authLoading) {
-      setSlowAuthHint(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setSlowAuthHint(true), 5000);
-    return () => window.clearTimeout(timer);
-  }, [authLoading]);
 
   // Show loading while checking authentication
   if (authLoading) {
@@ -54,17 +43,16 @@ export function ProtectedRoute({
     const roleArray = Array.isArray(requiredRole) ? requiredRole : [requiredRole];
     const hasRequiredRole = roleArray.includes(user.role);
     
-    console.log('🔐 ProtectedRoute - Role check:', {
-      userRole: user.role,
-      requiredRoles: roleArray,
-      hasAccess: hasRequiredRole,
-      path: location.pathname
-    });
-    
     if (!hasRequiredRole) {
-      // Redirect to appropriate dashboard based on user role
       const targetPath = fallbackPath || roleRedirect;
-      console.log('❌ Access denied - Redirecting to:', targetPath);
+      if (import.meta.env.DEV) {
+        console.log('ProtectedRoute denied:', {
+          userRole: user.role,
+          requiredRoles: roleArray,
+          path: location.pathname,
+          targetPath,
+        });
+      }
       return <Navigate to={targetPath} replace />;
     }
   }

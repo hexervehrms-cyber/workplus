@@ -27,9 +27,10 @@ const getConnectionOptions = () => {
     socketTimeoutMS: 45000, // 45 seconds socket timeout
     connectTimeoutMS: 10000, // 10 seconds connection timeout
     
-    // Connection pooling
-    maxPoolSize: 10, // Maximum connections in pool
-    minPoolSize: 1, // Minimum connections to maintain
+    // Connection pooling (scale via MONGO_MAX_POOL_SIZE on Render/multi-instance)
+    maxPoolSize: parseInt(process.env.MONGO_MAX_POOL_SIZE || (process.env.NODE_ENV === 'production' ? '40' : '10'), 10),
+    minPoolSize: parseInt(process.env.MONGO_MIN_POOL_SIZE || '2', 10),
+    maxIdleTimeMS: 30_000,
     
     // Write concerns
     retryWrites: true,

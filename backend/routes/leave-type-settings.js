@@ -6,6 +6,7 @@
 import express from 'express';
 import LeaveTypeSettings from '../models/LeaveTypeSettings.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
+import { authorize } from '../middleware/auth.js';
 import logger from '../utils/logger.js';
 
 const router = express.Router();
@@ -50,7 +51,7 @@ router.get('/:orgId', asyncHandler(async (req, res) => {
  * PUT /api/leave-type-settings/:orgId
  * Update leave type settings for organization
  */
-router.put('/:orgId', asyncHandler(async (req, res) => {
+router.put('/:orgId', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
   const { orgId } = req.params;
   const { enabledLeaveTypes, balanceKpiVisibility, updatedBy } = req.body;
 

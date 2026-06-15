@@ -1,0 +1,114 @@
+# ============================================================================
+# WORKPLUS BACKEND - RENDER DEPLOYMENT CONFIGURATION TEMPLATE
+# ============================================================================
+# This file is a TEMPLATE showing the structure of render.yaml
+# 
+# DO NOT use this in production. Instead:
+# 1. Configure deployment in Render dashboard UI
+# 2. Or set environment variables directly in Render > Settings > Environment
+# 3. DO NOT commit render.yaml to git with real secrets
+#
+# For development, create render.yaml locally (gitignored) with real values
+# ============================================================================
+
+services:
+  - type: web
+    name: workplus-backend
+    env: node
+    plan: standard
+    buildCommand: npm install
+    startCommand: node backend/server.js
+    rootDir: .
+    envVars:
+      # ============================================================================
+      # NON-SENSITIVE SERVER CONFIGURATION (safe to commit)
+      # ============================================================================
+      - key: PORT
+        value: 5000
+      - key: NODE_ENV
+        value: production
+      - key: JWT_EXPIRES_IN
+        value: 24h
+      - key: CORS_ORIGIN
+        value: https://hexerve.online,https://www.hexerve.online,https://workplus-qbshegha8-hexervehrms-8667s-projects.vercel.app
+      - key: FRONTEND_URL
+        value: https://hexerve.online
+      - key: SUPER_ADMIN_EMAIL
+        value: atul@hexerve.com
+      - key: SUPER_ADMIN_NAME
+        value: Atul
+      - key: SMTP_HOST
+        value: smtp.office365.com
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_USER
+        value: hr@hexerve.com
+      - key: FROM_EMAIL
+        value: hr@hexerve.com
+      - key: HR_EMAIL
+        value: hr@hexerve.com
+      - key: TWILIO_PHONE_NUMBER
+        value: +1234567890
+      - key: VITE_API_URL
+        value: https://workplus-backend-sg3a.onrender.com
+      - key: VITE_SOCKET_URL
+        value: https://workplus-backend-sg3a.onrender.com
+      - key: VITE_APP_NAME
+        value: WorkPlus Pro
+      - key: VITE_APP_VERSION
+        value: 1.0.0
+      - key: VITE_APP_ENV
+        value: production
+      - key: VITE_ENABLE_DEBUG
+        value: false
+      - key: VITE_ENABLE_ANALYTICS
+        value: true
+      - key: TEAMS_WEBHOOK_URL
+        value: https://workplus-backend-sg3a.onrender.com/api/chat/teams/webhook
+      - key: TEAMS_INTEGRATION_ENABLED
+        value: true
+      - key: TEAMS_MESSAGE_SYNC_ENABLED
+        value: true
+      - key: TEAMS_PRESENCE_SYNC_ENABLED
+        value: true
+      - key: TEAMS_FILE_SHARING_ENABLED
+        value: true
+      - key: TEAMS_MESSAGE_RETENTION_DAYS
+        value: 90
+      - key: TEAMS_API_RATE_LIMIT
+        value: 100
+      - key: TEAMS_API_RATE_LIMIT_WINDOW
+        value: 60000
+      - key: TEAMS_LOG_LEVEL
+        value: info
+      - key: TEAMS_LOG_MESSAGES
+        value: true
+
+      # ============================================================================
+      # SENSITIVE VALUES - SET IN RENDER DASHBOARD ONLY
+      # ============================================================================
+      # Use Render Dashboard > Settings > Environment to set these:
+      #
+      # MONGODB_URI=<your_mongodb_atlas_uri>
+      # JWT_SECRET=<generate_new_64_byte_hex_key>
+      # SUPER_ADMIN_PASSWORD=<secure_password>
+      # SMTP_PASS=<microsoft_365_app_password>
+      # REDIS_URL=<optional_redis_url>
+      # TWILIO_ACCOUNT_SID=<your_account_sid>
+      # TWILIO_AUTH_TOKEN=<your_auth_token>
+      # FIREBASE_PROJECT_ID=<your_project_id>
+      # FIREBASE_PRIVATE_KEY=<your_private_key>
+      # FIREBASE_CLIENT_EMAIL=<your_client_email>
+      # TEAMS_APP_ID=<your_app_id>
+      # TEAMS_APP_PASSWORD=<your_app_password>
+      # TEAMS_TENANT_ID=<your_tenant_id>
+      # TEAMS_BOT_ID=<your_bot_id>
+      # TEAMS_BOT_PASSWORD=<your_bot_password>
+      #
+      # ============================================================================
+
+databases:
+  - name: workplus-db
+    databaseName: workpluspro
+    user: workplus_user
+    plan: standard

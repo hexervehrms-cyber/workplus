@@ -15,8 +15,15 @@ async function fixEmployeePasswords() {
     const employees = await User.find({ role: 'employee' });
     console.log(`Found ${employees.length} employee users`);
 
-    // Update all employee passwords to 'Jadu@123'
-    const password = 'Jadu@123';
+    // Update all employee passwords to value from environment
+    const password = process.env.EMPLOYEE_PASSWORD;
+    
+    if (!password) {
+      console.error('❌ ERROR: EMPLOYEE_PASSWORD not set');
+      console.error('   Set EMPLOYEE_PASSWORD in .env file');
+      throw new Error('Missing EMPLOYEE_PASSWORD');
+    }
+
     const hashedPassword = await bcrypt.hash(password, 12);
 
     for (const employee of employees) {
@@ -26,7 +33,7 @@ async function fixEmployeePasswords() {
     }
 
     console.log('\n✅ All employee passwords updated!');
-    console.log('New password for all employees: Jadu@123');
+    console.log('New password from EMPLOYEE_PASSWORD env var');
 
     process.exit(0);
   } catch (error) {

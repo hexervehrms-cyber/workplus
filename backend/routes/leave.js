@@ -18,9 +18,44 @@ import logger from '../utils/logger.js';
 import EmailNotificationService from '../utils/emailNotificationService.js';
 import { emitLeaveKPIUpdate } from '../utils/kpiUpdater.js';
 import { dashboardCache } from '../utils/dashboardCache.js';
-import { notifyAdminsOnLeaveSubmitted, resolveOrganizationSmtp } from '../utils/workflowNotifications.js';
+import {
+  notifyAdminsOnLeaveSubmitted,
+  resolveOrganizationSmtp,
+  getHrInboxEmail
+} from '../utils/workflowNotifications.js';
+import {
+  computeLeaveRemaining,
+  findCurrentLeaveAllocation,
+  getLeaveFieldName,
+  getAllocatedTotal,
+} from '../utils/leaveBalanceHelpers.js';
+import {
+  syncLeaveAllocationPending,
+  syncLeaveAllocationOnApprove,
+  syncLeaveAllocationReleasePending,
+  computeLeaveDaysFromRequest,
+} from '../utils/leaveAllocationSync.js';
+import { authorize } from '../middleware/auth.js';
+import {
+  resolveQueryOrgId,
+  denyIfCrossOrg,
+  bulkOrgFilter,
+  scopedOrgId,
+  LEAVE_APPROVER_ROLES,
+} from '../utils/leaveAccessHelpers.js';
+import { userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
+import { findEmployeeForSelfService } from '../utils/employeeSelfService.js';
+import { assertEmployeeSelfOrPrivileged } from '../utils/employeeAccessHelpers.js';
+import {
+  toObjectIdIfValid,
+  userIdMatchFilter,
+  isSelfServiceUser,
+} from '../utils/mongoIdHelpers.js';
+
+const SELF_SERVICE_LEAVE_ROLES = ['employee', 'manager', 'accountant'];
 
 const router = express.Router();
+const leaveApprovers = authorize(...LEAVE_APPROVER_ROLES);
 
 // Apply pagination middleware
 router.use(paginationMiddleware);
@@ -34,19 +69,21 @@ router.get('/', asyncHandler(async (req, res) => {
   const { page, limit, skip } = req.pagination;
   const { userId, status, type, startDate, endDate, orgId } = req.query;
 
-  // Build query with CRITICAL orgId validation
-  const query = {};
-  
-  // CRITICAL: Enforce orgId - users can only access their organization's data
-  // Super admin can override with orgId parameter, others use their own orgId
-  if (req.user.role === 'super_admin' && orgId) {
-    query.orgId = orgId;
-  } else {
-    query.orgId = req.user.orgId;
+  const tenantOrg = scopedOrgId(req);
+  if (!tenantOrg) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
+    });
   }
-  
-  if (userId) {
-    query.userId = userId;
+
+  const query = { orgId: String(tenantOrg) };
+
+  if (SELF_SERVICE_LEAVE_ROLES.includes(req.user.role)) {
+    Object.assign(query, userIdMatchFilter(req.user.userId));
+  } else if (userId) {
+    Object.assign(query, userIdMatchFilter(userId));
   }
   
   if (status) {
@@ -97,9 +134,10 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   // CRITICAL: Enforce orgId validation - users can only delete their organization's data
+  const tenantOrg = scopedOrgId(req);
   const leaveRequest = await LeaveRequest.findOne({
     _id: id,
-    orgId: req.user.orgId
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
   });
 
   if (!leaveRequest) {
@@ -115,6 +153,28 @@ router.delete('/:id', asyncHandler(async (req, res) => {
       success: false,
       message: 'Only pending leave requests can be deleted'
     });
+  }
+
+  const privileged = LEAVE_APPROVER_ROLES.includes(req.user.role);
+  if (!privileged) {
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    if (
+      !emp ||
+      String(leaveRequest.userId) !== String(req.user.userId) ||
+      String(leaveRequest.employeeId) !== String(emp._id)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only delete your own pending leave requests',
+      });
+    }
+  }
+
+  if (leaveRequest.status === 'pending') {
+    const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
+    await syncLeaveAllocationReleasePending(LeaveAllocation, leaveRequest);
   }
 
   await LeaveRequest.findByIdAndDelete(id);
@@ -158,9 +218,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   } = req.body;
 
   // CRITICAL: Enforce orgId validation - users can only update their organization's data
+  const tenantOrg = scopedOrgId(req);
   const leaveRequest = await LeaveRequest.findOne({
     _id: id,
-    orgId: req.user.orgId
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
   });
 
   if (!leaveRequest) {
@@ -176,6 +237,23 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       success: false,
       message: 'Only pending leave requests can be edited'
     });
+  }
+
+  const privileged = LEAVE_APPROVER_ROLES.includes(req.user.role);
+  if (!privileged) {
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    if (
+      !emp ||
+      !isSelfServiceUser(req, leaveRequest.userId) ||
+      String(leaveRequest.employeeId) !== String(emp._id)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only edit your own pending leave requests',
+      });
+    }
   }
 
   let resolvedHourly =
@@ -209,35 +287,77 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     resolvedHourly = false;
   }
 
-  if (leaveType) leaveRequest.type = leaveType;
-  if (startDate) leaveRequest.startDate = new Date(startDate);
-  if (endDate) leaveRequest.endDate = new Date(endDate);
-  if (reason) leaveRequest.reason = reason;
-
-  leaveRequest.isHalfDay = resolvedHalfDay;
-  leaveRequest.halfDaySession = resolvedHalfSession;
-  leaveRequest.isHourlyLeave = resolvedHourly;
+  const patchSet = {
+    isHalfDay: resolvedHalfDay,
+    halfDaySession: resolvedHalfSession,
+    isHourlyLeave: resolvedHourly,
+  };
+  if (leaveType) patchSet.type = leaveType;
+  if (startDate) patchSet.startDate = new Date(startDate);
+  if (endDate) patchSet.endDate = new Date(endDate);
+  if (reason) patchSet.reason = reason;
   if (resolvedHourly) {
-    if (startTime) leaveRequest.startTime = startTime;
-    if (endTime) leaveRequest.endTime = endTime;
+    if (startTime) patchSet.startTime = startTime;
+    if (endTime) patchSet.endTime = endTime;
   } else {
-    leaveRequest.startTime = undefined;
-    leaveRequest.endTime = undefined;
+    patchSet.startTime = undefined;
+    patchSet.endTime = undefined;
   }
 
-  await leaveRequest.save();
+  const version = leaveRequest.__v;
+  const recordOrg = String(tenantOrg || leaveRequest.orgId || '');
+  const updated = await LeaveRequest.findOneAndUpdate(
+    {
+      _id: id,
+      ...(recordOrg ? { orgId: recordOrg } : {}),
+      status: 'pending',
+      __v: version,
+    },
+    {
+      $set: patchSet,
+      $inc: { __v: 1 },
+    },
+    { new: true }
+  );
+
+  if (!updated) {
+    return res.status(409).json({
+      success: false,
+      message: 'Leave request was modified by another user. Please refresh and try again.',
+      code: 'VERSION_CONFLICT',
+    });
+  }
+
+  const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
+  const oldDays = computeLeaveDaysFromRequest(leaveRequest);
+  const newDays = computeLeaveDaysFromRequest(updated);
+  const oldType = leaveRequest.type;
+  const newType = updated.type;
+  if (oldDays > 0) {
+    await syncLeaveAllocationReleasePending(LeaveAllocation, leaveRequest);
+  }
+  if (newDays > 0) {
+    await syncLeaveAllocationPending(LeaveAllocation, {
+      employeeId: updated.employeeId,
+      orgId: updated.orgId,
+      leaveType: newType,
+      days: newDays,
+      when: updated.startDate,
+      action: 'add',
+    });
+  }
 
   logger.info('Leave request updated', {
     leaveRequestId: id,
-    employeeId: leaveRequest.employeeId,
-    orgId: req.user.orgId,
+    employeeId: updated.employeeId,
+    orgId: recordOrg,
     userId: req.user.userId
   });
 
   res.json({
     success: true,
     message: 'Leave request updated successfully',
-    data: { leaveRequest }
+    data: { leaveRequest: updated }
   });
 }));
 
@@ -245,16 +365,16 @@ router.patch('/:id', asyncHandler(async (req, res) => {
  * PATCH /api/leave-requests/:id/approve
  * Approve leave request (must come before GET /:id)
  */
-router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.patch('/:id/approve', leaveApprovers, idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { approvedBy, comments = '' } = req.body;
+  const { comments = '' } = req.body;
+  const approvedBy = req.user.userId;
 
-  if (!approvedBy) {
-    return res.status(400).json({
-      success: false,
-      message: 'approvedBy is required'
-    });
+  const leaveForAuth = await LeaveRequest.findById(id).select('orgId').lean();
+  if (!leaveForAuth) {
+    return res.status(404).json({ success: false, message: 'Leave request not found' });
   }
+  if (denyIfCrossOrg(req, res, leaveForAuth.orgId)) return;
 
   // Use Leave Policy Engine if available
   if (global.leavePolicyEngine) {
@@ -267,6 +387,42 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
         employeeId: result.leaveRequest.employeeId._id
       });
 
+      try {
+        const lr = result.leaveRequest;
+        const populated = await LeaveRequest.findById(lr._id || id)
+          .populate('userId', 'name email')
+          .populate('approvedBy', 'name email');
+        if (populated?.userId?.email) {
+          const employeeRecord = await Employee.findOne({ userId: populated.userId._id })
+            .select('_id orgId')
+            .lean();
+          const orgSmtp = await resolveOrganizationSmtp(populated.orgId);
+          const employee = {
+            userId: populated.userId._id,
+            _id: employeeRecord?._id,
+            name: populated.userId.name || populated.employeeName,
+            email: populated.userId.email,
+            orgId: employeeRecord?.orgId || populated.orgId
+          };
+          const approver = {
+            _id: populated.approvedBy?._id || approvedBy,
+            name: populated.approvedBy?.name || 'Manager'
+          };
+          await EmailNotificationService.sendLeaveApproved(employee, populated, approver, {
+            organizationSmtp: orgSmtp
+          });
+          await EmailNotificationService.sendLeaveApprovedToHR(
+            employee,
+            populated,
+            approver,
+            getHrInboxEmail(),
+            { organizationSmtp: orgSmtp }
+          );
+        }
+      } catch (notifyErr) {
+        logger.warn('Smart leave approval emails failed', { error: notifyErr.message, leaveRequestId: id });
+      }
+
       return res.json({
         success: true,
         message: 'Leave request approved successfully',
@@ -277,11 +433,6 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
       logger.warn('Smart leave approval failed, falling back to basic', {
         error: policyError.message,
         leaveRequestId: id
-      });
-      
-      return res.status(400).json({
-        success: false,
-        message: policyError.message
       });
     }
   }
@@ -296,13 +447,7 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
     });
   }
 
-  // Verify orgId - prevent cross-tenant access
-  if (leaveRequest.orgId && leaveRequest.orgId !== req.user.orgId && req.user.role !== 'super_admin') {
-    return res.status(403).json({
-      success: false,
-      message: 'Unauthorized access'
-    });
-  }
+  if (denyIfCrossOrg(req, res, leaveRequest.orgId)) return;
 
   if (leaveRequest.status !== 'pending') {
     return res.status(400).json({
@@ -313,13 +458,13 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
 
   // CRITICAL: Validate leave balance before approval
   const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
-  const allocation = await LeaveAllocation.findOne({
-    employeeId: leaveRequest.employeeId,
-    leaveType: leaveRequest.type,
-    orgId: leaveRequest.orgId
-  }).lean();
+  const allocation = await findCurrentLeaveAllocation(
+    LeaveAllocation,
+    leaveRequest.employeeId,
+    leaveRequest.orgId
+  );
 
-  if (!allocation) {
+  if (!allocation || !getLeaveFieldName(leaveRequest.type)) {
     return res.status(400).json({
       success: false,
       message: `No leave allocation found for ${leaveRequest.type} leave type`
@@ -330,7 +475,7 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
   const start = new Date(leaveRequest.startDate);
   const end = new Date(leaveRequest.endDate);
   const days = leaveRequest.isHalfDay ? 0.5 : Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
-  const availableBalance = allocation.balance || 0;
+  const availableBalance = computeLeaveRemaining(allocation, leaveRequest.type);
 
   if (availableBalance < days) {
     return res.status(400).json({
@@ -370,6 +515,8 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
       code: 'VERSION_CONFLICT'
     });
   }
+
+  await syncLeaveAllocationOnApprove(LeaveAllocation, updated);
 
   // Emit business event for approved leave
   if (global.eventSystem) {
@@ -421,10 +568,7 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
       await EmailNotificationService.sendLeaveApproved(employee, updated, approver, { organizationSmtp: orgSmtp });
       logger.info('Leave approved email sent', { leaveRequestId: id, email: employee.email });
 
-      const hrEmail = process.env.HR_EMAIL;
-      if (!hrEmail) {
-        logger.warn('HR_EMAIL not configured; skipping leave HR email', { leaveRequestId: id, orgId: updated.orgId });
-      }
+      const hrEmail = getHrInboxEmail();
       if (hrEmail) {
         await EmailNotificationService.sendLeaveApprovedToHR(employee, updated, approver, hrEmail, {
           organizationSmtp: orgSmtp
@@ -472,14 +616,21 @@ router.patch('/:id/approve', idempotencyMiddleware, asyncHandler(async (req, res
  * PATCH /api/leave-requests/:id/reject
  * Reject leave request (must come before GET /:id)
  */
-router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res) => {
+router.patch('/:id/reject', leaveApprovers, idempotencyMiddleware, asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { rejectedBy, rejectionReason } = req.body;
+  const { rejectionReason } = req.body;
+  const rejectedBy = req.user.userId;
 
-  if (!rejectedBy || !rejectionReason) {
+  const leaveForAuth = await LeaveRequest.findById(id).select('orgId').lean();
+  if (!leaveForAuth) {
+    return res.status(404).json({ success: false, message: 'Leave request not found' });
+  }
+  if (denyIfCrossOrg(req, res, leaveForAuth.orgId)) return;
+
+  if (!rejectionReason) {
     return res.status(400).json({
       success: false,
-      message: 'rejectedBy and rejectionReason are required'
+      message: 'rejectionReason is required'
     });
   }
 
@@ -493,6 +644,39 @@ router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res)
         rejectedBy,
         reason: rejectionReason
       });
+
+      try {
+        const lr = result.leaveRequest;
+        const populated = await LeaveRequest.findById(lr._id || id)
+          .populate('userId', 'name email')
+          .populate('rejectedBy', 'name email');
+        if (populated?.userId?.email) {
+          const employeeRecord = await Employee.findOne({ userId: populated.userId._id })
+            .select('_id orgId')
+            .lean();
+          const orgSmtp = await resolveOrganizationSmtp(populated.orgId);
+          const employee = {
+            userId: populated.userId._id,
+            _id: employeeRecord?._id,
+            name: populated.userId.name || populated.employeeName,
+            email: populated.userId.email,
+            orgId: employeeRecord?.orgId || populated.orgId
+          };
+          const rejector = {
+            _id: populated.rejectedBy?._id || rejectedBy,
+            name: populated.rejectedBy?.name || 'Manager'
+          };
+          await EmailNotificationService.sendLeaveRejected(
+            employee,
+            populated,
+            rejector,
+            rejectionReason,
+            { organizationSmtp: orgSmtp }
+          );
+        }
+      } catch (notifyErr) {
+        logger.warn('Smart leave rejection emails failed', { error: notifyErr.message, leaveRequestId: id });
+      }
 
       return res.json({
         success: true,
@@ -564,6 +748,9 @@ router.patch('/:id/reject', idempotencyMiddleware, asyncHandler(async (req, res)
       code: 'VERSION_CONFLICT'
     });
   }
+
+  const LeaveAllocationReject = (await import('../models/LeaveAllocation.js')).default;
+  await syncLeaveAllocationReleasePending(LeaveAllocationReject, leaveRequest);
 
   // Emit business event for rejected leave
   if (global.eventSystem) {
@@ -665,14 +852,52 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
   const { status } = req.query;
 
   // Enforce tenant/user isolation for leave data
-  if (req.user.role === 'employee' && req.user.userId.toString() !== userId.toString()) {
+  let tenantOrg = scopedOrgId(req);
+  if (!tenantOrg) {
+    const emp = await findEmployeeForSelfService(req.user.userId, null, {
+      allowCrossOrgFallback: true,
+    });
+    if (emp?.orgId) tenantOrg = String(emp.orgId);
+  }
+  if (!tenantOrg) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'MISSING_ORG_CONTEXT',
+    });
+  }
+
+  if (
+    ['employee', 'manager', 'accountant'].includes(req.user.role) &&
+    !isSelfServiceUser(req, userId)
+  ) {
     return res.status(403).json({
       success: false,
       message: 'Unauthorized access'
     });
   }
 
-  const query = { userId, orgId: req.user.orgId };
+  const query = { orgId: String(tenantOrg) };
+
+  if (
+    ['employee', 'manager', 'accountant'].includes(req.user.role) &&
+    isSelfServiceUser(req, userId)
+  ) {
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    const userFilters = userIdMatchFilter(req.user.userId);
+    if (emp?._id) {
+      query.$or = [
+        ...(userFilters.$or ? userFilters.$or : [userFilters]),
+        { employeeId: emp._id },
+      ];
+    } else {
+      Object.assign(query, userFilters);
+    }
+  } else {
+    Object.assign(query, userIdMatchFilter(userId));
+  }
   
   if (status) {
     query.status = status;
@@ -696,14 +921,17 @@ router.get('/user/:userId', asyncHandler(async (req, res) => {
  * GET /api/leave-requests/stats/summary
  * Get leave request statistics
  */
-router.get('/stats/summary', asyncHandler(async (req, res) => {
+router.get('/stats/summary', leaveApprovers, asyncHandler(async (req, res) => {
   const { orgId, startDate, endDate } = req.query;
-
-  const query = {};
-  
-  if (orgId) {
-    query.orgId = orgId;
+  const scoped = resolveQueryOrgId(req, orgId);
+  if (!scoped) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context is required',
+    });
   }
+
+  const query = { orgId: String(scoped) };
   
   if (startDate && endDate) {
     query.startDate = {
@@ -759,6 +987,25 @@ router.get('/:id', asyncHandler(async (req, res) => {
     });
   }
 
+  if (denyIfCrossOrg(req, res, leaveRequest.orgId)) return;
+
+  if (SELF_SERVICE_LEAVE_ROLES.includes(req.user.role)) {
+    const tenantOrg = scopedOrgId(req);
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    if (
+      !emp ||
+      !isSelfServiceUser(req, leaveRequest.userId) ||
+      String(leaveRequest.employeeId) !== String(emp._id)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden',
+      });
+    }
+  }
+
   res.json({
     success: true,
     data: leaveRequest
@@ -812,11 +1059,50 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     resolvedHourly = false;
   }
 
-  // Validate required fields
-  if (!userId || !employeeId || !leaveType || !startDate || !endDate || !reason || !orgId) {
+  // Validate required fields (orgId resolved from JWT / body below)
+  if (!userId || !employeeId || !leaveType || !startDate || !endDate || !reason) {
     return res.status(400).json({
       success: false,
       message: 'All fields are required'
+    });
+  }
+
+  const tenantOrg =
+    scopedOrgId(req) || userOrgIdFromReq(req) || String(orgId || '').trim() || null;
+  const resolvedOrgId = tenantOrg || String(orgId || '').trim();
+  if (!resolvedOrgId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context is required',
+    });
+  }
+  const isPrivilegedCreator = ['admin', 'hr', 'manager', 'super_admin'].includes(req.user.role);
+  let effectiveUserId = userId;
+  let effectiveEmployeeId = employeeId;
+  let effectiveOrgId = resolvedOrgId;
+
+  if (!isPrivilegedCreator) {
+    const emp = await findEmployeeForSelfService(req.user.userId, resolvedOrgId, {
+      allowCrossOrgFallback: false,
+      createIfMissing: true,
+    });
+    if (!emp) {
+      return res.status(403).json({
+        success: false,
+        message: 'Employee profile not found for your account',
+      });
+    }
+    effectiveUserId = req.user.userId;
+    effectiveEmployeeId = emp._id;
+    effectiveOrgId = String(emp.orgId || resolvedOrgId);
+  } else if (
+    req.user.role !== 'super_admin' &&
+    tenantOrg &&
+    String(orgId) !== String(tenantOrg)
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot create leave for another organization',
     });
   }
 
@@ -838,8 +1124,8 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
     logger.warn('Could not fetch user name for leave request', { userId });
   }
 
-  // Use Leave Policy Engine if available
-  if (global.leavePolicyEngine) {
+  // Smart policy engine is for HR/admin only — employees always get pending requests for approval
+  if (global.leavePolicyEngine && isPrivilegedCreator) {
     try {
       const result = await global.leavePolicyEngine.processLeaveRequest({
         employeeId,
@@ -873,6 +1159,40 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
         workflowId: result.workflowId
       });
 
+      try {
+        const submitter = await User.findById(userId).select('name email').lean();
+        const employeeRecord = await Employee.findOne({ userId }).select('_id orgId').lean();
+        const orgSmtp = await resolveOrganizationSmtp(orgId);
+        if (submitter) {
+          const empName = submitter.name || employeeName || 'Employee';
+          const empEmail = submitter.email || '';
+          if (empEmail && employeeRecord) {
+            await EmailNotificationService.sendLeaveRequestSubmitted(
+              {
+                userId,
+                _id: employeeRecord._id,
+                name: empName,
+                email: empEmail,
+                orgId: employeeRecord.orgId || orgId
+              },
+              result.leaveRequest,
+              { organizationSmtp: orgSmtp }
+            );
+          }
+          await notifyAdminsOnLeaveSubmitted(orgId, {
+            leaveRequest: result.leaveRequest,
+            employeeUserId: userId,
+            employeeName: empName,
+            employeeEmail: empEmail
+          });
+        }
+      } catch (notifyErr) {
+        logger.warn('Smart leave notification emails failed', {
+          error: notifyErr.message,
+          leaveRequestId: result.leaveRequest._id
+        });
+      }
+
       return res.status(201).json({
         success: true,
         message: result.autoApproved ? 'Leave request auto-approved' : 'Leave request submitted successfully',
@@ -888,11 +1208,6 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
       logger.warn('Smart leave processing failed, falling back to basic', {
         error: policyError.message,
         employeeId
-      });
-      
-      return res.status(400).json({
-        success: false,
-        message: policyError.message
       });
     }
   }
@@ -934,9 +1249,16 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
   }
 
   // Check for overlapping leave requests - FIXED for half-day leaves
+  // Store under JWT tenant org for employees so admin leave list (scoped by org) always matches
+  const allocationOrgId = String(
+    !isPrivilegedCreator && tenantOrg
+      ? tenantOrg
+      : effectiveOrgId || tenantOrg || orgId || ''
+  ).trim();
+
   let overlapQuery = {
-    employeeId,
-    orgId,
+    employeeId: effectiveEmployeeId,
+    orgId: allocationOrgId,
     status: { $in: ['pending', 'approved'] }
   };
 
@@ -976,49 +1298,67 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
 
   // CRITICAL: Check leave balance before creating request
   const LeaveAllocation = (await import('../models/LeaveAllocation.js')).default;
-  const allocation = await LeaveAllocation.findOne({
-    employeeId,
-    leaveType: leaveType,
-    orgId
-  }).lean();
+  const allocation = await findCurrentLeaveAllocation(
+    LeaveAllocation,
+    effectiveEmployeeId,
+    allocationOrgId,
+    start
+  );
 
-  if (!allocation) {
-    return res.status(400).json({
-      success: false,
-      message: `No leave allocation found for ${leaveType} leave type`
+  const leaveField = getLeaveFieldName(leaveType);
+  if (allocation && leaveField) {
+    const allocatedTotal = getAllocatedTotal(allocation, leaveType);
+    const availableBalance = computeLeaveRemaining(allocation, leaveType);
+    if (allocatedTotal > 0 && availableBalance < days) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient leave balance. Available: ${availableBalance} days, Requested: ${days} days`,
+        data: {
+          availableBalance,
+          requestedDays: days,
+          leaveType
+        }
+      });
+    }
+  } else {
+    logger.warn('Leave submitted without monthly allocation — pending for HR', {
+      employeeId,
+      leaveType,
+      orgId: tenantOrg || orgId,
     });
   }
 
-  const availableBalance = allocation.balance || 0;
-  if (availableBalance < days) {
-    return res.status(400).json({
-      success: false,
-      message: `Insufficient leave balance. Available: ${availableBalance} days, Requested: ${days} days`,
-      data: {
-        availableBalance,
-        requestedDays: days,
-        leaveType
-      }
-    });
-  }
+  const userObjectId = toObjectIdIfValid(effectiveUserId) || effectiveUserId;
+  const employeeObjectId = toObjectIdIfValid(effectiveEmployeeId) || effectiveEmployeeId;
 
   // Create leave request
   const leaveRequest = await LeaveRequest.create({
-    userId,
-    employeeId,
+    userId: userObjectId,
+    employeeId: employeeObjectId,
     employeeName: employeeName,
     type: leaveType,
     startDate: start,
     endDate: end,
     reason,
     status: 'pending',
-    orgId,
+    orgId: allocationOrgId,
     isHalfDay: resolvedHalfDay,
     halfDaySession: resolvedHalfSession,
     isHourlyLeave: resolvedHourly,
     startTime: resolvedHourly ? startTime : undefined,
     endTime: resolvedHourly ? endTime : undefined
   });
+
+  if (allocation && leaveField) {
+    await syncLeaveAllocationPending(LeaveAllocation, {
+      employeeId: employeeObjectId,
+      orgId: allocationOrgId,
+      leaveType,
+      days,
+      when: start,
+      action: 'add',
+    });
+  }
 
   // Emit business event for workflow automation
   if (global.eventSystem) {
@@ -1057,31 +1397,34 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
 
     const orgSmtp = await resolveOrganizationSmtp(orgId);
 
-    if (user && user.email && employeeRecord) {
-      await EmailNotificationService.sendLeaveRequestSubmitted(
-        {
-          userId,
-          _id: employeeRecord._id,
-          name: user.name,
-          email: user.email,
-          orgId: employeeRecord.orgId || orgId
-        },
-        { _id: leaveRequest._id, type: leaveType, startDate: start, endDate: end, reason },
-        { organizationSmtp: orgSmtp }
-      );
-      logger.info('Leave request submitted email sent', { leaveRequestId: leaveRequest._id, email: user.email });
+    if (employeeRecord) {
+      const empName = user?.name || 'Employee';
+      const empEmail = user?.email || '';
+      if (empEmail) {
+        await EmailNotificationService.sendLeaveRequestSubmitted(
+          {
+            userId,
+            _id: employeeRecord._id,
+            name: empName,
+            email: empEmail,
+            orgId: employeeRecord.orgId || orgId
+          },
+          { _id: leaveRequest._id, type: leaveType, startDate: start, endDate: end, reason },
+          { organizationSmtp: orgSmtp }
+        );
+        logger.info('Leave request submitted email sent', { leaveRequestId: leaveRequest._id, email: empEmail });
+      }
 
       await notifyAdminsOnLeaveSubmitted(orgId, {
         leaveRequest,
         employeeUserId: userId,
-        employeeName: user.name,
-        employeeEmail: user.email
+        employeeName: empName,
+        employeeEmail: empEmail
       });
     } else {
-      logger.warn('Missing user or employee data for leave submission notification', {
+      logger.warn('Missing employee record for leave submission notification', {
         leaveRequestId: leaveRequest._id,
-        hasUser: !!user,
-        hasEmployeeRecord: !!employeeRecord
+        userId
       });
     }
   } catch (emailError) {
@@ -1107,8 +1450,9 @@ router.post('/', idempotencyMiddleware, asyncHandler(async (req, res) => {
  * POST /api/leave-requests/bulk-approve
  * Bulk approve leave requests with idempotency
  */
-router.post('/bulk-approve', idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const { requestIds, approvedBy } = req.body;
+router.post('/bulk-approve', leaveApprovers, idempotencyMiddleware, asyncHandler(async (req, res) => {
+  const { requestIds } = req.body;
+  const approvedBy = req.user.userId;
 
   if (!requestIds || !Array.isArray(requestIds) || requestIds.length === 0) {
     return res.status(400).json({
@@ -1117,18 +1461,12 @@ router.post('/bulk-approve', idempotencyMiddleware, asyncHandler(async (req, res
     });
   }
 
-  if (!approvedBy) {
-    return res.status(400).json({
-      success: false,
-      message: 'approvedBy is required'
-    });
-  }
-
   // Update all pending requests
   const result = await LeaveRequest.updateMany(
     {
       _id: { $in: requestIds },
-      status: 'pending'
+      status: 'pending',
+      ...bulkOrgFilter(req),
     },
     {
       $set: {
@@ -1139,6 +1477,16 @@ router.post('/bulk-approve', idempotencyMiddleware, asyncHandler(async (req, res
       $inc: { __v: 1 }
     }
   );
+
+  const LeaveAllocationBulk = (await import('../models/LeaveAllocation.js')).default;
+  const approvedLeaves = await LeaveRequest.find({
+    _id: { $in: requestIds },
+    status: 'approved',
+    ...bulkOrgFilter(req),
+  }).lean();
+  for (const lr of approvedLeaves) {
+    await syncLeaveAllocationOnApprove(LeaveAllocationBulk, lr);
+  }
 
   logger.info('Leave requests bulk approved', { count: result.modifiedCount, approvedBy });
 
@@ -1155,8 +1503,9 @@ router.post('/bulk-approve', idempotencyMiddleware, asyncHandler(async (req, res
  * POST /api/leave-requests/bulk-reject
  * Bulk reject leave requests with idempotency
  */
-router.post('/bulk-reject', idempotencyMiddleware, asyncHandler(async (req, res) => {
-  const { requestIds, rejectedBy, rejectionReason } = req.body;
+router.post('/bulk-reject', leaveApprovers, idempotencyMiddleware, asyncHandler(async (req, res) => {
+  const { requestIds, rejectionReason } = req.body;
+  const rejectedBy = req.user.userId;
 
   if (!requestIds || !Array.isArray(requestIds) || requestIds.length === 0) {
     return res.status(400).json({
@@ -1165,18 +1514,26 @@ router.post('/bulk-reject', idempotencyMiddleware, asyncHandler(async (req, res)
     });
   }
 
-  if (!rejectedBy || !rejectionReason) {
+  if (!rejectionReason) {
     return res.status(400).json({
       success: false,
-      message: 'rejectedBy and rejectionReason are required'
+      message: 'rejectionReason is required'
     });
   }
+
+  const LeaveAllocationBulkReject = (await import('../models/LeaveAllocation.js')).default;
+  const pendingBeforeReject = await LeaveRequest.find({
+    _id: { $in: requestIds },
+    status: 'pending',
+    ...bulkOrgFilter(req),
+  }).lean();
 
   // Update all pending requests
   const result = await LeaveRequest.updateMany(
     {
       _id: { $in: requestIds },
-      status: 'pending'
+      status: 'pending',
+      ...bulkOrgFilter(req),
     },
     {
       $set: {
@@ -1188,6 +1545,10 @@ router.post('/bulk-reject', idempotencyMiddleware, asyncHandler(async (req, res)
       $inc: { __v: 1 }
     }
   );
+
+  for (const lr of pendingBeforeReject) {
+    await syncLeaveAllocationReleasePending(LeaveAllocationBulkReject, lr);
+  }
 
   logger.info('Leave requests bulk rejected', { count: result.modifiedCount, rejectedBy });
 
@@ -1201,16 +1562,70 @@ router.post('/bulk-reject', idempotencyMiddleware, asyncHandler(async (req, res)
 }));
 
 /**
+ * POST /api/leave-requests/bulk-delete
+ * Bulk delete pending leave requests with idempotency
+ */
+router.post('/bulk-delete', leaveApprovers, idempotencyMiddleware, asyncHandler(async (req, res) => {
+  const { requestIds } = req.body;
+
+  if (!requestIds || !Array.isArray(requestIds) || requestIds.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'requestIds array is required'
+    });
+  }
+
+  // Get all pending requests to delete (for allocation cleanup)
+  const LeaveAllocationBulkDelete = (await import('../models/LeaveAllocation.js')).default;
+  const pendingToDelete = await LeaveRequest.find({
+    _id: { $in: requestIds },
+    status: 'pending',
+    ...bulkOrgFilter(req),
+  }).lean();
+
+  // Release pending leave allocations before deletion
+  for (const lr of pendingToDelete) {
+    await syncLeaveAllocationReleasePending(LeaveAllocationBulkDelete, lr);
+  }
+
+  // Delete all pending requests
+  const result = await LeaveRequest.deleteMany({
+    _id: { $in: requestIds },
+    status: 'pending',
+    ...bulkOrgFilter(req),
+  });
+
+  logger.info('Leave requests bulk deleted', { count: result.deletedCount });
+
+  res.json({
+    success: true,
+    message: `${result.deletedCount} leave requests deleted successfully`,
+    data: {
+      deletedCount: result.deletedCount
+    }
+  });
+}));
+
+/**
  * POST /api/leave-requests/policy
  * Set leave policy for organization
  */
-router.post('/policy', asyncHandler(async (req, res) => {
-  const { orgId, policy } = req.body;
+router.post('/policy', leaveApprovers, asyncHandler(async (req, res) => {
+  const { policy } = req.body;
+  const orgId =
+    req.user.role === 'super_admin' && req.body.orgId ? req.body.orgId : req.user.orgId;
 
   if (!orgId || !policy) {
     return res.status(400).json({
       success: false,
       message: 'orgId and policy are required'
+    });
+  }
+
+  if (req.user.role !== 'super_admin' && String(req.body.orgId || orgId) !== String(req.user.orgId)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Cannot update policy for another organization',
     });
   }
 
@@ -1239,6 +1654,16 @@ router.post('/policy', asyncHandler(async (req, res) => {
 router.get('/policy/:orgId', asyncHandler(async (req, res) => {
   const { orgId } = req.params;
 
+  if (
+    req.user.role !== 'super_admin' &&
+    String(orgId) !== String(req.user.orgId)
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: 'Unauthorized access',
+    });
+  }
+
   if (!global.leavePolicyEngine) {
     return res.status(503).json({
       success: false,
@@ -1261,6 +1686,14 @@ router.get('/policy/:orgId', asyncHandler(async (req, res) => {
 router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
   const { employeeId } = req.params;
   const { asOfDate } = req.query;
+
+  const balanceAccess = await assertEmployeeSelfOrPrivileged(req, employeeId);
+  if (!balanceAccess.ok) {
+    return res.status(balanceAccess.status).json({
+      success: false,
+      message: balanceAccess.message,
+    });
+  }
 
   if (!global.leavePolicyEngine) {
     return res.status(503).json({
@@ -1285,7 +1718,40 @@ router.get('/balance/:employeeId', asyncHandler(async (req, res) => {
  * Validate leave request before submission
  */
 router.post('/validate', asyncHandler(async (req, res) => {
-  const leaveRequestData = req.body;
+  const leaveRequestData = req.body || {};
+  const { employeeId, userId } = leaveRequestData;
+
+  if (SELF_SERVICE_LEAVE_ROLES.includes(req.user.role)) {
+    if (!employeeId) {
+      return res.status(400).json({
+        success: false,
+        message: 'employeeId is required for validation',
+      });
+    }
+    const access = await assertEmployeeSelfOrPrivileged(req, employeeId);
+    if (!access.ok) {
+      return res.status(access.status).json({
+        success: false,
+        message: access.message,
+      });
+    }
+    if (userId && !isSelfServiceUser(req, userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot validate leave for another user',
+      });
+    }
+    const tenantOrg = scopedOrgId(req);
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    if (!emp || String(employeeId) !== String(emp._id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot validate leave for another employee',
+      });
+    }
+  }
 
   if (!global.leavePolicyEngine) {
     return res.status(503).json({
@@ -1308,13 +1774,44 @@ router.post('/validate', asyncHandler(async (req, res) => {
  */
 router.patch('/:id/cancel', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { cancelledBy, reason } = req.body;
+  const { reason } = req.body;
+  const cancelledBy = req.user.userId;
 
-  if (!cancelledBy || !reason) {
+  if (!reason) {
     return res.status(400).json({
       success: false,
-      message: 'cancelledBy and reason are required'
+      message: 'reason is required'
     });
+  }
+
+  const tenantOrg = scopedOrgId(req);
+  const leaveRequest = await LeaveRequest.findOne({
+    _id: id,
+    ...(tenantOrg ? { orgId: String(tenantOrg) } : {}),
+  }).lean();
+
+  if (!leaveRequest) {
+    return res.status(404).json({
+      success: false,
+      message: 'Leave request not found',
+    });
+  }
+
+  const privileged = LEAVE_APPROVER_ROLES.includes(req.user.role);
+  if (!privileged) {
+    const emp = await findEmployeeForSelfService(req.user.userId, tenantOrg, {
+      allowCrossOrgFallback: true,
+    });
+    if (
+      !emp ||
+      !isSelfServiceUser(req, leaveRequest.userId) ||
+      String(leaveRequest.employeeId) !== String(emp._id)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only cancel your own leave requests',
+      });
+    }
   }
 
   if (!global.leavePolicyEngine) {
@@ -1337,15 +1834,18 @@ router.patch('/:id/cancel', asyncHandler(async (req, res) => {
  * GET /api/leave-requests/analytics
  * Get leave analytics
  */
-router.get('/analytics', asyncHandler(async (req, res) => {
-  const { orgId, timeframe = 30 } = req.query;
+router.get('/analytics', leaveApprovers, asyncHandler(async (req, res) => {
+  const { timeframe = 30 } = req.query;
+  const orgId = resolveQueryOrgId(req, req.query.orgId);
 
   if (!orgId) {
     return res.status(400).json({
       success: false,
-      message: 'orgId is required'
+      message: 'Organization context is required'
     });
   }
+
+  if (denyIfCrossOrg(req, res, orgId)) return;
 
   if (!global.leavePolicyEngine) {
     return res.status(503).json({
@@ -1356,7 +1856,7 @@ router.get('/analytics', asyncHandler(async (req, res) => {
 
   const analytics = await global.leavePolicyEngine.getLeaveAnalytics(
     orgId,
-    parseInt(timeframe)
+    parseInt(timeframe, 10)
   );
 
   res.json({
@@ -1369,7 +1869,7 @@ router.get('/analytics', asyncHandler(async (req, res) => {
  * GET /api/leave-requests/system/stats
  * Get leave system statistics
  */
-router.get('/system/stats', asyncHandler(async (req, res) => {
+router.get('/system/stats', leaveApprovers, asyncHandler(async (req, res) => {
   if (!global.leavePolicyEngine) {
     return res.status(503).json({
       success: false,

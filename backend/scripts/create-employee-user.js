@@ -12,9 +12,16 @@ async function createEmployeeUser() {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ Connected to MongoDB');
 
-    // Create employee user
-    const email = 'employee@company.com';
-    const password = 'Jadu@123';
+    // Create employee user with password from environment
+    const email = process.env.EMPLOYEE_EMAIL || 'employee@company.com';
+    const password = process.env.EMPLOYEE_PASSWORD;
+    
+    if (!password) {
+      console.error('❌ ERROR: EMPLOYEE_PASSWORD not set');
+      console.error('   Set EMPLOYEE_PASSWORD in .env file');
+      throw new Error('Missing EMPLOYEE_PASSWORD');
+    }
+
     const hashedPassword = await bcrypt.hash(password, 12);
 
     // Check if user already exists

@@ -1,6 +1,5 @@
 import { KPICard } from '../../components/KPICard';
 import ChatWidget from '../../components/ChatWidget';
-import LoadingProgressBar from '../../components/LoadingProgressBar';
 import {
   Users,
   TrendingUp,
@@ -19,17 +18,26 @@ import {
   Zap,
   Trash2,
   Edit,
-  Download
+  Download,
+  Loader2,
 } from 'lucide-react';
 import { useCurrency } from '../../context/CurrencyContext';
-import { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '../../context/AuthContext';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Progress } from '../../components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Input } from '../../components/ui/input';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Textarea } from '../../components/ui/textarea';
 import {
@@ -41,93 +49,427 @@ import {
   TableRow,
 } from '../../components/ui/table';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { apiClient } from '../../utils/api';
-import { TokenManager } from '../../utils/api';
+import { useIsMounted } from '../../hooks/useIsMounted';
+import { useFetchGeneration } from '../../hooks/useFetchGeneration';
+import { extractApiList } from '../../utils/api';
+import { apiGet, apiPatch, apiDelete, appendOrgIdParam, clearApiCache } from '../../utils/apiHelper';
+import { ensureAccessToken } from '../../utils/sessionAuth';
+import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
+import { ensureArray, safeCell, authUserKey } from '../../utils/safeUi';
+
+const DASHBOARD_SOCKET_DEBOUNCE_MS = 2500;
+
+type BreakRow = {
+  attendanceId?: string;
+  employeeId?: string;
+  employeeName: string;
+  department?: string;
+  breakIndex?: number;
+  breakType?: string;
+  startTime: string;
+  endTime?: string | null;
+  duration?: number | null;
+  status: 'active' | 'ended';
+};
+
+type DashboardStats = {
+  totalEmployees: number;
+  avgProductivity: number;
+  thisMonthExpenses: number;
+  thisMonthPayroll: number;
+  totalCost: number;
+  loggedInEmployees: number;
+  onLeave: number;
+};
+
+type QuickStats = {
+  totalEmployees: number;
+  presentToday: number;
+  attendanceRate: number;
+  pendingLeaves: number;
+  pendingExpenses: number;
+  activeUsers: number;
+  onLeave: number;
+  onBreak: number;
+  totalSales: number;
+  totalLoss: number;
+  totalBonus: number;
+  totalIncentive: number;
+};
+
+type ExpenseTrendRow = { month: string; amount: number };
+
+type LeaveRequestRow = {
+  _id?: string;
+  id?: string;
+  employeeName?: string;
+  employeeEmail?: string;
+  department?: string;
+  type?: string;
+  leaveType?: string;
+  startDate: string;
+  endDate: string;
+  reason?: string;
+  status: string;
+  createdAt?: string;
+  userId?: { name?: string };
+};
+
+type AttendanceRow = {
+  _id?: string;
+  employeeName: string;
+  department?: string;
+  employeeId?: { department?: string };
+  checkIn?: string;
+  hoursWorked?: number;
+  breaks?: Array<{ startTime?: string; endTime?: string | null; breakType?: string }>;
+};
+
+type EmployeeOnBreakRow = {
+  employeeId?: string;
+  employeeName: string;
+  department?: string;
+  designation?: string;
+  breakType?: string;
+  breakStartTime?: string;
+  breakDuration?: number;
+};
+
+type EditingLeave = {
+  id: string;
+  type: string;
+  startDate: string;
+  endDate: string;
+  reason: string;
+  employeeName: string;
+};
+
+const defaultDashboardStats: DashboardStats = {
+  totalEmployees: 0,
+  avgProductivity: 0,
+  thisMonthExpenses: 0,
+  thisMonthPayroll: 0,
+  totalCost: 0,
+  loggedInEmployees: 0,
+  onLeave: 0,
+};
+
+const defaultQuickStats: QuickStats = {
+  totalEmployees: 0,
+  presentToday: 0,
+  attendanceRate: 0,
+  pendingLeaves: 0,
+  pendingExpenses: 0,
+  activeUsers: 0,
+  onLeave: 0,
+  onBreak: 0,
+  totalSales: 0,
+  totalLoss: 0,
+  totalBonus: 0,
+  totalIncentive: 0,
+};
+
+function getErrorMessage(err: unknown, fallback: string) {
+  return err instanceof Error ? err.message : fallback;
+}
+
+function safeNum(value: unknown, fallback = 0): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeDashboardStats(raw: Partial<DashboardStats> | null | undefined): DashboardStats {
+  return {
+    totalEmployees: safeNum(raw?.totalEmployees, defaultDashboardStats.totalEmployees),
+    avgProductivity: safeNum(raw?.avgProductivity, defaultDashboardStats.avgProductivity),
+    thisMonthExpenses: safeNum(raw?.thisMonthExpenses, defaultDashboardStats.thisMonthExpenses),
+    thisMonthPayroll: safeNum(raw?.thisMonthPayroll, defaultDashboardStats.thisMonthPayroll),
+    totalCost: safeNum(raw?.totalCost, defaultDashboardStats.totalCost),
+    loggedInEmployees: safeNum(raw?.loggedInEmployees, defaultDashboardStats.loggedInEmployees),
+    onLeave: safeNum(raw?.onLeave, defaultDashboardStats.onLeave),
+  };
+}
+
+function normalizeQuickStats(raw: Partial<QuickStats> | null | undefined): QuickStats {
+  return {
+    totalEmployees: safeNum(raw?.totalEmployees, defaultQuickStats.totalEmployees),
+    presentToday: safeNum(raw?.presentToday, defaultQuickStats.presentToday),
+    attendanceRate: safeNum(raw?.attendanceRate, defaultQuickStats.attendanceRate),
+    pendingLeaves: safeNum(raw?.pendingLeaves, defaultQuickStats.pendingLeaves),
+    pendingExpenses: safeNum(raw?.pendingExpenses, defaultQuickStats.pendingExpenses),
+    activeUsers: safeNum(raw?.activeUsers, defaultQuickStats.activeUsers),
+    onLeave: safeNum(raw?.onLeave, defaultQuickStats.onLeave),
+    onBreak: safeNum(raw?.onBreak, defaultQuickStats.onBreak),
+    totalSales: safeNum(raw?.totalSales, defaultQuickStats.totalSales),
+    totalLoss: safeNum(raw?.totalLoss, defaultQuickStats.totalLoss),
+    totalBonus: safeNum(raw?.totalBonus, defaultQuickStats.totalBonus),
+    totalIncentive: safeNum(raw?.totalIncentive, defaultQuickStats.totalIncentive),
+  };
+}
+
+function formatTime(value?: string | null) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString();
+}
+
+function breakMinutesSince(startTime: string) {
+  return Math.max(0, Math.round((Date.now() - new Date(startTime).getTime()) / (1000 * 60)));
+}
+
+function summarizeAttendanceBreaks(
+  breaks?: Array<{ startTime?: string; endTime?: string | null; breakType?: string }>
+) {
+  if (!breaks?.length) {
+    return { label: 'No breaks', start: null as string | null, end: null as string | null, onBreak: false };
+  }
+  const last = breaks[breaks.length - 1];
+  const onBreak = Boolean(last.startTime && !last.endTime);
+  const lastEnded = [...breaks].reverse().find((b) => b.endTime);
+  return {
+    label: onBreak ? 'On break' : breaks.some((b) => b.endTime) ? 'Break logged' : 'No breaks',
+    start: (onBreak ? last.startTime : lastEnded?.startTime ?? last.startTime) ?? null,
+    end: onBreak ? null : (last.endTime ?? lastEnded?.endTime ?? null),
+    onBreak,
+    breakType: (onBreak ? last : lastEnded || last).breakType || 'regular',
+  };
+}
 
 export default function AdminDashboard() {
   const { formatCurrency, convertAmount, selectedCurrency } = useCurrency();
+  const { user } = useAuth();
+  const mounted = useIsMounted();
+  const { nextGeneration, isStale } = useFetchGeneration();
   const [selectedTab, setSelectedTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [filterType, setFilterType] = useState('month');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
-  const [dashboardStats, setDashboardStats] = useState({
-    totalEmployees: 0,
-    avgProductivity: 0,
-    thisMonthExpenses: 0,
-    thisMonthPayroll: 0,
-    totalCost: 0,
-    loggedInEmployees: 0,
-    onLeave: 0
-  });
-  const [quickStats, setQuickStats] = useState({
-    totalEmployees: 0,
-    presentToday: 0,
-    attendanceRate: 0,
-    pendingLeaves: 0,
-    pendingExpenses: 0,
-    activeUsers: 0,
-    onBreak: 0,
-    totalSales: 0,
-    totalLoss: 0,
-    totalBonus: 0,
-    totalIncentive: 0
-  });
-  const [expenseData, setExpenseData] = useState([]);
-  const [leaveRequests, setLeaveRequests] = useState([]);
-  const [todaysAttendance, setTodaysAttendance] = useState([]);
-  const [employeesOnBreak, setEmployeesOnBreak] = useState([]);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats>(defaultDashboardStats);
+  const [quickStats, setQuickStats] = useState<QuickStats>(defaultQuickStats);
+  const [expenseData, setExpenseData] = useState<ExpenseTrendRow[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequestRow[]>([]);
+  const [todaysAttendance, setTodaysAttendance] = useState<AttendanceRow[]>([]);
+  const [todayBreakLog, setTodayBreakLog] = useState<BreakRow[]>([]);
   const [lastUpdate, setLastUpdate] = useState(Date.now()); // Force re-render timestamp
+
+  const chartExpenseData = useMemo(() => ensureArray<ExpenseTrendRow>(expenseData), [expenseData]);
+  const safeLeaveRequests = useMemo(() => ensureArray<LeaveRequestRow>(leaveRequests), [leaveRequests]);
+  const safeTodaysAttendance = useMemo(() => ensureArray<AttendanceRow>(todaysAttendance), [todaysAttendance]);
+  const safeTodayBreakLog = useMemo(() => ensureArray<BreakRow>(todayBreakLog), [todayBreakLog]);
+  const pendingLeaveCount = useMemo(
+    () => safeLeaveRequests.filter((r) => r?.status === 'pending').length,
+    [safeLeaveRequests]
+  );
+
+  const formatMoney = useCallback(
+    (amount: unknown) => {
+      try {
+        return formatCurrency(safeNum(amount, 0));
+      } catch {
+        return '₹0.00';
+      }
+    },
+    [formatCurrency]
+  );
   
   // Edit leave modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editingLeave, setEditingLeave] = useState(null);
+  const [editingLeave, setEditingLeave] = useState<EditingLeave | null>(null);
+  const [showRejectLeaveDialog, setShowRejectLeaveDialog] = useState(false);
+  const [showDeleteLeaveDialog, setShowDeleteLeaveDialog] = useState(false);
+  const [pendingLeaveRequestId, setPendingLeaveRequestId] = useState<string | null>(null);
+  const [leaveRejectionReason, setLeaveRejectionReason] = useState('Rejected by admin');
+  const [leaveActionLoading, setLeaveActionLoading] = useState(false);
 
   const refreshDashboardData = useCallback(async () => {
+    const gen = nextGeneration();
     const params = new URLSearchParams();
-    params.append('filterType', filterType);
+    params.append('period', filterType);
     if (filterType === 'custom' && customStartDate && customEndDate) {
       params.append('startDate', customStartDate);
       params.append('endDate', customEndDate);
     }
 
-    console.log('⚡ [ADMIN-DASHBOARD] Fetching all data in parallel...');
+    console.log('⚡ [ADMIN-DASHBOARD] Loading KPI summary first...');
     
-    // Fetch all data in parallel using Promise.allSettled for resilience
-    const [statsResponse, quickStatsResponse, expenseTrendsResponse, leaveResponse, attendanceResponse, onBreakResponse] =
+    await ensureAccessToken();
+
+    // PHASE 3 OPTIMIZATION: Fetch critical KPI summary first
+    try {
+      const summaryResponse = await apiGet<{ success?: boolean; data?: any }>(
+        `/dashboard/admin/summary?period=${filterType}`,
+        false
+      );
+
+      if (!mounted.current || isStale(gen)) return;
+
+      if (summaryResponse?.success !== false && summaryResponse?.data?.kpis) {
+        const kpis = summaryResponse.data.kpis;
+        setDashboardStats({
+          totalEmployees: kpis.totalEmployees || 0,
+          avgProductivity: kpis.avgProductivity || 0,
+          thisMonthExpenses: kpis.thisMonthExpense || 0,
+          thisMonthPayroll: kpis.thisMonthPayroll || 0,
+          totalCost: kpis.totalCost || 0,
+          loggedInEmployees: kpis.loggedInEmployees || 0,
+          onLeave: kpis.onLeave || 0,
+        });
+        setQuickStats({
+          totalEmployees: kpis.totalEmployees || 0,
+          presentToday: kpis.presentToday || 0,
+          attendanceRate: 0,
+          pendingLeaves: 0,
+          pendingExpenses: 0,
+          activeUsers: kpis.loggedInEmployees || 0,
+          onLeave: kpis.onLeave || 0,
+          onBreak: kpis.onBreak || 0,
+          totalSales: 0,
+          totalLoss: 0,
+          totalBonus: 0,
+          totalIncentive: 0,
+        });
+        setLastUpdate(Date.now());
+      }
+    } catch (error) {
+      console.warn('[ADMIN-DASHBOARD] KPI summary failed:', error);
+      // Use fallback zeros, don't block dashboard
+    }
+
+    // PHASE 5 OPTIMIZATION: Lazy-load tables/charts after KPIs with Promise.allSettled
+    console.log('⚡ [ADMIN-DASHBOARD] Loading tables/charts in parallel...');
+    
+    const [expenseTrendsResponse, leaveResponse, attendanceResponse] =
       await Promise.allSettled([
-        apiClient.get(`/dashboard/stats?${params.toString()}`),
-        apiClient.get(`/dashboard/quick-stats?${params.toString()}&_t=${Date.now()}`),
-        apiClient.get('/dashboard/expense-trends'),
-        apiClient.get('/dashboard/recent-leave-requests'),
-        apiClient.get('/dashboard/todays-attendance'),
-        apiClient.get('/attendance/on-break')
+        apiGet<{ success?: boolean; data?: ExpenseTrendRow[] }>('/dashboard/expense-trends', false),
+        apiGet<{ success?: boolean; data?: unknown }>('/dashboard/recent-leave-requests', false),
+        apiGet<{ success?: boolean; data?: AttendanceRow[] }>('/dashboard/todays-attendance', false),
       ]);
 
-    console.log('✅ [ADMIN-DASHBOARD] All requests completed');
+    if (!mounted.current || isStale(gen)) return;
 
-    // Process results with fallbacks
-    if (statsResponse.status === 'fulfilled' && statsResponse.value.data?.success) {
-      setDashboardStats(statsResponse.value.data.data || {});
+    const unwrap = <T,>(r: PromiseSettledResult<{ success?: boolean; data?: T; message?: string }>) =>
+      r.status === 'fulfilled' ? r.value : null;
+
+    const trendsPayload = unwrap(expenseTrendsResponse);
+    if (trendsPayload?.success !== false) {
+      setExpenseData(extractApiList<ExpenseTrendRow>(trendsPayload));
     }
-    if (quickStatsResponse.status === 'fulfilled' && quickStatsResponse.value.success && quickStatsResponse.value.data) {
-      setQuickStats(quickStatsResponse.value.data);
+
+    const leavePayload = unwrap(leaveResponse);
+    if (leavePayload?.success !== false) {
+      setLeaveRequests(extractApiList<LeaveRequestRow>(leavePayload));
+    }
+
+    const attPayload = unwrap(attendanceResponse);
+    if (attPayload?.success !== false) {
+      setTodaysAttendance(extractApiList<AttendanceRow>(attPayload));
+    }
+
+    console.log('✅ [ADMIN-DASHBOARD] All data loaded');
+  }, [filterType, customStartDate, customEndDate, mounted, nextGeneration, isStale, user]);
+
+  const dashboardSocketDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleDashboardRefresh = useCallback(() => {
+    if (!mounted.current) return;
+    if (dashboardSocketDebounceRef.current) {
+      clearTimeout(dashboardSocketDebounceRef.current);
+    }
+    dashboardSocketDebounceRef.current = setTimeout(() => {
+      dashboardSocketDebounceRef.current = null;
+      void refreshDashboardData().catch((error) => {
+        console.error('Error refreshing dashboard data:', error);
+      });
+    }, DASHBOARD_SOCKET_DEBOUNCE_MS);
+  }, [refreshDashboardData, mounted]);
+
+  useEffect(() => {
+    return () => {
+      if (dashboardSocketDebounceRef.current) {
+        clearTimeout(dashboardSocketDebounceRef.current);
+      }
+    };
+  }, []);
+
+  const refreshLeaveList = useCallback(async () => {
+    const leaveResponse = await apiGet<{ success?: boolean; data?: unknown }>(
+      '/dashboard/recent-leave-requests',
+      false
+    );
+    if (leaveResponse?.success !== false) {
+      setLeaveRequests(extractApiList<LeaveRequestRow>(leaveResponse));
+    }
+  }, []);
+
+  const refreshBreakSections = useCallback(async () => {
+    try {
+      await ensureAccessToken();
+      
+      // PHASE 3 OPTIMIZATION: Removed ghost endpoint /attendance/today-breaks
+      // Break count now comes from /dashboard/admin/summary endpoint
+      // Only fetch the attendance table for lazy-load
+      const attendanceResponse = await apiGet<{ success?: boolean; data?: AttendanceRow[] }>(
+        '/dashboard/todays-attendance',
+        false
+      );
+      
+      if (!mounted.current) return;
+      if (attendanceResponse?.success !== false) {
+        setTodaysAttendance(extractApiList<AttendanceRow>(attendanceResponse));
+      }
       setLastUpdate(Date.now());
+    } catch (error) {
+      console.error('Error refreshing attendance section:', error);
     }
-    if (expenseTrendsResponse.status === 'fulfilled' && expenseTrendsResponse.value.data?.success) {
-      setExpenseData(expenseTrendsResponse.value.data.data || []);
-    }
-    if (leaveResponse.status === 'fulfilled' && leaveResponse.value.success && leaveResponse.value.data) {
-      setLeaveRequests(leaveResponse.value.data || []);
-    }
-    if (attendanceResponse.status === 'fulfilled' && attendanceResponse.value.success && attendanceResponse.value.data) {
-      setTodaysAttendance(attendanceResponse.value.data || []);
-    }
-    if (onBreakResponse.status === 'fulfilled' && onBreakResponse.value.data?.success) {
-      setEmployeesOnBreak(onBreakResponse.value.data.data || []);
-    }
-  }, [filterType, customStartDate, customEndDate]);
+  }, [mounted]);
+
+  // Refresh employees on break data
+  const applyKpiPayload = useCallback((kpis: Record<string, unknown>) => {
+    if (!kpis || typeof kpis !== 'object') return;
+    const num = (v: unknown, fallback: number) =>
+      typeof v === 'number' && !Number.isNaN(v) ? v : fallback;
+
+    setDashboardStats((prev) => ({
+      ...prev,
+      totalEmployees: num(kpis.totalEmployees, prev.totalEmployees),
+      avgProductivity: num(kpis.avgProductivity, prev.avgProductivity),
+      thisMonthExpenses: num(kpis.thisMonthExpenses, prev.thisMonthExpenses),
+      thisMonthPayroll: num(kpis.thisMonthPayroll, prev.thisMonthPayroll),
+      totalCost: num(
+        kpis.totalCost,
+        num(kpis.thisMonthExpenses, prev.thisMonthExpenses) +
+          num(kpis.thisMonthPayroll, prev.thisMonthPayroll)
+      ),
+      loggedInEmployees: num(kpis.activeUsers, prev.loggedInEmployees),
+      onLeave: num(kpis.onLeave, prev.onLeave),
+    }));
+
+    setQuickStats((prev) => ({
+      totalEmployees: num(kpis.totalEmployees, prev.totalEmployees),
+      presentToday: num(kpis.presentToday, prev.presentToday),
+      attendanceRate: num(kpis.attendanceRate, prev.attendanceRate),
+      pendingLeaves: num(kpis.pendingLeaves, prev.pendingLeaves),
+      pendingExpenses: num(kpis.pendingExpenses, prev.pendingExpenses),
+      activeUsers: num(kpis.activeUsers, prev.activeUsers),
+      onLeave: num(kpis.onLeave, prev.onLeave),
+      onBreak: num(kpis.onBreak, prev.onBreak),
+      totalSales: num(kpis.totalSales, prev.totalSales),
+      totalLoss: num(kpis.totalLoss, prev.totalLoss),
+      totalBonus: num(kpis.totalBonus, prev.totalBonus),
+      totalIncentive: num(kpis.totalIncentive, prev.totalIncentive),
+    }));
+    setLastUpdate(Date.now());
+  }, []);
 
   // Fetch dashboard data
   useEffect(() => {
@@ -138,7 +480,7 @@ export default function AdminDashboard() {
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
       } finally {
-        setLoading(false);
+        if (mounted.current) setLoading(false);
       }
     };
 
@@ -155,20 +497,23 @@ export default function AdminDashboard() {
     return () => {
       // clearInterval(pollInterval);
     };
-  }, [filterType, customStartDate, customEndDate, refreshDashboardData]);
+  }, [filterType, customStartDate, customEndDate, refreshDashboardData, mounted]);
 
-  // Socket.IO real-time updates - no polling needed
-  // All updates come through Socket.IO events
-
-  // Listen to real-time employee creation events and dashboard updates
   useEffect(() => {
-    const handleEmployeeCreated = (data: any) => {
-      console.log('👤 Employee created event received:', data);
-      // Update employee count
-      setDashboardStats(prev => ({
-        ...prev,
-        totalEmployees: (prev.totalEmployees || 0) + 1
-      }));
+    const uid = authUserKey(user);
+    if (!uid) return;
+    realTimeSocket.connectFromAuth({
+      id: uid,
+      role: user!.role,
+      orgId: user!.orgId || user!.tenantId,
+      tenantId: user!.tenantId || user!.orgId,
+    });
+  }, [user?.userId, user?.id, user?.role, user?.orgId, user?.tenantId]);
+
+  // Socket.IO real-time updates
+  useEffect(() => {
+    const handleEmployeeCreated = () => {
+      scheduleDashboardRefresh();
     };
 
     const handleDashboardUpdate = (data: any) => {
@@ -184,71 +529,40 @@ export default function AdminDashboard() {
           totalEmployees: data.data?.totalEmployees || prev.totalEmployees
         }));
       } else if (data.type === 'dashboard_refresh') {
-        refreshDashboardData().catch((error) => {
-          console.error('Error refreshing dashboard data:', error);
-        });
+        const reason = data.reason || data.data?.reason;
+        if (reason === 'break_started' || reason === 'break_ended') {
+          refreshBreakSections();
+        } else {
+          scheduleDashboardRefresh();
+        }
       } else if (data.type === 'kpi_update') {
-        if (data.data?.kpis) {
-          const kpis = data.data.kpis;
-          
-          // Update dashboard stats
-          setDashboardStats(prev => ({
-            ...prev,
-            totalEmployees: kpis.totalEmployees ?? prev.totalEmployees,
-            avgProductivity: kpis.avgProductivity ?? prev.avgProductivity,
-            thisMonthExpenses: kpis.thisMonthExpenses ?? prev.thisMonthExpenses,
-            thisMonthPayroll: kpis.thisMonthPayroll ?? prev.thisMonthPayroll,
-            totalCost: kpis.totalCost ?? prev.totalCost,
-            loggedInEmployees: kpis.activeUsers ?? prev.loggedInEmployees,
-            onLeave: kpis.onLeave ?? prev.onLeave
-          }));
-          
-          const newQuickStats = {
-            totalEmployees: kpis.totalEmployees ?? 0,
-            presentToday: kpis.presentToday ?? 0,
-            attendanceRate: kpis.attendanceRate ?? 0,
-            pendingLeaves: kpis.pendingLeaves ?? 0,
-            pendingExpenses: kpis.pendingExpenses ?? 0,
-            activeUsers: kpis.activeUsers ?? 0,
-            onLeave: kpis.onLeave ?? 0,
-            onBreak: kpis.onBreak ?? 0,
-            totalSales: kpis.totalSales ?? 0,
-            totalLoss: kpis.totalLoss ?? 0,
-            totalBonus: kpis.totalBonus ?? 0,
-            totalIncentive: kpis.totalIncentive ?? 0
-          };
-          setQuickStats(newQuickStats);
-          setLastUpdate(Date.now());
+        const kpis = data.data?.kpis || data.kpis;
+        if (kpis) {
+          applyKpiPayload(kpis);
         }
       }
     };
 
     const handleExpenseUpdate = (type: string, expense: any) => {
       if (type === 'created' || type === 'updated' || type === 'deleted') {
-        refreshDashboardData().catch((error) => {
-          console.error('Error fetching updated dashboard data:', error);
-        });
+        scheduleDashboardRefresh();
       }
     };
 
     const handleLeaveUpdate = (type: string, leave: any) => {
       if (type === 'created' || type === 'updated' || type === 'approved' || type === 'rejected') {
-        refreshDashboardData().catch((error) => {
-          console.error('Error fetching updated dashboard data:', error);
-        });
+        scheduleDashboardRefresh();
       }
     };
 
     const handleAttendanceUpdate = (attendance: any) => {
-      refreshDashboardData().catch((error) => {
-        console.error('Error fetching updated dashboard data:', error);
-      });
+      scheduleDashboardRefresh();
     };
 
     // Subscribe to real-time events using the correct methods
-    const unsubscribeEmployee = realTimeSocket.onEmployeeUpdate((type, employee) => {
+    const unsubscribeEmployee = realTimeSocket.onEmployeeUpdate((type) => {
       if (type === 'created') {
-        handleEmployeeCreated(employee);
+        handleEmployeeCreated();
       }
     });
 
@@ -257,151 +571,162 @@ export default function AdminDashboard() {
     const unsubscribeLeave = realTimeSocket.onLeaveUpdate(handleLeaveUpdate);
     const unsubscribeAttendance = realTimeSocket.onAttendanceUpdate(handleAttendanceUpdate);
 
-    // ADDED: Direct listeners for break events to ensure they trigger updates
-    const socket = realTimeSocket.getSocket();
-    if (socket) {
-      socket.on('break:started', (data) => {
-        console.log('☕ [DIRECT] break:started event received:', data);
-        handleAttendanceUpdate({ type: 'break_started', ...data });
-      });
-      
-      socket.on('break:ended', (data) => {
-        console.log('☕ [DIRECT] break:ended event received:', data);
-        handleAttendanceUpdate({ type: 'break_ended', ...data });
-      });
-      
-      socket.on('kpi:update', (data) => {
-        console.log('📊 [DIRECT] kpi:update event received:', data);
-        handleDashboardUpdate({ type: 'kpi_update', data });
-      });
-    }
+    const onBreakStarted = (data: any) => {
+      console.log('☕ break:started event received:', data);
+      refreshBreakSections();
+      scheduleDashboardRefresh();
+    };
 
-    // Cleanup listeners on unmount
+    const onBreakEnded = (data: any) => {
+      console.log('☕ break:ended event received:', data);
+      refreshBreakSections();
+      scheduleDashboardRefresh();
+    };
+
+    const onKpiUpdate = (data: any) => {
+      const kpis = data?.kpis || data?.data?.kpis;
+      if (kpis) {
+        applyKpiPayload(kpis);
+      } else {
+        handleDashboardUpdate({ type: 'kpi_update', data });
+      }
+    };
+
+    const unsubscribeBreakStart = realTimeSocket.onBreakStarted(onBreakStarted);
+    const unsubscribeBreakEnd = realTimeSocket.onBreakEnded(onBreakEnded);
+    const unsubscribeKpi = realTimeSocket.onKPIUpdate(onKpiUpdate);
+
     return () => {
       unsubscribeEmployee();
       unsubscribeDashboard();
       unsubscribeExpense();
       unsubscribeLeave();
       unsubscribeAttendance();
-      
-      // Clean up direct listeners
-      if (socket) {
-        socket.off('break:started');
-        socket.off('break:ended');
-        socket.off('kpi:update');
-      }
+      unsubscribeBreakStart();
+      unsubscribeBreakEnd();
+      unsubscribeKpi();
     };
-  }, [refreshDashboardData]);
+  }, [scheduleDashboardRefresh, refreshBreakSections, applyKpiPayload]);
 
-  const handleApproveLeave = async (requestId) => {
+  // Tick live durations for active breaks in the log table
+  useEffect(() => {
+    if (!safeTodayBreakLog.some((r) => r.status === 'active')) return;
+    const timer = setInterval(() => setLastUpdate(Date.now()), 60000);
+    return () => clearInterval(timer);
+  }, [safeTodayBreakLog]);
+
+  const handleApproveLeave = async (requestId: string) => {
     try {
       console.log('✅ Approving leave request:', requestId);
       
-      // Get current user ID
-      const currentUser = TokenManager.getUser();
-      const userId = currentUser?.id || currentUser?.userId;
-      
+      const userId = authUserKey(user);
       if (!userId) {
-        alert('Unable to get user information. Please log in again.');
+        toast.error('Unable to get user information. Please log in again.');
         return;
       }
-      
-      const response = await apiClient.patch(`/leave-requests/${requestId}/approve`, {
+
+      await ensureAccessToken();
+      const response = await apiPatch<{ success?: boolean }>(`/leave-requests/${requestId}/approve`, {
         approvedBy: userId
       });
       console.log('✅ Approve response:', response);
       
-      if (response.success) {
-        console.log('✅ Leave request approved successfully');
-        // Refresh leave requests
-        const leaveResponse = await apiClient.get('/dashboard/recent-leave-requests');
-        if (leaveResponse.success && leaveResponse.data) {
-          setLeaveRequests(leaveResponse.data || []);
-        }
-        alert('Leave request approved successfully');
+      if (response?.success !== false) {
+        clearApiCache('/dashboard');
+        await refreshLeaveList();
+        toast.success('Leave request approved');
       }
     } catch (error) {
       console.error('❌ Error approving leave:', error);
-      alert(`Failed to approve leave request: ${error.message || 'Unknown error'}`);
+      toast.error(`Failed to approve leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
-  // Handle leave request rejection
-  const handleRejectLeave = async (requestId) => {
-    const reason = window.prompt('Enter rejection reason:', 'Rejected by admin');
+  const openRejectLeaveDialog = (requestId: string) => {
+    setPendingLeaveRequestId(requestId);
+    setLeaveRejectionReason('Rejected by admin');
+    setShowRejectLeaveDialog(true);
+  };
+
+  const confirmRejectLeave = async () => {
+    const requestId = pendingLeaveRequestId;
+    const reason = leaveRejectionReason.trim();
+    if (!requestId) return;
     if (!reason) {
-      return; // User cancelled
+      toast.error('Please provide a rejection reason');
+      return;
     }
-    
+
     try {
-      console.log('❌ Rejecting leave request:', requestId);
-      
-      // Get current user ID
-      const currentUser = TokenManager.getUser();
-      const userId = currentUser?.id || currentUser?.userId;
-      
+      setLeaveActionLoading(true);
+      const userId = authUserKey(user);
       if (!userId) {
-        alert('Unable to get user information. Please log in again.');
+        toast.error('Unable to get user information. Please log in again.');
         return;
       }
-      
-      const response = await apiClient.patch(`/leave-requests/${requestId}/reject`, {
+
+      await ensureAccessToken();
+      const response = await apiPatch<{ success?: boolean }>(`/leave-requests/${requestId}/reject`, {
         rejectedBy: userId,
-        rejectionReason: reason
+        rejectionReason: reason,
       });
-      console.log('❌ Reject response:', response);
-      
-      if (response.success) {
-        console.log('✅ Leave request rejected successfully');
-        // Refresh leave requests
-        const leaveResponse = await apiClient.get('/dashboard/recent-leave-requests');
-        if (leaveResponse.success && leaveResponse.data) {
-          setLeaveRequests(leaveResponse.data || []);
-        }
-        alert('Leave request rejected successfully');
+
+      if (response?.success !== false) {
+        clearApiCache('/dashboard');
+        await refreshLeaveList();
+        toast.success('Leave request rejected');
+        setShowRejectLeaveDialog(false);
+        setPendingLeaveRequestId(null);
+        setLeaveRejectionReason('Rejected by admin');
       }
     } catch (error) {
       console.error('❌ Error rejecting leave:', error);
-      alert(`Failed to reject leave request: ${error.message || 'Unknown error'}`);
+      toast.error(`Failed to reject leave request: ${getErrorMessage(error, 'Unknown error')}`);
+    } finally {
+      setLeaveActionLoading(false);
     }
   };
 
-  // Handle leave request deletion
-  const handleDeleteLeave = async (requestId) => {
-    if (!window.confirm('Are you sure you want to delete this leave request? This action cannot be undone.')) {
-      return;
-    }
-    
+  const openDeleteLeaveDialog = (requestId: string) => {
+    setPendingLeaveRequestId(requestId);
+    setShowDeleteLeaveDialog(true);
+  };
+
+  const confirmDeleteLeave = async () => {
+    const requestId = pendingLeaveRequestId;
+    if (!requestId) return;
+
     try {
-      console.log('🗑️ Deleting leave request:', requestId);
-      const response = await apiClient.delete(`/leave-requests/${requestId}`);
-      console.log('🗑️ Delete response:', response);
-      
-      if (response.success) {
-        console.log('✅ Leave request deleted successfully');
-        // Refresh leave requests
-        const leaveResponse = await apiClient.get('/dashboard/recent-leave-requests');
-        if (leaveResponse.success && leaveResponse.data) {
-          setLeaveRequests(leaveResponse.data || []);
-        }
-        alert('Leave request deleted successfully');
+      setLeaveActionLoading(true);
+      await ensureAccessToken();
+      const response = await apiDelete<{ success?: boolean }>(`/leave-requests/${requestId}`);
+
+      if (response?.success !== false) {
+        clearApiCache('/dashboard');
+        await refreshLeaveList();
+        toast.success('Leave request deleted');
+        setShowDeleteLeaveDialog(false);
+        setPendingLeaveRequestId(null);
       }
     } catch (error) {
       console.error('❌ Error deleting leave:', error);
-      alert(`Failed to delete leave request: ${error.message || 'Unknown error'}`);
+      toast.error(`Failed to delete leave request: ${getErrorMessage(error, 'Unknown error')}`);
+    } finally {
+      setLeaveActionLoading(false);
     }
   };
 
   // Handle leave request edit (open modal with leave data)
-  const handleEditLeave = (request) => {
+  const handleEditLeave = (request: LeaveRequestRow) => {
     console.log('✏️ Opening edit modal for leave:', request);
+    const requestId = request._id || request.id || '';
     setEditingLeave({
-      id: request._id,
-      type: request.type,
+      id: requestId,
+      type: request.type || request.leaveType || 'casual',
       startDate: new Date(request.startDate).toISOString().split('T')[0],
       endDate: new Date(request.endDate).toISOString().split('T')[0],
       reason: request.reason || '',
-      employeeName: request.employeeName
+      employeeName: request.employeeName || request.userId?.name || 'Unknown'
     });
     setEditModalOpen(true);
   };
@@ -412,34 +737,29 @@ export default function AdminDashboard() {
     
     try {
       console.log('💾 Saving edited leave:', editingLeave);
-      const response = await apiClient.patch(`/leave-requests/${editingLeave.id}`, {
+      await ensureAccessToken();
+      const response = await apiPatch<{ success?: boolean }>(`/leave-requests/${editingLeave.id}`, {
         leaveType: editingLeave.type,
         startDate: editingLeave.startDate,
         endDate: editingLeave.endDate,
         reason: editingLeave.reason
       });
-      console.log('💾 Save response:', response);
-      
-      if (response.success || response.data?.success) {
-        console.log('✅ Leave request updated successfully');
+
+      if (response?.success !== false) {
         setEditModalOpen(false);
         setEditingLeave(null);
-        
-        // Refresh leave requests
-        const leaveResponse = await apiClient.get('/dashboard/recent-leave-requests');
-        if (leaveResponse.success && leaveResponse.data) {
-          setLeaveRequests(leaveResponse.data || []);
-        }
-        alert('Leave request updated successfully');
+        clearApiCache('/dashboard');
+        await refreshLeaveList();
+        toast.success('Leave request updated');
       }
     } catch (error) {
       console.error('❌ Error updating leave:', error);
-      alert(`Failed to update leave request: ${error.message || 'Unknown error'}`);
+      toast.error(`Failed to update leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
   // Handle leave request download (generate PDF)
-  const handleDownloadLeave = async (request) => {
+  const handleDownloadLeave = async (request: LeaveRequestRow) => {
     try {
       console.log('📥 Downloading leave request:', request);
       
@@ -450,11 +770,11 @@ export default function AdminDashboard() {
 LEAVE REQUEST DETAILS
 =====================
 
-Employee: ${request.employeeName}
+Employee: ${request.employeeName || request.userId?.name || 'Unknown'}
 Email: ${request.employeeEmail || 'N/A'}
 Department: ${request.department}
 
-Leave Type: ${request.type}
+Leave Type: ${request.type || request.leaveType || 'N/A'}
 Start Date: ${new Date(request.startDate).toLocaleDateString()}
 End Date: ${new Date(request.endDate).toLocaleDateString()}
 Duration: ${days} days
@@ -462,7 +782,7 @@ Duration: ${days} days
 Reason: ${request.reason || 'N/A'}
 Status: ${request.status}
 
-Applied On: ${new Date(request.createdAt).toLocaleString()}
+Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() : 'N/A'}
       `.trim();
       
       // Create blob and download
@@ -470,7 +790,8 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `leave-request-${request.employeeName.replace(/\s+/g, '-')}-${Date.now()}.txt`;
+      const nameSlug = (request.employeeName || request.userId?.name || 'employee').replace(/\s+/g, '-');
+      a.download = `leave-request-${nameSlug}-${Date.now()}.txt`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -479,20 +800,32 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
       console.log('✅ Leave request downloaded successfully');
     } catch (error) {
       console.error('❌ Error downloading leave:', error);
-      alert(`Failed to download leave request: ${error.message || 'Unknown error'}`);
+      toast.error(`Failed to download leave request: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
-  // Mock productivity data - CONVERT TO REAL DATA
-  const [productivityData, setProductivityData] = useState([
-    { day: 'Mon', productivity: 85 },
-    { day: 'Tue', productivity: 92 },
-    { day: 'Wed', productivity: 88 },
-    { day: 'Thu', productivity: 95 },
-    { day: 'Fri', productivity: 78 },
-    { day: 'Sat', productivity: 65 },
-    { day: 'Sun', productivity: 45 },
-  ]);
+  // Weekly productivity data - fetched from real attendance data
+  const [productivityData, setProductivityData] = useState<Array<{ day: string; productivity: number }>>([]);
+
+  // Fetch weekly productivity from backend
+  useEffect(() => {
+    const fetchProductivity = async () => {
+      try {
+        await ensureAccessToken();
+        const response = await apiGet<{ success?: boolean; data?: Array<{ day: string; productivity: number }> }>(
+          '/dashboard/weekly-productivity',
+          false
+        );
+        if (response?.success !== false && response?.data) {
+          setProductivityData(response.data);
+        }
+      } catch (error) {
+        console.error('Error fetching weekly productivity:', error);
+      }
+    };
+    
+    fetchProductivity();
+  }, []);
 
   // Currency amount display component with INR icon
   const CurrencyAmount: React.FC<{ amount: number; className?: string }> = ({ amount, className }) => {
@@ -509,13 +842,15 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
   };
 
   if (loading) {
-    // Don't show loading spinner - let content load in background
-    return null;
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center p-8" role="status" aria-label="Loading dashboard">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
   }
 
   return (
     <>
-      <LoadingProgressBar isLoading={loading} color="bg-green-500" />
       <div className="p-8 space-y-8">
       {/* Page Header */}
       <div>
@@ -587,26 +922,30 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
         <h2 className="text-xl font-bold mb-4">Financial Overview</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <KPICard
+            key={`expense-${lastUpdate}-${dashboardStats.thisMonthExpenses}`}
             title="This Month Expense"
-            value={formatCurrency(dashboardStats.thisMonthExpenses)}
+            value={formatMoney(dashboardStats.thisMonthExpenses)}
             icon={selectedCurrency.code === 'INR' ? IndianRupee : Receipt}
             color="accent"
           />
           <KPICard
+            key={`payroll-${lastUpdate}-${dashboardStats.thisMonthPayroll}`}
             title="This Month Payroll"
-            value={formatCurrency(dashboardStats.thisMonthPayroll)}
+            value={formatMoney(dashboardStats.thisMonthPayroll)}
             icon={selectedCurrency.code === 'INR' ? IndianRupee : DollarSign}
             color="primary"
           />
           <KPICard
+            key={`totalcost-${lastUpdate}-${dashboardStats.totalCost}`}
             title="Total Cost (Payroll + Expenses)"
-            value={formatCurrency(dashboardStats.totalCost)}
+            value={formatMoney(dashboardStats.totalCost)}
             icon={selectedCurrency.code === 'INR' ? IndianRupee : DollarSign}
             color="destructive"
           />
           <KPICard
+            key={`employees-${lastUpdate}-${dashboardStats.totalEmployees}`}
             title="Total Employees"
-            value={dashboardStats.totalEmployees.toString()}
+            value={String(dashboardStats.totalEmployees ?? 0)}
             icon={Users}
             color="secondary"
           />
@@ -620,16 +959,18 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
           <KPICard
             key={`activeUsers-${quickStats.activeUsers}-${lastUpdate}`}
             title="Logged In Employees"
-            value={quickStats.activeUsers.toString()}
+            value={String(safeNum(quickStats.activeUsers, 0))}
             icon={LogIn}
             color="primary"
+            emphasize
           />
           <KPICard
             key={`onBreak-${quickStats.onBreak}-${lastUpdate}`}
             title="On Break"
-            value={quickStats.onBreak.toString()}
+            value={String(safeNum(quickStats.onBreak, 0))}
             icon={Coffee}
             color="accent"
+            emphasize
           />
           <KPICard
             key={`onLeave-${quickStats.onLeave}-${lastUpdate}`}
@@ -654,25 +995,25 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <KPICard
             title="Total Sales"
-            value={formatCurrency(quickStats.totalSales)}
+            value={formatMoney(quickStats.totalSales)}
             icon={TrendingUp}
             color="secondary"
           />
           <KPICard
             title="Total Loss"
-            value={formatCurrency(quickStats.totalLoss)}
+            value={formatMoney(quickStats.totalLoss)}
             icon={TrendingDown}
             color="destructive"
           />
           <KPICard
             title="Total Bonus"
-            value={formatCurrency(quickStats.totalBonus)}
+            value={formatMoney(quickStats.totalBonus)}
             icon={Gift}
             color="accent"
           />
           <KPICard
             title="Total Incentive"
-            value={formatCurrency(quickStats.totalIncentive)}
+            value={formatMoney(quickStats.totalIncentive)}
             icon={Zap}
             color="primary"
           />
@@ -699,7 +1040,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
         <Card className="p-6 rounded-2xl">
           <h3 className="font-semibold text-lg mb-4">Monthly Expenses</h3>
           <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={expenseData}>
+            <BarChart data={chartExpenseData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
               <XAxis dataKey="month" stroke="#6B7280" />
               <YAxis stroke="#6B7280" />
@@ -717,7 +1058,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
             <h3 className="font-semibold text-lg">Leave Requests</h3>
             <p className="text-sm text-muted-foreground">Pending approval</p>
           </div>
-          <Badge variant="secondary">{leaveRequests.filter(r => r.status === 'pending').length} Pending</Badge>
+          <Badge variant="secondary">{pendingLeaveCount} Pending</Badge>
         </div>
         <Table>
           <TableHeader>
@@ -732,33 +1073,42 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {leaveRequests.length === 0 ? (
+            {safeLeaveRequests.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center text-muted-foreground">
                   No pending leave requests
                 </TableCell>
               </TableRow>
             ) : (
-              leaveRequests.map((request: any) => {
-                const requestId = request._id || request.id;
-                const employeeName = request.userId?.name || request.employeeName || 'Unknown';
-                const leaveType = request.type || request.leaveType || 'N/A';
-                const days = Math.ceil((new Date(request.endDate).getTime() - new Date(request.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+              safeLeaveRequests.map((request) => {
+                const requestId = request._id || request.id || '';
+                const employeeName = safeCell(
+                  request.employeeName ||
+                    (typeof request.userId === 'object' ? request.userId?.name : null) ||
+                    'Unknown'
+                );
+                const leaveType = safeCell(request.type || request.leaveType || 'N/A');
+                const startMs = new Date(request.startDate).getTime();
+                const endMs = new Date(request.endDate).getTime();
+                const days =
+                  Number.isNaN(startMs) || Number.isNaN(endMs)
+                    ? '—'
+                    : Math.ceil((endMs - startMs) / (1000 * 60 * 60 * 24)) + 1;
                 return (
-                  <TableRow key={requestId}>
+                  <TableRow key={requestId || `${employeeName}-${request.startDate}`}>
                     <TableCell className="font-medium">{employeeName}</TableCell>
                     <TableCell>{leaveType}</TableCell>
-                    <TableCell>{new Date(request.startDate).toLocaleDateString()}</TableCell>
-                    <TableCell>{new Date(request.endDate).toLocaleDateString()}</TableCell>
+                    <TableCell>{formatDate(request.startDate)}</TableCell>
+                    <TableCell>{formatDate(request.endDate)}</TableCell>
                     <TableCell>{days}</TableCell>
                     <TableCell>
                       <Badge variant={request.status === 'pending' ? 'secondary' : 'default'}>
-                        {request.status}
+                        {safeCell(request.status)}
                       </Badge>
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-2 flex-wrap">
-                        {request.status === 'pending' && (
+                        {request.status === 'pending' && requestId && (
                           <>
                             <Button 
                               variant="default" 
@@ -773,7 +1123,7 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
                             <Button 
                               variant="destructive" 
                               size="sm"
-                              onClick={() => handleRejectLeave(requestId)}
+                              onClick={() => openRejectLeaveDialog(requestId)}
                               title="Reject leave request"
                             >
                               Reject
@@ -796,15 +1146,17 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
                         >
                           <Download className="w-4 h-4" />
                         </Button>
+                        {requestId && (
                         <Button 
                           variant="outline" 
                           size="sm"
                           className="text-destructive hover:text-destructive"
-                          onClick={() => handleDeleteLeave(requestId)}
+                          onClick={() => openDeleteLeaveDialog(requestId)}
                           title="Delete leave request"
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -819,105 +1171,186 @@ Applied On: ${new Date(request.createdAt).toLocaleString()}
       <Card className="rounded-2xl overflow-hidden">
         <div className="p-6 border-b border-border">
           <h3 className="font-semibold text-lg">Today's Attendance</h3>
-          <p className="text-sm text-muted-foreground">Employee check-in status</p>
+          <p className="text-sm text-muted-foreground">Check-in status and break start / end times</p>
         </div>
-        <div className="p-6">
-          <div className="space-y-4">
-            {todaysAttendance.length === 0 ? (
-              <div className="text-center text-muted-foreground py-8">
-                No attendance records for today
-              </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Employee</TableHead>
+              <TableHead>Department</TableHead>
+              <TableHead>Check-in</TableHead>
+              <TableHead>Break start</TableHead>
+              <TableHead>Break end</TableHead>
+              <TableHead>Break status</TableHead>
+              <TableHead>Hours</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {safeTodaysAttendance.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                  No attendance records for today
+                </TableCell>
+              </TableRow>
             ) : (
-              todaysAttendance.map((attendance, index) => (
-                <div key={index} className="flex items-center justify-between p-4 rounded-xl bg-accent/50">
-                  <div className="flex items-center gap-4 flex-1">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-                      <Users className="w-5 h-5 text-primary" />
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium">{attendance.employeeName}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {attendance.employeeId?.department || 'N/A'}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-6">
-                    <div className="text-right">
-                      <p className="text-sm font-medium">
-                        {attendance.checkIn ? new Date(attendance.checkIn).toLocaleTimeString() : 'Not checked in'}
-                      </p>
-                      <Badge variant={attendance.status === 'present' ? 'default' : 'secondary'} className="mt-1">
-                        {attendance.status}
+              safeTodaysAttendance.map((attendance) => {
+                const breakInfo = summarizeAttendanceBreaks(attendance.breaks);
+                const rowKey = attendance._id || `${safeCell(attendance.employeeName)}-${attendance.checkIn}`;
+                return (
+                  <TableRow key={rowKey}>
+                    <TableCell className="font-medium">{safeCell(attendance.employeeName)}</TableCell>
+                    <TableCell>
+                      {safeCell(
+                        attendance.department ||
+                          (typeof attendance.employeeId === 'object'
+                            ? attendance.employeeId?.department
+                            : null) ||
+                          'N/A'
+                      )}
+                    </TableCell>
+                    <TableCell>{formatTime(attendance.checkIn)}</TableCell>
+                    <TableCell>{formatTime(breakInfo.start)}</TableCell>
+                    <TableCell>{formatTime(breakInfo.end)}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={breakInfo.onBreak ? 'secondary' : 'outline'}
+                        className={breakInfo.onBreak ? 'bg-accent/20 text-accent' : ''}
+                      >
+                        {breakInfo.label}
+                        {breakInfo.breakType ? ` (${breakInfo.breakType})` : ''}
                       </Badge>
-                    </div>
-                    {attendance.status === 'present' && attendance.hoursWorked > 0 && (
-                      <div className="w-24">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-muted-foreground">Hours</span>
-                          <span className="text-xs font-medium">{attendance.hoursWorked}h</span>
-                        </div>
-                        <Progress value={(attendance.hoursWorked / 8) * 100} className="h-2" />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))
+                    </TableCell>
+                    <TableCell>
+                      {(attendance.hoursWorked ?? 0) > 0 ? `${attendance.hoursWorked}h` : '—'}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
-          </div>
-        </div>
+          </TableBody>
+        </Table>
       </Card>
 
-      {/* Employees On Break */}
       <Card className="rounded-2xl overflow-hidden">
         <div className="p-6 border-b border-border flex items-center justify-between">
           <div>
-            <h3 className="font-semibold text-lg">Employees On Break</h3>
-            <p className="text-sm text-muted-foreground">Real-time break tracking</p>
+            <h3 className="font-semibold text-lg">All Employees Break Records</h3>
+            <p className="text-sm text-muted-foreground">Break start and end times stored for every employee today</p>
           </div>
-          <Badge variant="secondary" className="bg-accent/20 text-accent">{employeesOnBreak.length} On Break</Badge>
+          <Badge variant="secondary">{safeTodayBreakLog.length} entries</Badge>
         </div>
-        <div className="p-6">
-          <div className="space-y-4">
-            {employeesOnBreak.length === 0 ? (
-              <div className="text-center text-muted-foreground py-8">
-                <Coffee className="w-12 h-12 mx-auto mb-3 opacity-30" />
-                <p>No employees on break</p>
-              </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Employee</TableHead>
+              <TableHead>Department</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Start</TableHead>
+              <TableHead>End</TableHead>
+              <TableHead>Duration</TableHead>
+              <TableHead>Status</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {safeTodayBreakLog.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                  No break records for today yet
+                </TableCell>
+              </TableRow>
             ) : (
-              employeesOnBreak.map((employee, index) => (
-                <div key={index} className="flex items-center justify-between p-4 rounded-xl bg-accent/10 border border-accent/20">
-                  <div className="flex items-center gap-4 flex-1">
-                    <div className="w-10 h-10 rounded-full bg-accent/30 flex items-center justify-center">
-                      <Coffee className="w-5 h-5 text-accent" />
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium">{employee.employeeName}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {employee.department} • {employee.designation}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-6">
-                    <div className="text-right">
-                      <p className="text-sm font-medium">{employee.breakType}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {employee.breakDuration} min on break
-                      </p>
-                    </div>
-                    <Badge variant="outline" className="bg-accent/20 text-accent border-accent/30">
-                      {new Date(employee.breakStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </Badge>
-                  </div>
-                </div>
-              ))
+              safeTodayBreakLog.map((row) => {
+                const rowKey = `${row.attendanceId}-${row.breakIndex}-${row.startTime}`;
+                const duration =
+                  row.status === 'active' && row.startTime
+                    ? breakMinutesSince(row.startTime)
+                    : row.duration;
+                return (
+                  <TableRow key={rowKey}>
+                    <TableCell className="font-medium">{safeCell(row.employeeName)}</TableCell>
+                    <TableCell>{safeCell(row.department || 'N/A')}</TableCell>
+                    <TableCell>{safeCell(row.breakType || 'regular')}</TableCell>
+                    <TableCell>{formatTime(row.startTime)}</TableCell>
+                    <TableCell>{formatTime(row.endTime)}</TableCell>
+                    <TableCell>{duration != null ? `${duration} min` : '—'}</TableCell>
+                    <TableCell>
+                      <Badge variant={row.status === 'active' ? 'secondary' : 'outline'}>
+                        {row.status === 'active' ? 'On break' : 'Ended'}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
-          </div>
-        </div>
+          </TableBody>
+        </Table>
       </Card>
 
       {/* Chat Widget */}
       <ChatWidget />
       
+      {/* Reject Leave Dialog */}
+      <Dialog open={showRejectLeaveDialog} onOpenChange={setShowRejectLeaveDialog}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Reject Leave Request</DialogTitle>
+            <DialogDescription>Provide a reason for rejecting this request.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="dashboard-reject-reason">Rejection reason</Label>
+            <Textarea
+              id="dashboard-reject-reason"
+              rows={3}
+              value={leaveRejectionReason}
+              onChange={(e) => setLeaveRejectionReason(e.target.value)}
+              placeholder="Enter reason for rejection..."
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowRejectLeaveDialog(false);
+                setPendingLeaveRequestId(null);
+              }}
+              disabled={leaveActionLoading}
+            >
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmRejectLeave} disabled={leaveActionLoading}>
+              {leaveActionLoading ? 'Rejecting…' : 'Reject'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Leave Confirmation */}
+      <Dialog open={showDeleteLeaveDialog} onOpenChange={setShowDeleteLeaveDialog}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Delete Leave Request</DialogTitle>
+            <DialogDescription>
+              This action cannot be undone. The leave request will be permanently removed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowDeleteLeaveDialog(false);
+                setPendingLeaveRequestId(null);
+              }}
+              disabled={leaveActionLoading}
+            >
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDeleteLeave} disabled={leaveActionLoading}>
+              {leaveActionLoading ? 'Deleting…' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Edit Leave Modal */}
       <Dialog open={editModalOpen} onOpenChange={setEditModalOpen}>
         <DialogContent className="sm:max-w-[500px]">

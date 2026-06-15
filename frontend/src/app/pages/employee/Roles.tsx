@@ -1,3 +1,9 @@
+/**
+ * TODO: This page is currently not routed in routes.tsx
+ * Keep only if employee role visibility is planned; otherwise remove in future cleanup.
+ * See frontend/src/app/routes.tsx - no route defined for /employee/roles
+ */
+
 import { useState, useEffect } from 'react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';

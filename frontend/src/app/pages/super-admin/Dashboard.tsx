@@ -4,9 +4,9 @@ import { FeatureShowcase } from '../../components/FeatureShowcase';
 import OnboardingLinkGenerator from '../../components/OnboardingLinkGenerator';
 import DocumentGenerator from '../../components/DocumentGenerator';
 import ChatWidget from '../../components/ChatWidget';
-import LoadingProgressBar from '../../components/LoadingProgressBar';
 import { useCurrency } from '../../context/CurrencyContext';
 import { useRealTimeDashboard } from '../../hooks/useRealTimeDashboard';
+import { useNavigate } from 'react-router';
 import { useState, useEffect, useCallback } from 'react';
 import {
   DollarSign,
@@ -33,13 +33,87 @@ import {
 } from '../../components/ui/table';
 import { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { apiClient } from '../../utils/api';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
+
+interface SuperAdminKpiChanges {
+  revenueChange: number;
+  organizationChange: number;
+  userChange: number;
+  sessionChange: number;
+  expenseChange: number;
+  pipelineChange: number;
+  churnChange: number;
+}
+
+interface SuperAdminStatsPayload {
+  totalRevenue?: number;
+  totalOrganizations?: number;
+  totalEmployees?: number;
+  liveSessions?: number;
+  totalSales?: number;
+  pipelineValue?: number;
+  commissionPaid?: number;
+  churnRate?: number;
+  kpiChanges?: SuperAdminKpiChanges;
+}
+
+interface GrowthTrendPoint {
+  month: string;
+  revenue?: number;
+  users?: number;
+}
+
+interface OrganizationApiRow {
+  _id: string;
+  name?: string;
+  employeeCount?: number;
+  status?: string;
+  subscriptionPlan?: string;
+  monthlyRevenue?: number;
+}
+
+interface OrganizationRow {
+  id: string;
+  name: string;
+  users: number;
+  status: string;
+  plan: string;
+  revenue: number;
+}
+
+interface LiveUserRow {
+  name: string;
+  org: string;
+  status: string;
+  lastActive: string;
+}
+
+interface DashboardUpdateData {
+  type: 'stats' | 'chart' | 'table' | 'activity';
+  component: string;
+  data: unknown;
+  timestamp?: Date;
+}
+
+interface DashboardStatsState {
+  totalRevenue: number;
+  totalOrganizations: number;
+  activeUsers: number;
+  liveSessions: number;
+  totalSales: number;
+  pipelineValue: number;
+  commissionPaid: number;
+  churnRate: number;
+  kpiChanges: SuperAdminKpiChanges;
+}
 
 export default function SuperAdminDashboard() {
   const { formatCurrency } = useCurrency();
+  const navigate = useNavigate();
   const [selectedTab, setSelectedTab] = useState('overview');
   const [loading, setLoading] = useState(true);
-  const [dashboardStats, setDashboardStats] = useState({
+  const [apiErrors, setApiErrors] = useState<Record<string, string>>({});
+  const [dashboardStats, setDashboardStats] = useState<DashboardStatsState>({
     totalRevenue: 0,
     totalOrganizations: 0,
     activeUsers: 0,
@@ -53,12 +127,15 @@ export default function SuperAdminDashboard() {
       organizationChange: 0,
       userChange: 0,
       sessionChange: 0,
-      expenseChange: 0
+      expenseChange: 0,
+      pipelineChange: 0,
+      churnChange: 0,
     }
   });
-  const [revenueData, setRevenueData] = useState<any[]>([]);
-  const [organizations, setOrganizations] = useState<any[]>([]);
-  const [liveUsers, setLiveUsers] = useState<any[]>([]);
+  const [revenueData, setRevenueData] = useState<GrowthTrendPoint[]>([]);
+  const [organizations, setOrganizations] = useState<OrganizationRow[]>([]);
+  const [liveUsers, setLiveUsers] = useState<LiveUserRow[]>([]);
+  const [showOnboardingGenerator, setShowOnboardingGenerator] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
   // Real-time dashboard integration
@@ -66,26 +143,26 @@ export default function SuperAdminDashboard() {
     dashboardType: 'superadmin',
     autoRefresh: true,
     refreshInterval: 5 * 60 * 1000, // 5 minutes
-    onUpdate: useCallback((data) => {
+    onUpdate: useCallback((data: DashboardUpdateData) => {
       console.log('Super Admin dashboard update:', data);
       setLastUpdated(new Date());
       
       // Handle different types of updates
       if (data.type === 'stats' && data.component === 'kpi') {
-        setDashboardStats(prev => ({ ...prev, ...data.data }));
+        setDashboardStats(prev => ({ ...prev, ...(data.data as Partial<DashboardStatsState>) }));
       } else if (data.type === 'chart' && data.component === 'growth') {
-        setRevenueData(data.data);
+        setRevenueData(data.data as GrowthTrendPoint[]);
       } else if (data.type === 'table' && data.component === 'organizations') {
-        setOrganizations(data.data);
+        setOrganizations(data.data as OrganizationRow[]);
       } else if (data.component === 'live_users') {
-        setLiveUsers(data.data);
+        setLiveUsers(data.data as LiveUserRow[]);
       }
     }, []),
-    onActivity: useCallback((activity) => {
+    onActivity: useCallback((activity: unknown) => {
       console.log('New activity:', activity);
       // Could update activity feed here
     }, []),
-    onError: useCallback((error) => {
+    onError: useCallback((error: unknown) => {
       console.error('Real-time dashboard error:', error);
       // toast removed
     }, [])
@@ -95,43 +172,94 @@ export default function SuperAdminDashboard() {
     fetchDashboardData();
   }, []);
 
+  const handleRefresh = async () => {
+    setLastUpdated(new Date());
+    await fetchDashboardData();
+  };
+
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
+      setApiErrors({});
 
-      // Fetch super admin dashboard stats
-      const statsResponse = await apiClient.get('/dashboard/superadmin');
-      if (statsResponse.data?.success && statsResponse.data?.data) {
-        const stats = statsResponse.data.data;
+      // PHASE 5 OPTIMIZATION: Fetch summary first for quick KPI display
+      const summaryResponse = await apiClient.get<{ success?: boolean; data?: Record<string, unknown> }>('/dashboard/superadmin/summary');
+      if (summaryResponse.success && summaryResponse.data?.kpis) {
+        const kpis = summaryResponse.data.kpis as Record<string, unknown>;
         setDashboardStats({
-          totalRevenue: stats.totalRevenue || 0,
-          totalOrganizations: stats.totalOrganizations || 0,
-          activeUsers: stats.totalEmployees || 0,
-          liveSessions: stats.liveSessions || 0,
-          totalSales: stats.totalSales || 0, // Use real sales data from API
-          pipelineValue: stats.pipelineValue || 0, // Use real pipeline data from API
-          commissionPaid: stats.commissionPaid || 0, // Use real commission data from API
-          churnRate: stats.churnRate || 0,
-          kpiChanges: stats.kpiChanges || {
+          totalRevenue: Number(kpis.monthlyRevenue) || 0,
+          totalOrganizations: Number(kpis.totalOrganizations) || 0,
+          activeUsers: Number(kpis.totalEmployees) || 0,
+          liveSessions: Number(kpis.systemActivity) || 0,
+          totalSales: 0,
+          pipelineValue: 0,
+          commissionPaid: 0,
+          churnRate: 0,
+          kpiChanges: {
             revenueChange: 0,
             organizationChange: 0,
             userChange: 0,
             sessionChange: 0,
-            expenseChange: 0
-          }
+            expenseChange: 0,
+            pipelineChange: 0,
+            churnChange: 0,
+          },
         });
       }
 
-      // Fetch growth trends for charts
-      const trendsResponse = await apiClient.get('/dashboard/superadmin/growth-trends');
-      if (trendsResponse.data?.success && trendsResponse.data?.data) {
-        setRevenueData(trendsResponse.data.data);
+      // PHASE 5 OPTIMIZATION: Lazy-load tables/charts after KPIs
+      const [statsResponse, trendsResponse, orgsResponse, liveUsersResponse] = 
+        await Promise.allSettled([
+          apiClient.get<SuperAdminStatsPayload>('/dashboard/superadmin'),
+          apiClient.get<GrowthTrendPoint[]>('/dashboard/superadmin/growth-trends'),
+          apiClient.get<OrganizationApiRow[]>('/organizations?limit=10'),
+          apiClient.get<LiveUserRow[]>('/dashboard/superadmin/live-users?limit=5'),
+        ]);
+
+      const newErrors: Record<string, string> = {};
+
+      // Handle full stats response for additional metrics
+      if (statsResponse.status === 'fulfilled' && statsResponse.value.success && statsResponse.value.data) {
+        const stats = statsResponse.value.data;
+        setDashboardStats(prev => ({
+          ...prev,
+          totalRevenue: stats.totalRevenue || prev.totalRevenue,
+          totalOrganizations: stats.totalOrganizations || prev.totalOrganizations,
+          activeUsers: stats.totalEmployees || prev.activeUsers,
+          liveSessions: stats.liveSessions || prev.liveSessions,
+          totalSales: stats.totalSales || 0,
+          pipelineValue: stats.pipelineValue || 0,
+          commissionPaid: stats.commissionPaid || 0,
+          churnRate: stats.churnRate || 0,
+          kpiChanges: {
+            revenueChange: 0,
+            organizationChange: 0,
+            userChange: 0,
+            sessionChange: 0,
+            expenseChange: 0,
+            pipelineChange: 0,
+            churnChange: 0,
+            ...(stats.kpiChanges || {}),
+          },
+        }));
+      } else if (statsResponse.status === 'rejected') {
+        newErrors['stats'] = 'Failed to load dashboard statistics';
+        console.error('Dashboard stats API failed:', statsResponse.reason);
       }
 
-      // Fetch organizations
-      const orgsResponse = await apiClient.get('/organizations?limit=10');
-      if (orgsResponse.data?.success && orgsResponse.data?.data) {
-        setOrganizations(orgsResponse.data.data.map((org: any) => ({
+      // Handle trends
+      if (trendsResponse.status === 'fulfilled' && trendsResponse.value.success && trendsResponse.value.data) {
+        setRevenueData(trendsResponse.value.data);
+      } else if (trendsResponse.status === 'rejected') {
+        newErrors['trends'] = 'Failed to load growth trends';
+        console.error('Growth trends API failed:', trendsResponse.reason);
+        setRevenueData([]);
+      }
+
+      // Handle organizations
+      if (orgsResponse.status === 'fulfilled' && orgsResponse.value.success && orgsResponse.value.data) {
+        const orgArray = Array.isArray(orgsResponse.value.data) ? orgsResponse.value.data : [];
+        setOrganizations(orgArray.map((org) => ({
           id: org._id,
           name: org.name || 'Organization',
           users: org.employeeCount || 0,
@@ -139,20 +267,29 @@ export default function SuperAdminDashboard() {
           plan: org.subscriptionPlan || 'free',
           revenue: org.monthlyRevenue || 0
         })));
+      } else if (orgsResponse.status === 'rejected') {
+        newErrors['orgs'] = 'Failed to load organizations';
+        console.error('Organizations API failed:', orgsResponse.reason);
+        setOrganizations([]);
       }
 
-      // Fetch live users
-      const liveUsersResponse = await apiClient.get('/dashboard/superadmin/live-users?limit=5');
-      if (liveUsersResponse.data?.success && liveUsersResponse.data?.data) {
-        setLiveUsers(liveUsersResponse.data.data);
+      // Handle live users
+      if (liveUsersResponse.status === 'fulfilled' && liveUsersResponse.value.success && liveUsersResponse.value.data) {
+        const usersArray = Array.isArray(liveUsersResponse.value.data) ? liveUsersResponse.value.data : [];
+        setLiveUsers(usersArray);
+      } else if (liveUsersResponse.status === 'rejected') {
+        newErrors['liveUsers'] = 'Failed to load active users';
+        console.error('Live users API failed:', liveUsersResponse.reason);
+        setLiveUsers([]);
       }
 
-    } catch (error: any) {
+      setApiErrors(newErrors);
+
+    } catch (error: unknown) {
       console.error('Error fetching dashboard data:', error);
-      // toast removed
+      setApiErrors({ summary: 'Failed to load dashboard' });
       
       // Set loading state to false but don't show fake data
-      // Let the UI show empty states or error states instead
       setDashboardStats({
         totalRevenue: 0,
         totalOrganizations: 0,
@@ -167,7 +304,9 @@ export default function SuperAdminDashboard() {
           organizationChange: 0,
           userChange: 0,
           sessionChange: 0,
-          expenseChange: 0
+          expenseChange: 0,
+          pipelineChange: 0,
+          churnChange: 0,
         }
       });
       
@@ -180,13 +319,16 @@ export default function SuperAdminDashboard() {
   };
 
   if (loading) {
-    // Don't show loading spinner - let content load in background
-    return null;
+    return (
+      <div className="min-h-[40vh] flex flex-col items-center justify-center gap-3">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground">Loading control room…</p>
+      </div>
+    );
   }
 
   return (
     <>
-      <LoadingProgressBar isLoading={loading} color="bg-purple-500" />
       <div className="p-8 space-y-8">
       {/* Page Header */}
       <div className="flex items-center justify-between">
@@ -206,21 +348,26 @@ export default function SuperAdminDashboard() {
           <Button 
             variant="outline" 
             className="rounded-xl"
-            onClick={requestRefresh}
+            onClick={handleRefresh}
             disabled={loading}
           >
             <Activity className="w-4 h-4 mr-2" />
             Refresh
           </Button>
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             className="rounded-xl"
-            onClick={() => window.location.href = '/admin/employee-onboarding'}
+            onClick={() => setShowOnboardingGenerator(true)}
           >
             <FileText className="w-4 h-4 mr-2" />
-            Employee Onboarding
+            Generate Onboarding Link
           </Button>
-          <Button className="rounded-xl">Add Organization</Button>
+          <Button 
+            className="rounded-xl"
+            onClick={() => navigate('/super-admin/organizations')}
+          >
+            Add Organization
+          </Button>
         </div>
       </div>
 
@@ -230,8 +377,11 @@ export default function SuperAdminDashboard() {
       {/* Feature Showcase */}
       <FeatureShowcase />
 
-      {/* Onboarding Link Generator */}
-      <OnboardingLinkGenerator isSuperAdmin={true} />
+      <OnboardingLinkGenerator
+        isOpen={showOnboardingGenerator}
+        onClose={() => setShowOnboardingGenerator(false)}
+        isSuperAdmin={true}
+      />
 
       {/* Document Generator */}
       <DocumentGenerator isSuperAdmin={true} />
@@ -294,7 +444,7 @@ export default function SuperAdminDashboard() {
         <KPICard
           title="Pipeline Value"
           value={formatCurrency(dashboardStats.pipelineValue)}
-          change={0} // TODO: Calculate pipeline change
+          change={dashboardStats.kpiChanges.pipelineChange}
           icon={Target}
           color="accent"
         />
@@ -308,7 +458,7 @@ export default function SuperAdminDashboard() {
         <KPICard
           title="Churn Rate"
           value={`${dashboardStats.churnRate}%`}
-          change={-0.5} // TODO: Calculate churn change
+          change={dashboardStats.kpiChanges.churnChange}
           icon={XCircle}
           color="destructive"
         />

@@ -8,6 +8,7 @@
 import mongoose from 'mongoose';
 import logger from './logger.js';
 import Notification from '../models/Notification.js';
+import { normalizeSmtpConfig, sendSmtpMail } from './smtpService.js';
 
 function toRecipientUserId(employee) {
   return employee?.userId || employee?.recipientUserId || employee?._id;
@@ -104,7 +105,7 @@ class EmailNotificationService {
    * Automatically retries with exponential backoff on failure
    */
   static async sendEmail(emailData) {
-    return this.sendEmailWithRetry(emailData, 3);
+    return this.sendEmailWithRetry(emailData, 2);
   }
 
   /**
@@ -112,81 +113,48 @@ class EmailNotificationService {
    * Supports sending from employee email addresses
    */
   static async _sendEmailInternal(emailData) {
-    try {
-      const o = emailData.organizationSmtp;
-      const useOrg = o && o.host && o.user && o.pass;
-      const host = useOrg ? o.host : process.env.SMTP_HOST;
-      const port = useOrg ? (parseInt(String(o.port), 10) || 587) : (parseInt(process.env.SMTP_PORT, 10) || 587);
-      const secure = useOrg ? !!o.secure : (String(process.env.SMTP_PORT) === '465');
-      const authUser = useOrg ? o.user : process.env.SMTP_USER;
-      const authPass = useOrg ? o.pass : process.env.SMTP_PASS;
+    const smtpConfig = normalizeSmtpConfig(emailData.organizationSmtp);
 
-      if (!host || !authUser || !authPass) {
-        logger.warn('Email service not configured', {
-          to: emailData.to,
-          useOrgSmtp: !!useOrg,
-          hasHost: !!host,
-          hasUser: !!authUser,
-          hasPass: !!authPass
-        });
-        return false;
-      }
-
-      const nodemailer = await import('nodemailer');
-
-      const transporter = nodemailer.default.createTransport({
-        host,
-        port,
-        secure,
-        auth: {
-          user: authUser,
-          pass: authPass
-        },
-        tls: {
-          rejectUnauthorized: false
-        }
-      });
-
-      try {
-        await transporter.verify();
-      } catch (verifyErr) {
-        logger.warn('SMTP verify failed; attempting send anyway', { error: verifyErr.message, host });
-      }
-
-      const fromEmail = useOrg
-        ? (o.fromEmail || o.user)
-        : (process.env.FROM_EMAIL || process.env.SMTP_USER);
-      const fromName = useOrg
-        ? (o.fromName || emailData.fromName || 'WorkPlus HR')
-        : (emailData.fromName || 'WorkPlus HR');
-      const replyToEmail = emailData.replyTo || emailData.from || fromEmail;
-
-      const info = await transporter.sendMail({
-        from: `"${fromName}" <${fromEmail}>`,
+    if (!smtpConfig) {
+      logger.warn('Email service not configured', {
         to: emailData.to,
-        subject: emailData.subject,
-        html: emailData.html,
-        text: emailData.text,
-        replyTo: replyToEmail
+        hasOrgSmtp: !!(emailData.organizationSmtp?.host && emailData.organizationSmtp?.user),
       });
+      return false;
+    }
 
+    const fromEmail = smtpConfig.fromEmail;
+    const fromName = emailData.fromName || smtpConfig.fromName || 'WorkPlus HR';
+    const replyToEmail = emailData.replyTo || emailData.from || fromEmail;
+
+    const result = await sendSmtpMail(smtpConfig, {
+      from: `"${fromName}" <${fromEmail}>`,
+      to: emailData.to,
+      subject: emailData.subject,
+      html: emailData.html,
+      text: emailData.text,
+      replyTo: replyToEmail,
+    });
+
+    if (result.success) {
       logger.info('Email sent successfully', {
         to: emailData.to,
         from: fromEmail,
         replyTo: replyToEmail,
         subject: emailData.subject,
-        messageId: info.messageId,
-        smtp: host,
-        viaOrgSmtp: !!useOrg
+        messageId: result.messageId,
+        smtp: smtpConfig.host,
       });
       return true;
-    } catch (error) {
-      logger.error('Email send failed', {
-        error: error.message,
-        to: emailData.to
-      });
-      return false;
     }
+
+    logger.error('Email send failed', {
+      to: emailData.to,
+      host: smtpConfig.host,
+      code: result.code,
+      error: result.error,
+    });
+    return false;
   }
 
   /**
@@ -290,7 +258,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       type: 'payroll_generated',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/payroll',
       actionText: 'View Payslip',
       relatedEntity: {
@@ -332,7 +300,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       type: 'leave_request',
       priority: 'medium',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/leave',
       actionText: 'View Leave',
       relatedEntity: {
@@ -366,7 +334,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">Duration:</span><span class="value">${days} day(s)</span></div>
 <div class="info-row"><span class="label">Reason:</span><span class="value">${leaveRequest.reason}</span></div>
 <div class="info-row"><span class="label">Status:</span><span class="value" style="color:#ffc107">⏳ Pending</span></div></div>
-<div style="text-align:center"><a href="${getFrontendUrl()}/admin/leave-requests" class="button">📋 Review Leave</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/leaves" class="button">📋 Review Leave</a></div>`;
     
     await this.sendEmail({
       to: hrEmail,
@@ -399,7 +367,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       priority: 'high',
       recipientId: toRecipientUserId(employee),
       senderId: approver._id,
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/leave',
       actionText: 'View Leave',
       relatedEntity: {
@@ -429,7 +397,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
 <div class="info-row"><span class="label">From:</span><span class="value">${start}</span></div>
 <div class="info-row"><span class="label">To:</span><span class="value">${end}</span></div>
 <div class="info-row"><span class="label">Approved By:</span><span class="value">${approver.name}</span></div></div>
-<div style="text-align:center"><a href="${getFrontendUrl()}/admin/leave-requests" class="button">📋 View All Leaves</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/leaves" class="button">📋 View All Leaves</a></div>`;
     
     await this.sendEmail({
       to: hrEmail,
@@ -463,7 +431,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       priority: 'high',
       recipientId: toRecipientUserId(employee),
       senderId: rejector._id,
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/leave',
       actionText: 'View Leave',
       relatedEntity: {
@@ -499,7 +467,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       priority: 'high',
       recipientId: toRecipientUserId(employee),
       senderId: rejector._id,
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/expenses',
       actionText: 'View Expense',
       relatedEntity: {
@@ -538,7 +506,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       type: 'expense_submitted',
       priority: 'medium',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/expenses',
       actionText: 'View Expense',
       relatedEntity: {
@@ -597,7 +565,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       priority: 'high',
       recipientId: toRecipientUserId(employee),
       senderId: approver._id,
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/expenses',
       actionText: 'View Expense',
       relatedEntity: {
@@ -670,7 +638,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;col
       type: 'attendance_checkin',
       priority: 'low',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/attendance',
       actionText: 'View Attendance'
     });
@@ -726,7 +694,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
       type: 'attendance_checkout',
       priority: 'low',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/attendance',
       actionText: 'View Attendance'
     });
@@ -783,7 +751,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
       type: 'attendance_break',
       priority: 'low',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/attendance',
       actionText: 'View Attendance'
     });
@@ -843,7 +811,7 @@ ${meeting.description ? `<div class="info-row"><span class="label">Description:<
       type: 'meeting_scheduled',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/attendance',
       actionText: 'View Meeting'
     });
@@ -898,7 +866,7 @@ ${employee.department ? `<div class="info-row"><span class="label">Department:</
 <div class="info-row"><span class="label">Uploaded By:</span><span class="value">${document.uploadedBy}</span></div>
 <div class="info-row"><span class="label">Date:</span><span class="value">${new Date(document.uploadDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
 ${document.description ? `<div class="info-row"><span class="label">Description:</span><span class="value">${document.description}</span></div>` : ''}</div>
-<div style="text-align:center"><a href="${getFrontendUrl()}/employee/documents" class="button">📥 View Document</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/profile" class="button">📥 View Document</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -907,8 +875,8 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       type: 'document_uploaded',
       priority: 'medium',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
-      actionUrl: '/employee/documents',
+      orgId: employee.orgId,
+      actionUrl: '/employee/profile',
       actionText: 'View Document',
       relatedEntity: {
         entityType: 'document',
@@ -935,7 +903,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
 <div class="info-row"><span class="label">Submitted By:</span><span class="value">${document.submittedBy}</span></div>
 <div class="info-row"><span class="label">Date:</span><span class="value">${new Date(document.submissionDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
 ${document.description ? `<div class="info-row"><span class="label">Description:</span><span class="value">${document.description}</span></div>` : ''}</div>
-<div style="text-align:center"><a href="${getFrontendUrl()}/admin/documents" class="button">✓ Review & Approve</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/admin/company-docs" class="button">✓ Review & Approve</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -944,8 +912,8 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       type: 'document_approval_required',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
-      actionUrl: '/admin/documents',
+      orgId: employee.orgId,
+      actionUrl: '/admin/company-docs',
       actionText: 'Review Document',
       relatedEntity: {
         entityType: 'document',
@@ -971,7 +939,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
 <div class="info-row"><span class="label">Type:</span><span class="value">${document.type}</span></div>
 <div class="info-row"><span class="label">Approved By:</span><span class="value">${approver.name}</span></div>
 <div class="info-row"><span class="label">Date:</span><span class="value">${new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div></div>
-<div style="text-align:center"><a href="${getFrontendUrl()}/employee/documents" class="button">📥 View Document</a></div>`;
+<div style="text-align:center"><a href="${getFrontendUrl()}/employee/profile" class="button">📥 View Document</a></div>`;
     
     // Create in-app notification
     await this.createInAppNotification({
@@ -981,8 +949,8 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       priority: 'high',
       recipientId: toRecipientUserId(employee),
       senderId: approver._id,
-      orgId: employee.orgId || 'system',
-      actionUrl: '/employee/documents',
+      orgId: employee.orgId,
+      actionUrl: '/employee/profile',
       actionText: 'View Document',
       relatedEntity: {
         entityType: 'document',
@@ -1021,7 +989,7 @@ ${document.description ? `<div class="info-row"><span class="label">Description:
       type: 'payslip_generated',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/payroll',
       actionText: 'Download Payslip',
       relatedEntity: {
@@ -1064,7 +1032,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       type: 'asset_allocated',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/assets',
       actionText: 'View Asset',
       relatedEntity: {
@@ -1100,7 +1068,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       type: 'asset_return_reminder',
       priority: 'high',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/assets',
       actionText: 'View Assets'
     });
@@ -1133,7 +1101,7 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       type: 'asset_returned',
       priority: 'medium',
       recipientId: toRecipientUserId(employee),
-      orgId: employee.orgId || 'system',
+      orgId: employee.orgId,
       actionUrl: '/employee/assets',
       actionText: 'View Assets'
     });
@@ -1166,6 +1134,41 @@ ${asset.description ? `<div class="info-row"><span class="label">Description:</s
       html: this.getEmailTemplate(content, '🎉 Welcome to WorkPlus'),
       text: `Welcome! Email: ${employee.email}, Password: ${tempPassword}`
     });
+  }
+
+  /**
+   * Onboarding invite — from HR mailbox (e.g. hr@hexerve.com) to employee Outlook inbox
+   */
+  static async sendOnboardingInviteEmail({
+    to,
+    employeeName,
+    onboardingUrl,
+    orgName = 'WorkPlus',
+    organizationSmtp
+  }) {
+    const hrFrom = organizationSmtp?.fromEmail || process.env.FROM_EMAIL || process.env.SMTP_USER || 'hr@hexerve.com';
+    const content = `
+      <p>Hi <strong>${employeeName}</strong>,</p>
+      <p>We're excited to have you join <strong>${orgName}</strong>! Please complete your onboarding form using the link below. This link is valid for 30 days.</p>
+      <div style="text-align:center;margin:28px 0"><a href="${onboardingUrl}" class="button">Complete Your Onboarding</a></div>
+      <p style="font-size:13px;color:#666;margin-top:24px">Or copy this link into your browser:</p>
+      <p style="font-size:12px;word-break:break-all;background:#f5f5f5;padding:10px;border-radius:6px">${onboardingUrl}</p>
+      <p style="font-size:13px;color:#666;margin-top:20px">Questions? Reply to this email to reach our HR team.</p>
+    `;
+    const html = this.getEmailTemplate(content, `Welcome to ${orgName}`);
+
+    return this.sendEmailWithRetry(
+      {
+        to: String(to).trim(),
+        subject: `Welcome to ${orgName} — complete your onboarding`,
+        html,
+        text: `Hi ${employeeName},\n\nComplete your onboarding: ${onboardingUrl}\n\n— ${orgName} HR`,
+        organizationSmtp,
+        fromName: organizationSmtp?.fromName || `${orgName} HR`,
+        replyTo: process.env.HR_EMAIL || hrFrom
+      },
+      2
+    );
   }
 
   static async sendPasswordResetEmail(employee, newPassword, resetBy) {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Calendar as CalendarIcon, CheckCircle, XCircle, Clock, Plus, Edit2, Download, Trash2, AlertCircle } from 'lucide-react';
+import { Calendar as CalendarIcon, CheckCircle, XCircle, Clock, Plus, Edit2, Download, Trash2, AlertCircle, Eye } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -20,9 +20,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../../components/ui/select';
-import { LeaveRequestService, LeaveAllocationService, EmployeeService, LeaveTypeSettingsService } from '../../utils/api';
+import {
+  LeaveRequestService,
+  LeaveAllocationService,
+  EmployeeService,
+  LeaveTypeSettingsService,
+  extractApiList,
+} from '../../utils/api';
+import { clearApiCache, resolveAuthOrgId, resolveOrgIdForApi } from '../../utils/apiHelper';
+import { resolveEmployeeMongoId } from '../../utils/resolveEmployeeId';
 import { useAuth } from '../../context/AuthContext';
-import { toast } from 'sonner';
+import { toast } from '../../utils/portalToast';
+import realTimeSocket from '../../utils/realTimeSocket';
+import {
+  type LeaveBalanceMap,
+  parseBalanceApiResponse,
+  getTypeBalance,
+} from '../../utils/leaveBalance';
 
 interface LeaveRequest {
   _id: string;
@@ -50,15 +64,69 @@ const DEFAULT_ENABLED_LEAVE_TYPES: Record<string, boolean> = {
   sandwichLeave: false
 };
 
+const LEAVE_TYPE_LABELS: Record<string, string> = {
+  sickLeave: 'Sick Leave',
+  casualLeave: 'Casual Leave',
+  earnedLeave: 'Earned Leave',
+  medicalLeave: 'Medical Leave',
+  maternityLeave: 'Maternity Leave',
+  paternityLeave: 'Paternity Leave',
+  compensatoryOff: 'Compensatory Off (Comp Off)',
+  personal: 'Personal',
+  emergency: 'Emergency',
+  ncns: 'NCNS (No Call No Show)',
+  sandwichLeave: 'Sandwich Leave',
+};
+
+const DEFAULT_LEAVE_TYPE_ORDER = [
+  'casualLeave',
+  'sickLeave',
+  'earnedLeave',
+  'personal',
+  'emergency',
+  'compensatoryOff',
+  'maternityLeave',
+  'paternityLeave',
+  'medicalLeave',
+  'ncns',
+  'sandwichLeave',
+];
+
+function normalizeLeaveRow(raw: Record<string, unknown>): LeaveRequest {
+  const id = String(raw._id || raw.id || '');
+  return {
+    _id: id,
+    type: String(raw.type || raw.leaveType || 'Leave'),
+    leaveType: String(raw.leaveType || raw.type || 'Leave'),
+    startDate: String(raw.startDate || ''),
+    endDate: String(raw.endDate || ''),
+    reason: String(raw.reason || ''),
+    status: String(raw.status || 'pending'),
+    days: typeof raw.days === 'number' ? raw.days : undefined,
+  };
+}
+
+function defaultLeaveTypeLabel(enabled: Record<string, boolean> | null): string {
+  if (!enabled) return LEAVE_TYPE_LABELS.casualLeave;
+  for (const key of DEFAULT_LEAVE_TYPE_ORDER) {
+    if (enabled[key] && LEAVE_TYPE_LABELS[key]) return LEAVE_TYPE_LABELS[key];
+  }
+  return '';
+}
+
 export default function Leave() {
   const { user } = useAuth();
+  const authUserId = user?.userId || user?.id ? String(user.userId || user.id) : '';
   const [leaveHistory, setLeaveHistory] = useState<LeaveRequest[]>([]);
-  const [leaveBalance, setLeaveBalance] = useState<any>(null);
+  const [leaveBalance, setLeaveBalance] = useState<LeaveBalanceMap>({});
+  const [hasLeaveAllocation, setHasLeaveAllocation] = useState(false);
+  const [viewingLeave, setViewingLeave] = useState<LeaveRequest | null>(null);
   const [enabledLeaveTypes, setEnabledLeaveTypes] = useState<Record<string, boolean> | null>(null);
   const [balanceKpiVisibility, setBalanceKpiVisibility] = useState<Record<string, boolean> | null>(null);
   const [leaveKpiReady, setLeaveKpiReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showLeaveForm, setShowLeaveForm] = useState(false);
+  const [submittingLeave, setSubmittingLeave] = useState(false);
   const [editingLeaveId, setEditingLeaveId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     type: '',
@@ -72,7 +140,7 @@ export default function Leave() {
 
   useEffect(() => {
     const fetchData = async () => {
-      if (!user?.id) return;
+      if (!authUserId) return;
       
       try {
         setLoading(true);
@@ -82,24 +150,20 @@ export default function Leave() {
         console.log('🔄 [LEAVE] Fetching fresh leave data...');
         
         // Fetch leave requests
-        const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
-        console.log('📊 [LEAVE] Leave requests response:', leaveResponse);
-        
-        if (leaveResponse.success && leaveResponse.data) {
-          // Handle both array and paginated response
-          const leaveData = Array.isArray(leaveResponse.data) ? leaveResponse.data : leaveResponse.data.data || [];
-          setLeaveHistory(leaveData);
-          console.log('✅ [LEAVE] Loaded', leaveData.length, 'leave requests');
-        }
+        const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
+        const leaveData = extractApiList(leaveResponse).map((row) =>
+          normalizeLeaveRow(row as Record<string, unknown>)
+        );
+        setLeaveHistory(leaveData);
 
         // Fetch leave balance from allocation
-        let employeeId = user.employeeId;
+        let employeeId = user?.employeeId;
         
         // If employeeId is not set, try to fetch it from the employee service
         if (!employeeId) {
           console.log('⚠️ [LEAVE] employeeId not found in user context, fetching from backend...');
           try {
-            const employeeResponse = await EmployeeService.getEmployeeByUserId(user.id);
+            const employeeResponse = await EmployeeService.getEmployeeByUserId(authUserId);
             if (employeeResponse && employeeResponse._id) {
               employeeId = employeeResponse._id;
               console.log('✅ [LEAVE] Employee ID fetched:', employeeId);
@@ -125,9 +189,11 @@ export default function Leave() {
           const balanceResponse = await LeaveAllocationService.getEmployeeBalance(employeeId, year, month);
           console.log('📊 [LEAVE] Balance response:', balanceResponse);
           
-          if (balanceResponse.success && balanceResponse.data) {
-            setLeaveBalance(balanceResponse.data);
-            console.log('✅ [LEAVE] Leave balance loaded:', balanceResponse.data);
+          if (balanceResponse.success) {
+            const parsed = parseBalanceApiResponse(balanceResponse);
+            setLeaveBalance(parsed.balances);
+            setHasLeaveAllocation(parsed.hasAllocation);
+            console.log('✅ [LEAVE] Leave balance loaded:', parsed);
           } else {
             console.warn('⚠️ [LEAVE] No balance data returned from API');
             console.warn('⚠️ [LEAVE] This employee may not have leave allocations set up');
@@ -138,21 +204,10 @@ export default function Leave() {
         }
 
         // Fetch enabled leave types
-        let orgId = user?.orgId || user?.tenantId;
+        const orgId = resolveAuthOrgId(user);
         if (!orgId) {
-          const storedUser = localStorage.getItem('user');
-          if (storedUser) {
-            try {
-              const parsedUser = JSON.parse(storedUser);
-              orgId = parsedUser.orgId || parsedUser.tenantId || 'system';
-            } catch (e) {
-              orgId = 'system';
-            }
-          } else {
-            orgId = 'system';
-          }
-        }
-
+          console.warn('[LEAVE] Organization context missing — skipping leave type settings');
+        } else {
         try {
           const enabledTypesResponse = await LeaveTypeSettingsService.getEnabledLeaveTypes(orgId);
           if (enabledTypesResponse.success && enabledTypesResponse.data) {
@@ -167,6 +222,7 @@ export default function Leave() {
           setEnabledLeaveTypes({ ...DEFAULT_ENABLED_LEAVE_TYPES });
           setBalanceKpiVisibility(null);
         }
+        }
       } catch (error) {
         console.error('Error fetching data:', error);
       } finally {
@@ -176,147 +232,99 @@ export default function Leave() {
     };
 
     fetchData();
-  }, [user]);
+  }, [authUserId, user?.employeeId]);
+
+  useEffect(() => {
+    const refetchLeaves = () => {
+      if (!authUserId) return;
+      void LeaveRequestService.getLeaveRequestsByUserId(authUserId).then((leaveResponse) => {
+        const list = extractApiList(leaveResponse).map((row) =>
+          normalizeLeaveRow(row as Record<string, unknown>)
+        );
+        setLeaveHistory(list);
+      }).catch(() => {});
+    };
+    const unsub = realTimeSocket.onLeaveUpdate(refetchLeaves);
+    return () => unsub();
+  }, [authUserId]);
+
+  useEffect(() => {
+    const refreshBalances = async () => {
+      if (!authUserId || document.visibilityState !== 'visible') return;
+      let employeeId = user?.employeeId;
+      if (!employeeId) {
+        try {
+          const emp = await EmployeeService.getEmployeeByUserId(authUserId);
+          employeeId = emp?._id;
+        } catch {
+          return;
+        }
+      }
+      if (!employeeId) return;
+      const now = new Date();
+      const balanceResponse = await LeaveAllocationService.getEmployeeBalance(
+        employeeId,
+        now.getFullYear(),
+        now.getMonth() + 1
+      );
+      if (balanceResponse.success) {
+        const parsed = parseBalanceApiResponse(balanceResponse);
+        setLeaveBalance(parsed.balances);
+        setHasLeaveAllocation(parsed.hasAllocation);
+      }
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshBalances();
+    };
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [authUserId, user?.employeeId]);
 
   const leaveBalanceCards = useMemo(() => {
-    const all: Array<{
-      type: string;
-      key: string;
-      total: number;
-      used: number;
-      pending: number;
-      color: string;
-      remaining: number;
-    }> = [
-    { 
-      type: 'Sick Leave', 
-      key: 'sickLeave',
-      total: leaveBalance?.sickLeave?.allocated || 0, 
-      used: leaveBalance?.sickLeave?.used || 0, 
-      pending: leaveBalance?.sickLeave?.pending || 0,
-      color: 'bg-secondary',
-      remaining: 0
-    },
-    { 
-      type: 'Casual Leave', 
-      key: 'casualLeave',
-      total: leaveBalance?.casualLeave?.allocated || 0, 
-      used: leaveBalance?.casualLeave?.used || 0, 
-      pending: leaveBalance?.casualLeave?.pending || 0,
-      color: 'bg-accent',
-      remaining: 0
-    },
-    { 
-      type: 'Earned Leave', 
-      key: 'earnedLeave',
-      total: leaveBalance?.earnedLeave?.allocated || 0, 
-      used: leaveBalance?.earnedLeave?.used || 0, 
-      pending: leaveBalance?.earnedLeave?.pending || 0,
-      color: 'bg-yellow-500',
-      remaining: 0
-    },
-    { 
-      type: 'Medical Leave', 
-      key: 'medicalLeave',
-      total: leaveBalance?.medicalLeave?.allocated || 0, 
-      used: leaveBalance?.medicalLeave?.used || 0, 
-      pending: leaveBalance?.medicalLeave?.pending || 0,
-      color: 'bg-red-500',
-      remaining: 0
-    },
-    { 
-      type: 'Maternity Leave', 
-      key: 'maternityLeave',
-      total: leaveBalance?.maternityLeave?.allocated || 0, 
-      used: leaveBalance?.maternityLeave?.used || 0, 
-      pending: leaveBalance?.maternityLeave?.pending || 0,
-      color: 'bg-pink-500',
-      remaining: 0
-    },
-    { 
-      type: 'Paternity Leave', 
-      key: 'paternityLeave',
-      total: leaveBalance?.paternityLeave?.allocated || 0, 
-      used: leaveBalance?.paternityLeave?.used || 0, 
-      pending: leaveBalance?.paternityLeave?.pending || 0,
-      color: 'bg-blue-500',
-      remaining: 0
-    },
-    { 
-      type: 'Compensatory Off', 
-      key: 'compensatoryOff',
-      total: leaveBalance?.compensatoryOff?.allocated || 0, 
-      used: leaveBalance?.compensatoryOff?.used || 0, 
-      pending: leaveBalance?.compensatoryOff?.pending || 0,
-      color: 'bg-green-500',
-      remaining: 0
-    },
-    { 
-      type: 'Personal', 
-      key: 'personal',
-      total: leaveBalance?.personal?.allocated || 0, 
-      used: leaveBalance?.personal?.used || 0, 
-      pending: leaveBalance?.personal?.pending || 0,
-      color: 'bg-purple-500',
-      remaining: 0
-    },
-    { 
-      type: 'Emergency', 
-      key: 'emergency',
-      total: leaveBalance?.emergency?.allocated || 0, 
-      used: leaveBalance?.emergency?.used || 0, 
-      pending: leaveBalance?.emergency?.pending || 0,
-      color: 'bg-orange-500',
-      remaining: 0
-    },
-    { 
-      type: 'NCNS', 
-      key: 'ncns',
-      total: leaveBalance?.ncns?.allocated || 0, 
-      used: leaveBalance?.ncns?.used || 0, 
-      pending: leaveBalance?.ncns?.pending || 0,
-      color: 'bg-gray-500',
-      remaining: 0
-    },
-    { 
-      type: 'Sandwich Leave', 
-      key: 'sandwichLeave',
-      total: leaveBalance?.sandwichLeave?.allocated || 0, 
-      used: leaveBalance?.sandwichLeave?.used || 0, 
-      pending: leaveBalance?.sandwichLeave?.pending || 0,
-      color: 'bg-indigo-500',
-      remaining: 0
-    },
-  ];
+    const cardDefs: Array<{ type: string; key: string; color: string }> = [
+      { type: 'Sick Leave', key: 'sickLeave', color: 'bg-secondary' },
+      { type: 'Casual Leave', key: 'casualLeave', color: 'bg-accent' },
+      { type: 'Earned Leave', key: 'earnedLeave', color: 'bg-yellow-500' },
+      { type: 'Maternity Leave', key: 'maternityLeave', color: 'bg-pink-500' },
+      { type: 'Paternity Leave', key: 'paternityLeave', color: 'bg-blue-500' },
+      { type: 'Compensatory Off', key: 'compensatoryOff', color: 'bg-green-500' },
+      { type: 'Personal', key: 'personal', color: 'bg-purple-500' },
+      { type: 'Emergency', key: 'emergency', color: 'bg-orange-500' },
+      { type: 'NCNS', key: 'ncns', color: 'bg-gray-500' },
+      { type: 'Sandwich Leave', key: 'sandwichLeave', color: 'bg-indigo-500' },
+    ];
+
+    const all = cardDefs.map((def) => {
+      const b = getTypeBalance(leaveBalance, def.key);
+      return {
+        ...def,
+        total: b.total,
+        used: b.used,
+        pending: b.pending,
+        remaining: b.remaining,
+      };
+    });
 
     if (!leaveKpiReady || !enabledLeaveTypes) return [];
 
-    return all
-      .filter((card) => {
-        if (card.key === 'vacation') return false;
-        if (enabledLeaveTypes[card.key] !== true) return false;
-        if (balanceKpiVisibility && balanceKpiVisibility[card.key] === false) return false;
-        return true;
-      })
-      .map((leave) => ({
-        ...leave,
-        remaining: leave.total - leave.used - leave.pending
-      }));
+    return all.filter((card) => {
+      if (card.key === 'vacation' || card.key === 'medicalLeave') return false;
+      if (enabledLeaveTypes[card.key] !== true) return false;
+      if (balanceKpiVisibility && balanceKpiVisibility[card.key] === false) return false;
+      return true;
+    });
   }, [leaveBalance, enabledLeaveTypes, balanceKpiVisibility, leaveKpiReady]);
 
   // Submit or update leave request
   const handleSubmitLeave = async () => {
-    console.log('🔵 handleSubmitLeave called');
-    console.log('📊 Form data:', formData);
-    console.log('👤 User:', user);
-    
-    if (!user?.id || !formData.type || !formData.startDate || !formData.reason) {
-      console.error('❌ Validation failed:', {
-        userId: !!user?.id,
-        type: !!formData.type,
-        startDate: !!formData.startDate,
-        reason: !!formData.reason
-      });
+    if (submittingLeave) return;
+
+    if (!authUserId || !formData.type || !formData.startDate || !formData.reason) {
       toast.error('Please fill in all required fields');
       return;
     }
@@ -336,31 +344,22 @@ export default function Leave() {
       return;
     }
 
+    setSubmittingLeave(true);
     try {
-      let employeeId = user.employeeId;
-      
-      // If employeeId is not set, try to fetch it
+      const employeeId = await resolveEmployeeMongoId(user);
+
       if (!employeeId) {
-        console.log('employeeId not found in user context, fetching from backend...');
-        try {
-          const employeeResponse = await EmployeeService.getEmployeeByUserId(user.id);
-          if (employeeResponse && employeeResponse._id) {
-            employeeId = employeeResponse._id;
-            console.log('Employee ID fetched:', employeeId);
-          }
-        } catch (error) {
-          console.error('Error fetching employee:', error);
-          toast.error('Could not find employee record');
-          return;
-        }
-      }
-      
-      if (!employeeId) {
-        toast.error('Employee ID not found');
+        toast.error('Employee profile not found. Please contact HR.');
         return;
       }
-      
-      const orgId = user.orgId || 'system';
+
+      const orgId = await resolveOrgIdForApi(user);
+      if (!orgId) {
+        toast.error('Organization not set on your account. Please sign out and sign in again, or contact HR.');
+        return;
+      }
+
+      const submitUserId = String(user?.userId || user?.id || authUserId);
 
       const startDate = new Date(formData.startDate);
       const endDate =
@@ -406,28 +405,27 @@ export default function Leave() {
       };
 
       const leaveTypeKey = leaveTypeMap[formData.type];
-      const balance = leaveBalance?.[leaveTypeKey];
-      
-      console.log('Leave submission validation:', {
-        leaveType: formData.type,
-        leaveTypeKey,
-        balance,
-        daysRequested: days,
-        hoursRequested: hours,
-        leaveDuration: formData.leaveDuration,
-        isEditing: !!editingLeaveId
-      });
+      const balance = leaveTypeKey ? leaveBalance?.[leaveTypeKey] : undefined;
 
-      // For new requests, check if there's enough balance
-      // For editing, skip the balance check since leaves are already deducted
-      if (!editingLeaveId && (!balance || balance.available < days)) {
-        toast.error(`Insufficient ${formData.type} balance. Available: ${balance?.available || 0} days, Requested: ${days.toFixed(2)} days`);
+      // Only block when HR allocated days for this type and remaining is insufficient
+      const remaining = balance?.remaining ?? 0;
+      const allocatedTotal = balance?.total ?? 0;
+      if (
+        !editingLeaveId &&
+        hasLeaveAllocation &&
+        balance &&
+        allocatedTotal > 0 &&
+        remaining < days
+      ) {
+        toast.error(
+          `Insufficient ${formData.type} balance. Available: ${remaining} day(s), requested: ${days.toFixed(2)} day(s).`
+        );
         return;
       }
 
       // Prepare leave data with time information
       const leaveData: any = {
-        userId: user.id,
+        userId: submitUserId,
         employeeId: employeeId,
         leaveType: formData.type,
         startDate: startDate.toISOString(),
@@ -454,26 +452,24 @@ export default function Leave() {
 
       let response;
       if (editingLeaveId) {
-        // Update existing leave request
         response = await LeaveRequestService.updateLeaveRequest(editingLeaveId, leaveData);
-        toast.success('Leave request updated successfully');
       } else {
-        // Create new leave request
         response = await LeaveRequestService.createLeaveRequest(leaveData);
-        
-        if (response.success) {
-          // Deduct leaves from allocation only for new requests
-          await LeaveAllocationService.deductLeaves(employeeId, formData.type, days, response.data?.leaveRequest?._id);
-        }
-        
-        if (isHourly) {
+      }
+
+      const createdRaw =
+        (response as { data?: { leaveRequest?: Record<string, unknown> } })?.data?.leaveRequest ||
+        (response as { data?: Record<string, unknown> })?.data;
+
+      if (response?.success !== false) {
+        clearApiCache();
+        if (editingLeaveId) {
+          toast.success('Leave request updated successfully');
+        } else if (isHourly) {
           toast.success(`Hourly leave submitted successfully (${hours.toFixed(1)} hours)`);
         } else {
           toast.success('Leave request submitted successfully');
         }
-      }
-      
-      if (response.success) {
         setShowLeaveForm(false);
         setEditingLeaveId(null);
         setFormData({
@@ -485,19 +481,28 @@ export default function Leave() {
           reason: '',
           leaveDuration: 'full'
         });
-        
-        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
-        if (updatedLeaves.success && updatedLeaves.data) {
-          // Handle both array and paginated response
-          const leaveData = Array.isArray(updatedLeaves.data) ? updatedLeaves.data : updatedLeaves.data.data || [];
-          setLeaveHistory(leaveData);
+
+        if (!editingLeaveId && createdRaw && (createdRaw._id || createdRaw.id)) {
+          setLeaveHistory((prev) => [normalizeLeaveRow(createdRaw), ...prev]);
+        }
+
+        try {
+          const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(submitUserId);
+          const list = extractApiList(updatedLeaves).map((row) =>
+            normalizeLeaveRow(row as Record<string, unknown>)
+          );
+          if (list.length > 0) {
+            setLeaveHistory(list);
+          }
+        } catch (refreshErr) {
+          console.warn('[LEAVE] List refresh after submit failed:', refreshErr);
         }
 
         // Refresh balance
-        let refreshEmployeeId = user.employeeId;
+        let refreshEmployeeId = user?.employeeId;
         if (!refreshEmployeeId) {
           try {
-            const employeeResponse = await EmployeeService.getEmployeeByUserId(user.id);
+            const employeeResponse = await EmployeeService.getEmployeeByUserId(authUserId);
             if (employeeResponse && employeeResponse._id) {
               refreshEmployeeId = employeeResponse._id;
             }
@@ -512,16 +517,23 @@ export default function Leave() {
           const month = now.getMonth() + 1;
           
           const balanceResponse = await LeaveAllocationService.getEmployeeBalance(refreshEmployeeId, year, month);
-          if (balanceResponse.success && balanceResponse.data) {
-            setLeaveBalance(balanceResponse.data);
+          if (balanceResponse.success) {
+            const parsed = parseBalanceApiResponse(balanceResponse);
+            setLeaveBalance(parsed.balances);
+            setHasLeaveAllocation(parsed.hasAllocation);
           }
         }
       } else {
-        toast.error(response.message || 'Failed to save leave request');
+        toast.error(response?.message || 'Failed to save leave request');
       }
     } catch (error) {
-      console.error('Error saving leave request:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to submit leave request');
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to submit leave request';
+      toast.error(message.includes('Organization') ? message : message || 'Failed to submit leave request');
+    } finally {
+      setSubmittingLeave(false);
     }
   };
 
@@ -535,10 +547,12 @@ export default function Leave() {
         </div>
         <Button 
           onClick={() => {
-            console.log('🔵 Request Leave button clicked');
-            console.log('📊 Current showLeaveForm state:', showLeaveForm);
+            const defaultType = defaultLeaveTypeLabel(enabledLeaveTypes);
+            setFormData((prev) => ({
+              ...prev,
+              type: prev.type || defaultType,
+            }));
             setShowLeaveForm(true);
-            console.log('✅ showLeaveForm set to true');
           }}
           className="w-full sm:w-auto rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl"
         >
@@ -563,7 +577,7 @@ export default function Leave() {
         </div>
       ) : (
         <>
-          {leaveBalanceCards.length > 0 && leaveBalanceCards.every(card => card.total === 0) && (
+          {!hasLeaveAllocation && leaveBalanceCards.length > 0 && leaveBalanceCards.every((card) => card.total === 0) && (
             <Card className="p-4 sm:p-6 rounded-xl bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800">
               <div className="flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-500 flex-shrink-0 mt-0.5" />
@@ -682,10 +696,20 @@ export default function Leave() {
                 <div className="flex flex-col sm:flex-row gap-2 pt-3 border-t border-foreground/10">
                   <Button
                     size="sm"
+                    variant="secondary"
+                    className="rounded-lg flex-1 text-xs sm:text-sm"
+                    type="button"
+                    onClick={() => setViewingLeave(leave)}
+                  >
+                    <Eye className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
+                    View
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
                     variant="outline"
                     className="rounded-lg flex-1 text-xs sm:text-sm"
                     onClick={() => {
-                      // Edit functionality - populate form with leave data
                       setEditingLeaveId(leave._id);
                   setFormData({
                     type: leave.leaveType || leave.type || '',
@@ -710,6 +734,7 @@ export default function Leave() {
                     Edit
                   </Button>
                   <Button
+                    type="button"
                     size="sm"
                     variant="outline"
                     className="rounded-lg flex-1 text-xs sm:text-sm"
@@ -739,42 +764,33 @@ Reason: ${leave.reason}
                     Download
                   </Button>
                   <Button
+                    type="button"
                     size="sm"
                     variant="destructive"
                     className="rounded-lg flex-1 text-xs sm:text-sm"
                     onClick={async () => {
+                      if (!authUserId) return;
                       if (confirm('Are you sure you want to delete this leave request?')) {
                         try {
                           // Calculate days to restore
-                          const startDate = new Date(leave.startDate);
-                          const endDate = new Date(leave.endDate);
-                          const daysToRestore = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-                          
                           // Get employeeId
-                          let employeeId = user.employeeId;
+                          let employeeId = user?.employeeId;
                           if (!employeeId) {
-                            const employeeResponse = await EmployeeService.getEmployeeByUserId(user.id);
+                            const employeeResponse = await EmployeeService.getEmployeeByUserId(authUserId);
                             if (employeeResponse && employeeResponse._id) {
                               employeeId = employeeResponse._id;
                             }
                           }
                           
-                          // Delete the leave request
                           await LeaveRequestService.deleteLeaveRequest(leave._id);
+                          clearApiCache();
+                          toast.success('Leave request deleted');
                           
-                          // Restore leaves to allocation (only if pending)
-                          if (leave.status === 'pending' && employeeId) {
-                            await LeaveAllocationService.restoreLeaves(employeeId, leave.leaveType || leave.type, daysToRestore, leave._id);
-                          }
-                          
-                          // toast.success('Leave request deleted and leaves restored');
-                          
-                          // Refresh leave history
-                          const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
-                          if (updatedLeaves.success && updatedLeaves.data) {
-                            const leaveData = Array.isArray(updatedLeaves.data) ? updatedLeaves.data : updatedLeaves.data.data || [];
-                            setLeaveHistory(leaveData);
-                          }
+                          const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
+                          const list = extractApiList(updatedLeaves).map((row) =>
+                            normalizeLeaveRow(row as Record<string, unknown>)
+                          );
+                          setLeaveHistory(list);
                           
                           // Refresh balance
                           if (employeeId) {
@@ -783,13 +799,17 @@ Reason: ${leave.reason}
                             const month = now.getMonth() + 1;
                             
                             const balanceResponse = await LeaveAllocationService.getEmployeeBalance(employeeId, year, month);
-                            if (balanceResponse.success && balanceResponse.data) {
-                              setLeaveBalance(balanceResponse.data);
+                            if (balanceResponse.success) {
+                              const parsed = parseBalanceApiResponse(balanceResponse);
+                              setLeaveBalance(parsed.balances);
+                              setHasLeaveAllocation(parsed.hasAllocation);
                             }
                           }
                         } catch (error) {
                           console.error('Error deleting leave request:', error);
-                          // toast.error('Failed to delete leave request');
+                          toast.error(
+                            error instanceof Error ? error.message : 'Failed to delete leave request'
+                          );
                         }
                       }
                     }}
@@ -812,7 +832,13 @@ Reason: ${leave.reason}
       </Card>
 
       {/* Leave Form Dialog - Mobile optimized */}
-      <Dialog open={showLeaveForm} onOpenChange={setShowLeaveForm}>
+      <Dialog
+        open={showLeaveForm}
+        onOpenChange={(open) => {
+          setShowLeaveForm(open);
+          if (!open) setEditingLeaveId(null);
+        }}
+      >
         <DialogContent className="max-w-md sm:max-w-lg rounded-2xl border-0 shadow-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader className="pb-3 sm:pb-4">
             <DialogTitle className="text-lg sm:text-xl font-bold">Request Leave</DialogTitle>
@@ -829,25 +855,12 @@ Reason: ${leave.reason}
                 </SelectTrigger>
                 <SelectContent className="rounded-xl border-foreground/20">
                   {enabledLeaveTypes && Object.entries(enabledLeaveTypes).map(([key, enabled]) => {
-                    if (!enabled || key === 'vacation') return null; // Exclude vacation
-                    
-                    const leaveTypeLabels: { [key: string]: string } = {
-                      sickLeave: 'Sick Leave',
-                      casualLeave: 'Casual Leave',
-                      earnedLeave: 'Earned Leave',
-                      medicalLeave: 'Medical Leave',
-                      maternityLeave: 'Maternity Leave',
-                      paternityLeave: 'Paternity Leave',
-                      compensatoryOff: 'Compensatory Off (Comp Off)',
-                      personal: 'Personal',
-                      emergency: 'Emergency',
-                      ncns: 'NCNS (No Call No Show)',
-                      sandwichLeave: 'Sandwich Leave'
-                    };
-                    
+                    if (!enabled || key === 'vacation') return null;
+                    const label = LEAVE_TYPE_LABELS[key];
+                    if (!label) return null;
                     return (
-                      <SelectItem key={key} value={leaveTypeLabels[key]} className="rounded-lg">
-                        {leaveTypeLabels[key]}
+                      <SelectItem key={key} value={label} className="rounded-lg">
+                        {label}
                       </SelectItem>
                     );
                   })}
@@ -995,14 +1008,63 @@ Reason: ${leave.reason}
               >
                 Cancel
               </Button>
-              <Button 
-                className="flex-1 rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl" 
-                onClick={handleSubmitLeave}
+              <Button
+                type="button"
+                disabled={submittingLeave}
+                className="flex-1 rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-60"
+                onClick={() => void handleSubmitLeave()}
               >
-                {editingLeaveId ? 'Save Changes' : 'Submit Request'}
+                {submittingLeave
+                  ? 'Submitting…'
+                  : editingLeaveId
+                    ? 'Save Changes'
+                    : 'Submit Request'}
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!viewingLeave} onOpenChange={(open) => !open && setViewingLeave(null)}>
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>Leave request details</DialogTitle>
+            <DialogDescription>Full details for your leave application</DialogDescription>
+          </DialogHeader>
+          {viewingLeave && (
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">Type</span>
+                <span className="font-medium">{viewingLeave.leaveType || viewingLeave.type}</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">Status</span>
+                <Badge variant={viewingLeave.status === 'approved' ? 'default' : viewingLeave.status === 'pending' ? 'secondary' : 'destructive'}>
+                  {viewingLeave.status}
+                </Badge>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">From</span>
+                <span>{new Date(viewingLeave.startDate).toLocaleDateString()}</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">To</span>
+                <span>{new Date(viewingLeave.endDate).toLocaleDateString()}</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">Duration</span>
+                <span>
+                  {viewingLeave.days
+                    ? `${viewingLeave.days} day(s)`
+                    : '—'}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground block mb-1">Reason</span>
+                <p className="rounded-lg bg-muted/50 p-3">{viewingLeave.reason}</p>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

@@ -29,6 +29,7 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+    dedupe: ['react', 'react-dom', 'three'],
   },
 
   server: {
@@ -37,6 +38,10 @@ export default defineConfig({
         target: 'http://localhost:5000',
         changeOrigin: true,
         rewrite: (path) => path,
+      },
+      '/uploads': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
       },
     },
   },
@@ -86,6 +91,7 @@ export default defineConfig({
           'vendor-charts': ['recharts'],
           'vendor-forms': ['react-hook-form', 'react-dnd', 'react-dnd-html5-backend'],
           'vendor-utils': ['date-fns', 'clsx', 'tailwind-merge', 'class-variance-authority'],
+          'vendor-motion': ['framer-motion'],
         },
       },
     },

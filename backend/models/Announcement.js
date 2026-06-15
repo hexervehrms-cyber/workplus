@@ -1,4 +1,6 @@
 import mongoose from "mongoose";
+import { resolveOrganizationObjectId } from "../utils/workflowNotifications.js";
+import logger from "../utils/logger.js";
 
 const announcementSchema = new mongoose.Schema(
   {
@@ -24,6 +26,13 @@ const announcementSchema = new mongoose.Schema(
       type: String,
       enum: ["low", "medium", "high", "urgent"],
       default: "medium",
+      index: true
+    },
+    // Scope determines if announcement is global or organization-specific
+    scope: {
+      type: String,
+      enum: ["global", "organization"],
+      default: "organization",
       index: true
     },
     visibility: {
@@ -52,9 +61,9 @@ const announcementSchema = new mongoose.Schema(
       required: true,
       index: true
     },
+    // orgId is required for organization-scoped announcements, optional for global
     orgId: { 
       type: String, 
-      required: true,
       index: true
     },
     publishedAt: { 
@@ -140,6 +149,8 @@ const announcementSchema = new mongoose.Schema(
 );
 
 // Compound indexes for performance
+announcementSchema.index({ scope: 1, isPublished: 1, publishedAt: -1 });
+announcementSchema.index({ scope: 1, orgId: 1, isPublished: 1, publishedAt: -1 });
 announcementSchema.index({ orgId: 1, isPublished: 1, publishedAt: -1 });
 announcementSchema.index({ orgId: 1, isPinned: 1, publishedAt: -1 });
 announcementSchema.index({ authorId: 1, createdAt: -1 });
@@ -255,54 +266,103 @@ announcementSchema.methods.createNotifications = async function() {
   const Notification = mongoose.model('Notification');
   const User = mongoose.model('User');
   const Employee = mongoose.model('Employee');
-  
-  let targetUsers = [];
-  
+
+  const orgIdStr = String(this.orgId || '');
+  const orgOid = await resolveOrganizationObjectId(orgIdStr);
+  if (!orgOid) {
+    logger.warn('Could not resolve Organization id for announcement notifications', {
+      orgId: orgIdStr,
+    });
+    return [];
+  }
+
+  let targetUserIds = [];
+
   if (this.visibility === 'all') {
-    // Get all users in organization
-    const employees = await Employee.find({ orgId: this.orgId, status: 'active' })
-      .populate('userId')
+    const employees = await Employee.find({ orgId: orgIdStr, status: 'active' })
+      .select('userId')
       .lean();
-    targetUsers = employees.map(emp => emp.userId._id);
+    targetUserIds = employees.map((emp) => emp.userId).filter(Boolean);
+    if (targetUserIds.length === 0) {
+      const users = await User.find({ orgId: orgIdStr, isActive: true })
+        .select('_id')
+        .lean();
+      targetUserIds = users.map((u) => u._id);
+    }
   } else if (this.visibility === 'department') {
-    // Get users in specific departments
-    const employees = await Employee.find({ 
-      orgId: this.orgId, 
+    const employees = await Employee.find({
+      orgId: orgIdStr,
       status: 'active',
-      departmentId: { $in: this.targetAudience.departments }
-    }).populate('userId').lean();
-    targetUsers = employees.map(emp => emp.userId._id);
+      departmentId: { $in: this.targetAudience?.departments || [] }
+    })
+      .select('userId')
+      .lean();
+    targetUserIds = employees.map((emp) => emp.userId).filter(Boolean);
   } else if (this.visibility === 'role') {
-    // Get users with specific roles
-    const users = await User.find({ 
-      orgId: this.orgId,
+    const roles = this.targetAudience?.roles || [];
+    const users = await User.find({
+      orgId: orgIdStr,
       isActive: true,
-      role: { $in: this.targetAudience.roles }
-    }).lean();
-    targetUsers = users.map(user => user._id);
+      role: { $in: roles }
+    })
+      .select('_id role')
+      .lean();
+    targetUserIds = users.map((u) => u._id);
   } else if (this.visibility === 'specific_users') {
-    targetUsers = this.targetAudience.specificUsers;
+    targetUserIds = this.targetAudience?.specificUsers || [];
   }
-  
-  // Create notifications for all target users
-  const notifications = targetUsers.map(userId => ({
-    title: 'New Announcement',
-    message: this.title,
-    type: 'announcement',
-    priority: this.priority,
-    recipientId: userId,
-    senderId: this.authorId,
-    orgId: this.orgId,
-    relatedEntity: {
-      entityType: 'announcement',
-      entityId: this._id
-    },
-    actionUrl: `/announcements/${this._id}`
-  }));
-  
-  if (notifications.length > 0) {
-    await Notification.insertMany(notifications);
+
+  const authorIdStr = String(this.authorId || '');
+  const uniqueIds = [...new Set(targetUserIds.map((id) => String(id)))].filter(Boolean);
+  if (authorIdStr && !uniqueIds.includes(authorIdStr)) {
+    uniqueIds.push(authorIdStr);
   }
+  if (uniqueIds.length === 0) {
+    return [];
+  }
+
+  const usersByRole = await User.find({ _id: { $in: uniqueIds } })
+    .select('_id role')
+    .lean();
+  const roleById = new Map(usersByRole.map((u) => [String(u._id), u.role]));
+
+  const adminRoles = new Set(['admin', 'super_admin', 'hr', 'manager']);
+  const notifications = uniqueIds.map((userId) => {
+    const role = roleById.get(userId);
+    const actionUrl = role && adminRoles.has(role) ? '/admin/announcements' : '/employee/dashboard';
+    return {
+      title: 'New Announcement',
+      message: this.title,
+      type: 'announcement',
+      priority: this.priority,
+      recipientId: userId,
+      senderId: this.authorId,
+      orgId: orgOid,
+      relatedEntity: {
+        entityType: 'announcement',
+        entityId: this._id
+      },
+      actionUrl
+    };
+  });
+
+  const created = await Notification.insertMany(notifications);
+
+  if (global.io) {
+    for (const n of created) {
+      global.io.to(`user_${String(n.recipientId)}`).emit('notification', {
+        id: n._id,
+        title: n.title,
+        message: n.message,
+        type: n.type,
+        priority: n.priority,
+        createdAt: n.createdAt,
+        actionUrl: n.actionUrl
+      });
+    }
+  }
+
+  return created;
 };
 
 // Method to mark as read by user

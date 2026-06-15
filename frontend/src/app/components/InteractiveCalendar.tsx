@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Calendar as CalendarIcon, Plus, CheckCircle, XCircle, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
@@ -20,10 +20,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
-import { LeaveRequestService } from '../utils/api';
-import { apiGet } from '../utils/apiHelper';
+import { LeaveRequestService, extractApiList } from '../utils/api';
+import {
+  buildAndSubmitLeaveRequest,
+  formatLocalDateString,
+  isLeaveApiSuccess,
+} from '../utils/leaveSubmit';
+import {
+  apiGetSafe,
+  appendOrgIdParam,
+  holidaysStorageKey,
+  resolveAuthOrgId,
+} from '../utils/apiHelper';
+import realTimeSocket from '../utils/realTimeSocket';
 import { useAuth } from '../context/AuthContext';
-import { toast } from 'sonner';
+import { toast } from '../utils/portalToast';
 
 interface LeaveRequest {
   _id: string;
@@ -52,6 +63,7 @@ export default function InteractiveCalendar() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [showLeaveForm, setShowLeaveForm] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string>('');
+  const [submittingLeave, setSubmittingLeave] = useState(false);
   const [formData, setFormData] = useState({
     type: '',
     startDate: '',
@@ -62,61 +74,69 @@ export default function InteractiveCalendar() {
     reason: ''
   });
 
+  const authUserId = user?.userId || user?.id || '';
+
+  const loadHolidays = useCallback(async () => {
+    const year = new Date().getFullYear();
+    const holidayRes = await apiGetSafe<{ success?: boolean; data?: Holiday[] }>(
+      appendOrgIdParam(`holidays?year=${year}&limit=500`, user, resolveAuthOrgId(user)),
+      false
+    );
+    if (holidayRes.ok && holidayRes.data?.success && Array.isArray(holidayRes.data.data)) {
+      setHolidays(holidayRes.data.data);
+      const hKey = holidaysStorageKey(authUserId, user?.orgId || user?.tenantId);
+      try {
+        localStorage.setItem(hKey, JSON.stringify(holidayRes.data.data));
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    const hKey = holidaysStorageKey(authUserId, user?.orgId || user?.tenantId);
+    try {
+      const cached = localStorage.getItem(hKey);
+      if (cached) setHolidays(JSON.parse(cached));
+    } catch {
+      /* ignore */
+    }
+  }, [authUserId, user]);
+
+  const loadLeaveHistory = useCallback(async () => {
+    if (!authUserId) return;
+    const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
+    setLeaveHistory(extractApiList<LeaveRequest>(leaveResponse));
+  }, [authUserId]);
+
   // Fetch leave requests and holidays
   useEffect(() => {
+    if (!authUserId) {
+      setLoading(false);
+      return;
+    }
+
     const fetchData = async () => {
-      if (!user?.id) return;
-      
       try {
         setLoading(true);
-        
-        // Fetch leave requests
-        const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
-        if (leaveResponse.success && leaveResponse.data) {
-          setLeaveHistory(leaveResponse.data);
-        }
-
-        // Fetch holidays
-        const holidayData = await apiGet('/holidays');
-        if (holidayData?.success && Array.isArray(holidayData.data)) {
-          setHolidays(holidayData.data);
-        }
+        await Promise.all([loadLeaveHistory(), loadHolidays()]);
       } catch (error) {
-        console.error('Error fetching data:', error);
-        // Avoid noisy global toast on dashboard load; keep calendar usable with partial data.
+        console.error('Error fetching calendar data:', error);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchData();
-  }, [user]);
+    void fetchData();
+  }, [authUserId, loadLeaveHistory, loadHolidays]);
 
-  // Listen for real-time holiday updates via Socket.IO
   useEffect(() => {
-    const refreshHolidays = async () => {
-      try {
-        const holidayData = await apiGet('/holidays');
-        if (holidayData?.success && Array.isArray(holidayData.data)) {
-          setHolidays(holidayData.data);
-        }
-      } catch (error) {
-        console.error('Error refreshing holidays:', error);
-      }
+    const refreshHolidays = () => void loadHolidays();
+    realTimeSocket.on('holiday:update', refreshHolidays);
+    const unsubLeave = realTimeSocket.onLeaveUpdate(() => void loadLeaveHistory());
+    return () => {
+      realTimeSocket.off('holiday:update', refreshHolidays);
+      unsubLeave();
     };
-
-    // Import socket dynamically to avoid circular dependencies
-    import('../utils/realTimeSocket').then((module) => {
-      const socket = module.default;
-      if (socket) {
-        socket.on('holiday:update', refreshHolidays);
-        
-        return () => {
-          socket.off('holiday:update', refreshHolidays);
-        };
-      }
-    });
-  }, []);
+  }, [loadHolidays, loadLeaveHistory]);
 
   // Get days in month
   const getDaysInMonth = (date: Date) => {
@@ -211,7 +231,7 @@ export default function InteractiveCalendar() {
 
   // Open leave form
   const openLeaveForm = (day: Date) => {
-    const dateStr = day.toISOString().split('T')[0];
+    const dateStr = formatLocalDateString(day);
     setSelectedDate(dateStr);
     setFormData({
       type: '',
@@ -227,65 +247,82 @@ export default function InteractiveCalendar() {
 
   // Submit leave request
   const handleSubmitLeave = async () => {
-    if (!user?.id || !formData.type || !formData.startDate || !formData.endDate || !formData.reason) {
-      toast.error('Please fill in all required fields');
-      return;
-    }
-
-    if (formData.isHourlyLeave && (!formData.startTime || !formData.endTime)) {
-      toast.error('Please select start and end time for hourly leave');
-      return;
-    }
-
     try {
-      const employeeId = user.employeeId || user.id;
-      const orgId = user.orgId || 'system';
-
-      const startDate = new Date(formData.startDate);
-      const endDate = new Date(formData.endDate);
-
-      const leaveData = {
-        userId: user.id,
-        employeeId: employeeId,
-        leaveType: formData.type,
-        startDate: startDate.toISOString(),
-        endDate: endDate.toISOString(),
+      setSubmittingLeave(true);
+      const result = await buildAndSubmitLeaveRequest(user, {
+        type: formData.type,
+        startDate: formData.startDate,
+        endDate: formData.endDate,
         reason: formData.reason,
-        orgId: orgId,
         isHourlyLeave: formData.isHourlyLeave,
-        startTime: formData.isHourlyLeave ? formData.startTime : undefined,
-        endTime: formData.isHourlyLeave ? formData.endTime : undefined
-      };
+        leaveDuration: formData.isHourlyLeave ? 'hourly' : 'full',
+        startTime: formData.startTime,
+        endTime: formData.endTime,
+      });
 
-      const response = await LeaveRequestService.createLeaveRequest(leaveData);
-      
-      if (response.success) {
-        toast.success('Leave request submitted successfully');
-        setShowLeaveForm(false);
-        setFormData({ type: '', startDate: '', endDate: '', startTime: '09:00', endTime: '10:00', isHourlyLeave: false, reason: '' });
-        
-        const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(user.id);
-        if (updatedLeaves.success && updatedLeaves.data) {
-          setLeaveHistory(updatedLeaves.data);
+      if (!result.ok) {
+        let msg = result.error || 'Failed to submit leave request';
+        if (msg.toLowerCase().includes('route not found')) {
+          msg = 'Leave API unavailable — redeploy backend or sign in again.';
         }
-      } else {
-        toast.error(response.message || 'Failed to submit leave request');
+        toast.error(msg);
+        return;
       }
+
+      const response = result.response;
+      const autoApproved =
+        isLeaveApiSuccess(response) &&
+        !!(
+          (response as { data?: { autoApproved?: boolean; leaveRequest?: { autoApproved?: boolean } } })
+            ?.data?.autoApproved ||
+          (response as { data?: { leaveRequest?: { autoApproved?: boolean } } })?.data?.leaveRequest
+            ?.autoApproved
+        );
+      toast.success(
+        autoApproved
+          ? 'Leave request was auto-approved by policy'
+          : 'Leave request submitted — pending admin approval'
+      );
+      setShowLeaveForm(false);
+      setFormData({
+        type: '',
+        startDate: '',
+        endDate: '',
+        startTime: '09:00',
+        endTime: '10:00',
+        isHourlyLeave: false,
+        reason: '',
+      });
+      await loadLeaveHistory();
     } catch (error) {
       console.error('Error submitting leave request:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to submit leave request');
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to submit leave request'
+      );
+    } finally {
+      setSubmittingLeave(false);
     }
   };
+
+  if (loading) {
+    return (
+      <Card className="p-6 rounded-2xl">
+        <div className="flex items-center justify-center py-16">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <>
       {/* Interactive Calendar */}
-      <Card className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-visible relative z-0">
-        <div className="space-y-6 overflow-visible">
+      <Card className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-hidden flex flex-col h-full">
+        <div className="space-y-6 flex-1 flex flex-col min-w-0 overflow-hidden">
           {/* Calendar Header */}
-          <div className="flex items-center justify-between p-1 bg-muted/20 rounded-xl border border-foreground/10">
+          <div className="flex items-center justify-between p-1 bg-muted/20 rounded-xl border border-foreground/10 flex-shrink-0">
             <h3 className="font-semibold text-lg text-foreground ml-4">Apply Leave</h3>
-            <div className="flex gap-1">
+            <div className="flex gap-1 flex-shrink-0">
               <Button
                 variant="ghost"
                 size="sm"
@@ -306,7 +343,7 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Month/Year Display */}
-          <div className="text-center">
+          <div className="text-center flex-shrink-0">
             <h2 className="text-xl font-bold text-foreground">
               {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
             </h2>
@@ -316,7 +353,7 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Weekday Headers */}
-          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-visible bg-muted/30 shadow-sm">
+          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-hidden bg-muted/30 shadow-sm flex-shrink-0">
             {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => (
               <div 
                 key={day} 
@@ -330,7 +367,7 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Calendar Days */}
-          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-visible shadow-sm bg-background relative z-0">
+          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-hidden shadow-sm bg-background flex-1 min-h-0">
             {getDaysInMonth(currentMonth).map((day, index) => {
               if (!day) {
                 return (
@@ -402,7 +439,7 @@ export default function InteractiveCalendar() {
                         </>
                       ) : leave ? (
                         <>
-                          <div className="font-medium">{leaveStatus?.charAt(0).toUpperCase() + leaveStatus?.slice(1)} Leave</div>
+                          <div className="font-medium">{(leaveStatus?.charAt(0) ?? '').toUpperCase() + (leaveStatus?.slice(1) ?? '')} Leave</div>
                           <div className="text-gray-300">Click for details</div>
                         </>
                       ) : null}
@@ -426,29 +463,29 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Legend */}
-          <div className="mt-6 p-4 bg-muted/30 rounded-xl border border-foreground/10">
+          <div className="mt-6 p-4 bg-muted/30 rounded-xl border border-foreground/10 flex-shrink-0">
             <h4 className="text-sm font-medium text-foreground mb-3">Legend</h4>
             <div className="grid grid-cols-2 gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-red-100 border border-red-200 flex items-center justify-center">
+                <div className="w-4 h-4 rounded-full bg-red-100 border border-red-200 flex items-center justify-center flex-shrink-0">
                   <div className="w-2 h-2 rounded-full bg-red-500" />
                 </div>
                 <span className="text-xs text-muted-foreground">Weekend</span>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-green-100 border border-green-200 flex items-center justify-center">
+                <div className="w-4 h-4 rounded-full bg-green-100 border border-green-200 flex items-center justify-center flex-shrink-0">
                   <div className="w-2 h-2 rounded-full bg-green-500" />
                 </div>
                 <span className="text-xs text-muted-foreground">Holiday</span>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">
+                <div className="w-4 h-4 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
                   <div className="w-2 h-2 rounded-full bg-primary" />
                 </div>
                 <span className="text-xs text-muted-foreground">Approved Leave</span>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-yellow-100 border border-yellow-200 flex items-center justify-center">
+                <div className="w-4 h-4 rounded-full bg-yellow-100 border border-yellow-200 flex items-center justify-center flex-shrink-0">
                   <div className="w-2 h-2 rounded-full bg-yellow-500" />
                 </div>
                 <span className="text-xs text-muted-foreground">Pending Leave</span>
@@ -579,16 +616,18 @@ export default function InteractiveCalendar() {
                 className="flex-1 rounded-xl border-foreground/20 hover:bg-muted/50 transition-all duration-200" 
                 onClick={() => {
                   setShowLeaveForm(false);
-                  setFormData({ type: '', startDate: '', endDate: '', reason: '' });
+                  setFormData({ type: '', startDate: '', endDate: '', startTime: '09:00', endTime: '10:00', isHourlyLeave: false, reason: '' });
                 }}
               >
                 Cancel
               </Button>
               <Button 
+                type="button"
                 className="flex-1 rounded-xl bg-primary hover:bg-primary/90 transition-all duration-200 shadow-lg hover:shadow-xl" 
                 onClick={handleSubmitLeave}
+                disabled={submittingLeave}
               >
-                Submit Request
+                {submittingLeave ? 'Submitting…' : 'Submit Request'}
               </Button>
             </div>
           </div>

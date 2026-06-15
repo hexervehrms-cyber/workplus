@@ -3,12 +3,22 @@
  * Features: Session persistence, proactive token refresh, role-based routing
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { AuthService, TokenManager, ApiError, TokenRefreshService } from '../utils/api';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { AuthService, TokenManager, ApiError } from '../utils/api';
 import { socketService, ConnectionState } from '../utils/socket';
-import { clearApiCache } from '../utils/apiHelper';
+import realTimeSocket from '../utils/realTimeSocket';
+import { clearApiCache, clearAllHolidayCaches } from '../utils/apiHelper';
+import {
+  ensureAccessToken,
+  refreshAccessToken,
+  hydrateAccessToken,
+  isRefreshEndpointUnavailable,
+} from '../utils/sessionAuth';
+import { getRefreshTokenMirror } from '../utils/sessionAccessMirror';
 import { clearPersistedAttendance } from '../utils/attendancePersistence';
-import { toast } from 'sonner';
+import { clearUserScopedLocalStorage } from '../utils/userScopedStorage';
+import { broadcastUserSessionCleared } from '../utils/clientSessionSync';
+import { isPublicBootstrapPath, hasStoredSessionHint } from '../utils/publicPaths';
 
 export type UserRole = 'super_admin' | 'admin' | 'hr' | 'manager' | 'accountant' | 'employee';
 
@@ -39,27 +49,41 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Session check interval (15 minutes) — proactive refresh / expiry warnings only
-const SESSION_CHECK_INTERVAL = 15 * 60 * 1000;
+// Proactive JWT refresh (access token TTL is 15m on server)
+const SESSION_CHECK_INTERVAL = 4 * 60 * 1000;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [socketConnected, setSocketConnected] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const userRef = useRef<User | null>(null);
+  const socketWasConnectedRef = useRef(false);
+
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
 
   const performLogout = useCallback(async () => {
     setLoading(true);
+    const uid = userRef.current?.id ? String(userRef.current.id) : null;
 
     try {
       await AuthService.logout();
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
+      try {
+        await clearPersistedAttendance(uid);
+      } catch (e) {
+        console.warn('clearPersistedAttendance on logout:', e);
+      }
       // Clear all state immediately
       setUser(null);
       setSocketConnected(false);
       socketService.disconnect();
+      realTimeSocket.disconnect();
+      socketWasConnectedRef.current = false;
       
       // Clear localStorage
       localStorage.removeItem('dashboardCache');
@@ -68,10 +92,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem('authToken');
       localStorage.removeItem('token');
       localStorage.removeItem('refreshToken');
+      localStorage.removeItem('wp_session_hint');
       localStorage.removeItem('cached_holidays');
+      clearAllHolidayCaches();
+
+      clearUserScopedLocalStorage(uid);
+      clearApiCache();
+      broadcastUserSessionCleared();
 
       setLoading(false);
-      toast.info('You have been logged out.');
 
       // Force redirect to login
       window.location.href = '/login';
@@ -85,17 +114,48 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await performLogout();
   }, [performLogout]);
 
+  const connectSocketsInBackground = useCallback((sessionUser: User) => {
+    void (async () => {
+      try {
+        await ensureAccessToken();
+        const socketUserId = String(sessionUser.userId || sessionUser.id);
+        const connectionPromise = socketService.connect(
+          socketUserId,
+          sessionUser.role,
+          sessionUser.tenantId || sessionUser.orgId
+        );
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Socket connection timeout')), 8000)
+        );
+        await Promise.race([connectionPromise, timeoutPromise]);
+
+        realTimeSocket.connectFromAuth({
+          id: socketUserId,
+          role: sessionUser.role,
+          orgId: sessionUser.orgId,
+          tenantId: sessionUser.tenantId || sessionUser.orgId,
+        });
+
+        setSocketConnected(socketService.getState() === 'connected');
+      } catch (error) {
+        console.warn('[AUTH] Socket connect deferred failed:', error);
+        setSocketConnected(false);
+      }
+    })();
+  }, []);
+
   // Socket state callback — registered first so connect() in bootstrap can update UI.
   useEffect(() => {
     let isMounted = true;
     socketService.setStateChangeCallback((state: ConnectionState) => {
       if (!isMounted) return;
       setSocketConnected(state === 'connected');
-      if (state === 'reconnecting') {
+      if (state === 'connected') {
+        socketWasConnectedRef.current = true;
+      } else if (state === 'reconnecting') {
         console.log('🔄 [AUTH] Socket reconnecting...');
-      } else if (state === 'disconnected') {
+      } else if (state === 'disconnected' && socketWasConnectedRef.current && userRef.current) {
         console.warn('⚠️ [AUTH] Socket disconnected');
-        toast.error('Lost connection to real-time server');
       }
     });
     return () => {
@@ -115,62 +175,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
 
     const tryRefreshAccessToken = async (): Promise<boolean> => {
-      try {
-        const svc = new TokenRefreshService();
-        const result = await svc.refreshToken();
-        return !!(result.success && result.data?.token);
-      } catch {
-        return false;
-      }
+      const token = await refreshAccessToken();
+      return !!token;
+    };
+
+    const finish = (sessionUser: User | null) => {
+      if (cancelled) return;
+      setLoading(false);
+      setIsInitialized(true);
+      if (sessionUser) connectSocketsInBackground(sessionUser);
+    };
+
+    const fetchCurrentUser = async () => {
+      const timeoutMs = 15000;
+      return Promise.race([
+        AuthService.getCurrentUser(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs))
+      ]);
     };
 
     const initializeAuth = async () => {
       let userForSocket: User | null = null;
 
-      const finish = async () => {
-        if (cancelled) return;
-        if (userForSocket) {
-          try {
-            // Connect to Socket.IO with proper error handling and timeout
-            const connectionPromise = socketService.connect(
-              userForSocket.id,
-              userForSocket.role,
-              userForSocket.tenantId || userForSocket.orgId
-            );
-            
-            // Add timeout to prevent hanging
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Socket connection timeout')), 10000)
-            );
-            
-            await Promise.race([connectionPromise, timeoutPromise]);
-            
-            if (!cancelled) {
-              const state = socketService.getState();
-              setSocketConnected(state === 'connected');
-              console.log('✅ [AUTH] Socket.IO connected successfully, state:', state);
-            }
-          } catch (error) {
-            console.error('❌ [AUTH] Failed to connect to Socket.IO during bootstrap:', error);
-            if (!cancelled) {
-              setSocketConnected(false);
-              // Show warning but don't block app initialization
-              toast.warning('Real-time updates unavailable. Some features may be limited.');
-            }
-          }
-        }
-        if (!cancelled) {
-          setLoading(false);
-          setIsInitialized(true);
-        }
-      };
-
       try {
         await TokenManager.hydrateFromIndexedDB();
-        // Try to get current user from backend (uses httpOnly cookie + Redis session)
+
+        if (
+          isPublicBootstrapPath() &&
+          !TokenManager.get() &&
+          !hasStoredSessionHint() &&
+          !getRefreshTokenMirror()
+        ) {
+          finish(null);
+          return;
+        }
+
         try {
-          const currentUser = await AuthService.getCurrentUser();
+          let currentUser = await fetchCurrentUser();
+          if (!currentUser && (TokenManager.get() || getRefreshTokenMirror())) {
+            await tryRefreshAccessToken();
+            await ensureAccessToken();
+            currentUser = await fetchCurrentUser();
+          }
           if (currentUser) {
+            if (!TokenManager.get()) {
+              await tryRefreshAccessToken();
+            }
+            await ensureAccessToken();
             console.log('✅ User restored from Redis session:', {
               id: currentUser.id,
               email: currentUser.email,
@@ -178,7 +229,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             });
             setUser(currentUser);
             userForSocket = currentUser;
-            await finish();
+            finish(userForSocket);
             return;
           }
         } catch (error) {
@@ -186,8 +237,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const recovered = await tryRefreshAccessToken();
             if (recovered) {
               try {
-                const retryUser = await AuthService.getCurrentUser();
+                const retryUser = await fetchCurrentUser();
                 if (retryUser) {
+                  await ensureAccessToken();
                   console.log('✅ User restored after token refresh:', {
                     id: retryUser.id,
                     email: retryUser.email,
@@ -195,32 +247,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   });
                   setUser(retryUser);
                   userForSocket = retryUser;
-                  await finish();
+                  finish(userForSocket);
                   return;
                 }
               } catch {
                 console.log('No valid session found');
                 setUser(null);
-                userForSocket = null;
-                await finish();
+                finish(null);
                 return;
               }
+            } else if (getRefreshTokenMirror()) {
+              console.warn('[AUTH] Refresh token present but session restore failed');
+              setUser(null);
+              finish(null);
+              return;
             } else {
               console.log('Token refresh failed, no session');
               setUser(null);
-              userForSocket = null;
-              await finish();
+              finish(null);
               return;
             }
           } else {
             console.warn('Could not verify session with backend:', error);
+            if (getRefreshTokenMirror()) {
+              const recovered = await tryRefreshAccessToken();
+              if (recovered) {
+                try {
+                  const retryUser = await fetchCurrentUser();
+                  if (retryUser) {
+                    await ensureAccessToken();
+                    setUser(retryUser);
+                    userForSocket = retryUser;
+                    finish(userForSocket);
+                    return;
+                  }
+                } catch {
+                  /* fall through */
+                }
+              }
+            }
           }
         }
       } catch (error) {
         console.error('Auth initialization error:', error);
       }
 
-      await finish();
+      finish(userForSocket);
     };
 
     // Only initialize on mount, not after login
@@ -231,54 +303,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [connectSocketsInBackground, isInitialized]);
 
   // Session check interval — attempt refresh before forcing logout when access token expires
   useEffect(() => {
     if (!user) return;
 
-    const tryRefreshAccessToken = async (): Promise<boolean> => {
-      try {
-        const svc = new TokenRefreshService();
-        const result = await svc.refreshToken();
-        return !!(result.success && result.data?.token);
-      } catch {
-        return false;
-      }
-    };
-
     const checkSession = () => {
       void (async () => {
-        const token = TokenManager.get();
-        if (!token) {
+        await hydrateAccessToken();
+        if (!TokenManager.get() && !getRefreshTokenMirror()) {
           return;
         }
-
+        if (isRefreshEndpointUnavailable()) {
+          return;
+        }
         try {
-          const payload = JSON.parse(atob(token.split('.')[1]));
-          const exp = payload.exp * 1000;
-
-          const timeUntilExpiry = exp - Date.now();
-          if (timeUntilExpiry < 5 * 60 * 1000 && timeUntilExpiry > 0) {
-            toast.warning('Your session will expire soon. Please save your work.');
-          }
-
-          if (Date.now() >= exp) {
-            const refreshed = await tryRefreshAccessToken();
-            if (!refreshed) {
-              toast.error('Your session has expired. Please log in again.');
-              await performLogout();
-            }
-          }
+          await ensureAccessToken();
         } catch (error) {
-          console.error('Session check error (ignored; not forcing logout):', error);
+          console.warn('[AUTH] Proactive refresh failed (not logging out):', error);
         }
       })();
     };
 
     const interval = setInterval(checkSession, SESSION_CHECK_INTERVAL);
     return () => clearInterval(interval);
-  }, [user, performLogout]);
+  }, [user]);
 
   // Login function
   const login = useCallback(async (email: string, password: string) => {
@@ -300,36 +350,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Verify role is present and valid
         if (!result.user.role) {
           console.error('❌ Login response missing role field', result.user);
-          toast.error('Login failed: Invalid user data');
           setLoading(false);
           return { success: false, error: 'Invalid user data' };
         }
 
         // Validate role is one of the expected values
         const validRoles = ['super_admin', 'admin', 'hr', 'manager', 'accountant', 'employee'];
-        if (!validRoles.includes(result.user.role)) {
-          console.error('❌ Invalid role received:', result.user.role, 'Type:', typeof result.user.role);
-          toast.error('Login failed: Invalid user role');
+        const userRole = String(result.user.role) as UserRole;
+        if (!validRoles.includes(userRole)) {
+          console.error('❌ Invalid role received:', userRole, 'Type:', typeof userRole);
           setLoading(false);
           return { success: false, error: 'Invalid user role' };
         }
 
+        const normalizedUser: User = {
+          id: String(result.user.id),
+          userId: result.user.userId != null ? String(result.user.userId) : undefined,
+          name: String(result.user.name ?? ''),
+          email: String(result.user.email ?? ''),
+          role: userRole,
+          avatar: result.user.avatar != null ? String(result.user.avatar) : undefined,
+          organization: result.user.organization != null ? String(result.user.organization) : undefined,
+          tenantId: result.user.tenantId != null ? String(result.user.tenantId) : undefined,
+          orgId: result.user.orgId != null ? String(result.user.orgId) : undefined,
+          employeeId: result.user.employeeId != null ? String(result.user.employeeId) : undefined,
+          employeeCode: result.user.employeeCode != null ? String(result.user.employeeCode) : undefined,
+        };
+
         console.log('✅ Login successful - User data:', {
-          id: result.user.id,
-          email: result.user.email,
-          role: result.user.role,
-          roleType: typeof result.user.role,
-          name: result.user.name
+          id: normalizedUser.id,
+          email: normalizedUser.email,
+          role: normalizedUser.role,
+          roleType: typeof normalizedUser.role,
+          name: normalizedUser.name
         });
 
         // Update user state - this will trigger RoleBasedRedirect
-        console.log('🔐 Setting user state with role:', result.user.role);
-        setUser(result.user);
+        console.log('🔐 Setting user state with role:', normalizedUser.role);
+        clearUserScopedLocalStorage(normalizedUser.id);
+        setUser(normalizedUser);
         setLoading(false);
-        setIsInitialized(true); // Mark as initialized so we don't re-fetch
-        toast.success(`Welcome back, ${result.user.name}!`);
-        
-        // Return success - RoleBasedRedirect will handle navigation
+        setIsInitialized(true);
+        clearApiCache();
+        connectSocketsInBackground(normalizedUser);
+
         return { success: true };
       }
 
@@ -346,28 +410,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         errorMessage = error.message;
       }
 
-      toast.error(errorMessage);
       setLoading(false);
       return { success: false, error: errorMessage };
     }
-  }, []);
+  }, [connectSocketsInBackground]);
 
-  // Switch role (for demo/testing)
+  // UI-only role preview (JWT / API always use server-assigned role; disabled in production builds)
   const switchRole = useCallback((role: UserRole) => {
-    if (user) {
-      const updatedUser = { ...user, role };
-      setUser(updatedUser);
-      TokenManager.setUser(updatedUser);
-
-      // Reconnect socket with new role
-      socketService.disconnect();
-      socketService.connect(user.id, role, user.tenantId)
-        .then(() => setSocketConnected(true))
-        .catch((error) => {
-          console.error('Failed to reconnect socket:', error);
-          setSocketConnected(false);
-        });
+    if (!import.meta.env.DEV) {
+      return;
     }
+    if (!user) return;
+
+    const token = TokenManager.get();
+    let jwtRole: UserRole = user.role;
+    if (token) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1])) as { role?: UserRole };
+        if (payload.role) jwtRole = payload.role;
+      } catch {
+        /* use stored role */
+      }
+    }
+
+    const updatedUser = { ...user, role };
+    setUser(updatedUser);
+    TokenManager.setUser(updatedUser);
+    clearApiCache();
+
+    socketService.disconnect();
+    realTimeSocket.disconnect();
+    const tenant = user.tenantId || user.orgId;
+    socketService
+      .connect(user.id, jwtRole, tenant)
+      .then(() => {
+        realTimeSocket.connectFromAuth({
+          id: user.id,
+          role: jwtRole,
+          orgId: user.orgId,
+          tenantId: tenant
+        });
+        setSocketConnected(true);
+      })
+      .catch((error) => {
+        console.error('Failed to reconnect socket:', error);
+        setSocketConnected(false);
+      });
   }, [user]);
 
   const value: AuthContextType = {
@@ -421,10 +509,10 @@ export function useRoleRedirect(): string {
       path = '/super-admin';
       break;
     case 'admin':
+    case 'hr':
       path = '/admin';
       break;
     case 'employee':
-    case 'hr':
     case 'manager':
     case 'accountant':
       path = '/employee';

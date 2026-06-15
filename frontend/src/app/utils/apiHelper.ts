@@ -4,14 +4,51 @@
  */
 
 import { TokenManager } from './api';
+import { ensureAccessToken, refreshAccessToken } from './sessionAuth';
+import { getApiBaseUrl } from './apiBaseUrl';
 
 // Simple request cache for GET requests
 const requestCache = new Map<string, { data: any; timestamp: number }>();
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const inFlightGet = new Map<string, Promise<unknown>>();
+const CACHE_DURATION = 2 * 60 * 1000; // 2 minutes default
+const ATTENDANCE_CACHE_MS = 20 * 1000; // short TTL for live attendance
 const REQUEST_TIMEOUT_MS = 30_000;
 
+function cacheTtlForEndpoint(endpoint: string): number {
+  const e = endpoint.toLowerCase();
+  if (e.includes('/attendance/')) return ATTENDANCE_CACHE_MS;
+  if (e.includes('/dashboard/')) return 60 * 1000;
+  return CACHE_DURATION;
+}
+
 function cacheKeyForEndpoint(endpoint: string): string {
-  return endpoint.trim();
+  const ep = endpoint.trim();
+  const token = TokenManager.get();
+  let sessionKey = 'anon';
+  if (token) {
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1])) as {
+        userId?: string;
+        sub?: string;
+        id?: string;
+        orgId?: string;
+        tenantId?: string;
+        role?: string;
+        exp?: number;
+      };
+      const uid = payload.userId || payload.sub || payload.id;
+      const org = payload.orgId || payload.tenantId;
+      const role = payload.role;
+      if (uid) {
+        sessionKey = `u:${String(uid)}:o:${org || '_'}:r:${role || '_'}`;
+      } else {
+        sessionKey = `t:${token.length}:${token.slice(-16)}`;
+      }
+    } catch {
+      sessionKey = `t:${token.length}:${token.slice(-16)}`;
+    }
+  }
+  return `${sessionKey}::${ep}`;
 }
 
 async function fetchWithTimeout(
@@ -33,35 +70,39 @@ async function fetchWithTimeout(
  * In production: uses VITE_API_URL environment variable
  * In development: uses /api (Vite proxy)
  */
-export const getApiBaseUrl = (): string => {
-  const apiUrl = import.meta.env.VITE_API_URL;
-  
-  if (!apiUrl) {
-    if (typeof window !== 'undefined' && (window.location.hostname.includes('hexerve.online') || window.location.hostname.includes('vercel.app'))) {
-      return 'https://workplus-backend-sg3a.onrender.com/api';
-    }
-    return '/api';
-  }
-  
-  const baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
-  
-  if (baseUrl === '/api' || baseUrl.endsWith('/api')) {
-    return baseUrl;
-  }
-  
-  return `${baseUrl}/api`;
-};
+export { getApiBaseUrl };
 
 /**
  * Build full API URL
  * @param endpoint - API endpoint (e.g., '/expenses', 'expenses/user/123')
  * @returns Full API URL
  */
+/** Strip leading `/api/` for buildApiUrl (which already includes `/api`). */
+export function normalizeApiEndpoint(endpoint: string): string {
+  const e = endpoint.trim();
+  if (e.startsWith('http://') || e.startsWith('https://')) return e;
+  return e.replace(/^\/api\//, '').replace(/^\//, '');
+}
+
 export const buildApiUrl = (endpoint: string): string => {
   const baseUrl = getApiBaseUrl();
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
   return `${baseUrl}/${cleanEndpoint}`;
 };
+
+/** Access token from session mirror (IndexedDB + memory) — prefer over localStorage.authToken */
+export function getBearerToken(): string | null {
+  return TokenManager.get();
+}
+
+/** Fetch headers with Bearer token when available */
+export function bearerAuthHeaders(extra?: Record<string, string>): HeadersInit {
+  const token = getBearerToken();
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extra,
+  };
+}
 
 /**
  * Make an API request with proper headers and error handling
@@ -69,38 +110,67 @@ export const buildApiUrl = (endpoint: string): string => {
  * @param options - Fetch options
  * @returns Response data
  */
+export type ApiRequestOptions = RequestInit & {
+  skipContentType?: boolean;
+  /** Override default 30s timeout (e.g. onboarding send-email uses 90s on server). */
+  timeoutMs?: number;
+};
+
 export const apiRequest = async <T = any>(
   endpoint: string,
-  options: RequestInit = {}
+  options: ApiRequestOptions = {},
+  retriedAuth = false
 ): Promise<T> => {
   const url = buildApiUrl(endpoint);
-  const token = TokenManager.get();
+  const token = await ensureAccessToken();
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const { timeoutMs: _timeoutMs, skipContentType, ...fetchOptions } = options;
 
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-    ...(token && { Authorization: `Bearer ${token}` }),
-    ...options.headers
+  const headers: Record<string, string> = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(fetchOptions.headers as Record<string, string> | undefined),
   };
 
+  // Only set Content-Type if not FormData and not skipped
+  if (!skipContentType && !(fetchOptions.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   const config: RequestInit = {
-    ...options,
+    ...fetchOptions,
     headers,
-    credentials: options.credentials ?? 'include'
+    credentials: fetchOptions.credentials ?? 'include'
   };
 
   try {
-    const response = await fetchWithTimeout(url, config, REQUEST_TIMEOUT_MS);
+    let response = await fetchWithTimeout(url, config, timeoutMs);
+
+    if (response.status === 401 && !retriedAuth) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        TokenManager.set(refreshed);
+        return apiRequest<T>(endpoint, options, true);
+      }
+    }
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `API request failed: ${response.status}`);
+      const err = new Error(
+        errorData.message || `API request failed: ${response.status}`
+      ) as Error & { code?: string; status?: number };
+      err.code = errorData.code;
+      err.status = response.status;
+      throw err;
     }
 
     const data = await response.json();
+    if (data && typeof data === 'object' && data.success === false) {
+      throw new Error(data.message || 'Request failed');
+    }
     return data;
   } catch (error: any) {
     if (error?.name === 'AbortError') {
-      throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+      throw new Error(`Request timed out after ${timeoutMs / 1000}s`);
     }
     console.error(`API request failed for ${endpoint}:`, error);
     throw error;
@@ -108,46 +178,219 @@ export const apiRequest = async <T = any>(
 };
 
 /**
+ * Authenticated fetch returning the raw Response (blobs, CSV, custom parsing).
+ */
+export async function apiFetch(
+  endpoint: string,
+  options: RequestInit & { skipContentType?: boolean } = {},
+  retriedAuth = false
+): Promise<Response> {
+  const normalized = normalizeApiEndpoint(endpoint);
+  const url = normalized.startsWith('http') ? normalized : buildApiUrl(normalized);
+  const token = await ensureAccessToken();
+
+  const headers: Record<string, string> = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers as Record<string, string> | undefined),
+  };
+
+  if (!options.skipContentType && !(options.body instanceof FormData)) {
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+  }
+
+  const config: RequestInit = {
+    ...options,
+    headers,
+    credentials: options.credentials ?? 'include',
+  };
+
+  let response = await fetchWithTimeout(url, config, REQUEST_TIMEOUT_MS);
+
+  if (response.status === 401 && !retriedAuth) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      TokenManager.set(refreshed);
+      return apiFetch(endpoint, options, true);
+    }
+  }
+
+  return response;
+}
+
+export async function apiFetchBlob(
+  endpoint: string,
+  options: RequestInit & { skipContentType?: boolean } = {}
+): Promise<Blob> {
+  const response = await apiFetch(endpoint, { ...options, skipContentType: true });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      (errorData as { message?: string }).message ||
+        `API request failed: ${response.status}`
+    );
+  }
+  return response.blob();
+}
+
+/**
  * GET request with caching
  */
 export const apiGet = async <T = any>(endpoint: string, useCache = true): Promise<T> => {
   const cacheKey = cacheKeyForEndpoint(endpoint);
+  const ttl = cacheTtlForEndpoint(endpoint);
+
   if (useCache && requestCache.has(cacheKey)) {
     const cached = requestCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-      return cached.data;
+    if (cached && Date.now() - cached.timestamp < ttl) {
+      return cached.data as T;
     }
   }
 
-  const data = await apiRequest<T>(endpoint, { method: 'GET' });
-  
-  if (useCache) {
-    requestCache.set(cacheKey, { data, timestamp: Date.now() });
+  if (inFlightGet.has(cacheKey)) {
+    return inFlightGet.get(cacheKey) as Promise<T>;
   }
-  
-  return data;
+
+  const flight = apiRequest<T>(endpoint, { method: 'GET' })
+    .then((data) => {
+      if (useCache) {
+        requestCache.set(cacheKey, { data, timestamp: Date.now() });
+      }
+      return data;
+    })
+    .finally(() => {
+      inFlightGet.delete(cacheKey);
+    });
+
+  inFlightGet.set(cacheKey, flight);
+  return flight;
 };
+
+/** GET that never throws — for dashboards and background sync. */
+export async function apiGetSafe<T = unknown>(
+  endpoint: string,
+  useCache = true
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  try {
+    const data = await apiGet<T>(endpoint, useCache);
+    return { ok: true, data };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Request failed';
+    return { ok: false, error: message };
+  }
+}
 
 /**
  * Clear cache for specific endpoint or all
  */
-export const clearApiCache = (endpoint?: string) => {
+export const clearApiCache = (
+  endpoint?: string,
+  options?: { broadcast?: boolean }
+) => {
   if (endpoint) {
     requestCache.delete(cacheKeyForEndpoint(endpoint));
+    inFlightGet.delete(cacheKeyForEndpoint(endpoint));
   } else {
     requestCache.clear();
+    inFlightGet.clear();
+  }
+  if (options?.broadcast !== false && typeof window !== 'undefined') {
+    void import('./clientSessionSync').then(({ broadcastClearApiCache }) => {
+      broadcastClearApiCache(endpoint);
+    });
   }
 };
+
+/** Resolved tenant id from auth user (never returns literal "system"). */
+export function resolveAuthOrgId(
+  user: { orgId?: string; tenantId?: string } | null | undefined
+): string | null {
+  const id = user?.orgId || user?.tenantId;
+  if (!id || id === 'system') return null;
+  return String(id);
+}
+
+/** Resolve tenant org from user state, optionally refreshing from /auth/me. */
+export async function resolveOrgIdForApi(
+  user: { role?: string; orgId?: string; tenantId?: string; userId?: string; id?: string } | null | undefined
+): Promise<string | null> {
+  const fromUser = resolveAuthOrgId(user);
+  if (fromUser) return fromUser;
+  try {
+    const me = await apiGet<{
+      success?: boolean;
+      data?: { orgId?: string; tenantId?: string };
+      user?: { orgId?: string; tenantId?: string };
+    }>('auth/me', false);
+    const d = me?.data || me?.user;
+    const oid = d?.orgId || d?.tenantId;
+    if (oid && oid !== 'system') return String(oid);
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/** Append orgId query param when tenant scope must be explicit (super admin or fallback). */
+export function appendOrgIdParam(
+  url: string,
+  user: { role?: string; orgId?: string; tenantId?: string } | null | undefined,
+  explicitOrgId?: string | null
+): string {
+  const oid = explicitOrgId || resolveAuthOrgId(user);
+  if (!oid) return url;
+  if (user?.role !== 'super_admin' && url.includes('orgId=')) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  if (new RegExp(`(?:\\?|&)orgId=`).test(url)) return url;
+  return `${url}${sep}orgId=${encodeURIComponent(oid)}`;
+}
+
+/** Scoped localStorage key for holiday lists (per user + org). */
+export function holidaysStorageKey(
+  userId?: string | null,
+  orgId?: string | null
+): string {
+  return `cached_holidays:${userId || 'anon'}:${orgId || 'none'}`;
+}
+
+export function clearAllHolidayCaches(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('cached_holidays')) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 /**
  * POST request
  */
-export const apiPost = async <T = any>(endpoint: string, data?: any): Promise<T> => {
+export const apiPost = async <T = any>(
+  endpoint: string,
+  data?: any,
+  config?: Pick<ApiRequestOptions, 'timeoutMs'>
+): Promise<T> => {
   // Clear cache on POST (data mutation)
   clearApiCache();
+  
+  // Handle FormData separately - don't stringify it
+  if (data instanceof FormData) {
+    return apiRequest<T>(endpoint, {
+      method: 'POST',
+      body: data,
+      skipContentType: true, // Don't set Content-Type header for FormData
+      ...config,
+    });
+  }
+  
   return apiRequest<T>(endpoint, {
     method: 'POST',
-    body: data ? JSON.stringify(data) : undefined
+    body: data ? JSON.stringify(data) : undefined,
+    ...config,
   });
 };
 
@@ -189,10 +432,11 @@ export const apiDelete = async <T = any>(endpoint: string): Promise<T> => {
  */
 export const apiUpload = async <T = any>(
   endpoint: string,
-  formData: FormData
+  formData: FormData,
+  retriedAuth = false
 ): Promise<T> => {
   const url = buildApiUrl(endpoint);
-  const token = TokenManager.get();
+  const token = (await ensureAccessToken()) || TokenManager.get();
 
   const response = await fetchWithTimeout(
     url,
@@ -207,14 +451,27 @@ export const apiUpload = async <T = any>(
     REQUEST_TIMEOUT_MS
   );
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.message || 'Upload failed');
+  if (response.status === 401 && !retriedAuth) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      TokenManager.set(refreshed);
+      return apiUpload<T>(endpoint, formData, true);
+    }
   }
 
-  // Clear cache on upload
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      (errorData as { message?: string }).message || 'Upload failed'
+    );
+  }
+
   clearApiCache();
-  return response.json();
+  const data = await response.json();
+  if (data && typeof data === 'object' && data.success === false) {
+    throw new Error(data.message || 'Upload failed');
+  }
+  return data;
 };
 
 /**
@@ -229,13 +486,16 @@ export const getBackendUrl = (): string => {
     return apiUrl.endsWith('/api') ? apiUrl.slice(0, -4) : apiUrl;
   }
   
-  // Production fallback - use the deployed backend URL
-  if (import.meta.env.PROD) {
+  if (typeof window !== 'undefined' && (window.location.hostname.includes('hexerve.online') || window.location.hostname.includes('vercel.app'))) {
     return 'https://workplus-backend-sg3a.onrender.com';
   }
-  
-  // Development fallback - use window.location.origin (Vite proxy will handle it)
-  return window.location.origin;
+
+  // Development without VITE_API_URL: API uses `/api` and uploads use `/uploads` (Vite proxies both to Express)
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    return window.location.origin;
+  }
+
+  return typeof window !== 'undefined' ? window.location.origin : '';
 };
 
 /**
@@ -251,3 +511,81 @@ export const buildFileUrl = (filePath: string): string => {
   const backendUrl = getBackendUrl();
   return `${backendUrl}${filePath}`;
 };
+
+/** Extract and properly encode filename from stored receipt path (/uploads/receipts/...) */
+export function getReceiptFilename(receiptPath: string): string | null {
+  if (!receiptPath?.trim()) return null;
+  
+  // Handle both string and object receipt formats
+  let raw = typeof receiptPath === 'string' ? receiptPath : (receiptPath as any)?.filename || (receiptPath as any)?.path || (receiptPath as any)?.url || String(receiptPath);
+  
+  if (!raw?.trim()) return null;
+  
+  // Remove query parameters
+  const clean = String(raw).split('?')[0];
+  
+  // Split by both forward and backward slashes to handle different path formats
+  const parts = clean.split(/[/\\]/);
+  const name = parts[parts.length - 1];
+  
+  // Reject if empty or contains dangerous patterns
+  if (!name || name.includes('..')) return null;
+  
+  return name;
+}
+
+/**
+ * Load receipt via authenticated API (fallback: public /uploads static URL).
+ * Returns a blob: URL suitable for img/iframe preview.
+ */
+export async function fetchReceiptObjectUrl(receiptPath: string): Promise<string> {
+  const filename = getReceiptFilename(receiptPath);
+  const token = getBearerToken();
+
+  // Try authenticated API endpoint first
+  if (filename && token) {
+    try {
+      const response = await fetchWithTimeout(
+        buildApiUrl(`expenses/receipt/${encodeURIComponent(filename)}?inline=1`),
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          credentials: 'include',
+        },
+        REQUEST_TIMEOUT_MS
+      );
+      if (response.ok) {
+        const blob = await response.blob();
+        return URL.createObjectURL(blob);
+      } else if (response.status === 404) {
+        throw new Error('Receipt file not found');
+      } else if (response.status === 403) {
+        throw new Error('You do not have permission to view this receipt');
+      } else {
+        throw new Error(`Failed to load receipt (${response.status})`);
+      }
+    } catch (apiError) {
+      // Log but fall through to static URL as fallback
+      console.warn('API receipt fetch failed, trying static URL:', apiError);
+    }
+  }
+
+  // Fallback to public static URL
+  const staticUrl = buildFileUrl(receiptPath);
+  try {
+    const staticResponse = await fetchWithTimeout(
+      staticUrl,
+      { credentials: 'include' },
+      REQUEST_TIMEOUT_MS
+    );
+    if (!staticResponse.ok) {
+      if (staticResponse.status === 404) {
+        throw new Error('Receipt file not found');
+      }
+      throw new Error('Unable to load receipt');
+    }
+    const blob = await staticResponse.blob();
+    return URL.createObjectURL(blob);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error('Unable to load receipt');
+  }
+}

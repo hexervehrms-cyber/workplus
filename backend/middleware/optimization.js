@@ -137,6 +137,12 @@ export const optimizeResponse = (req, res, next) => {
  */
 export const requestTimeout = (timeout = 30000) => {
   return (req, res, next) => {
+    const isOnboardingEmail =
+      req.method === 'POST' &&
+      (req.originalUrl?.includes('/onboarding/send-email') ||
+        req.path?.includes('/send-email'));
+    const effectiveTimeout = isOnboardingEmail ? Math.max(timeout, 90000) : timeout;
+
     const timer = setTimeout(() => {
       if (!res.headersSent) {
         res.status(408).json({
@@ -145,7 +151,7 @@ export const requestTimeout = (timeout = 30000) => {
           code: 'REQUEST_TIMEOUT'
         });
       }
-    }, timeout);
+    }, effectiveTimeout);
     
     res.on('finish', () => clearTimeout(timer));
     res.on('close', () => clearTimeout(timer));

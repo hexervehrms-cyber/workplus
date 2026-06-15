@@ -1,57 +1,43 @@
 /**
- * Organization ID Validation Middleware
- * CRITICAL: Enforces strict tenant isolation to prevent cross-tenant data access
- * 
- * This middleware ensures:
- * 1. All authenticated requests have a valid orgId
- * 2. Users can only access their own organization's data
- * 3. Super admins can access any organization but must explicitly specify orgId
- * 4. No fallback to 'system' orgId - must be explicit
+ * Organization ID validation — strict tenant context (no "system" fallback for tenants).
  */
-
 import logger from '../utils/logger.js';
+import { isSuperAdmin, userOrgIdFromReq } from '../utils/orgScopeHelpers.js';
 
-/**
- * Validate that user has a valid orgId
- * Rejects requests without proper organization context
- */
 export const validateOrgId = (req, res, next) => {
   try {
-    const userOrgId = req.user?.orgId;
-    
-    // CRITICAL: Reject if no orgId
-    if (!userOrgId || userOrgId === undefined || userOrgId === null) {
+    if (!req.user) {
+      return next();
+    }
+
+    const role = req.user.role;
+    const raw =
+      req.user.orgId || req.user.tenantId || req.user.organizationId;
+
+    if (isSuperAdmin(req)) {
+      req.validatedOrgId = raw ? String(raw) : 'system';
+      if (raw && !req.user.orgId) {
+        req.user.orgId = String(raw);
+      }
+      return next();
+    }
+
+    const orgId = userOrgIdFromReq(req);
+    if (!orgId) {
       logger.warn('Request rejected: missing orgId', {
-        userId: req.user?.userId,
-        role: req.user?.role,
+        userId: req.user.userId,
+        role,
         path: req.path
       });
-      
       return res.status(403).json({
         success: false,
         message: 'Organization context required. Please log in again.',
         code: 'MISSING_ORG_CONTEXT'
       });
     }
-    
-    // CRITICAL: Reject 'system' orgId for non-super-admins
-    if (userOrgId === 'system' && req.user?.role !== 'super_admin') {
-      logger.warn('Request rejected: invalid orgId for non-super-admin', {
-        userId: req.user?.userId,
-        role: req.user?.role,
-        orgId: userOrgId,
-        path: req.path
-      });
-      
-      return res.status(403).json({
-        success: false,
-        message: 'Invalid organization context',
-        code: 'INVALID_ORG_CONTEXT'
-      });
-    }
-    
-    // Store validated orgId on request for use in route handlers
-    req.validatedOrgId = userOrgId;
+
+    req.validatedOrgId = orgId;
+    req.user.orgId = orgId;
     next();
   } catch (error) {
     logger.error('OrgId validation middleware error:', error);
@@ -63,43 +49,53 @@ export const validateOrgId = (req, res, next) => {
   }
 };
 
-/**
- * Enforce orgId in query/body parameters
- * Ensures users can't access other organizations' data via query parameters
- */
 export const enforceOrgIdInQuery = (req, res, next) => {
   try {
-    const userOrgId = req.user?.orgId;
+    if (!req.user) {
+      return next();
+    }
+
+    const userOrgId = req.validatedOrgId || userOrgIdFromReq(req);
     const userRole = req.user?.role;
-    const queryOrgId = req.query.orgId || req.body?.orgId;
-    
-    // Super admin can query any orgId
+    const explicitOrgId = req.query?.orgId || req.body?.orgId || req.body?.organizationId;
+    const explicitTrimmed =
+      explicitOrgId != null && String(explicitOrgId).trim() !== '' && String(explicitOrgId) !== 'system'
+        ? String(explicitOrgId).trim()
+        : null;
+
     if (userRole === 'super_admin') {
-      if (queryOrgId) {
-        req.validatedOrgId = queryOrgId;
+      if (explicitTrimmed) {
+        req.validatedOrgId = explicitTrimmed;
       }
       return next();
     }
-    
-    // Non-super-admin: must use their own orgId
-    if (queryOrgId && queryOrgId !== userOrgId) {
+
+    const tenantOrg = userOrgId || explicitTrimmed;
+    if (!tenantOrg) {
+      return res.status(403).json({
+        success: false,
+        message: 'Organization context required. Please log in again.',
+        code: 'MISSING_ORG_CONTEXT',
+      });
+    }
+
+    if (explicitTrimmed && userOrgId && String(explicitTrimmed) !== String(userOrgId)) {
       logger.warn('Request rejected: orgId mismatch', {
         userId: req.user?.userId,
         role: userRole,
         userOrgId,
-        queryOrgId,
-        path: req.path
+        queryOrgId: explicitTrimmed,
+        path: req.path,
       });
-      
       return res.status(403).json({
         success: false,
         message: 'Cannot access data from other organizations',
-        code: 'ORG_MISMATCH'
+        code: 'ORG_MISMATCH',
       });
     }
-    
-    // Use user's orgId
-    req.validatedOrgId = userOrgId;
+
+    req.validatedOrgId = tenantOrg;
+    req.user.orgId = tenantOrg;
     next();
   } catch (error) {
     logger.error('OrgId enforcement middleware error:', error);
@@ -111,26 +107,21 @@ export const enforceOrgIdInQuery = (req, res, next) => {
   }
 };
 
-/**
- * Validate orgId in route parameters (e.g., /api/organizations/:orgId)
- */
 export const validateOrgIdParam = (req, res, next) => {
   try {
-    const userOrgId = req.user?.orgId;
+    const userOrgId = req.validatedOrgId || userOrgIdFromReq(req);
     const userRole = req.user?.role;
     const paramOrgId = req.params.orgId;
-    
+
     if (!paramOrgId) {
       return next();
     }
-    
-    // Super admin can access any orgId
+
     if (userRole === 'super_admin') {
       return next();
     }
-    
-    // Non-super-admin: must match their orgId
-    if (paramOrgId !== userOrgId) {
+
+    if (String(paramOrgId) !== String(userOrgId)) {
       logger.warn('Request rejected: orgId param mismatch', {
         userId: req.user?.userId,
         role: userRole,
@@ -138,14 +129,13 @@ export const validateOrgIdParam = (req, res, next) => {
         paramOrgId,
         path: req.path
       });
-      
       return res.status(403).json({
         success: false,
         message: 'Cannot access data from other organizations',
         code: 'ORG_PARAM_MISMATCH'
       });
     }
-    
+
     next();
   } catch (error) {
     logger.error('OrgId param validation middleware error:', error);
@@ -157,22 +147,13 @@ export const validateOrgIdParam = (req, res, next) => {
   }
 };
 
-/**
- * Sanitize query to enforce orgId
- * Automatically adds orgId filter to queries
- */
 export const sanitizeOrgIdQuery = (req, res, next) => {
   try {
-    const userOrgId = req.user?.orgId;
-    const userRole = req.user?.role;
-    
-    // Store the sanitized orgId for use in route handlers
-    if (userRole === 'super_admin' && req.query.orgId) {
-      req.sanitizedOrgId = req.query.orgId;
+    if (req.user?.role === 'super_admin' && req.query.orgId) {
+      req.sanitizedOrgId = String(req.query.orgId);
     } else {
-      req.sanitizedOrgId = userOrgId;
+      req.sanitizedOrgId = req.validatedOrgId || userOrgIdFromReq(req);
     }
-    
     next();
   } catch (error) {
     logger.error('OrgId query sanitization error:', error);

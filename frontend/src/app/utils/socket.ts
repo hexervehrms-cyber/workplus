@@ -3,8 +3,11 @@
  * Features: Auto reconnect, cleanup, connection state, error handling
  */
 
+/// <reference types="vite/client" />
+
 import { io, Socket } from 'socket.io-client';
 import { TokenManager } from './api';
+import { ensureAccessToken, refreshAccessToken } from './sessionAuth';
 
 // Socket configuration
 // In production, VITE_SOCKET_URL is set to the backend URL
@@ -25,7 +28,7 @@ export class SocketService {
   private listeners: Map<string, Set<EventCallback>> = new Map();
   private connectionState: ConnectionState = 'disconnected';
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
+  private maxReconnectAttempts = 12;
   private reconnectDelay = 1000;
   private connectionTimeout: NodeJS.Timeout | null = null;
   private userId: string | null = null;
@@ -56,21 +59,38 @@ export class SocketService {
   // Connect to Socket.IO server
   connect(userId: string, role: string, tenantId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Store user info for reconnection
-      this.userId = userId;
-      this.role = role;
-      this.tenantId = tenantId || null;
+      const uid = String(userId);
+      const tid = tenantId ? String(tenantId) : null;
 
-      // Disconnect existing socket if any
+      // Reuse existing connection for same user (avoids duplicate sockets on reload/navigation)
+      if (
+        this.socket?.connected &&
+        this.userId === uid &&
+        this.role === role &&
+        this.tenantId === tid
+      ) {
+        this.setState('connected');
+        resolve();
+        return;
+      }
+
+      // Store user info for reconnection
+      this.userId = uid;
+      this.role = role;
+      this.tenantId = tid;
+
+      // Disconnect existing socket if any (different user or stale connection)
       if (this.socket) {
+        this.socket.removeAllListeners();
         this.socket.disconnect();
         this.socket = null;
       }
 
       this.setState('connecting');
 
+      void (async () => {
       try {
-        const token = TokenManager.get();
+        const token = (await ensureAccessToken()) || TokenManager.get();
         
         this.socket = io(SOCKET_URL, {
           transports: ['websocket', 'polling'],
@@ -80,14 +100,11 @@ export class SocketService {
           reconnectionDelay: 1000,
           reconnectionDelayMax: 30_000,
           randomizationFactor: 0.5,
-          reconnectionDelayFn: (attempt) => {
-            const exp = Math.min(1000 * Math.pow(2, attempt - 1), 30_000);
-            return exp + Math.random() * 750;
-          },
           timeout: 20_000,
           auth: {
-            token: token || ''
-          }
+            token: token || '',
+          },
+          forceNew: false,
         });
 
         // Connection successful
@@ -96,11 +113,9 @@ export class SocketService {
           this.setState('connected');
           this.reconnectAttempts = 0;
 
-          // Authenticate with server
-          this.socket?.emit('authenticate', { 
-            userId, 
-            role, 
-            tenantId 
+          // Identity comes from JWT on the server; omit userId to avoid mismatch with stale client state
+          this.socket?.emit('authenticate', {
+            ...(tenantId ? { tenantId } : {}),
           });
 
           // Re-register all listeners
@@ -140,9 +155,13 @@ export class SocketService {
           this.reconnectAttempts = 0;
         });
 
-        this.socket.io.on('reconnect_attempt', (attemptNumber) => {
+        this.socket.io.on('reconnect_attempt', async (attemptNumber) => {
           console.log('🔄 Socket.IO reconnecting, attempt', attemptNumber);
           this.setState('reconnecting');
+          const fresh = await ensureAccessToken();
+          if (this.socket?.auth && typeof this.socket.auth === 'object') {
+            (this.socket.auth as { token?: string }).token = fresh || '';
+          }
         });
 
         this.socket.io.on('reconnect_failed', () => {
@@ -155,8 +174,22 @@ export class SocketService {
           console.log('✅ Socket.IO authenticated');
         });
 
-        this.socket.on('auth_error', (error: any) => {
-          console.error('❌ Socket.IO auth error:', error);
+        this.socket.on('auth_error', async (error: { message?: string; code?: string }) => {
+          const code = error?.code || '';
+          if (code === 'IDENTITY_MISMATCH' || code === 'INVALID_AUTH_DATA') {
+            console.warn('Socket.IO auth warning:', error?.message || error);
+            return;
+          }
+          const refreshed = (await refreshAccessToken()) || (await ensureAccessToken());
+          if (refreshed && this.socket?.auth && typeof this.socket.auth === 'object') {
+            (this.socket.auth as { token?: string }).token = refreshed;
+            TokenManager.set(refreshed);
+            this.socket.emit('authenticate', {
+              ...(this.tenantId ? { tenantId: this.tenantId } : {}),
+            });
+            return;
+          }
+          console.warn('Socket.IO auth error (non-fatal):', error?.message || error);
         });
 
       } catch (error: any) {
@@ -164,15 +197,17 @@ export class SocketService {
         this.setState('disconnected');
         reject(error);
       }
+      })();
     });
   }
 
-  // Re-register all listeners after reconnection
+  // Re-register all listeners after reconnection (avoid duplicate handlers)
   private reregisterListeners() {
     if (!this.socket) return;
 
     this.listeners.forEach((callbacks, event) => {
-      callbacks.forEach(callback => {
+      callbacks.forEach((callback) => {
+        this.socket?.off(event, callback);
         this.socket?.on(event, callback);
       });
     });

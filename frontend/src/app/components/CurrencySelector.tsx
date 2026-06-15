@@ -25,7 +25,7 @@ const CurrencySelector: React.FC<CurrencySelectorProps> = ({ onClose, showSaveBu
   );
 
   const popularCurrencies = [
-    'USD', 'EUR', 'GBP', 'JPY', 'CNY', 'INR', 'CAD', 'AUD', 'CHF', 'SGD'
+    'INR', 'USD', 'EUR', 'GBP', 'JPY', 'CNY', 'CAD', 'AUD', 'CHF', 'SGD'
   ];
 
   const groupedCurrencies = filteredCurrencies.reduce((groups, currency) => {

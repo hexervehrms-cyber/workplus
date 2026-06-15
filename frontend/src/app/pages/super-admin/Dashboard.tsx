@@ -6,6 +6,7 @@ import DocumentGenerator from '../../components/DocumentGenerator';
 import ChatWidget from '../../components/ChatWidget';
 import { useCurrency } from '../../context/CurrencyContext';
 import { useRealTimeDashboard } from '../../hooks/useRealTimeDashboard';
+import { useNavigate } from 'react-router';
 import { useState, useEffect, useCallback } from 'react';
 import {
   DollarSign,
@@ -108,8 +109,10 @@ interface DashboardStatsState {
 
 export default function SuperAdminDashboard() {
   const { formatCurrency } = useCurrency();
+  const navigate = useNavigate();
   const [selectedTab, setSelectedTab] = useState('overview');
   const [loading, setLoading] = useState(true);
+  const [apiErrors, setApiErrors] = useState<Record<string, string>>({});
   const [dashboardStats, setDashboardStats] = useState<DashboardStatsState>({
     totalRevenue: 0,
     totalOrganizations: 0,
@@ -169,22 +172,64 @@ export default function SuperAdminDashboard() {
     fetchDashboardData();
   }, []);
 
+  const handleRefresh = async () => {
+    setLastUpdated(new Date());
+    await fetchDashboardData();
+  };
+
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
+      setApiErrors({});
 
-      // Fetch super admin dashboard stats
-      const statsResponse = await apiClient.get<SuperAdminStatsPayload>('/dashboard/superadmin');
-      if (statsResponse.success && statsResponse.data) {
-        const stats = statsResponse.data;
+      // PHASE 5 OPTIMIZATION: Fetch summary first for quick KPI display
+      const summaryResponse = await apiClient.get<{ success?: boolean; data?: Record<string, unknown> }>('/dashboard/superadmin/summary');
+      if (summaryResponse.success && summaryResponse.data?.kpis) {
+        const kpis = summaryResponse.data.kpis as Record<string, unknown>;
         setDashboardStats({
-          totalRevenue: stats.totalRevenue || 0,
-          totalOrganizations: stats.totalOrganizations || 0,
-          activeUsers: stats.totalEmployees || 0,
-          liveSessions: stats.liveSessions || 0,
-          totalSales: stats.totalSales || 0, // Use real sales data from API
-          pipelineValue: stats.pipelineValue || 0, // Use real pipeline data from API
-          commissionPaid: stats.commissionPaid || 0, // Use real commission data from API
+          totalRevenue: Number(kpis.monthlyRevenue) || 0,
+          totalOrganizations: Number(kpis.totalOrganizations) || 0,
+          activeUsers: Number(kpis.totalEmployees) || 0,
+          liveSessions: Number(kpis.systemActivity) || 0,
+          totalSales: 0,
+          pipelineValue: 0,
+          commissionPaid: 0,
+          churnRate: 0,
+          kpiChanges: {
+            revenueChange: 0,
+            organizationChange: 0,
+            userChange: 0,
+            sessionChange: 0,
+            expenseChange: 0,
+            pipelineChange: 0,
+            churnChange: 0,
+          },
+        });
+      }
+
+      // PHASE 5 OPTIMIZATION: Lazy-load tables/charts after KPIs
+      const [statsResponse, trendsResponse, orgsResponse, liveUsersResponse] = 
+        await Promise.allSettled([
+          apiClient.get<SuperAdminStatsPayload>('/dashboard/superadmin'),
+          apiClient.get<GrowthTrendPoint[]>('/dashboard/superadmin/growth-trends'),
+          apiClient.get<OrganizationApiRow[]>('/organizations?limit=10'),
+          apiClient.get<LiveUserRow[]>('/dashboard/superadmin/live-users?limit=5'),
+        ]);
+
+      const newErrors: Record<string, string> = {};
+
+      // Handle full stats response for additional metrics
+      if (statsResponse.status === 'fulfilled' && statsResponse.value.success && statsResponse.value.data) {
+        const stats = statsResponse.value.data;
+        setDashboardStats(prev => ({
+          ...prev,
+          totalRevenue: stats.totalRevenue || prev.totalRevenue,
+          totalOrganizations: stats.totalOrganizations || prev.totalOrganizations,
+          activeUsers: stats.totalEmployees || prev.activeUsers,
+          liveSessions: stats.liveSessions || prev.liveSessions,
+          totalSales: stats.totalSales || 0,
+          pipelineValue: stats.pipelineValue || 0,
+          commissionPaid: stats.commissionPaid || 0,
           churnRate: stats.churnRate || 0,
           kpiChanges: {
             revenueChange: 0,
@@ -196,19 +241,25 @@ export default function SuperAdminDashboard() {
             churnChange: 0,
             ...(stats.kpiChanges || {}),
           },
-        });
+        }));
+      } else if (statsResponse.status === 'rejected') {
+        newErrors['stats'] = 'Failed to load dashboard statistics';
+        console.error('Dashboard stats API failed:', statsResponse.reason);
       }
 
-      // Fetch growth trends for charts
-      const trendsResponse = await apiClient.get<GrowthTrendPoint[]>('/dashboard/superadmin/growth-trends');
-      if (trendsResponse.success && trendsResponse.data) {
-        setRevenueData(trendsResponse.data);
+      // Handle trends
+      if (trendsResponse.status === 'fulfilled' && trendsResponse.value.success && trendsResponse.value.data) {
+        setRevenueData(trendsResponse.value.data);
+      } else if (trendsResponse.status === 'rejected') {
+        newErrors['trends'] = 'Failed to load growth trends';
+        console.error('Growth trends API failed:', trendsResponse.reason);
+        setRevenueData([]);
       }
 
-      // Fetch organizations
-      const orgsResponse = await apiClient.get<OrganizationApiRow[]>('/organizations?limit=10');
-      if (orgsResponse.success && orgsResponse.data) {
-        setOrganizations(orgsResponse.data.map((org) => ({
+      // Handle organizations
+      if (orgsResponse.status === 'fulfilled' && orgsResponse.value.success && orgsResponse.value.data) {
+        const orgArray = Array.isArray(orgsResponse.value.data) ? orgsResponse.value.data : [];
+        setOrganizations(orgArray.map((org) => ({
           id: org._id,
           name: org.name || 'Organization',
           users: org.employeeCount || 0,
@@ -216,20 +267,29 @@ export default function SuperAdminDashboard() {
           plan: org.subscriptionPlan || 'free',
           revenue: org.monthlyRevenue || 0
         })));
+      } else if (orgsResponse.status === 'rejected') {
+        newErrors['orgs'] = 'Failed to load organizations';
+        console.error('Organizations API failed:', orgsResponse.reason);
+        setOrganizations([]);
       }
 
-      // Fetch live users
-      const liveUsersResponse = await apiClient.get<LiveUserRow[]>('/dashboard/superadmin/live-users?limit=5');
-      if (liveUsersResponse.success && liveUsersResponse.data) {
-        setLiveUsers(liveUsersResponse.data);
+      // Handle live users
+      if (liveUsersResponse.status === 'fulfilled' && liveUsersResponse.value.success && liveUsersResponse.value.data) {
+        const usersArray = Array.isArray(liveUsersResponse.value.data) ? liveUsersResponse.value.data : [];
+        setLiveUsers(usersArray);
+      } else if (liveUsersResponse.status === 'rejected') {
+        newErrors['liveUsers'] = 'Failed to load active users';
+        console.error('Live users API failed:', liveUsersResponse.reason);
+        setLiveUsers([]);
       }
+
+      setApiErrors(newErrors);
 
     } catch (error: unknown) {
       console.error('Error fetching dashboard data:', error);
-      // toast removed
+      setApiErrors({ summary: 'Failed to load dashboard' });
       
       // Set loading state to false but don't show fake data
-      // Let the UI show empty states or error states instead
       setDashboardStats({
         totalRevenue: 0,
         totalOrganizations: 0,
@@ -288,7 +348,7 @@ export default function SuperAdminDashboard() {
           <Button 
             variant="outline" 
             className="rounded-xl"
-            onClick={requestRefresh}
+            onClick={handleRefresh}
             disabled={loading}
           >
             <Activity className="w-4 h-4 mr-2" />
@@ -302,7 +362,12 @@ export default function SuperAdminDashboard() {
             <FileText className="w-4 h-4 mr-2" />
             Generate Onboarding Link
           </Button>
-          <Button className="rounded-xl">Add Organization</Button>
+          <Button 
+            className="rounded-xl"
+            onClick={() => navigate('/super-admin/organizations')}
+          >
+            Add Organization
+          </Button>
         </div>
       </div>
 
@@ -315,6 +380,7 @@ export default function SuperAdminDashboard() {
       <OnboardingLinkGenerator
         isOpen={showOnboardingGenerator}
         onClose={() => setShowOnboardingGenerator(false)}
+        isSuperAdmin={true}
       />
 
       {/* Document Generator */}

@@ -46,37 +46,51 @@ export async function countOrgEmployees(orgId) {
 
 /**
  * Sum approved/paid expenses and payroll net pay for a date range.
+ * KPI Rules:
+ * - Expenses: Only "approved" status (not pending/rejected)
+ * - Payroll: Only "paid" or "pending" status (not draft)
+ * - Date: Use actual payslip month/year for Payslip model
  */
 export async function getFinancialTotals(orgId, rangeStart, rangeEnd) {
   const orgFilter = buildOrgIdFilter(orgId);
 
+  // Extract month/year boundaries for payslip queries
+  const startMonth = rangeStart.getMonth() + 1; // 1-12
+  const startYear = rangeStart.getFullYear();
+  const endMonth = rangeEnd.getMonth() + 1; // 1-12
+  const endYear = rangeEnd.getFullYear();
+
   const [expenseAgg, payslipAgg, salarySlipAgg] = await Promise.all([
+    // Expenses: Only approved (not pending, not rejected)
     Expense.aggregate([
       {
         $match: {
           ...orgFilter,
           date: { $gte: rangeStart, $lt: rangeEnd },
-          status: { $in: ['approved', 'paid'] },
+          status: 'approved', // Only approved expenses
         },
       },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]),
+    // Payslips: Only pending/paid (not draft), matching month/year range
+    // month is a String (e.g., "June" or "06"), year is Number
     Payslip.aggregate([
       {
         $match: {
           ...orgFilter,
-          createdAt: { $gte: rangeStart, $lt: rangeEnd },
-          status: { $in: ['draft', 'pending', 'paid'] },
+          year: { $gte: startYear, $lte: endYear },
+          status: { $in: ['pending', 'paid'] }, // Not draft
         },
       },
       { $group: { _id: null, total: { $sum: '$netPay' } } },
     ]),
+    // SalarySlips: Only approved/paid (not draft/pending_approval), using updatedAt date
     SalarySlip.aggregate([
       {
         $match: {
           ...orgFilter,
           updatedAt: { $gte: rangeStart, $lt: rangeEnd },
-          status: { $in: ['draft', 'pending_approval', 'approved', 'processed', 'paid'] },
+          status: { $in: ['approved', 'processed', 'paid'] }, // Only finalized slips
         },
       },
       { $group: { _id: null, total: { $sum: '$netSalary' } } },

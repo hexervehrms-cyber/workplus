@@ -36,7 +36,10 @@ const chatMessageSchema = new mongoose.Schema(
         fileName: { type: String },
         filePath: { type: String },
         fileSize: { type: Number },
-        mimeType: { type: String }
+        mimeType: { type: String },
+        // GridFS storage fields (NEW - Sprint G)
+        storageKey: { type: String, default: null },
+        storageDriver: { type: String, enum: ['local', 'gridfs', 'mongodb'], default: null }
       },
       system: {
         action: { type: String },

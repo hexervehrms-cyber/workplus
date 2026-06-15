@@ -1,0 +1,61 @@
+﻿src/app/components/OnboardingForm.tsx(647,22): error TS2304: Cannot find name 'Badge'.
+src/app/components/OnboardingForm.tsx(650,23): error TS2304: Cannot find name 'Badge'.
+src/app/components/OnboardingForm.tsx(709,22): error TS2304: Cannot find name 'Badge'.
+src/app/components/OnboardingForm.tsx(712,23): error TS2304: Cannot find name 'Badge'.
+src/app/components/UserInfoModal.tsx(428,24): error TS2304: Cannot find name 'CheckCircle'.
+src/app/components/UserInfoModal.tsx(433,26): error TS2304: Cannot find name 'CheckCircle'.
+src/app/pages/admin/Attendance.tsx(405,7): error TS2552: Cannot find name 'setLateEmployeesLoading'. Did you mean '_setLateEmployeesLoading'?
+src/app/pages/admin/Attendance.tsx(417,7): error TS2552: Cannot find name 'setLateEmployeesLoading'. Did you mean '_setLateEmployeesLoading'?
+src/app/pages/admin/AttendanceHistory.tsx(648,16): error TS2304: Cannot find name 'Tooltip'.
+src/app/pages/admin/AttendanceUnified.tsx(443,20): error TS2304: Cannot find name 'Calendar'.
+src/app/pages/admin/AttendanceUnified.tsx(499,71): error TS2304: Cannot find name 'attendancePageSize'.
+src/app/pages/admin/AttendanceUnified.tsx(499,108): error TS2304: Cannot find name 'attendancePageSize'.
+src/app/pages/admin/AttendanceUnified.tsx(537,18): error TS2304: Cannot find name 'employees'.
+src/app/pages/admin/AttendanceUnified.tsx(537,33): error TS7006: Parameter 'emp' implicitly has an 'any' type.
+src/app/pages/admin/EmployeeOnboarding.tsx(31,54): error TS2345: Argument of type '(emp: Record<string, unknown>) => { _id: string; name: string; email: string; department: string; }' is not assignable to parameter of type '(value: unknown, index: number, array: unknown[]) => { _id: string; name: string; email: string; department: string; }'.
+  Types of parameters 'emp' and 'value' are incompatible.
+    Type 'unknown' is not assignable to type 'Record<string, unknown>'.
+src/app/pages/admin/LeaveAllocation.tsx(141,51): error TS2345: Argument of type '(emp: { _id: string; name?: string; employeeCode?: string; department?: string; designation?: string; userId?: { name?: string; }; }) => { ...; }' is not assignable to parameter of type '(value: unknown, index: number, array: unknown[]) => { _id: string; name: string; employeeCode: string; department: string; designation: string | undefined; }'.
+  Types of parameters 'emp' and 'value' are incompatible.
+    Type 'unknown' is not assignable to type '{ _id: string; name?: string | undefined; employeeCode?: string | undefined; department?: string | undefined; designation?: string | undefined; userId?: { name?: string | undefined; } | undefined; }'.
+src/app/pages/admin/LeaveAllocation.tsx(175,13): error TS2322: Type 'unknown[]' is not assignable to type 'LeaveAllocationRecord[]'.
+  Type 'unknown' is not assignable to type 'LeaveAllocationRecord'.
+src/app/pages/admin/Payroll.tsx(546,9): error TS2353: Object literal may only specify known properties, and 'leaveDeduction' does not exist in type 'SetStateAction<{ providentFund: number; employeeStateInsurance: number; professionalTax: number; incomeTax: number; otherDeductions: SalaryField[]; }>'.
+src/app/pages/admin/PayrollUnified.tsx(196,66): error TS2304: Cannot find name 'salarySlipsPageSize'.
+src/app/pages/admin/PayrollUnified.tsx(196,105): error TS2304: Cannot find name 'salarySlipsPageSize'.
+src/app/pages/admin/PayrollUnified.tsx(214,39): error TS2304: Cannot find name 'salarySlipsPageSize'.
+src/app/pages/admin/PayrollUnified.tsx(217,81): error TS2304: Cannot find name 'salarySlipsPageSize'.
+src/app/pages/admin/PayrollUnified.tsx(232,85): error TS2304: Cannot find name 'salarySlipsPageSize'.
+src/app/pages/employee/Assets.tsx(64,28): error TS2339: Property 'employeeId' does not exist on type '{ employeeId?: string | undefined; userId?: string | undefined; id?: string | undefined; } | { success?: boolean | undefined; data?: { employeeId?: string | undefined; userId?: string | undefined; id?: string | undefined; } | undefined; }'.
+  Property 'employeeId' does not exist on type '{ success?: boolean | undefined; data?: { employeeId?: string | undefined; userId?: string | undefined; id?: string | undefined; } | undefined; }'.
+src/app/pages/employee/Assets.tsx(67,32): error TS2339: Property 'userId' does not exist on type '{ employeeId?: string | undefined; userId?: string | undefined; id?: string | undefined; } | { success?: boolean | undefined; data?: { employeeId?: string | undefined; userId?: string | undefined; id?: string | undefined; } | undefined; }'.
+  Property 'userId' does not exist on type '{ success?: boolean | undefined; data?: { employeeId?: string | undefined; userId?: string | undefined; id?: string | undefined; } | undefined; }'.
+src/app/pages/employee/Assets.tsx(67,46): error TS2339: Property 'id' does not exist on type '{ employeeId?: string | undefined; userId?: string | undefined; id?: string | undefined; } | { success?: boolean | undefined; data?: { employeeId?: string | undefined; userId?: string | undefined; id?: string | undefined; } | undefined; }'.
+  Property 'id' does not exist on type '{ success?: boolean | undefined; data?: { employeeId?: string | undefined; userId?: string | undefined; id?: string | undefined; } | undefined; }'.
+src/app/pages/employee/Assets.tsx(76,58): error TS2339: Property 'data' does not exist on type '{ _id?: string | undefined; }'.
+src/app/pages/employee/Assets.tsx(91,26): error TS2339: Property 'assets' does not exist on type '{ assets?: Asset[] | undefined; totalValue?: number | undefined; totalAssets?: number | undefined; } | { success?: boolean | undefined; data?: { assets?: Asset[] | undefined; totalValue?: number | undefined; totalAssets?: number | undefined; } | undefined; }'.
+  Property 'assets' does not exist on type '{ success?: boolean | undefined; data?: { assets?: Asset[] | undefined; totalValue?: number | undefined; totalAssets?: number | undefined; } | undefined; }'.
+src/app/pages/employee/Assets.tsx(92,27): error TS2339: Property 'totalValue' does not exist on type '{ assets?: Asset[] | undefined; totalValue?: number | undefined; totalAssets?: number | undefined; } | { success?: boolean | undefined; data?: { assets?: Asset[] | undefined; totalValue?: number | undefined; totalAssets?: number | undefined; } | undefined; }'.
+  Property 'totalValue' does not exist on type '{ success?: boolean | undefined; data?: { assets?: Asset[] | undefined; totalValue?: number | undefined; totalAssets?: number | undefined; } | undefined; }'.
+src/app/pages/employee/Assets.tsx(97,21): error TS2339: Property 'assets' does not exist on type '{ assets?: Asset[] | undefined; totalValue?: number | undefined; totalAssets?: number | undefined; } | { success?: boolean | undefined; data?: { assets?: Asset[] | undefined; totalValue?: number | undefined; totalAssets?: number | undefined; } | undefined; }'.
+  Property 'assets' does not exist on type '{ success?: boolean | undefined; data?: { assets?: Asset[] | undefined; totalValue?: number | undefined; totalAssets?: number | undefined; } | undefined; }'.
+src/app/pages/employee/Assets.tsx(98,14): error TS7006: Parameter 'sum' implicitly has an 'any' type.
+src/app/pages/employee/Assets.tsx(98,19): error TS7006: Parameter 'a' implicitly has an 'any' type.
+src/app/pages/employee/Calendar.tsx(87,27): error TS2345: Argument of type '{}' is not assignable to parameter of type 'SetStateAction<LeaveRequest[]>'.
+src/app/pages/employee/Calendar.tsx(104,23): error TS2345: Argument of type 'unknown[]' is not assignable to parameter of type 'SetStateAction<Holiday[]>'.
+  Type 'unknown[]' is not assignable to type 'Holiday[]'.
+    Type 'unknown' is not assignable to type 'Holiday'.
+src/app/pages/employee/Calendar.tsx(144,23): error TS2345: Argument of type 'unknown[]' is not assignable to parameter of type 'SetStateAction<Holiday[]>'.
+  Type 'unknown[]' is not assignable to type 'Holiday[]'.
+    Type 'unknown' is not assignable to type 'Holiday'.
+src/app/pages/employee/Calendar.tsx(333,21): error TS2345: Argument of type 'unknown[]' is not assignable to parameter of type 'SetStateAction<Holiday[]>'.
+  Type 'unknown[]' is not assignable to type 'Holiday[]'.
+    Type 'unknown' is not assignable to type 'Holiday'.
+src/app/pages/employee/Payroll.tsx(98,62): error TS2339: Property 'data' does not exist on type '{ _id?: string | undefined; }'.
+src/app/pages/employee/Payroll.tsx(134,22): error TS2345: Argument of type 'SalarySlip' is not assignable to parameter of type 'SetStateAction<SalarySlip[]>'.
+src/app/pages/employee/Payroll.tsx(134,22): error TS2352: Conversion of type '(Record<string, unknown> & { grossEarnings: number; totalDeductions: number; netSalary: number; attendanceData: { totalWorkingDays: number; presentDays: number; absentDays: number; leavesTaken: number; }; earnings: { ...; }; deductions: { ...; }; })[]' to type 'SalarySlip' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '(Record<string, unknown> & { grossEarnings: number; totalDeductions: number; netSalary: number; attendanceData: { totalWorkingDays: number; presentDays: number; absentDays: number; leavesTaken: number; }; earnings: { ...; }; deductions: { ...; }; })[]' is missing the following properties from type 'SalarySlip': _id, month, year, status, and 6 more.
+src/app/pages/super-admin/Announcements.tsx(89,19): error TS2339: Property 'stats' does not exist on type 'ApiResponse<any>'.
+src/app/pages/super-admin/Announcements.tsx(90,26): error TS2339: Property 'stats' does not exist on type 'ApiResponse<any>'.
+src/app/pages/super-admin/Users.tsx(326,45): error TS7006: Parameter 's' implicitly has an 'any' type.
+src/app/utils/api.ts(176,21): error TS2304: Cannot find name 'getApiBaseUrl'.

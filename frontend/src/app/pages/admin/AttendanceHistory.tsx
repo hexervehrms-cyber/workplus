@@ -76,9 +76,8 @@ export default function AttendanceHistory() {
   const [leaveRecords, setLeaveRecords] = useState<LeaveRecord[]>([]);
   const [summary, setSummary] = useState<AttendanceSummary | null>(null);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [totalRecords, setTotalRecords] = useState(0);
-
-  const limit = 50;
 
   // Salary slip modal state
   const [showSalarySlipModal, setShowSalarySlipModal] = useState(false);
@@ -111,7 +110,7 @@ export default function AttendanceHistory() {
       
       const params = new URLSearchParams({
         page: page.toString(),
-        limit: limit.toString()
+        limit: pageSize.toString()
       });
 
       if (startDate) params.append('startDate', startDate);
@@ -142,7 +141,7 @@ export default function AttendanceHistory() {
       
       const params = new URLSearchParams({
         page: page.toString(),
-        limit: limit.toString()
+        limit: pageSize.toString()
       });
 
       if (startDate) params.append('startDate', startDate);
@@ -186,7 +185,7 @@ export default function AttendanceHistory() {
       
       const params = new URLSearchParams({
         page: page.toString(),
-        limit: limit.toString()
+        limit: pageSize.toString()
       });
 
       if (startDate) params.append('startDate', startDate);
@@ -570,7 +569,7 @@ export default function AttendanceHistory() {
       {/* Tabs */}
       <div className="flex gap-4 border-b border-border">
         <button
-          onClick={() => setActiveTab('attendance')}
+          onClick={() => { setActiveTab('attendance'); setPage(1); }}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             activeTab === 'attendance'
               ? 'border-primary text-primary'
@@ -580,7 +579,7 @@ export default function AttendanceHistory() {
           Attendance History
         </button>
         <button
-          onClick={() => setActiveTab('breaks')}
+          onClick={() => { setActiveTab('breaks'); setPage(1); }}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             activeTab === 'breaks'
               ? 'border-primary text-primary'
@@ -590,7 +589,7 @@ export default function AttendanceHistory() {
           Break History
         </button>
         <button
-          onClick={() => setActiveTab('leaves')}
+          onClick={() => { setActiveTab('leaves'); setPage(1); }}
           className={`px-4 py-2 font-medium border-b-2 transition-colors ${
             activeTab === 'leaves'
               ? 'border-primary text-primary'
@@ -656,9 +655,26 @@ export default function AttendanceHistory() {
       {/* Attendance Records Table */}
       {activeTab === 'attendance' && (
         <Card className="p-6 rounded-2xl overflow-x-auto">
-          <div className="mb-4">
-            <h3 className="text-lg font-semibold">Attendance Records</h3>
-            <p className="text-sm text-muted-foreground">{totalRecords} total records</p>
+          <div className="mb-4 flex justify-between items-center">
+            <div>
+              <h3 className="text-lg font-semibold">Attendance Records</h3>
+              <p className="text-sm text-muted-foreground">{totalRecords} total records</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-medium text-muted-foreground">Rows per page:</label>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setPage(1);
+                }}
+                className="px-3 py-1 border rounded-lg bg-background text-sm"
+              >
+                <option value={10}>10</option>
+                <option value={15}>15</option>
+                <option value={25}>25</option>
+              </select>
+            </div>
           </div>
           {loading ? (
             <div className="flex justify-center py-8">
@@ -709,15 +725,61 @@ export default function AttendanceHistory() {
               No attendance records found
             </div>
           )}
+          {totalRecords > 0 && (
+            <div className="flex items-center justify-between border-t pt-3 mt-3">
+              <p className="text-sm text-muted-foreground">
+                Page {page} of {Math.max(1, Math.ceil(totalRecords / pageSize))} ({totalRecords} total)
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={page <= 1}
+                  onClick={() => setPage(prev => Math.max(1, prev - 1))}
+                  className="rounded-lg"
+                >
+                  Previous
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={page >= Math.ceil(totalRecords / pageSize)}
+                  onClick={() => setPage(prev => Math.min(Math.ceil(totalRecords / pageSize), prev + 1))}
+                  className="rounded-lg"
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
       )}
 
       {/* Break Records Table */}
       {activeTab === 'breaks' && (
         <Card className="p-6 rounded-2xl overflow-x-auto">
-          <div className="mb-4">
-            <h3 className="text-lg font-semibold">Break History</h3>
-            <p className="text-sm text-muted-foreground">{breakRecords.length} total breaks</p>
+          <div className="mb-4 flex justify-between items-center">
+            <div>
+              <h3 className="text-lg font-semibold">Break History</h3>
+              <p className="text-sm text-muted-foreground">{breakRecords.length} breaks on current page</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-medium text-muted-foreground">Rows per page:</label>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setPage(1);
+                }}
+                className="px-3 py-1 border rounded-lg bg-background text-sm"
+              >
+                <option value={10}>10</option>
+                <option value={15}>15</option>
+                <option value={25}>25</option>
+              </select>
+            </div>
           </div>
           {loading ? (
             <div className="flex justify-center py-8">
@@ -759,15 +821,61 @@ export default function AttendanceHistory() {
               No break records found
             </div>
           )}
+          {breakRecords.length > 0 && (
+            <div className="flex items-center justify-between border-t pt-3 mt-3">
+              <p className="text-sm text-muted-foreground">
+                Page {page} of {Math.max(1, Math.ceil(totalRecords / pageSize))} ({totalRecords} total)
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={page <= 1}
+                  onClick={() => setPage(prev => Math.max(1, prev - 1))}
+                  className="rounded-lg"
+                >
+                  Previous
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={page >= Math.ceil(totalRecords / pageSize)}
+                  onClick={() => setPage(prev => Math.min(Math.ceil(totalRecords / pageSize), prev + 1))}
+                  className="rounded-lg"
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
       )}
 
       {/* Leave History Tab */}
       {activeTab === 'leaves' && (
         <Card className="p-6 rounded-2xl overflow-x-auto">
-          <div className="mb-4">
-            <h3 className="text-lg font-semibold">Leave History</h3>
-            <p className="text-sm text-muted-foreground">{totalRecords} total leave records</p>
+          <div className="mb-4 flex justify-between items-center">
+            <div>
+              <h3 className="text-lg font-semibold">Leave History</h3>
+              <p className="text-sm text-muted-foreground">{totalRecords} total leave records</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-medium text-muted-foreground">Rows per page:</label>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setPage(1);
+                }}
+                className="px-3 py-1 border rounded-lg bg-background text-sm"
+              >
+                <option value={10}>10</option>
+                <option value={15}>15</option>
+                <option value={25}>25</option>
+              </select>
+            </div>
           </div>
           {loading ? (
             <div className="flex justify-center py-8">
@@ -815,6 +923,35 @@ export default function AttendanceHistory() {
           ) : (
             <div className="text-center py-8 text-muted-foreground">
               No leave records found
+            </div>
+          )}
+          {totalRecords > 0 && (
+            <div className="flex items-center justify-between border-t pt-3 mt-3">
+              <p className="text-sm text-muted-foreground">
+                Page {page} of {Math.max(1, Math.ceil(totalRecords / pageSize))} ({totalRecords} total)
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={page <= 1}
+                  onClick={() => setPage(prev => Math.max(1, prev - 1))}
+                  className="rounded-lg"
+                >
+                  Previous
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={page >= Math.ceil(totalRecords / pageSize)}
+                  onClick={() => setPage(prev => Math.min(Math.ceil(totalRecords / pageSize), prev + 1))}
+                  className="rounded-lg"
+                >
+                  Next
+                </Button>
+              </div>
             </div>
           )}
         </Card>

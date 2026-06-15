@@ -462,10 +462,11 @@ router.post("/", authorize('super_admin'), asyncHandler(async (req, res) => {
  * PUT /api/organizations/:id
  * Update organization (Super Admin only)
  * Supports optional admin password reset via adminPassword or newAdminPassword field
+ * Supports custom domain configuration with automatic DNS record generation
  */
 router.put("/:id", authorize('super_admin'), asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { adminPassword, newAdminPassword, ...organizationUpdates } = req.body;
+  const { adminPassword, newAdminPassword, customDomain, ...organizationUpdates } = req.body;
   
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res.status(400).json({
@@ -487,6 +488,63 @@ router.put("/:id", authorize('super_admin'), asyncHandler(async (req, res) => {
   
   let updateMessage = 'Organization updated successfully';
   let passwordUpdated = false;
+  let dnsData = null;
+  let customDomainChanged = false;
+  
+  // Handle custom domain if provided
+  if (customDomain !== undefined) {
+    if (customDomain.trim()) {
+      let domain = customDomain.trim().toLowerCase();
+      
+      // Remove protocol if accidentally included
+      domain = domain.replace(/^https?:\/\//, '');
+      domain = domain.replace(/\/$/, ''); // Remove trailing slash
+      domain = domain.trim();
+      
+      // Basic domain validation
+      if (!/^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z0-9]+(-[a-z0-9]+)*$/.test(domain)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid custom domain format'
+        });
+      }
+      
+      // Check if domain is already in use by another organization (if different from current)
+      if (domain !== organization.customDomain) {
+        const existingDomain = await Organization.findOne({ 
+          customDomain: domain, 
+          isActive: true,
+          _id: { $ne: id }
+        });
+        if (existingDomain) {
+          return res.status(400).json({
+            success: false,
+            message: 'This custom domain is already assigned to another organization'
+          });
+        }
+        customDomainChanged = true;
+      }
+      
+      // Generate new DNS records if domain is new or changed
+      if (customDomainChanged || !organization.customDomain) {
+        dnsData = generateDnsRecords(domain);
+        organizationUpdates.customDomain = domain;
+        organizationUpdates.customDomainStatus = 'pending_dns';
+        organizationUpdates.customDomainDnsRecords = dnsData.records;
+        organizationUpdates.customDomainVerificationToken = dnsData.verificationToken;
+        organizationUpdates.customDomainUrl = `https://${domain}`;
+        organizationUpdates.defaultTenantUrl = `${process.env.FRONTEND_URL || 'https://workplus.vercel.app'}/login?org=${organization._id}`;
+      }
+    } else {
+      // Clear custom domain if empty string is provided
+      organizationUpdates.customDomain = null;
+      organizationUpdates.customDomainStatus = 'not_configured';
+      organizationUpdates.customDomainDnsRecords = [];
+      organizationUpdates.customDomainVerificationToken = null;
+      organizationUpdates.customDomainUrl = null;
+      customDomainChanged = true;
+    }
+  }
   
   // Handle admin password reset if provided
   const passwordToSet = adminPassword || newAdminPassword;
@@ -558,7 +616,8 @@ router.put("/:id", authorize('super_admin'), asyncHandler(async (req, res) => {
       },
       details: {
         organizationUpdated: true,
-        adminPasswordReset: passwordUpdated
+        adminPasswordReset: passwordUpdated,
+        customDomainChanged: customDomainChanged
       },
       changes: {
         before: originalData,
@@ -573,23 +632,39 @@ router.put("/:id", authorize('super_admin'), asyncHandler(async (req, res) => {
     logger.warn('Failed to log activity:', logError);
   }
   
+  // Build response
+  const responseData = {
+    _id: updatedOrg._id,
+    name: updatedOrg.name,
+    code: updatedOrg.code,
+    email: updatedOrg.email,
+    phone: updatedOrg.phone,
+    customDomain: updatedOrg.customDomain,
+    customDomainStatus: updatedOrg.customDomainStatus,
+    isActive: updatedOrg.isActive,
+    subscriptionPlan: updatedOrg.subscriptionPlan,
+    subscriptionStatus: updatedOrg.subscriptionStatus,
+    updatedAt: updatedOrg.updatedAt
+  };
+  
+  // Add DNS setup info if custom domain is being configured
+  if (updatedOrg.customDomain && dnsData) {
+    responseData.dnsSetup = {
+      domain: updatedOrg.customDomain,
+      status: updatedOrg.customDomainStatus,
+      dnsRecords: updatedOrg.customDomainDnsRecords,
+      customDomainUrl: updatedOrg.customDomainUrl,
+      defaultTenantUrl: updatedOrg.defaultTenantUrl,
+      verificationRequired: true,
+      warning: 'DNS records must be configured at your domain provider before domain verification can succeed. The custom domain login link will work after DNS is verified.'
+    };
+  }
+  
   // Return response WITHOUT exposing password
   res.json({
     success: true,
     message: updateMessage,
-    data: {
-      _id: updatedOrg._id,
-      name: updatedOrg.name,
-      code: updatedOrg.code,
-      email: updatedOrg.email,
-      phone: updatedOrg.phone,
-      customDomain: updatedOrg.customDomain,
-      customDomainStatus: updatedOrg.customDomainStatus,
-      isActive: updatedOrg.isActive,
-      subscriptionPlan: updatedOrg.subscriptionPlan,
-      subscriptionStatus: updatedOrg.subscriptionStatus,
-      updatedAt: updatedOrg.updatedAt
-    }
+    data: responseData
   });
 }));
 

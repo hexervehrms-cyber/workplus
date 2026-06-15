@@ -4,6 +4,7 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { authenticate, auditLog } from "../middleware/auth.js";
+import { blockUnverifiedDomain } from "../middleware/domainResolver.js";
 import { loginLimiter, registerLimiter, passwordResetLimiter } from "../middleware/rateLimiter.js";
 import User from "../models/User.js";
 import Employee from "../models/Employee.js";
@@ -33,6 +34,7 @@ const router = express.Router();
  */
 router.post("/login", 
   loginLimiter,
+  blockUnverifiedDomain,
   asyncHandler(async (req, res) => {
     const { email, password } = req.body;
 
@@ -80,9 +82,29 @@ router.post("/login",
         roleType: typeof user.role
       });
 
+      // Check domain tenant match: if accessing from verified custom domain,
+      // ensure user belongs to that organization
+      if (req.resolvedOrgId) {
+        const userOrgId = normalizeAuthOrgId(user);
+        if (userOrgId !== req.resolvedOrgId) {
+          logger.warn('Login attempt with mismatched org', {
+            userId: user._id,
+            userOrgId,
+            resolvedOrgId: req.resolvedOrgId,
+            domain: req.resolvedCustomDomain
+          });
+          return res.status(403).json({
+            success: false,
+            message: 'Your account does not belong to this organization domain.',
+            code: 'ORG_MISMATCH'
+          });
+        }
+      }
+
       // Generate access token (short-lived)
       const sessionId = crypto.randomBytes(16).toString('hex');
-      const orgId = normalizeAuthOrgId(user);
+      // Prefer resolved domain org if available, otherwise use user's org
+      const orgId = req.resolvedOrgId || normalizeAuthOrgId(user);
       if (!orgId) {
         return res.status(403).json({
           success: false,

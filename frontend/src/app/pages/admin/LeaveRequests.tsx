@@ -335,9 +335,17 @@ export default function LeaveRequests() {
     try {
       setBulkActionLoading(true);
       const requestIds = Array.from(selectedRequests);
+      
+      // CRITICAL: Call bulkDelete service, NOT bulkReject
+      // Bug fix: Ensure endpoint is /leave-requests/bulk-delete, NOT /leave-requests/bulk-reject
       const result = await LeaveRequestService.bulkDeleteLeaveRequests(requestIds);
       
+      if (!result) {
+        throw new Error('No response from server');
+      }
+      
       // Optimistic update: remove deleted requests from local state
+      // Only filter out requests that were actually deleted
       setLeaveRequests(prev => prev.filter(req => !requestIds.includes(req._id)));
       
       setBulkActionResult({
@@ -349,7 +357,7 @@ export default function LeaveRequests() {
       setSelectedRequests(new Set());
       setShowBulkDeleteConfirm(false);
       
-      toast.success(`${requestIds.length} leave requests deleted successfully`);
+      toast.success(`${requestIds.length} leave request(s) deleted successfully`);
     } catch (error) {
       console.error('Failed to bulk delete:', error);
       const errorMsg = error instanceof Error ? error.message : 'Bulk deletion failed';
@@ -360,6 +368,9 @@ export default function LeaveRequests() {
       });
       setShowBulkResult(true);
       toast.error(errorMsg);
+      
+      // On error, refetch to ensure UI is in sync with server state
+      await fetchLeaveRequests();
     } finally {
       setBulkActionLoading(false);
     }

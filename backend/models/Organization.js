@@ -123,15 +123,37 @@ const organizationSchema = new mongoose.Schema(
     },
     customDomainStatus: {
       type: String,
-      enum: ['not_configured', 'pending', 'verified', 'failed'],
+      enum: ['not_configured', 'pending_dns', 'verified', 'failed'],
       default: 'not_configured'
     },
     customDomainDnsRecords: [{
-      type: { type: String, enum: ['CNAME', 'A', 'MX'] },
+      type: { type: String, enum: ['CNAME', 'A', 'ALIAS', 'ANAME', 'TXT'] },
       name: String,
       value: String,
-      status: { type: String, enum: ['pending', 'verified', 'failed'], default: 'pending' }
+      status: { type: String, enum: ['pending', 'verified', 'failed'], default: 'pending' },
+      purpose: String,
+      warning: String
     }],
+    customDomainVerificationToken: {
+      type: String,
+      select: false
+    },
+    customDomainVerifiedAt: {
+      type: Date,
+      default: null
+    },
+    customDomainLastCheckedAt: {
+      type: Date,
+      default: null
+    },
+    defaultTenantUrl: {
+      type: String,
+      default: null
+    },
+    customDomainUrl: {
+      type: String,
+      default: null
+    },
     isActive: { 
       type: Boolean, 
       default: true 

@@ -33,12 +33,13 @@ const Calls = () => {
     try {
       setLoading(true);
       const url = filterStatus
-        ? `sales/calls?status=${filterStatus}`
-        : 'sales/calls';
+        ? `/api/sales/calls?status=${filterStatus}`
+        : '/api/sales/calls';
       const res = await salesApi.get<{ data?: unknown[] }>(url);
-      setCalls((res as { data?: unknown[] })?.data || []);
+      setCalls((res as { data?: unknown[] })?.data?.data ?? (res as { data?: unknown[] })?.data ?? []);
     } catch (error) {
       console.error('Error fetching calls:', error);
+      setCalls([]);
     } finally {
       setLoading(false);
     }
@@ -47,18 +48,20 @@ const Calls = () => {
   const fetchEmployees = async () => {
     try {
       const res = await salesApi.get<{ data?: unknown[] }>('/api/employees');
-      setEmployees((res as { data?: unknown[] })?.data || []);
+      setEmployees((res as { data?: unknown[] })?.data?.data ?? (res as { data?: unknown[] })?.data ?? []);
     } catch (error) {
       console.error('Error fetching employees:', error);
+      setEmployees([]);
     }
   };
 
   const fetchLeads = async () => {
     try {
-      const res = await salesApi.get<{ data?: unknown[] }>('sales/leads');
-      setLeads((res as { data?: unknown[] })?.data || []);
+      const res = await salesApi.get<{ data?: unknown[] }>('/api/sales/leads');
+      setLeads((res as { data?: unknown[] })?.data?.data ?? (res as { data?: unknown[] })?.data ?? []);
     } catch (error) {
       console.error('Error fetching leads:', error);
+      setLeads([]);
     }
   };
 
@@ -66,9 +69,9 @@ const Calls = () => {
     e.preventDefault();
     try {
       if (editingCall) {
-        await salesApi.patch(`sales/calls/${editingCall._id}`, formData);
+        await salesApi.patch(`/api/sales/calls/${editingCall._id}`, formData);
       } else {
-        await salesApi.post('sales/calls', formData);
+        await salesApi.post('/api/sales/calls', formData);
       }
       fetchCalls();
       setShowModal(false);
@@ -100,7 +103,7 @@ const Calls = () => {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this call?')) {
       try {
-        await salesApi.delete(`sales/calls/${id}`);
+        await salesApi.delete(`/api/sales/calls/${id}`);
         fetchCalls();
       } catch (error) {
         console.error('Error deleting call:', error);

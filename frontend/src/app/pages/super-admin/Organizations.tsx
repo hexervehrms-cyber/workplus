@@ -119,7 +119,7 @@ export default function Organizations() {
       phone: org.phone || '',
       adminPassword: '',
       confirmPassword: '',
-      customDomain: '',
+      customDomain: org.customDomain || '',
       showPassword: false,
     });
     setShowEditForm(true);
@@ -184,10 +184,22 @@ export default function Organizations() {
           updatePayload.adminPassword = formData.adminPassword;
         }
         
-        const res = await apiClient.put<OrganizationRow>(`/organizations/${editingOrg._id}`, updatePayload);
+        // Add custom domain if provided or being updated
+        if (formData.customDomain.trim()) {
+          updatePayload.customDomain = formData.customDomain.trim().toLowerCase();
+        }
+        
+        const res = await apiClient.put<any>(`/organizations/${editingOrg._id}`, updatePayload);
         if (res.success) {
           const msg = res.message || 'Organization updated';
           toast.success(msg);
+          
+          // Show DNS records if custom domain was configured/updated
+          if (res.data?.dnsSetup) {
+            setDnsSetupData(res.data.dnsSetup);
+            setShowDnsSetup(true);
+          }
+          
           closeForms();
           await loadOrganizations();
         } else {
@@ -232,6 +244,22 @@ export default function Organizations() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleViewDnsSetup = (org: OrganizationRow) => {
+    if (!org.customDomain) return;
+    
+    // For existing organizations, build DNS setup data from org properties
+    // The data will be partial since we're rebuilding from stored info
+    setDnsSetupData({
+      domain: org.customDomain,
+      status: org.customDomainStatus || 'pending_dns',
+      defaultTenantUrl: `${process.env.REACT_APP_API_URL?.replace('/api', '') || 'https://workplus.vercel.app'}/login?org=${org._id}`,
+      customDomainUrl: `https://${org.customDomain}`,
+      dnsRecords: [],
+      verificationRequired: true
+    });
+    setShowDnsSetup(true);
   };
 
   const handleVerifyDomain = async () => {
@@ -772,7 +800,8 @@ export default function Organizations() {
                   <span className="font-medium text-foreground">{formatDate(org.createdAt)}</span>
                 </div>
               </div>
-              <div className="flex gap-2">
+              
+              <div className="flex gap-2 mb-2">
                 <Button variant="outline" size="sm" className="rounded-lg flex-1" onClick={() => openEdit(org)}>
                   <Edit className="w-4 h-4 mr-1" />
                   Edit
@@ -789,6 +818,38 @@ export default function Organizations() {
                   <Trash2 className="w-4 h-4" />
                 </Button>
               </div>
+              
+              {org.customDomain && (
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="rounded-lg flex-1"
+                    onClick={() => handleViewDnsSetup(org)}
+                  >
+                    View DNS Setup
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="rounded-lg flex-1"
+                    onClick={() => {
+                      setDnsSetupData({
+                        domain: org.customDomain || '',
+                        status: org.customDomainStatus || 'pending_dns',
+                        defaultTenantUrl: `${process.env.REACT_APP_API_URL?.replace('/api', '') || 'https://workplus.vercel.app'}/login?org=${org._id}`,
+                        customDomainUrl: `https://${org.customDomain}`,
+                        dnsRecords: [],
+                        verificationRequired: true
+                      });
+                      setVerifyingDomain(true);
+                      void handleVerifyDomain();
+                    }}
+                  >
+                    Verify Domain
+                  </Button>
+                </div>
+              )}
             </Card>
           ))}
         </div>

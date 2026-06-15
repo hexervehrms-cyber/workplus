@@ -53,24 +53,53 @@ function resolveAudience(audienceKey) {
 
 /**
  * GET /api/announcements
+ * For Super Admin: supports ?scope=all|global|organization, ?orgId={orgId}
+ * For Admin/HR: uses their orgId, returns global + org-specific announcements
+ * For Employee: returns published global + published org-specific announcements
  */
 router.get(
   "/",
   asyncHandler(async (req, res) => {
-    const orgId = assertScopedOrgId(req, res);
-    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
-    const { type, priority, page = 1, limit = 20, search } = req.query;
+    const { type, priority, page = 1, limit = 20, search, scope, orgId: queryOrgId, status } = req.query;
 
     const lim = Math.min(parseInt(String(limit), 10) || 20, 100);
     const p = Math.max(parseInt(String(page), 10) || 1, 1);
     const skip = (p - 1) * lim;
 
-    if (userRole === "admin" || userRole === "super_admin") {
-      const filter = { orgId };
+    // For Super Admin, no required orgId - they can filter by scope/orgId
+    if (userRole === "super_admin") {
+      const filter = {};
+      
+      // Handle scope filtering
+      if (scope === 'global') {
+        filter.scope = 'global';
+      } else if (scope === 'organization') {
+        filter.scope = 'organization';
+        if (queryOrgId) {
+          filter.orgId = String(queryOrgId);
+        }
+      } else if (scope === 'all') {
+        // Return all (both global and organization-specific)
+        // No scope filter
+      } else if (queryOrgId) {
+        // If orgId provided without scope, return announcements for that org
+        filter.orgId = String(queryOrgId);
+      }
+
       if (type) filter.type = type;
       if (priority) filter.priority = priority;
+      if (status === 'published') {
+        filter.isPublished = true;
+        filter.isDraft = false;
+      } else if (status === 'draft') {
+        filter.isDraft = true;
+      } else if (status === 'scheduled') {
+        filter.isDraft = true;
+        filter.publishedAt = null;
+      }
+      
       if (search && String(search).trim()) {
         const q = String(search).trim();
         filter.$or = [
@@ -78,6 +107,7 @@ router.get(
           { content: { $regex: q, $options: "i" } },
         ];
       }
+
       const [announcements, total] = await Promise.all([
         Announcement.find(filter)
           .populate("authorId", "name email avatar")
@@ -87,6 +117,15 @@ router.get(
           .lean(),
         Announcement.countDocuments(filter),
       ]);
+
+      // Calculate stats for filtered announcements
+      const stats = await Promise.all([
+        Announcement.countDocuments(filter),
+        Announcement.countDocuments({ ...filter, isPublished: true, isDraft: false }),
+        Announcement.countDocuments({ ...filter, isDraft: true }),
+        Announcement.countDocuments({ ...filter, isPinned: true, isPublished: true })
+      ]);
+
       return res.json({
         success: true,
         data: announcements,
@@ -94,12 +133,78 @@ router.get(
           page: p,
           limit: lim,
           total,
-          pages: Math.max(1, Math.ceil(total / lim)),
+          pages: Math.max(1, Math.ceil(total / lim))
         },
+        stats: {
+          total: stats[0],
+          published: stats[1],
+          draftOrScheduled: stats[2],
+          pinnedLive: stats[3]
+        }
       });
     }
 
-    const userView = await Announcement.getUserAnnouncements(userId, orgId);
+    // For Admin/HR: use their orgId, show global + org announcements
+    const userOrgId = req.user?.orgId;
+    if (!userOrgId) {
+      return res.status(400).json({
+        success: false,
+        message: "Organization context is required"
+      });
+    }
+
+    if (userRole === "admin" || userRole === "hr") {
+      // Return global announcements + org-specific announcements
+      const filter = {
+        $or: [
+          { scope: 'global' },
+          { scope: 'organization', orgId: userOrgId }
+        ]
+      };
+
+      if (type) {
+        filter.$and = filter.$and || [];
+        filter.$and.push({ type });
+      }
+      if (priority) {
+        filter.$and = filter.$and || [];
+        filter.$and.push({ priority });
+      }
+      if (search && String(search).trim()) {
+        const q = String(search).trim();
+        filter.$and = filter.$and || [];
+        filter.$and.push({
+          $or: [
+            { title: { $regex: q, $options: "i" } },
+            { content: { $regex: q, $options: "i" } }
+          ]
+        });
+      }
+
+      const [announcements, total] = await Promise.all([
+        Announcement.find(filter)
+          .populate("authorId", "name email avatar")
+          .sort({ isPinned: -1, publishedAt: -1, createdAt: -1 })
+          .skip(skip)
+          .limit(lim)
+          .lean(),
+        Announcement.countDocuments(filter),
+      ]);
+
+      return res.json({
+        success: true,
+        data: announcements,
+        pagination: {
+          page: p,
+          limit: lim,
+          total,
+          pages: Math.max(1, Math.ceil(total / lim))
+        }
+      });
+    }
+
+    // For Employee: published global + published org announcements
+    const userView = await Announcement.getUserAnnouncements(userId, userOrgId);
     let rows = userView || [];
     if (type) rows = rows.filter((r) => r.type === type);
     if (priority) rows = rows.filter((r) => r.priority === priority);
@@ -121,8 +226,8 @@ router.get(
         page: p,
         limit: lim,
         total,
-        pages: Math.max(1, Math.ceil(total / lim)),
-      },
+        pages: Math.max(1, Math.ceil(total / lim))
+      }
     });
   })
 );
@@ -254,12 +359,12 @@ router.get(
 
 /**
  * POST /api/announcements
+ * For Super Admin: can create global (scope=global, orgId=null) or org-specific (scope=organization, orgId=required)
+ * For Admin/HR: can only create org-specific announcements with their orgId
  */
 router.post(
   "/",
   asyncHandler(async (req, res) => {
-    const orgId = assertScopedOrgId(req, res);
-    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
 
@@ -276,6 +381,8 @@ router.post(
       type = "general",
       priority = "medium",
       audience = "all",
+      scope,
+      orgId: bodyOrgId,
       scheduledFor,
       expiresAt,
       isPinned = false,
@@ -289,6 +396,68 @@ router.post(
       });
     }
 
+    let finalScope = scope;
+    let finalOrgId;
+
+    if (userRole === "super_admin") {
+      // Super Admin can create global or organization-specific
+      if (scope === "global") {
+        finalScope = "global";
+        finalOrgId = undefined; // No orgId for global announcements
+      } else if (scope === "organization") {
+        finalScope = "organization";
+        if (!bodyOrgId) {
+          return res.status(400).json({
+            success: false,
+            message: "Organization is required for organization-scoped announcements"
+          });
+        }
+        // Validate organization exists
+        const Organization = require("../models/Organization.js").default;
+        const org = await Organization.findOne({ _id: bodyOrgId, isActive: true });
+        if (!org) {
+          return res.status(400).json({
+            success: false,
+            message: "Selected organization not found or inactive"
+          });
+        }
+        finalOrgId = String(bodyOrgId);
+      } else if (bodyOrgId) {
+        // If orgId provided but no scope, infer organization scope
+        const Organization = require("../models/Organization.js").default;
+        const org = await Organization.findOne({ _id: bodyOrgId, isActive: true });
+        if (!org) {
+          return res.status(400).json({
+            success: false,
+            message: "Selected organization not found or inactive"
+          });
+        }
+        finalScope = "organization";
+        finalOrgId = String(bodyOrgId);
+      } else {
+        // Default to organization scope with no orgId (will fail validation below)
+        finalScope = "organization";
+      }
+    } else {
+      // Admin/HR can only create organization-scoped announcements
+      finalScope = "organization";
+      finalOrgId = req.user?.orgId;
+      if (!finalOrgId) {
+        return res.status(400).json({
+          success: false,
+          message: "Organization context is required"
+        });
+      }
+    }
+
+    // Validate scope requirements
+    if (finalScope === "organization" && !finalOrgId) {
+      return res.status(400).json({
+        success: false,
+        message: "Organization ID is required for organization-scoped announcements"
+      });
+    }
+
     const { visibility, targetAudience } = resolveAudience(audience);
     const scheduled = scheduledFor ? new Date(scheduledFor) : null;
     const isScheduled = Boolean(scheduled && !Number.isNaN(scheduled.getTime()) && scheduled.getTime() > Date.now());
@@ -298,10 +467,11 @@ router.post(
       content: String(content).trim(),
       type,
       priority: mapPriority(priority),
+      scope: finalScope,
       visibility,
       targetAudience,
       authorId: userId,
-      orgId,
+      orgId: finalOrgId || undefined,
       isPublished: !isScheduled,
       isDraft: isScheduled,
       publishedAt: isScheduled ? null : new Date(),
@@ -328,7 +498,7 @@ router.post(
                 ? "All employees"
                 : String(audience);
           await notifyTeamsOnAnnouncement(
-            orgId,
+            finalOrgId || "global",
             doc.title,
             doc.content,
             audienceLabel
@@ -430,16 +600,16 @@ router.put(
 
 /**
  * DELETE /api/announcements/:id
- * Withdraw from publication (schema has no isDeleted field).
+ * For Super Admin: can delete any announcement (global or org-specific)
+ * For Admin/HR: can delete announcements in their organization only
  */
 router.delete(
   "/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const orgId = assertScopedOrgId(req, res);
-    if (!orgId) return;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
+    const userOrgId = req.user?.orgId;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
@@ -448,12 +618,28 @@ router.delete(
       });
     }
 
-    const announcement = await Announcement.findOne({ _id: id, orgId });
+    // Super Admin can delete any announcement
+    let announcement;
+    if (userRole === "super_admin") {
+      announcement = await Announcement.findById(id);
+    } else {
+      // Admin/HR can only delete announcements in their organization
+      if (!userOrgId) {
+        return res.status(400).json({
+          success: false,
+          message: "Organization context is required"
+        });
+      }
+      announcement = await Announcement.findOne({ 
+        _id: id, 
+        orgId: userOrgId 
+      });
+    }
 
     if (!announcement) {
       return res.status(404).json({
         success: false,
-        message: "Announcement not found",
+        message: "Announcement not found or access denied",
       });
     }
 

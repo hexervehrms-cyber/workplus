@@ -18,26 +18,13 @@ import { authorize } from '../middleware/auth.js';
 import User from '../models/User.js';
 import Employee from '../models/Employee.js';
 import logger from '../utils/logger.js';
+import storageService from '../utils/storageService.js';
 
 const router = express.Router();
 
-// Configure multer for avatar uploads
-const avatarStorage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadDir = 'backend/uploads/avatars';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, `avatar-${req.user.userId}-${uniqueSuffix}${path.extname(file.originalname)}`);
-  }
-});
-
+// Configure multer for avatar uploads (memory storage for storageService processing)
 const avatarUpload = multer({
-  storage: avatarStorage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 5 * 1024 * 1024 // 5MB limit
   },
@@ -439,7 +426,9 @@ router.put('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), 
 
 /**
  * POST /api/profile/avatar
- * Upload profile avatar with validation and real-time sync
+ * Upload profile avatar with GridFS migration and fallback support
+ * Stores in storageService (GridFS or local depending on FILE_STORAGE_DRIVER)
+ * Maintains backward compatibility with old avatar paths
  */
 router.post('/avatar', authorize('super_admin', 'admin', 'hr', 'manager', 'employee'), avatarUpload.single('avatar'), asyncHandler(async (req, res) => {
   const userId = req.user.userId;
@@ -452,66 +441,104 @@ router.post('/avatar', authorize('super_admin', 'admin', 'hr', 'manager', 'emplo
     });
   }
 
-  // Get current user to check for existing avatar
-  const currentUser = await User.findById(userId).select('avatar');
-  
-  // Delete old avatar if exists
-  if (currentUser.avatar) {
-    const oldAvatarPath = path.join(process.cwd(), currentUser.avatar);
-    if (fs.existsSync(oldAvatarPath)) {
+  try {
+    // Upload file via storageService (GridFS or local)
+    const uploadResult = await storageService.uploadFile({
+      buffer: req.file.buffer,
+      folder: 'avatars',
+      fileName: `avatar-${userId}-${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(req.file.originalname)}`,
+      mimeType: req.file.mimetype,
+      size: req.file.size
+    });
+
+    // Get current user to clean up old avatar
+    const currentUser = await User.findById(userId).select('avatar storageKey storageDriver');
+    
+    // Delete old avatar if it exists (both GridFS and local)
+    if (currentUser?.storageKey && currentUser?.storageDriver) {
       try {
-        fs.unlinkSync(oldAvatarPath);
-        logger.info('Old avatar deleted', { userId, oldPath: oldAvatarPath });
+        await storageService.deleteFile(currentUser.storageKey, currentUser.storageDriver);
+        logger.info('Old avatar deleted from GridFS', { userId, storageKey: currentUser.storageKey });
       } catch (error) {
-        logger.warn('Failed to delete old avatar', { error: error.message });
+        logger.warn('Failed to delete old avatar from GridFS', { error: error.message, userId });
+      }
+    } else if (currentUser?.avatar && currentUser.avatar.startsWith('uploads/')) {
+      // Fallback: delete old local avatar path
+      const oldAvatarPath = path.join(process.cwd(), currentUser.avatar);
+      if (fs.existsSync(oldAvatarPath)) {
+        try {
+          fs.unlinkSync(oldAvatarPath);
+          logger.info('Old avatar deleted (local)', { userId, oldPath: oldAvatarPath });
+        } catch (error) {
+          logger.warn('Failed to delete old avatar (local)', { error: error.message });
+        }
       }
     }
-  }
 
-  // Update user with new avatar path
-  const avatarPath = `uploads/avatars/${req.file.filename}`;
-  const updatedUser = await User.findByIdAndUpdate(
-    userId,
-    { avatar: avatarPath },
-    { new: true }
-  ).select('name email avatar');
-
-  // REAL-TIME UPDATES: Emit socket events
-  if (global.socketManager) {
-    global.socketManager.broadcastToOrganization(userOrgId, 'avatar_updated', {
+    // Update user with new storage info
+    const updatedUser = await User.findByIdAndUpdate(
       userId,
-      userName: updatedUser.name,
-      avatarPath,
-      timestamp: new Date()
+      {
+        // Store both new GridFS fields and old avatar field for backward compatibility
+        avatar: `uploads/avatars/${uploadResult.storageKey}`, // Keep old format for backward compat
+        storageKey: uploadResult.storageKey,
+        storageDriver: uploadResult.driver,
+        avatarMimeType: uploadResult.mimeType,
+        avatarSize: uploadResult.size,
+        avatarUploadedAt: new Date()
+      },
+      { new: true }
+    ).select('name email avatar storageKey storageDriver');
+
+    // REAL-TIME UPDATES: Emit socket events
+    if (global.socketManager) {
+      global.socketManager.broadcastToOrganization(userOrgId, 'avatar_updated', {
+        userId,
+        userName: updatedUser.name,
+        storageKey: uploadResult.storageKey,
+        storageDriver: uploadResult.driver,
+        timestamp: new Date()
+      });
+    }
+
+    // Emit activity log
+    if (typeof req.emitActivityUpdate === 'function') {
+      req.emitActivityUpdate({
+        action: 'avatar_update',
+        description: 'Profile picture updated',
+        userId: userId,
+        orgId: userOrgId,
+        severity: 'low',
+        category: 'employee'
+      }, userOrgId);
+    }
+
+    logger.info('Avatar uploaded via storageService', { 
+      userId, 
+      filename: uploadResult.originalFileName,
+      storageKey: uploadResult.storageKey,
+      driver: uploadResult.driver,
+      size: uploadResult.size 
+    });
+
+    res.json({
+      success: true,
+      message: 'Avatar uploaded successfully',
+      data: {
+        avatar: `uploads/avatars/${uploadResult.storageKey}`,
+        storageKey: uploadResult.storageKey,
+        storageDriver: uploadResult.driver,
+        user: updatedUser
+      }
+    });
+  } catch (error) {
+    logger.error('Avatar upload failed', { error: error.message, userId });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to upload avatar',
+      error: error.message
     });
   }
-
-  // Emit activity log
-  if (typeof req.emitActivityUpdate === 'function') {
-    req.emitActivityUpdate({
-      action: 'avatar_update',
-      description: 'Profile picture updated',
-      userId: userId,
-      orgId: userOrgId,
-      severity: 'low',
-      category: 'employee'
-    }, userOrgId);
-  }
-
-  logger.info('Avatar uploaded', { 
-    userId, 
-    filename: req.file.filename,
-    size: req.file.size 
-  });
-
-  res.json({
-    success: true,
-    message: 'Avatar uploaded successfully',
-    data: {
-      avatarPath,
-      user: updatedUser
-    }
-  });
 }));
 
 /**

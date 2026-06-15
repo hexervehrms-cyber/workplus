@@ -14,12 +14,12 @@ const router = express.Router();
  * Get all roles with filtering and pagination
  */
 router.get("/", 
-  authorize('super_admin', 'admin'),
+  authorize('super_admin', 'admin', 'hr'),
   asyncHandler(async (req, res) => {
     try {
       // First try to get roles from database
       const orgId = assertScopedOrgId(req, res);
-    if (!orgId) return;
+      if (!orgId) return;
       
       let roles = [];
       try {
@@ -38,7 +38,9 @@ router.get("/",
         const defaultRoles = [
           {
             id: 'ADMIN',
+            _id: 'ADMIN',
             name: 'Admin',
+            displayName: 'Admin',
             description: 'Administrative access with most permissions',
             level: 80,
             permissions: [
@@ -50,7 +52,9 @@ router.get("/",
           },
           {
             id: 'ACCOUNTANT',
+            _id: 'ACCOUNTANT',
             name: 'Accountant',
+            displayName: 'Accountant',
             description: 'Financial and accounting access',
             level: 70,
             permissions: [
@@ -61,7 +65,9 @@ router.get("/",
           },
           {
             id: 'HR_SPECIALIST',
+            _id: 'HR_SPECIALIST',
             name: 'HR Specialist',
+            displayName: 'HR Specialist',
             description: 'Human resources management access',
             level: 50,
             permissions: [
@@ -72,7 +78,9 @@ router.get("/",
           },
           {
             id: 'EMPLOYEE',
+            _id: 'EMPLOYEE',
             name: 'Employee',
+            displayName: 'Employee',
             description: 'Basic employee access',
             level: 40,
             permissions: [
@@ -91,12 +99,15 @@ router.get("/",
       
       // Transform database roles to expected format
       const formattedRoles = roles.map(role => ({
-        id: role._id,
-        name: role.displayName || role.name,
+        id: role._id?.toString() || role.id || role.name,
+        _id: role._id?.toString() || role.id,
+        name: role.name,
+        displayName: role.displayName || role.name,
         description: role.description,
         level: role.level,
         permissions: role.permissions || [],
-        isCustom: role.isCustom || false
+        isCustom: role.isCustom || false,
+        isSystemRole: role.isSystemRole || false
       }));
       
       res.json({
@@ -110,7 +121,9 @@ router.get("/",
       const defaultRoles = [
         {
           id: 'ADMIN',
+          _id: 'ADMIN',
           name: 'Admin',
+          displayName: 'Admin',
           description: 'Administrative access with most permissions',
           level: 80,
           permissions: [],
@@ -118,7 +131,9 @@ router.get("/",
         },
         {
           id: 'ACCOUNTANT',
+          _id: 'ACCOUNTANT',
           name: 'Accountant',
+          displayName: 'Accountant',
           description: 'Financial and accounting access',
           level: 70,
           permissions: [],
@@ -126,7 +141,9 @@ router.get("/",
         },
         {
           id: 'HR_SPECIALIST',
+          _id: 'HR_SPECIALIST',
           name: 'HR Specialist',
+          displayName: 'HR Specialist',
           description: 'Human resources management access',
           level: 50,
           permissions: [],
@@ -134,7 +151,9 @@ router.get("/",
         },
         {
           id: 'EMPLOYEE',
+          _id: 'EMPLOYEE',
           name: 'Employee',
+          displayName: 'Employee',
           description: 'Basic employee access',
           level: 40,
           permissions: [],
@@ -229,7 +248,7 @@ router.post("/",
     } = req.body;
     
     // Validate required fields
-    if (!name || !displayName || !level) {
+    if (!name || !displayName || level === undefined) {
       return res.status(400).json({
         success: false,
         message: "Name, display name, and level are required"
@@ -300,10 +319,17 @@ router.post("/",
       .populate('parentRole', 'name displayName level')
       .lean();
     
+    // Ensure response has both _id and id for flexibility
+    const responseRole = {
+      ...populatedRole,
+      id: populatedRole._id?.toString() || populatedRole.id,
+      _id: populatedRole._id?.toString() || populatedRole._id
+    };
+    
     res.status(201).json({
       success: true,
       message: "Role created successfully",
-      data: populatedRole
+      data: responseRole
     });
   })
 );
@@ -321,14 +347,20 @@ router.put("/:id",
     if (!orgId) return;
     const userId = req.user?.userId;
     
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    if (!mongoose.Types.ObjectId.isValid(id) && id.match(/^[A-Z_]+$/)) {
+      // Allow system role names like ADMIN, HR, etc.
+    } else if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
         message: "Invalid role ID"
       });
     }
     
-    const role = await Role.findOne({ _id: id, orgId });
+    // Try to find by ObjectId first, then by name
+    let role = await Role.findOne({ _id: id, orgId });
+    if (!role) {
+      role = await Role.findOne({ name: id.toUpperCase(), orgId });
+    }
     
     if (!role) {
       return res.status(404).json({
@@ -391,10 +423,17 @@ router.put("/:id",
       .populate('parentRole', 'name displayName level')
       .lean();
     
+    // Ensure response has both _id and id for flexibility
+    const responseRole = {
+      ...updatedRole,
+      id: updatedRole._id?.toString() || updatedRole.id,
+      _id: updatedRole._id?.toString() || updatedRole._id
+    };
+    
     res.json({
       success: true,
       message: "Role updated successfully",
-      data: updatedRole
+      data: responseRole
     });
   })
 );
@@ -411,14 +450,21 @@ router.delete("/:id",
     const orgId = assertScopedOrgId(req, res);
     if (!orgId) return;
     
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    if (!mongoose.Types.ObjectId.isValid(id) && !id.match(/^[A-Z_]+$/)) {
       return res.status(400).json({
         success: false,
         message: "Invalid role ID"
       });
     }
     
-    const role = await Role.findOne({ _id: id, orgId });
+    // Try to find by ObjectId first, then by name
+    let role = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      role = await Role.findOne({ _id: id, orgId });
+    }
+    if (!role) {
+      role = await Role.findOne({ name: id.toUpperCase(), orgId });
+    }
     
     if (!role) {
       return res.status(404).json({
@@ -444,7 +490,7 @@ router.delete("/:id",
     if (userCount > 0) {
       return res.status(400).json({
         success: false,
-        message: `Cannot delete role. ${userCount} users are assigned to this role.`
+        message: `Cannot delete role. ${userCount} user(s) are assigned to this role.`
       });
     }
     

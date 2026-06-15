@@ -307,6 +307,7 @@ export default function EmployeeDashboard() {
     leaveBalance: "0 days",
     leaveBalanceSubtitle: "",
     hoursThisWeek: "0h",
+    totalHours: "0h 0m",
     breakTodayMinutes: 0,
     weekHoursSubtitle: "Mon–Sun · check-in/out sessions",
     performance: "0%"
@@ -485,10 +486,52 @@ export default function EmployeeDashboard() {
       }, SYNC_CONFIG.ACTION_TIMEOUT_MS);
 
       debug.group('[FETCH DASHBOARD]');
-      debug.log('⚡ Fetching all dashboard data in parallel...');
+      debug.log('⚡ [PHASE 4] Fetching employee summary first, then lazy-loading tables...');
 
-      const holidayYear = new Date().getFullYear();
       const tenantOrgId = resolveAuthOrgId(user);
+      
+      // PHASE 4 OPTIMIZATION: Fetch summary first for quick status display
+      const summaryResult = await apiGetSafe('/dashboard/employee/summary', false);
+      
+      if (
+        summaryResult.ok &&
+        summaryResult.data &&
+        (summaryResult.data as { success?: boolean }).success !== false
+      ) {
+        const summaryPayload = summaryResult.data as { data?: Record<string, unknown> };
+        const kpis = summaryPayload.data?.kpis || {};
+        
+        // Update attendance context with summary data
+        if (typeof kpis === 'object' && kpis !== null) {
+          updateAttendance(
+            {
+              isCheckedIn: Boolean((kpis as any).isCheckedIn),
+              checkInTime: null,
+              checkOutTime: null,
+              hoursWorked: Number((kpis as any).hoursWorkedToday) || 0,
+              status: (kpis as any).isCheckedIn ? 'present' : 'absent',
+              isOnBreak: false,
+              breakType: 'regular',
+              currentBreakDuration: 0,
+            },
+            'api'
+          );
+          
+          // Update total hours KPI from summary
+          const totalHoursLabel = (kpis as any).totalHoursLabel || '0h 0m';
+          if (mountedRef.current) {
+            setKpiMetrics((prev) => ({
+              ...prev,
+              totalHours: totalHoursLabel
+            }));
+          }
+        }
+      }
+
+      debug.log('✅ Summary loaded, now lazy-loading tables in background...');
+
+      // PHASE 4 OPTIMIZATION: Lazy-load tables/charts after KPIs
+      const holidayYear = new Date().getFullYear();
       const holidaysUrl = appendOrgIdParam(
         `holidays?year=${holidayYear}&limit=500`,
         user,
@@ -793,7 +836,7 @@ export default function EmployeeDashboard() {
         ...prev,
         leaveBalance: leaveBalanceLabel,
         leaveBalanceSubtitle,
-        performance: "85%",
+        performance: "0%", // Safe fallback - no performance data API
       }));
 
       debug.groupEnd();
@@ -1798,9 +1841,9 @@ export default function EmployeeDashboard() {
             color="secondary"
           />
           <KPICard
-            title="Performance"
-            value={kpiMetrics.performance}
-            change={5.2}
+            title="Total Hours"
+            value={kpiMetrics.totalHours}
+            subtitle="This month · actual working hours"
             icon={TrendingUp}
             color="secondary"
           />
@@ -1863,14 +1906,14 @@ export default function EmployeeDashboard() {
         )}
 
         {/* Apply Leave Calendar and Holidays - Side by Side Layout */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-stretch">
           {/* Apply leave — click a day on the calendar */}
-          <div>
+          <div className="min-w-0">
             <InteractiveCalendar />
           </div>
 
           {/* Holidays */}
-          <Card className="rounded-2xl overflow-hidden flex flex-col h-full">
+          <Card className="rounded-2xl overflow-hidden flex flex-col h-full min-w-0">
             <div className="p-6 border-b border-border flex-shrink-0">
               <div>
                 <h3 className="font-semibold text-lg">Holidays</h3>
@@ -1882,54 +1925,56 @@ export default function EmployeeDashboard() {
                 </p>
               </div>
             </div>
-            <div className="p-6 space-y-3 flex-1 min-h-0 overflow-y-auto">
-              {holidays && holidays.length > 0 ? (
-                <div className="space-y-3">
-                  {holidays
-                    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-                    .map((holiday) => {
-                      const holidayDate = new Date(holiday.date);
-                      const today = new Date();
-                      const isUpcoming = holidayDate >= today;
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <div className="p-6 space-y-3">
+                {holidays && holidays.length > 0 ? (
+                  <div className="space-y-3">
+                    {holidays
+                      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                      .map((holiday) => {
+                        const holidayDate = new Date(holiday.date);
+                        const today = new Date();
+                        const isUpcoming = holidayDate >= today;
 
-                      return (
-                        <div
-                          key={holiday._id || holiday.id}
-                          className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d ${isUpcoming
-                            ? 'dark:bg-green-950 dark:border-green-800 dark:text-green-200 bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300'
-                            : 'dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
-                            }`}
-                        >
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <p className="font-medium text-sm">{holiday.name}</p>
-                                {isUpcoming && (
-                                  <span className="px-2 py-1 text-xs dark:bg-green-900 dark:text-green-200 bg-green-100 text-green-700 rounded-full">
-                                    Upcoming
-                                  </span>
-                                )}
+                        return (
+                          <div
+                            key={holiday._id || holiday.id}
+                            className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d box-border w-full ${isUpcoming
+                              ? 'dark:bg-green-950 dark:border-green-800 dark:text-green-200 bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300'
+                              : 'dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
+                              }`}
+                          >
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <p className="font-medium text-sm">{holiday.name}</p>
+                                  {isUpcoming && (
+                                    <span className="px-2 py-1 text-xs dark:bg-green-900 dark:text-green-200 bg-green-100 text-green-700 rounded-full">
+                                      Upcoming
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  {holidayDate.toLocaleDateString('en-US', {
+                                    weekday: 'long',
+                                    month: 'long',
+                                    day: 'numeric',
+                                    year: 'numeric'
+                                  })}
+                                </p>
                               </div>
-                              <p className="text-xs text-muted-foreground mt-1">
-                                {holidayDate.toLocaleDateString('en-US', {
-                                  weekday: 'long',
-                                  month: 'long',
-                                  day: 'numeric',
-                                  year: 'numeric'
-                                })}
-                              </p>
                             </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              ) : (
-                <div className="text-center py-8 flex flex-col items-center justify-center h-full">
-                  <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
-                  <p className="text-muted-foreground">No holidays added yet</p>
-                </div>
-              )}
+                        );
+                      })}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 flex flex-col items-center justify-center">
+                    <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
+                    <p className="text-muted-foreground">No holidays added yet</p>
+                  </div>
+                )}
+              </div>
             </div>
           </Card>
         </div>

@@ -156,7 +156,7 @@ export function Sidebar() {
   };
 
   return (
-    <aside className={`${isCollapsed ? 'w-20' : 'w-64'} bg-card border-r border-border h-screen sticky top-0 flex flex-col transition-all duration-300`}>
+    <aside className={`${isCollapsed ? 'w-20' : 'w-64'} bg-card border-r border-border h-screen sticky top-0 z-20 flex flex-col transition-all duration-300`}>
       {/* Logo */}
       <div className="p-6 border-b border-border">
         <Link 

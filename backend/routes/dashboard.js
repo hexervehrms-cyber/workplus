@@ -1,6 +1,7 @@
 import express from "express";
 import mongoose from "mongoose";
 import { asyncHandler } from "../middleware/errorHandler.js";
+import { authenticate } from "../middleware/auth.js";
 import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import LeaveRequest from "../models/LeaveRequest.js";
@@ -588,6 +589,7 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
       ] = await Promise.all([
         countOrgEmployees(orgId),
         // Attendance stats in one aggregation
+        // Count employees who are currently logged in TODAY (checked in, not checked out)
         Attendance.aggregate([
           {
             $facet: {
@@ -601,6 +603,7 @@ router.get("/quick-stats", asyncHandler(async (req, res) => {
                 },
                 { $count: 'count' }
               ],
+              // Logged in: TODAY's attendance with checkIn but no checkOut (currently active session)
               activeUsers: [
                 {
                   $match: {
@@ -904,6 +907,167 @@ router.post("/circuit-breaker/reset", asyncHandler(async (req, res) => {
     success: true,
     message: 'Circuit breakers reset'
   });
+}));
+
+/**
+ * GET /api/dashboard/admin/summary
+ * Optimized summary endpoint for admin dashboard KPI cards
+ * Returns only critical data needed for KPI rendering
+ * 15-30 second cache
+ */
+router.get("/admin/summary", asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'public, max-age=30');
+  
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId) return;
+  const { period = 'this_month' } = req.query;
+  
+  try {
+    const cacheKey = `dashboard:admin:${orgId}:${period}`;
+    const cachedSummary = await dashboardCache.getAsync('/dashboard/admin/summary', orgId, { period });
+    if (cachedSummary) {
+      return res.json({ success: true, data: cachedSummary, cached: true });
+    }
+    
+    const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(String(period));
+    const now = new Date();
+    const { start: startOfDay, end: endOfDay } = getDayBounds(now);
+    const orgMatch = buildOrgIdFlexible(orgId);
+    
+    const [
+      totalEmployees,
+      financialTotals,
+      todayStats,
+      onLeaveCount,
+      loggedInCount,
+      onBreakCount
+    ] = await Promise.all([
+      countOrgEmployees(orgId),
+      getFinancialTotals(orgId, rangeStart, rangeEnd),
+      Attendance.countDocuments({ ...orgMatch, date: { $gte: startOfDay, $lt: endOfDay }, status: 'present' }),
+      LeaveRequest.countDocuments({
+        orgId,
+        status: 'approved',
+        startDate: { $lte: now },
+        endDate: { $gte: now }
+      }),
+      Attendance.countDocuments({
+        ...orgMatch,
+        date: { $gte: startOfDay, $lt: endOfDay },
+        checkIn: { $exists: true, $ne: null },
+        $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
+      }),
+      countEmployeesCurrentlyOnBreak(Attendance, orgMatch, startOfDay, endOfDay)
+    ]);
+    
+    const summary = {
+      kpis: {
+        totalEmployees,
+        loggedInEmployees: loggedInCount,
+        onBreak: onBreakCount,
+        onLeave: onLeaveCount,
+        thisMonthExpense: financialTotals.thisMonthExpenses,
+        thisMonthPayroll: financialTotals.thisMonthPayroll,
+        totalCost: financialTotals.totalCost,
+        presentToday: todayStats,
+        avgProductivity: 75 // Placeholder - can add real calc if needed
+      },
+      lastUpdated: new Date().toISOString()
+    };
+    
+    dashboardCache.set('/dashboard/admin/summary', orgId, summary, { period }, 30000);
+    
+    res.json({ success: true, data: summary });
+  } catch (error) {
+    console.error('Error fetching admin summary:', error);
+    res.status(500).json({ success: false, message: 'Failed to load dashboard summary' });
+  }
+}));
+
+/**
+ * GET /api/dashboard/employee/summary
+ * Optimized summary endpoint for employee dashboard
+ * Returns only critical data: today's status, pending leaves, latest payslip, total hours this month
+ */
+router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'public, max-age=20');
+  
+  const userId = req.user?.userId;
+  const orgId = assertScopedOrgId(req, res);
+  if (!orgId || !userId) return;
+  
+  try {
+    const cachedSummary = await dashboardCache.getAsync('/dashboard/employee/summary', orgId, { userId });
+    if (cachedSummary) {
+      return res.json({ success: true, data: cachedSummary, cached: true });
+    }
+    
+    const { start: startOfDay, end: endOfDay } = getDayBounds();
+    const userIdMatch = { userId: new mongoose.Types.ObjectId(userId) };
+    
+    // Get current month boundaries for total hours calculation
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    monthStart.setHours(0, 0, 0, 0);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    monthEnd.setHours(0, 0, 0, 0);
+    
+    const [
+      todayAttendance,
+      pendingLeaveCount,
+      latestPayslip,
+      monthAttendanceRecords
+    ] = await Promise.all([
+      Attendance.findOne({
+        ...userIdMatch,
+        date: { $gte: startOfDay, $lt: endOfDay }
+      }).select('checkIn checkOut status hoursWorked breaks').lean(),
+      LeaveRequest.countDocuments({
+        userId: new mongoose.Types.ObjectId(userId),
+        status: 'pending'
+      }),
+      Payslip.findOne({
+        userId: new mongoose.Types.ObjectId(userId)
+      }).sort({ createdAt: -1 }).select('month year status netPay').lean(),
+      Attendance.find({
+        ...userIdMatch,
+        date: { $gte: monthStart, $lt: monthEnd }
+      }).select('hoursWorked').lean()
+    ]);
+    
+    // Calculate total hours for current month
+    let totalMonthHours = 0;
+    if (Array.isArray(monthAttendanceRecords)) {
+      totalMonthHours = monthAttendanceRecords.reduce((sum, record) => {
+        return sum + (typeof record.hoursWorked === 'number' ? record.hoursWorked : 0);
+      }, 0);
+    }
+    
+    // Convert decimal hours to label format (e.g., 12.5 => "12h 30m")
+    const hoursInt = Math.floor(totalMonthHours);
+    const minutesFloat = (totalMonthHours - hoursInt) * 60;
+    const minutesInt = Math.round(minutesFloat);
+    const totalHoursLabel = `${hoursInt}h ${minutesInt}m`;
+    
+    const summary = {
+      kpis: {
+        isCheckedIn: Boolean(todayAttendance?.checkIn && !todayAttendance?.checkOut),
+        pendingLeaves: pendingLeaveCount,
+        latestPayslipStatus: latestPayslip?.status || 'not_available',
+        hoursWorkedToday: todayAttendance?.hoursWorked || 0,
+        totalHoursMinutes: Math.round(totalMonthHours * 60),
+        totalHoursLabel: totalHoursLabel
+      },
+      lastUpdated: new Date().toISOString()
+    };
+    
+    dashboardCache.set('/dashboard/employee/summary', orgId, summary, { userId }, 20000);
+    
+    res.json({ success: true, data: summary });
+  } catch (error) {
+    console.error('Error fetching employee summary:', error);
+    res.status(500).json({ success: false, message: 'Failed to load dashboard summary' });
+  }
 }));
 
 export default router;

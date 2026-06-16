@@ -1,3 +1,4 @@
+import { motion } from 'framer-motion';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Card } from './ui/card';
@@ -410,12 +411,12 @@ export default function InteractiveCalendar() {
 
                 return (
                   <div
-                    key={_index}
-                    className={`min-h-[56px] sm:min-h-[64px] xl:min-h-[68px] group ${
-                      !isLastColumn ? 'border-r border-foreground/10' : ''
-                    } ${!isLastRow ? 'border-b border-foreground/10' : ''}`}
-                  >
-                    <button
+  key={formatLocalDateString(day)}
+  className={`min-h-[64px] sm:min-h-[72px] xl:min-h-[78px] group overflow-hidden ${
+    !isLastColumn ? 'border-r border-foreground/10' : ''
+  } ${!isLastRow ? 'border-b border-foreground/10' : ''}`}
+>
+                    <motion.button
                       type="button"
                       onClick={() => !weekend && !holiday && openLeaveForm(day)}
                       disabled={weekend || holiday}
@@ -447,7 +448,7 @@ export default function InteractiveCalendar() {
                           <div className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
                         )}
                       </div>
-                    </button>
+                    </motion.button>
                   </div>
                 );
               })}

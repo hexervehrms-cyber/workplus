@@ -1452,6 +1452,7 @@ router.post(
 /**
  * GET /api/chat/users
  * Get all users for chat (accessible to all authenticated users)
+ * PART B: Include presenceStatus and lastSeen
  * Employees see: admins, super_admins, and other employees
  * Admins see: employees, other admins, and super_admins
  * Super admins see: everyone
@@ -1481,14 +1482,24 @@ router.get('/users', authenticate, asyncHandler(async (req, res) => {
       filter.role = { $in: ['admin', 'hr', 'manager', 'employee'] };
     }
 
+    // PART B: Include presence fields
     const users = await User.find(filter)
-      .select('_id name email role avatar isActive')
+      .select('_id name email role avatar isActive presenceStatus lastSeen')
       .sort({ role: 1, name: 1 })
       .lean();
 
+    // PART B: Format response with presence defaults
+    const formattedUsers = users.map(u => ({
+      ...u,
+      // Default to offline if presenceStatus missing
+      presenceStatus: u.presenceStatus || 'offline',
+      // Include lastSeen as-is or null
+      lastSeen: u.lastSeen || null
+    }));
+
     res.json({
       success: true,
-      data: users
+      data: formattedUsers
     });
   } catch (error) {
     logger.error('Error fetching chat users', error);
@@ -1741,6 +1752,177 @@ router.get('/messages/:messageId/attachment/download', authenticate, asyncHandle
     res.status(500).json({
       success: false,
       message: 'Failed to download attachment',
+      error: error.message
+    });
+  }
+}));
+
+/**
+ * PHASE 2: Mark conversation as read
+ * POST /api/chat/conversations/:conversationId/mark-read
+ * Marks all messages in a conversation as read for the current user
+ */
+router.post('/conversations/:conversationId/mark-read', authenticate, asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const userId = req.user.userId;
+  const orgId = userOrgIdFromReq(req) || req.validatedOrgId;
+
+  if (!orgId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'ORG_REQUIRED',
+    });
+  }
+
+  try {
+    // Verify user has access to conversation
+    const access = await assertConversationAccess(conversationId, userId, orgId);
+    if (!access.ok) {
+      return res.status(access.status).json({
+        success: false,
+        message: access.message,
+        code: 'CONVERSATION_ACCESS_DENIED'
+      });
+    }
+
+    // Mark all messages in conversation as read for this user
+    const result = await ChatMessage.updateMany(
+      {
+        conversationId: String(conversationId),
+        orgId: String(orgId),
+        isDeleted: false,
+        'readBy.userId': { $ne: new mongoose.Types.ObjectId(userId) }
+      },
+      {
+        $push: {
+          readBy: {
+            userId: new mongoose.Types.ObjectId(userId),
+            readAt: new Date()
+          }
+        }
+      }
+    );
+
+    res.json({
+      success: true,
+      data: {
+        conversationId,
+        marked: result.modifiedCount,
+        message: 'Conversation marked as read'
+      }
+    });
+  } catch (error) {
+    logger.error('Error marking conversation as read', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark conversation as read',
+      error: error.message
+    });
+  }
+}));
+
+/**
+ * PHASE 2: Get conversation list with unread counts
+ * GET /api/chat/conversations?includeUnread=true
+ * Enhanced endpoint that returns unreadCount, lastMessage, updatedAt
+ */
+router.get('/conversations/list/with-unread', authenticate, asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const orgId = userOrgIdFromReq(req) || req.validatedOrgId;
+
+  if (!orgId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Organization context required',
+      code: 'ORG_REQUIRED',
+    });
+  }
+
+  try {
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    
+    // Get all conversations with unread count
+    const conversations = await ChatMessage.aggregate([
+      {
+        $match: {
+          $or: [
+            { senderId: userObjectId },
+            { recipientId: userObjectId },
+            { 'channelInfo.participants': userObjectId }
+          ],
+          isDeleted: false,
+          orgId: String(orgId)
+        }
+      },
+      {
+        $sort: { createdAt: -1 }
+      },
+      {
+        $group: {
+          _id: '$conversationId',
+          lastMessage: { $first: '$$ROOT' },
+          messageCount: { $sum: 1 },
+          unreadCount: {
+            $sum: {
+              $cond: [
+                { $not: [{ $in: [userObjectId, '$readBy.userId'] }] },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'lastMessage.senderId',
+          foreignField: '_id',
+          as: 'sender'
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'lastMessage.recipientId',
+          foreignField: '_id',
+          as: 'recipient'
+        }
+      },
+      {
+        $sort: { 'lastMessage.createdAt': -1 }
+      },
+      {
+        $limit: 100
+      }
+    ]);
+
+    // Format response with required fields
+    const formatted = conversations.map(conv => ({
+      conversationId: conv._id,
+      lastMessage: conv.lastMessage ? {
+        _id: conv.lastMessage._id,
+        content: conv.lastMessage.content?.text || '',
+        createdAt: conv.lastMessage.createdAt,
+        senderId: conv.lastMessage.senderId,
+        senderName: conv.sender?.[0]?.name || 'User'
+      } : null,
+      unreadCount: conv.unreadCount || 0,
+      messageCount: conv.messageCount || 0,
+      updatedAt: conv.lastMessage?.createdAt || new Date()
+    }));
+
+    res.json({
+      success: true,
+      data: formatted,
+      count: formatted.length
+    });
+  } catch (error) {
+    logger.error('Error fetching conversations with unread', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch conversations',
       error: error.message
     });
   }

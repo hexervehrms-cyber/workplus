@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Calendar as CalendarIcon, Plus, CheckCircle, XCircle, Clock, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
+import { Plus, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { Card } from '../../components/ui/card';
-import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import {
   Dialog,
@@ -80,21 +80,25 @@ export default function Calendar() {
   useEffect(() => {
     const fetchData = async () => {
       const authUserId = user?.userId || user?.id;
-      if (!authUserId) return;
+      if (!authUserId) {
+        setLoading(false);
+        return;
+      }
       
       try {
         setLoading(true);
         
         // Fetch leave requests
         const leaveResponse = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
-        if (leaveResponse.success && leaveResponse.data) {
-          setLeaveHistory(leaveResponse.data);
+        if (leaveResponse?.success && Array.isArray(leaveResponse.data)) {
+          setLeaveHistory(leaveResponse.data as LeaveRequest[]);
         }
 
         // Fetch holidays with proper error handling
         const token = getBearerToken();
         if (!token) {
           console.warn('No auth token found for holiday fetch');
+          setLoading(false);
           return;
         }
 
@@ -105,7 +109,7 @@ export default function Calendar() {
         );
         if (holidayData?.success && Array.isArray(holidayData.data)) {
           console.log('✅ Loaded holidays:', holidayData.data.length, 'holidays');
-          setHolidays(holidayData.data);
+          setHolidays(holidayData.data as Holiday[]);
           const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
           localStorage.setItem(hKey, JSON.stringify(holidayData.data));
         } else {
@@ -117,7 +121,7 @@ export default function Calendar() {
             try {
               const parsed = JSON.parse(cachedHolidays);
               console.log('📦 Using cached holidays:', parsed.length);
-              setHolidays(parsed);
+              setHolidays(parsed as Holiday[]);
             } catch (e) {
               console.warn('Failed to parse cached holidays');
             }
@@ -146,7 +150,7 @@ export default function Calendar() {
           false
         );
         if (holidayData?.success && Array.isArray(holidayData.data)) {
-          setHolidays(holidayData.data);
+          setHolidays(holidayData.data as Holiday[]);
           const hKey = holidaysStorageKey(user?.id, user?.orgId || user?.tenantId);
           localStorage.setItem(hKey, JSON.stringify(holidayData.data));
         }
@@ -159,7 +163,7 @@ export default function Calendar() {
     return () => {
       unsubscribe();
     };
-  }, []);
+  }, [user]);
 
   // Get days in month
   const getDaysInMonth = (date: Date) => {
@@ -335,7 +339,7 @@ export default function Calendar() {
         false
       );
       if (holidayData?.success && Array.isArray(holidayData.data)) {
-        setHolidays(holidayData.data);
+        setHolidays(holidayData.data as Holiday[]);
       }
     } catch (error) {
       console.error('Error adding holiday:', error);
@@ -431,7 +435,7 @@ export default function Calendar() {
                 const isLastRow = index >= getDaysInMonth(currentMonth).length - 7;
 
                 return (
-                  <button
+                  <motion.button
                     key={index}
                     type="button"
                     onClick={() => !weekend && !holiday && openLeaveForm(day)}
@@ -441,6 +445,10 @@ export default function Calendar() {
                       holiday ? `Holiday: ${getHolidayForDay(day)?.name}` :
                       'Click to apply leave'
                     }
+                    initial={{ opacity: 0.9, scale: 1 }}
+                    whileHover={{ scale: !weekend && !holiday ? 1.05 : 1, backgroundColor: !weekend && !holiday ? '#f3f4f6' : undefined }}
+                    whileTap={{ scale: !weekend && !holiday ? 0.95 : 1 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 17 }}
                     className={`
                       w-full aspect-square p-1 text-xs font-medium transition-all border-r border-b border-foreground/40
                       ${isLastInRow ? 'border-r-0' : ''}
@@ -450,11 +458,11 @@ export default function Calendar() {
                       ${leave && leaveStatus === 'approved' ? 'bg-primary text-primary-foreground' : ''}
                       ${leave && leaveStatus === 'pending' ? 'bg-yellow-100 text-yellow-800' : ''}
                       ${leave && leaveStatus === 'rejected' ? 'bg-destructive/20 text-destructive' : ''}
-                      ${!weekend && !holiday && !leave ? 'text-foreground hover:bg-accent/30 cursor-pointer bg-background' : ''}
+                      ${!weekend && !holiday && !leave ? 'text-foreground cursor-pointer bg-background hover:bg-accent/30' : ''}
                     `}
                   >
                     {day.getDate()}
-                  </button>
+                  </motion.button>
                 );
               })}
             </div>
@@ -501,8 +509,16 @@ export default function Calendar() {
           </div>
           <div className="p-6 space-y-3 max-h-96 overflow-y-auto">
             {holidays && holidays.length > 0 ? (
-              holidays.map((holiday) => (
-                <div key={holiday._id || holiday.id} className="p-3 rounded-lg border border-green-200 flex items-center justify-between" style={{ backgroundColor: '#F0FDF4' }}>
+              holidays.map((holiday, idx) => (
+                <motion.div
+                  key={holiday._id || holiday.id}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: idx * 0.05, type: 'spring', stiffness: 300, damping: 20 }}
+                  whileHover={{ scale: 1.02, backgroundColor: '#ecfdf5' }}
+                  className="p-3 rounded-lg border border-green-200 flex items-center justify-between transition-colors" 
+                  style={{ backgroundColor: '#F0FDF4' }}
+                >
                   <div>
                     <p className="font-medium text-sm">{holiday.name}</p>
                     <p className="text-xs text-muted-foreground">
@@ -513,16 +529,21 @@ export default function Calendar() {
                     )}
                   </div>
                   {(user?.role === 'hr' || user?.role === 'admin') && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handleDeleteHoliday(holiday._id || holiday.id || '')}
-                      className="text-destructive hover:text-destructive"
+                    <motion.div
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.95 }}
                     >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleDeleteHoliday(holiday._id || holiday.id || '')}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </motion.div>
                   )}
-                </div>
+                </motion.div>
               ))
             ) : (
               <div className="text-center py-8">

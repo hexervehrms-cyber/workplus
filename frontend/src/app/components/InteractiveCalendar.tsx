@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
@@ -137,25 +137,34 @@ export default function InteractiveCalendar() {
     };
   }, [loadHolidays, loadLeaveHistory]);
 
-  // Get days in month
-  const getDaysInMonth = (date: Date) => {
+  // Get days in month - helper function that returns days array
+  const getDaysInMonth = (date: Date): Array<Date | null> => {
     const year = date.getFullYear();
     const month = date.getMonth();
+
     let firstDay = new Date(year, month, 1).getDay();
     firstDay = firstDay === 0 ? 6 : firstDay - 1;
+
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    
-    const days = [];
+    const days: Array<Date | null> = [];
+
     for (let i = 0; i < firstDay; i++) {
       days.push(null);
     }
-    
+
     for (let i = 1; i <= daysInMonth; i++) {
       days.push(new Date(year, month, i));
     }
-    
+
+    while (days.length % 7 !== 0) {
+      days.push(null);
+    }
+
     return days;
   };
+
+  // Memoize calendar days array to prevent unnecessary recalculations
+  const calendarDays = useMemo(() => getDaysInMonth(currentMonth), [currentMonth]);
 
   // Check if day is a weekend (1st/3rd Saturday or Sunday)
   const isWeekend = (day: Date) => {
@@ -209,21 +218,23 @@ export default function InteractiveCalendar() {
     });
   };
 
-  // Check if day has leave
+  // Check if day has leave - use normalized date strings for accurate comparison
   const hasLeave = (day: Date) => {
+    const dayStr = normalizeDate(day);
     return leaveHistory.some(leave => {
-      const startDate = new Date(leave.startDate);
-      const endDate = new Date(leave.endDate);
-      return day >= startDate && day <= endDate;
+      const startStr = normalizeDate(leave.startDate);
+      const endStr = normalizeDate(leave.endDate);
+      return dayStr >= startStr && dayStr <= endStr;
     });
   };
 
-  // Get leave status for day
+  // Get leave status for day - use normalized date strings for accurate comparison
   const getLeaveStatus = (day: Date) => {
+    const dayStr = normalizeDate(day);
     const leave = leaveHistory.find(leave => {
-      const startDate = new Date(leave.startDate);
-      const endDate = new Date(leave.endDate);
-      return day >= startDate && day <= endDate;
+      const startStr = normalizeDate(leave.startDate);
+      const endStr = normalizeDate(leave.endDate);
+      return dayStr >= startStr && dayStr <= endStr;
     });
     return leave?.status;
   };
@@ -351,114 +362,96 @@ export default function InteractiveCalendar() {
             </p>
           </div>
 
-          {/* Weekday Headers */}
-          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-hidden bg-muted/30 shadow-sm flex-shrink-0">
-            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => (
-              <div 
-                key={day} 
-                className="text-center text-xs font-semibold text-foreground/80 p-3 border-r border-foreground/10 last:border-r-0"
-              >
-                {day}
-              </div>
-            ))}
-          </div>
-
-          {/* Calendar Days */}
-          <div className="grid grid-cols-7 gap-0 border border-t-0 border-foreground/20 rounded-b-xl overflow-visible shadow-sm bg-background flex-grow auto-rows-fr w-full">
-            {getDaysInMonth(currentMonth).map((day, _index) => {
-              // Calculate if this is the last column (every 7th element) or last row
-              const isLastColumn = (_index + 1) % 7 === 0;
-              const daysInMonth = getDaysInMonth(currentMonth);
-              const isLastRow = _index >= daysInMonth.length - 7;
-              
-              if (!day) {
-                return (
-                  <div 
-                    key={_index} 
-                    className={`p-1 bg-muted/20 border-b border-foreground/10 min-h-[56px] sm:min-h-[64px] xl:min-h-[68px] ${
-                      !isLastColumn ? 'border-r border-foreground/10' : ''
-                    } ${isLastRow ? '' : ''}`} 
-                  />
-                );
-              }
-
-              const weekend = isWeekend(day);
-              const holiday = isHoliday(day);
-              const leave = hasLeave(day);
-              const leaveStatus = getLeaveStatus(day);
-              const holidayInfo = getHolidayForDay(day);
-
-              return (
-                <div
-                  key={_index}
-                  className={`relative group border-b border-foreground/10 min-h-[56px] sm:min-h-[64px] xl:min-h-[68px] overflow-visible ${
-                    !isLastColumn ? 'border-r border-foreground/10' : ''
+          {/* Calendar Grid Wrapper - Unified header + body */}
+          <div className="w-full rounded-xl border border-foreground/20 bg-background overflow-hidden shadow-sm">
+            {/* Weekday Headers */}
+            <div className="grid grid-cols-7 gap-0 bg-muted/30 border-b border-foreground/10">
+              {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, idx) => (
+                <div 
+                  key={day} 
+                  className={`text-center text-xs font-semibold text-foreground/80 p-3 h-10 flex items-center justify-center ${
+                    (idx + 1) % 7 !== 0 ? 'border-r border-foreground/10' : ''
                   }`}
                 >
-                  <button
-                    type="button"
-                    onClick={() => !weekend && !holiday && openLeaveForm(day)}
-                    disabled={weekend || holiday}
-                    className={`
-                      w-full h-full p-2 text-xs font-medium transition-colors duration-200 relative flex flex-col items-center justify-center
-                      ${weekend ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold' : ''}
-                      ${holiday ? 'dark:bg-green-950 dark:text-green-200 bg-green-50 text-green-700 cursor-not-allowed font-semibold' : ''}
-                      ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold' : ''}
-                      ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold' : ''}
-                      ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 font-semibold' : ''}
-                      ${!weekend && !holiday && !leave ? 'dark:text-foreground dark:bg-slate-800 dark:hover:bg-slate-700 text-foreground cursor-pointer bg-slate-50 hover:bg-primary/5 hover:border-primary/30 hover:text-slate-900 hover:font-semibold' : ''}
-                      focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary/30
-                    `}
-                  >
-                    <span className="relative z-10 block">{day.getDate()}</span>
-                    
-                    {/* Status indicators */}
-                    <div className="mt-1 flex gap-1">
-                      {leave && (
-                        <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                          leaveStatus === 'approved' ? 'bg-primary' :
-                          leaveStatus === 'pending' ? 'bg-yellow-500' :
-                          'bg-destructive'
-                        }`} />
-                      )}
-                      
-                      {holiday && (
-                        <div className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
-                      )}
-                    </div>
-                  </button>
-                  
-                  {/* Tooltip for holidays and leaves - positioned inside cell or constrained */}
-                  {(holiday || leave) && (
-                    <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-20 whitespace-nowrap">
-                      {holiday && holidayInfo ? (
-                        <>
-                          <div className="font-medium">{holidayInfo.name}</div>
-                          <div className="text-gray-300">Holiday</div>
-                        </>
-                      ) : leave ? (
-                        <>
-                          <div className="font-medium">{(leaveStatus?.charAt(0) ?? '').toUpperCase() + (leaveStatus?.slice(1) ?? '')} Leave</div>
-                          <div className="text-gray-300">Click for details</div>
-                        </>
-                      ) : null}
-                      {/* Tooltip arrow */}
-                      <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900" />
-                    </div>
-                  )}
-                  
-                  {/* Clickable day tooltip */}
-                  {!weekend && !holiday && !leave && (
-                    <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 px-3 py-2 bg-primary text-primary-foreground text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-20 whitespace-nowrap">
-                      <div className="font-medium">Apply for Leave</div>
-                      <div className="text-primary-foreground/80">Click to request</div>
-                      {/* Tooltip arrow */}
-                      <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-primary" />
-                    </div>
-                  )}
+                  {day}
                 </div>
-              );
-            })}
+              ))}
+            </div>
+
+            {/* Calendar Days */}
+            <div className="grid grid-cols-7 gap-0 bg-background">
+              {calendarDays.map((day, _index) => {
+                const isLastColumn = (_index + 1) % 7 === 0;
+                const isLastRow = _index >= calendarDays.length - 7;
+                
+                if (!day) {
+                  return (
+                    <div 
+                      key={_index} 
+                      className={`min-h-[56px] sm:min-h-[64px] xl:min-h-[68px] bg-muted/20 ${
+                        !isLastColumn ? 'border-r border-foreground/10' : ''
+                      } ${!isLastRow ? 'border-b border-foreground/10' : ''}`} 
+                    />
+                  );
+                }
+
+                const weekend = isWeekend(day);
+                const holiday = isHoliday(day);
+                const leave = hasLeave(day);
+                const leaveStatus = getLeaveStatus(day);
+                const holidayInfo = getHolidayForDay(day);
+                const tooltipText = holiday && holidayInfo 
+                  ? holidayInfo.name 
+                  : leave 
+                  ? `${(leaveStatus?.charAt(0) ?? '').toUpperCase()}${leaveStatus?.slice(1) ?? ''} Leave`
+                  : !weekend && !holiday && !leave 
+                  ? 'Click to request leave'
+                  : undefined;
+
+                return (
+                  <div
+                    key={_index}
+                    className={`min-h-[56px] sm:min-h-[64px] xl:min-h-[68px] group ${
+                      !isLastColumn ? 'border-r border-foreground/10' : ''
+                    } ${!isLastRow ? 'border-b border-foreground/10' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => !weekend && !holiday && openLeaveForm(day)}
+                      disabled={weekend || holiday}
+                      title={tooltipText}
+                      className={`
+                        w-full h-full p-2 text-xs font-medium transition-colors duration-200 flex flex-col items-center justify-center
+                        ${weekend ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold' : ''}
+                        ${holiday ? 'dark:bg-green-950 dark:text-green-200 bg-green-50 text-green-700 cursor-not-allowed font-semibold' : ''}
+                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold' : ''}
+                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold' : ''}
+                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 font-semibold' : ''}
+                        ${!weekend && !holiday && !leave ? 'dark:text-foreground dark:bg-slate-800 dark:hover:bg-slate-700 text-foreground cursor-pointer bg-slate-50 hover:bg-primary/5 hover:ring-1 hover:ring-inset hover:ring-primary/30' : ''}
+                        focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary/30
+                      `}
+                    >
+                      <span className="block">{day.getDate()}</span>
+                      
+                      {/* Status indicators */}
+                      <div className="mt-1 flex gap-1">
+                        {leave && (
+                          <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                            leaveStatus === 'approved' ? 'bg-primary' :
+                            leaveStatus === 'pending' ? 'bg-yellow-500' :
+                            'bg-destructive'
+                          }`} />
+                        )}
+                        
+                        {holiday && (
+                          <div className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
+                        )}
+                      </div>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           {/* Legend */}

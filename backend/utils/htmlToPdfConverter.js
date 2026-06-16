@@ -12,6 +12,8 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// ========== HELPER FUNCTIONS ==========
+
 /**
  * Format currency value for PDF (using INR text instead of rupee symbol for PDF compatibility)
  * PDFKit's default font (Helvetica) doesn't support rupee symbol ₹
@@ -23,6 +25,329 @@ function formatCurrency(amount) {
   const formatted = num.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
   return `INR ${formatted}`;
 }
+
+/**
+ * Safe text renderer - prevents undefined values from breaking PDF
+ * @param {*} value - Value to render
+ * @param {string} fallback - Fallback if value is empty
+ * @returns {string} Safe string representation
+ */
+function safeText(value, fallback = '-') {
+  if (value === null || value === undefined || value === '') return fallback;
+  return String(value).trim() || fallback;
+}
+
+/**
+ * Draw a horizontal line on PDF
+ * @param {PDFDocument} doc - PDF document
+ * @param {number} x - Start X coordinate
+ * @param {number} y - Y coordinate
+ * @param {number} width - Line width in points
+ * @param {string} color - Hex color code
+ * @param {number} weight - Line weight in points
+ */
+function drawLine(doc, x, y, width, color = '#cccccc', weight = 0.5) {
+  doc.strokeColor(color).lineWidth(weight);
+  doc.moveTo(x, y).lineTo(x + width, y).stroke();
+  doc.strokeColor('#000000').lineWidth(1);
+}
+
+/**
+ * Draw page header with logo and title
+ * @param {PDFDocument} doc - PDF document
+ * @param {Object} organization - Organization data
+ * @param {number} pageWidth - Page width
+ * @param {number} leftMargin - Left margin
+ * @param {number} rightMargin - Right margin
+ * @returns {number} Y position after header
+ */
+function drawHeader(doc, organization, pageWidth, leftMargin, rightMargin) {
+  const contentWidth = pageWidth - leftMargin - rightMargin;
+  const logoPath = path.join(__dirname, '..', 'public', 'assets', 'Hexerve_logo.PNG');
+  let headerY = doc.y;
+
+  // Draw logo if available
+  if (fs.existsSync(logoPath)) {
+    try {
+      doc.image(logoPath, leftMargin, headerY, { width: 90, height: 60 });
+      headerY = doc.y;
+    } catch (logoErr) {
+      logger.warn('Failed to embed logo in PDF', { error: logoErr.message });
+    }
+  }
+
+  // Set Y position for title (right-aligned)
+  doc.y = headerY - 60;
+
+  // Draw title
+  doc.fontSize(24).font('Helvetica-Bold').fillColor('#003366');
+  doc.text('SALARY SLIP', {
+    align: 'right',
+    width: contentWidth - 5,
+    x: leftMargin
+  });
+
+  // Draw organization name
+  doc.fontSize(11).font('Helvetica').fillColor('#555555');
+  doc.text(safeText(organization?.name, 'Organization'), {
+    align: 'right',
+    width: contentWidth - 5,
+    x: leftMargin
+  });
+
+  // Draw address if available
+  if (organization?.address) {
+    doc.fontSize(9).fillColor('#777777');
+    doc.text(organization.address, {
+      align: 'right',
+      width: contentWidth - 5,
+      x: leftMargin
+    });
+  }
+
+  // Move to next position
+  doc.y = headerY + 10;
+  doc.fillColor('#000000');
+  drawLine(doc, leftMargin, doc.y, contentWidth, '#003366', 2);
+  doc.moveDown(0.6);
+
+  return doc.y;
+}
+
+/**
+ * Draw section title
+ * @param {PDFDocument} doc - PDF document
+ * @param {string} title - Section title
+ * @param {number} x - X coordinate
+ */
+function drawSectionTitle(doc, title, x = 50) {
+  doc.fontSize(11).font('Helvetica-Bold').fillColor('#003366');
+  doc.text(title, x);
+  doc.fillColor('#000000');
+  doc.moveDown(0.3);
+}
+
+/**
+ * Draw employee information box
+ * @param {PDFDocument} doc - PDF document
+ * @param {Object} employee - Employee data
+ * @param {Object} options - Options including x, width
+ */
+function drawEmployeeInfoBox(doc, employee, { x = 50, width = 495, y = null }) {
+  if (y !== null) doc.y = y;
+
+  const boxHeight = 90;
+  const currentY = doc.y;
+
+  // Draw box background
+  doc.rect(x, currentY, width, boxHeight).fill('#f0f7ff');
+  doc.rect(x, currentY, width, boxHeight).stroke('#003366');
+
+  // Title
+  doc.fontSize(10).font('Helvetica-Bold').fillColor('#003366');
+  doc.text('Employee Information', x + 12, currentY + 8);
+
+  // Employee details in 2 columns
+  const col1X = x + 12;
+  const col2X = x + 260;
+  const detailsY = currentY + 28;
+
+  doc.fontSize(9).font('Helvetica');
+  const empName = employee ? `${employee.firstName || ''} ${employee.lastName || ''}`.trim() : 'N/A';
+
+  // Column 1
+  doc.fillColor('#666666').font('Helvetica-Bold').text('Name:', col1X, detailsY);
+  doc.fillColor('#000000').font('Helvetica').text(safeText(empName), col1X + 70, detailsY - 14);
+
+  doc.fillColor('#666666').font('Helvetica-Bold').text('Designation:', col1X, detailsY + 16);
+  doc.fillColor('#000000').font('Helvetica').text(safeText(employee?.designation, 'N/A'), col1X + 70, detailsY + 16);
+
+  // Column 2
+  doc.fillColor('#666666').font('Helvetica-Bold').text('Employee ID:', col2X, detailsY);
+  doc.fillColor('#000000').font('Helvetica').text(safeText(employee?.employeeCode, 'N/A'), col2X + 70, detailsY - 14);
+
+  doc.fillColor('#666666').font('Helvetica-Bold').text('Department:', col2X, detailsY + 16);
+  doc.fillColor('#000000').font('Helvetica').text(safeText(employee?.department, 'N/A'), col2X + 70, detailsY + 16);
+
+  doc.fillColor('#000000');
+  doc.y = currentY + boxHeight + 8;
+}
+
+/**
+ * Draw attendance summary box
+ * @param {PDFDocument} doc - PDF document
+ * @param {Object} attendanceData - Attendance data
+ * @param {Object} options - Options including x, width
+ */
+function drawAttendanceSummaryBox(doc, attendanceData, { x = 50, width = 495, y = null }) {
+  if (y !== null) doc.y = y;
+
+  if (!attendanceData) {
+    doc.moveDown(0.5);
+    return;
+  }
+
+  const boxHeight = 75;
+  const currentY = doc.y;
+
+  // Draw box background
+  doc.rect(x, currentY, width, boxHeight).fill('#f9f5f0');
+  doc.rect(x, currentY, width, boxHeight).stroke('#8b6f47');
+
+  // Title
+  doc.fontSize(10).font('Helvetica-Bold').fillColor('#8b6f47');
+  doc.text('Attendance Summary', x + 12, currentY + 8);
+
+  // Stats in 2x2 grid
+  const statWidth = (width - 24) / 2;
+  const statX1 = x + 12;
+  const statX2 = x + 12 + statWidth;
+  const stat1Y = currentY + 28;
+  const stat2Y = currentY + 50;
+
+  doc.fontSize(9);
+
+  // Total Working Days
+  doc.fillColor('#666666').font('Helvetica-Bold').text('Total Working Days:', statX1, stat1Y);
+  doc.fillColor('#003366').font('Helvetica-Bold').fontSize(12).text(String(attendanceData.totalWorkingDays || 0), statX1, stat1Y + 14);
+
+  // Present Days
+  doc.fontSize(9).fillColor('#666666').font('Helvetica-Bold').text('Present Days:', statX2, stat1Y);
+  doc.fillColor('#003366').font('Helvetica-Bold').fontSize(12).text(String(attendanceData.presentDays || 0), statX2, stat1Y + 14);
+
+  // Absent Days
+  doc.fontSize(9).fillColor('#666666').font('Helvetica-Bold').text('Absent Days:', statX1, stat2Y);
+  doc.fillColor('#003366').font('Helvetica-Bold').fontSize(12).text(String(attendanceData.absentDays || 0), statX1, stat2Y + 14);
+
+  // Leaves Taken
+  doc.fontSize(9).fillColor('#666666').font('Helvetica-Bold').text('Leaves Taken:', statX2, stat2Y);
+  doc.fillColor('#003366').font('Helvetica-Bold').fontSize(12).text(String(attendanceData.leavesTaken || 0), statX2, stat2Y + 14);
+
+  doc.fillColor('#000000');
+  doc.y = currentY + boxHeight + 8;
+}
+
+/**
+ * Draw salary table (for earnings or deductions)
+ * @param {PDFDocument} doc - PDF document
+ * @param {Object} options - Table configuration
+ */
+function drawSalaryTable(doc, options) {
+  const {
+    title = 'TABLE',
+    rows = [],
+    totalLabel = 'Total',
+    totalAmount = 0,
+    x = 50,
+    width = 495,
+    headerColor = '#003366',
+    y = null
+  } = options;
+
+  if (y !== null) doc.y = y;
+
+  const currentY = doc.y;
+  const headerHeight = 24;
+  const rowHeight = 22;
+  const descWidth = width - 170;
+  const amountWidth = 160;
+  const amountX = x + descWidth;
+
+  // Section title
+  drawSectionTitle(doc, title, x);
+
+  // Table header
+  const headerY = doc.y;
+  doc.rect(x, headerY, width, headerHeight).fillAndStroke(headerColor, headerColor);
+
+  doc.fontSize(10).font('Helvetica-Bold').fillColor('#ffffff');
+  doc.text('Description', x + 8, headerY + 5);
+  doc.text('Amount (INR)', amountX + 8, headerY + 5, { width: amountWidth - 16, align: 'right' });
+
+  doc.fillColor('#000000');
+  doc.y = headerY + headerHeight + 2;
+
+  // Table rows
+  doc.fontSize(9).font('Helvetica');
+  let rowY = doc.y;
+
+  rows.forEach((row) => {
+    const [description, amount] = row;
+    const displayAmount = formatCurrency(amount);
+
+    doc.text(description, x + 8, rowY, { width: descWidth - 16 });
+    doc.text(displayAmount, amountX + 8, rowY, { width: amountWidth - 16, align: 'right' });
+    rowY += rowHeight;
+  });
+
+  // Draw line before total
+  drawLine(doc, x, rowY, width, '#cccccc', 0.5);
+  rowY += 6;
+
+  // Total row
+  doc.fontSize(10).font('Helvetica-Bold');
+  doc.text(totalLabel, x + 8, rowY);
+  doc.text(formatCurrency(totalAmount), amountX + 8, rowY, { width: amountWidth - 16, align: 'right' });
+
+  doc.fillColor('#000000');
+  doc.y = rowY + rowHeight;
+}
+
+/**
+ * Draw net salary highlight box
+ * @param {PDFDocument} doc - PDF document
+ * @param {number} netSalary - Net salary amount
+ * @param {Object} options - Options including x, width
+ */
+function drawNetSalaryBox(doc, netSalary, { x = 50, width = 495, y = null }) {
+  if (y !== null) doc.y = y;
+
+  const currentY = doc.y;
+  const boxHeight = 55;
+
+  // Draw background box with border
+  doc.rect(x, currentY, width, boxHeight).fill('#e8f4f8');
+  doc.rect(x, currentY, width, boxHeight).stroke('#003366');
+  doc.lineWidth(2);
+
+  // Label
+  doc.fontSize(11).font('Helvetica-Bold').fillColor('#003366');
+  doc.text('NET SALARY PAYABLE', x + 12, currentY + 8);
+
+  // Amount (large and prominent)
+  doc.fontSize(18).font('Helvetica-Bold').fillColor('#003366');
+  doc.text(formatCurrency(netSalary), x + 12, currentY + 25);
+
+  doc.fillColor('#000000').lineWidth(1);
+  doc.y = currentY + boxHeight + 8;
+}
+
+/**
+ * Draw page footer
+ * @param {PDFDocument} doc - PDF document
+ * @param {number} x - X coordinate
+ * @param {number} width - Width
+ */
+function drawFooter(doc, x = 50, width = 495) {
+  doc.moveDown(0.5);
+  drawLine(doc, x, doc.y, width, '#cccccc', 0.5);
+  doc.moveDown(0.4);
+
+  doc.fontSize(8).font('Helvetica').fillColor('#999999');
+  doc.text('This is a computer-generated salary slip and does not require a signature.', {
+    align: 'center',
+    width: width,
+    x: x
+  });
+  doc.text(`Generated on: ${new Date().toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' })}`, {
+    align: 'center',
+    width: width,
+    x: x
+  });
+
+  doc.fillColor('#000000');
+}
+
 
 /**
  * Generate professional salary slip PDF with Hexerve logo and complete layout
@@ -38,7 +363,7 @@ export async function generateSalarySlipPdf(slip, employee, organization) {
     try {
       const pdf = new PDFDocument({
         size: 'A4',
-        margin: 40,
+        margin: 0,
         bufferPages: true,
         font: 'Helvetica'
       });
@@ -51,140 +376,49 @@ export async function generateSalarySlipPdf(slip, employee, organization) {
 
       // Layout constants
       const pageWidth = 595; // A4 width in points
-      const leftMargin = 40;
-      const rightMargin = 40;
-      const contentWidth = pageWidth - leftMargin - rightMargin; // 515
-      const descColumn = leftMargin; // 40
-      const amountColumn = pageWidth - rightMargin - 100; // ~455 for amount column
+      const leftMargin = 45;
+      const rightMargin = 50;
+      const contentWidth = pageWidth - leftMargin - rightMargin; // 500
 
-      // Helper: Draw a horizontal line
-      const drawLine = (y, color = '#cccccc', width = 1) => {
-        pdf.strokeColor(color).lineWidth(width);
-        pdf.moveTo(descColumn, y).lineTo(pageWidth - rightMargin, y).stroke();
-      };
+      // Initialize page margins
+      pdf.y = leftMargin;
 
-      // ========== LOGO HEADER ==========
-      let logoY = pdf.y;
-      const logoPath = path.join(__dirname, '..', 'public', 'assets', 'Hexerve_logo.PNG');
-      
-      if (fs.existsSync(logoPath)) {
-        try {
-          // Add Hexerve logo with proper sizing for visibility
-          pdf.image(logoPath, leftMargin, pdf.y, { width: 75, height: 55 });
-          logoY = pdf.y + 55 + 10;
-        } catch (logoErr) {
-          logger.warn('Failed to embed logo in PDF', { error: logoErr.message });
-          logoY = pdf.y;
-        }
-      }
-
-      // ========== HEADER TEXT (right side) ==========
-      pdf.y = logoY - 55;
-      pdf.fontSize(16).font('Helvetica-Bold').text('SALARY SLIP', {
-        align: 'center',
-        width: contentWidth,
-        x: descColumn
-      });
-      
-      pdf.fontSize(9).font('Helvetica').fillColor('#555555').text(
-        organization?.name || 'Organization',
-        { align: 'center', width: contentWidth, x: descColumn }
-      );
-      
-      if (organization?.address) {
-        pdf.fontSize(8).text(organization.address, { align: 'center', width: contentWidth, x: descColumn });
-      }
-
-      pdf.moveDown(0.5);
-      pdf.fillColor('#000000');
-      drawLine(pdf.y, '#000000', 1);
+      // ========== 1. HEADER WITH LOGO ==========
+      drawHeader(pdf, organization, pageWidth, leftMargin, rightMargin);
       pdf.moveDown(0.6);
 
-      // ========== PERIOD & SLIP INFO (two columns) ==========
+      // ========== 2. SALARY PERIOD & SLIP DATE ROW ==========
       const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
       const monthName = monthNames[slip.month - 1] || slip.month;
       const period = `${monthName} ${slip.year}`;
+      const slipDate = slip.createdAt ? new Date(slip.createdAt).toLocaleDateString('en-IN') : 'N/A';
 
-      pdf.fontSize(10).font('Helvetica-Bold');
-      pdf.text('Salary Period:', descColumn, pdf.y);
-      pdf.fontSize(10).font('Helvetica');
-      pdf.text(period, descColumn + 110, pdf.y - 14);
+      // Two-column period info
+      pdf.fontSize(10).font('Helvetica-Bold').fillColor('#333333');
+      pdf.text('Salary Period:', leftMargin);
+      pdf.fontSize(10).font('Helvetica').text(period, leftMargin + 115, pdf.y - 14);
 
-      if (slip.createdAt) {
-        const slipDate = new Date(slip.createdAt).toLocaleDateString('en-IN');
-        pdf.fontSize(10).font('Helvetica-Bold');
-        pdf.text('Slip Date:', descColumn, pdf.y);
-        pdf.fontSize(10).font('Helvetica');
-        pdf.text(slipDate, descColumn + 110, pdf.y - 14);
-      }
+      pdf.fontSize(10).font('Helvetica-Bold').fillColor('#333333');
+      pdf.text('Slip Date:', leftMargin);
+      pdf.fontSize(10).font('Helvetica').text(slipDate, leftMargin + 115, pdf.y - 14);
 
+      pdf.fillColor('#000000');
       pdf.moveDown(0.8);
 
-      // ========== EMPLOYEE DETAILS (two-column layout) ==========
-      pdf.fontSize(10).font('Helvetica-Bold').text('Employee Information', descColumn);
-      pdf.moveDown(0.3);
-      
-      const empName = employee ? `${employee.firstName || ''} ${employee.lastName || ''}`.trim() : 'N/A';
-      const empCode = employee?.employeeCode || 'N/A';
-      const empDesignation = employee?.designation || 'N/A';
-      const empDepartment = employee?.department || 'N/A';
+      // ========== 3. EMPLOYEE INFORMATION BOX ==========
+      drawEmployeeInfoBox(pdf, employee, { x: leftMargin, width: contentWidth });
 
-      pdf.fontSize(9).font('Helvetica');
-
-      // Left column of employee info
-      const col1X = descColumn;
-      const col2X = descColumn + 280;
-      const infoY = pdf.y;
-
-      pdf.text(`Name: ${empName}`, col1X, infoY);
-      pdf.text(`Designation: ${empDesignation}`, col1X, pdf.y + 16);
-
-      // Right column of employee info
-      pdf.text(`Employee ID: ${empCode}`, col2X, infoY);
-      pdf.text(`Department: ${empDepartment}`, col2X, pdf.y + 16);
-
-      pdf.moveDown(1.2);
-
-      // ========== ATTENDANCE SUMMARY ==========
+      // ========== 4. ATTENDANCE SUMMARY BOX ==========
       if (slip.attendanceData) {
-        pdf.fontSize(10).font('Helvetica-Bold').text('Attendance Summary', descColumn);
-        pdf.moveDown(0.2);
-        
-        const attY = pdf.y;
-        const attCol1X = descColumn;
-        const attCol2X = descColumn + 200;
-
-        pdf.fontSize(9).font('Helvetica');
-        pdf.text(`Total Working Days: ${slip.attendanceData.totalWorkingDays || 0}`, attCol1X, attY);
-        pdf.text(`Leaves Taken: ${slip.attendanceData.leavesTaken || 0}`, attCol2X, attY);
-        pdf.text(`Present Days: ${slip.attendanceData.presentDays || 0}`, attCol1X, attY + 14);
-        pdf.text(`Absent Days: ${slip.attendanceData.absentDays || 0}`, attCol2X, attY + 14);
-
-        pdf.moveDown(0.8);
+        drawAttendanceSummaryBox(pdf, slip.attendanceData, { x: leftMargin, width: contentWidth });
       }
 
-      drawLine(pdf.y, '#cccccc', 0.5);
       pdf.moveDown(0.5);
 
-      // ========== EARNINGS TABLE ==========
-      pdf.fontSize(11).font('Helvetica-Bold').text('EARNINGS', descColumn);
-      pdf.moveDown(0.3);
-
-      // Table header with borders
-      const tableHeaderY = pdf.y;
-      pdf.fontSize(9).font('Helvetica-Bold').fillColor('#ffffff');
-      pdf.rect(descColumn, tableHeaderY, contentWidth, 20).fillAndStroke('#003366', '#003366');
-      pdf.text('Description', descColumn + 5, tableHeaderY + 4, { width: 250 });
-      pdf.text('Amount (INR)', amountColumn + 5, tableHeaderY + 4, { width: 100, align: 'right' });
-
-      pdf.moveDown(1.8);
-      pdf.fillColor('#000000');
-
-      // Earnings rows
-      pdf.fontSize(9).font('Helvetica');
-      let rowY = pdf.y;
-
-      const earningsData = [
+      // ========== 5. EARNINGS TABLE ==========
+      const earningsRows = [];
+      
+      const earningsMap = [
         ['Basic Salary', slip.earnings?.basic || 0],
         ['HRA', slip.earnings?.hra || 0],
         ['Medical Allowance', slip.earnings?.medicalExpenses || 0],
@@ -196,57 +430,36 @@ export async function generateSalarySlipPdf(slip, employee, organization) {
         ['Commission', slip.earnings?.commission || 0]
       ];
 
-      earningsData.forEach(([label, amount]) => {
+      earningsMap.forEach(([label, amount]) => {
         if (amount > 0) {
-          pdf.text(label, descColumn + 5, rowY);
-          pdf.text(formatCurrency(amount), amountColumn + 5, rowY, { width: 100, align: 'right' });
-          rowY += 16;
+          earningsRows.push([label, amount]);
         }
       });
 
-      // Other earnings
       if (slip.earnings?.otherEarnings && Array.isArray(slip.earnings.otherEarnings)) {
         slip.earnings.otherEarnings.forEach(({ name, amount }) => {
           if (amount > 0) {
-            pdf.text(name, descColumn + 5, rowY);
-            pdf.text(formatCurrency(amount), amountColumn + 5, rowY, { width: 100, align: 'right' });
-            rowY += 16;
+            earningsRows.push([name, amount]);
           }
         });
       }
 
-      // Total earnings row
-      pdf.moveDown(0.2);
-      drawLine(pdf.y, '#cccccc', 0.5);
+      drawSalaryTable(pdf, {
+        title: 'EARNINGS',
+        rows: earningsRows,
+        totalLabel: 'Gross Earnings',
+        totalAmount: slip.grossEarnings || 0,
+        x: leftMargin,
+        width: contentWidth,
+        headerColor: '#1f4e78'
+      });
 
-      pdf.fontSize(10).font('Helvetica-Bold');
-      const grossEarnings = slip.grossEarnings || 0;
-      pdf.text('Gross Earnings', descColumn + 5, pdf.y + 4);
-      pdf.text(formatCurrency(grossEarnings), amountColumn + 5, pdf.y + 4, { width: 100, align: 'right' });
-      pdf.moveDown(0.7);
+      pdf.moveDown(0.4);
 
-      drawLine(pdf.y, '#cccccc', 0.5);
-      pdf.moveDown(0.5);
+      // ========== 6. DEDUCTIONS TABLE ==========
+      const deductionsRows = [];
 
-      // ========== DEDUCTIONS TABLE ==========
-      pdf.fontSize(11).font('Helvetica-Bold').text('DEDUCTIONS', descColumn);
-      pdf.moveDown(0.3);
-
-      // Table header
-      const dedHeaderY = pdf.y;
-      pdf.fontSize(9).font('Helvetica-Bold').fillColor('#ffffff');
-      pdf.rect(descColumn, dedHeaderY, contentWidth, 20).fillAndStroke('#663300', '#663300');
-      pdf.text('Description', descColumn + 5, dedHeaderY + 4, { width: 250 });
-      pdf.text('Amount (INR)', amountColumn + 5, dedHeaderY + 4, { width: 100, align: 'right' });
-
-      pdf.moveDown(1.8);
-      pdf.fillColor('#000000');
-
-      // Deductions rows
-      pdf.fontSize(9).font('Helvetica');
-      let dedRowY = pdf.y;
-
-      const deductionsData = [
+      const deductionsMap = [
         ['Provident Fund (PF)', slip.deductions?.providentFund || 0],
         ['Employee State Insurance (ESI)', slip.deductions?.employeeStateInsurance || 0],
         ['Professional Tax', slip.deductions?.professionalTax || 0],
@@ -254,62 +467,38 @@ export async function generateSalarySlipPdf(slip, employee, organization) {
         ['Leave Deduction', slip.deductions?.leaveDeduction || 0]
       ];
 
-      deductionsData.forEach(([label, amount]) => {
+      deductionsMap.forEach(([label, amount]) => {
         if (amount > 0) {
-          pdf.text(label, descColumn + 5, dedRowY);
-          pdf.text(formatCurrency(amount), amountColumn + 5, dedRowY, { width: 100, align: 'right' });
-          dedRowY += 16;
+          deductionsRows.push([label, amount]);
         }
       });
 
-      // Other deductions
       if (slip.deductions?.otherDeductions && Array.isArray(slip.deductions.otherDeductions)) {
         slip.deductions.otherDeductions.forEach(({ name, amount }) => {
           if (amount > 0) {
-            pdf.text(name, descColumn + 5, dedRowY);
-            pdf.text(formatCurrency(amount), amountColumn + 5, dedRowY, { width: 100, align: 'right' });
-            dedRowY += 16;
+            deductionsRows.push([name, amount]);
           }
         });
       }
 
-      // Total deductions row
-      pdf.moveDown(0.2);
-      drawLine(pdf.y, '#cccccc', 0.5);
+      drawSalaryTable(pdf, {
+        title: 'DEDUCTIONS',
+        rows: deductionsRows,
+        totalLabel: 'Total Deductions',
+        totalAmount: slip.totalDeductions || 0,
+        x: leftMargin,
+        width: contentWidth,
+        headerColor: '#8b6f47'
+      });
 
-      pdf.fontSize(10).font('Helvetica-Bold');
-      const totalDeductions = slip.totalDeductions || 0;
-      pdf.text('Total Deductions', descColumn + 5, pdf.y + 4);
-      pdf.text(formatCurrency(totalDeductions), amountColumn + 5, pdf.y + 4, { width: 100, align: 'right' });
-      pdf.moveDown(0.7);
-
-      drawLine(pdf.y, '#000000', 1);
       pdf.moveDown(0.6);
 
-      // ========== NET SALARY SUMMARY (highlighted box) ==========
-      const netSalaryY = pdf.y;
-      const netSalary = slip.netSalary || Math.max(0, grossEarnings - totalDeductions);
-      
-      // Draw background box
-      pdf.rect(descColumn, netSalaryY, contentWidth, 50).fillAndStroke('#e8f4f8', '#003366');
-      
-      pdf.fontSize(12).font('Helvetica-Bold').fillColor('#003366');
-      pdf.text('NET SALARY PAYABLE', descColumn + 10, netSalaryY + 8);
-      
-      pdf.fontSize(16).font('Helvetica-Bold').fillColor('#003366');
-      pdf.text(formatCurrency(netSalary), descColumn + 10, netSalaryY + 25);
-      
-      pdf.moveDown(3);
-      pdf.fillColor('#000000');
+      // ========== 7. NET SALARY BOX ==========
+      const netSalary = slip.netSalary || Math.max(0, (slip.grossEarnings || 0) - (slip.totalDeductions || 0));
+      drawNetSalaryBox(pdf, netSalary, { x: leftMargin, width: contentWidth });
 
-      // ========== FOOTER ==========
-      pdf.moveDown(0.5);
-      drawLine(pdf.y, '#cccccc', 0.5);
-      pdf.moveDown(0.4);
-      
-      pdf.fontSize(7).font('Helvetica').fillColor('#666666');
-      pdf.text('This is a computer-generated salary slip and does not require a signature.', { align: 'center' });
-      pdf.text(`Generated on: ${new Date().toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' })}`, { align: 'center' });
+      // ========== 8. FOOTER ==========
+      drawFooter(pdf, leftMargin, contentWidth);
 
       pdf.end();
     } catch (error) {

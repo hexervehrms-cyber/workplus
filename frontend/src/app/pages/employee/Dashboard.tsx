@@ -1953,7 +1953,7 @@ export default function EmployeeDashboard() {
         )}
 
         {/* Apply Leave Calendar and Holidays - Side by Side Layout */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start overflow-visible">
           {/* Apply leave — click a day on the calendar */}
           <div className="min-w-0">
             <InteractiveCalendar />
@@ -1961,7 +1961,7 @@ export default function EmployeeDashboard() {
 
           {/* Holidays */}
           <Card className="rounded-2xl overflow-hidden flex flex-col h-auto xl:h-[600px] min-w-0 shadow-lg border-0 bg-gradient-to-br from-background to-muted/20">
-            <div className="p-6 border-b border-foreground/10 flex-shrink-0 bg-muted/30">
+            <div className="px-6 py-5 border-b border-foreground/10 flex-shrink-0 bg-muted/30">
               <h3 className="font-semibold text-lg text-foreground">Holidays</h3>
               <p className="text-sm text-muted-foreground mt-1">
                 {holidays.length > 0
@@ -1970,8 +1970,8 @@ export default function EmployeeDashboard() {
                 }
               </p>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto">
-              <div className="p-4 sm:p-6 space-y-3">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+              <div className="px-6 py-5 space-y-3">
                 {holidays && holidays.length > 0 ? (
                   <div className="space-y-3">
                     {holidays

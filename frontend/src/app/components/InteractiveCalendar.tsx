@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Calendar as CalendarIcon, Plus, CheckCircle, XCircle, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Card } from './ui/card';
-import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import {
   Dialog,
@@ -354,12 +353,10 @@ export default function InteractiveCalendar() {
 
           {/* Weekday Headers */}
           <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-hidden bg-muted/30 shadow-sm flex-shrink-0">
-            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => (
+            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => (
               <div 
                 key={day} 
-                className={`text-center text-xs font-semibold text-foreground/80 p-3 border-r border-foreground/10 ${
-                  index === 6 ? 'border-r-0' : ''
-                }`}
+                className="text-center text-xs font-semibold text-foreground/80 p-3 border-r border-foreground/10 last:border-r-0"
               >
                 {day}
               </div>
@@ -367,11 +364,11 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Calendar Days */}
-          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-hidden shadow-sm bg-background flex-1 min-h-0">
-            {getDaysInMonth(currentMonth).map((day, index) => {
+          <div className="grid grid-cols-7 gap-0 border border-t-0 border-foreground/20 rounded-b-xl overflow-hidden shadow-sm bg-background flex-1 min-h-0 auto-rows-fr">
+            {getDaysInMonth(currentMonth).map((day, _index) => {
               if (!day) {
                 return (
-                  <div key={index} className="aspect-square p-1 bg-muted/20 border-r border-b border-foreground/10 last:border-r-0" />
+                  <div key={_index} className="p-1 bg-muted/20 border-r border-b border-foreground/10 last-of-type:border-r-0" />
                 );
               }
 
@@ -379,54 +376,44 @@ export default function InteractiveCalendar() {
               const holiday = isHoliday(day);
               const leave = hasLeave(day);
               const leaveStatus = getLeaveStatus(day);
-              const isLastInRow = (index + 1) % 7 === 0;
-              const isLastRow = index >= getDaysInMonth(currentMonth).length - 7;
               const holidayInfo = getHolidayForDay(day);
 
               return (
                 <div
-                  key={index}
-                  className="relative group calendar-date-3d hover:z-50"
+                  key={_index}
+                  className="relative group calendar-date-3d hover:z-50 border-r border-b border-foreground/10 last-of-type:border-r-0"
                 >
                   <button
                     type="button"
                     onClick={() => !weekend && !holiday && openLeaveForm(day)}
                     disabled={weekend || holiday}
                     className={`
-                      w-full aspect-square p-2 text-xs font-medium transition-all duration-500 border-r border-b border-foreground/10 relative overflow-visible
-                      ${isLastInRow ? 'border-r-0' : ''}
-                      ${isLastRow ? 'border-b-0' : ''}
+                      w-full h-full p-2 text-xs font-medium transition-all duration-500 relative flex flex-col items-center justify-center min-h-[72px]
                       ${weekend ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold' : ''}
                       ${holiday ? 'dark:bg-green-950 dark:text-green-200 bg-green-50 text-green-700 cursor-not-allowed font-semibold' : ''}
-                      ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950 dark:text-blue-200 bg-blue-50 text-blue-700 border-blue-200 font-semibold' : ''}
+                      ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold' : ''}
                       ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold' : ''}
                       ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 font-semibold' : ''}
-                      ${!weekend && !holiday && !leave ? 'dark:text-foreground dark:bg-slate-800 dark:hover:bg-slate-700 text-foreground cursor-pointer bg-slate-50 hover:from-slate-100 hover:to-slate-200 hover:text-slate-900 hover:font-semibold' : ''}
-                      focus:outline-none focus:ring-2 focus:ring-slate-300 focus:ring-inset rounded-sm
+                      ${!weekend && !holiday && !leave ? 'dark:text-foreground dark:bg-slate-800 dark:hover:bg-slate-700 text-foreground cursor-pointer bg-slate-50 hover:bg-slate-100 hover:text-slate-900 hover:font-semibold' : ''}
+                      focus:outline-none focus:ring-2 focus:ring-slate-300 focus:ring-inset
                     `}
-                    style={{
-                      transformStyle: 'preserve-3d',
-                    }}
                   >
-                    <span className="relative z-10">{day.getDate()}</span>
-                    
-                    {/* Hover effect overlay */}
-                    {!weekend && !holiday && !leave && (
-                      <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-200 rounded-sm" />
-                    )}
+                    <span className="relative z-10 block">{day.getDate()}</span>
                     
                     {/* Status indicators */}
-                    {leave && (
-                      <div className={`absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full ${
-                        leaveStatus === 'approved' ? 'bg-primary' :
-                        leaveStatus === 'pending' ? 'bg-yellow-500' :
-                        'bg-destructive'
-                      }`} />
-                    )}
-                    
-                    {holiday && (
-                      <div className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-green-500" />
-                    )}
+                    <div className="mt-1 flex gap-1">
+                      {leave && (
+                        <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                          leaveStatus === 'approved' ? 'bg-primary' :
+                          leaveStatus === 'pending' ? 'bg-yellow-500' :
+                          'bg-destructive'
+                        }`} />
+                      )}
+                      
+                      {holiday && (
+                        <div className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
+                      )}
+                    </div>
                   </button>
                   
                   {/* Tooltip for holidays and leaves */}

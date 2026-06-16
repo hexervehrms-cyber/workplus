@@ -313,6 +313,11 @@ export default function EmployeeDashboard() {
     performance: "0%"
   });
 
+  /** Store completed month hours before today's live session (updated on each server sync). */
+  const monthHoursExclTodayRef = useRef(0);
+  /** Store whether we're currently tracking an active session for monthly total. */
+  const hasActiveTodayRef = useRef(false);
+
   /** Completed week hours before today's live session (updated on each server sync). */
   const weekHoursExclTodayRef = useRef(0);
 
@@ -343,6 +348,26 @@ export default function EmployeeDashboard() {
       applyWeekHours(hoursThisWeek, weekKey, true);
     },
     [applyWeekHours]
+  );
+
+  const applyTotalHours = useCallback((hours: number) => {
+    if (mountedRef.current) {
+      const hoursInt = Math.floor(hours);
+      const minutesFloat = (hours - hoursInt) * 60;
+      const minutesInt = Math.round(minutesFloat);
+      const label = `${hoursInt}h ${minutesInt}m`;
+      setKpiMetrics((prev) => ({ ...prev, totalHours: label }));
+    }
+  }, []);
+
+  const ingestMonthlyHoursFromServer = useCallback(
+    (monthlyTotal: number, todayLiveHours = 0) => {
+      // Store the baseline (all completed days' hours minus today's live portion)
+      monthHoursExclTodayRef.current = Math.max(0, monthlyTotal - todayLiveHours);
+      hasActiveTodayRef.current = todayLiveHours > 0;
+      applyTotalHours(monthlyTotal);
+    },
+    [applyTotalHours]
   );
 
   const syncWeeklyHours = useCallback(async () => {
@@ -519,6 +544,16 @@ export default function EmployeeDashboard() {
           
           // Update total hours KPI from summary
           const totalHoursLabel = (kpis as any).totalHoursLabel || '0h 0m';
+          const totalHoursMinutes = (kpis as any).totalHoursMinutes || 0;
+          const hoursWorkedToday = Number((kpis as any).hoursWorkedToday) || 0;
+          
+          // Extract the baseline monthly hours (total - today's live)
+          // For now, assume all the returned hours are the baseline since we haven't added active time yet
+          const monthlyHours = totalHoursMinutes / 60;
+          const todayLiveHours = hoursWorkedToday;
+          
+          ingestMonthlyHoursFromServer(monthlyHours, todayLiveHours);
+          
           if (mountedRef.current) {
             setKpiMetrics((prev) => ({
               ...prev,
@@ -1207,6 +1242,18 @@ export default function EmployeeDashboard() {
     const interval = setInterval(tick, 5000);
     return () => clearInterval(interval);
   }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, workingHours, applyWeekHours]);
+
+  // Live "Total Hours" — server baseline + today's worked hours (updates monthly total while checked in)
+  useEffect(() => {
+    if (!todayAttendance.isCheckedIn || !hasActiveTodayRef.current) return;
+    const tick = () => {
+      const todayPart = workingHours;
+      applyTotalHours(monthHoursExclTodayRef.current + todayPart);
+    };
+    tick();
+    const interval = setInterval(tick, 5000);
+    return () => clearInterval(interval);
+  }, [todayAttendance.isCheckedIn, workingHours, applyTotalHours]);
 
   const formatTime = safeFormatTime;
 
@@ -1906,27 +1953,25 @@ export default function EmployeeDashboard() {
         )}
 
         {/* Apply Leave Calendar and Holidays - Side by Side Layout */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-stretch">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
           {/* Apply leave — click a day on the calendar */}
           <div className="min-w-0">
             <InteractiveCalendar />
           </div>
 
           {/* Holidays */}
-          <Card className="rounded-2xl overflow-hidden flex flex-col h-full min-w-0">
-            <div className="p-6 border-b border-border flex-shrink-0">
-              <div>
-                <h3 className="font-semibold text-lg">Holidays</h3>
-                <p className="text-sm text-muted-foreground">
-                  {holidays.length > 0
-                    ? `${holidays.filter(h => new Date(h.date) >= new Date()).length} upcoming, ${holidays.length} total`
-                    : 'Company holidays'
-                  }
-                </p>
-              </div>
+          <Card className="rounded-2xl overflow-hidden flex flex-col h-auto xl:h-[600px] min-w-0 shadow-lg border-0 bg-gradient-to-br from-background to-muted/20">
+            <div className="p-6 border-b border-foreground/10 flex-shrink-0 bg-muted/30">
+              <h3 className="font-semibold text-lg text-foreground">Holidays</h3>
+              <p className="text-sm text-muted-foreground mt-1">
+                {holidays.length > 0
+                  ? `${holidays.filter(h => new Date(h.date) >= new Date()).length} upcoming, ${holidays.length} total`
+                  : 'Company holidays'
+                }
+              </p>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto">
-              <div className="p-6 space-y-3">
+              <div className="p-4 sm:p-6 space-y-3">
                 {holidays && holidays.length > 0 ? (
                   <div className="space-y-3">
                     {holidays
@@ -1934,44 +1979,44 @@ export default function EmployeeDashboard() {
                       .map((holiday) => {
                         const holidayDate = new Date(holiday.date);
                         const today = new Date();
+                        today.setHours(0, 0, 0, 0);
                         const isUpcoming = holidayDate >= today;
 
                         return (
                           <div
                             key={holiday._id || holiday.id}
-                            className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d box-border w-full ${isUpcoming
-                              ? 'dark:bg-green-950 dark:border-green-800 dark:text-green-200 bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300'
-                              : 'dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
-                              }`}
+                            className={`p-4 rounded-lg border transition-all duration-200 box-border w-full flex flex-col gap-2 ${
+                              isUpcoming
+                                ? 'dark:bg-green-950 dark:border-green-800 dark:text-green-200 bg-green-50 border-green-200 shadow-sm hover:shadow-md'
+                                : 'dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400 bg-gray-50 border-gray-200 opacity-80 hover:opacity-100'
+                            }`}
                           >
-                            <div className="flex items-start justify-between">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2">
-                                  <p className="font-medium text-sm">{holiday.name}</p>
-                                  {isUpcoming && (
-                                    <span className="px-2 py-1 text-xs dark:bg-green-900 dark:text-green-200 bg-green-100 text-green-700 rounded-full">
-                                      Upcoming
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-xs text-muted-foreground mt-1">
+                            <div className="flex items-start justify-between gap-2 min-w-0">
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-sm break-words">{holiday.name}</p>
+                                <p className="text-xs text-muted-foreground mt-1 break-words">
                                   {holidayDate.toLocaleDateString('en-US', {
-                                    weekday: 'long',
-                                    month: 'long',
+                                    weekday: 'short',
+                                    month: 'short',
                                     day: 'numeric',
                                     year: 'numeric'
                                   })}
                                 </p>
                               </div>
+                              {isUpcoming && (
+                                <span className="px-2 py-1 text-xs dark:bg-green-900 dark:text-green-200 bg-green-100 text-green-700 rounded-full flex-shrink-0 whitespace-nowrap">
+                                  Upcoming
+                                </span>
+                              )}
                             </div>
                           </div>
                         );
                       })}
                   </div>
                 ) : (
-                  <div className="text-center py-8 flex flex-col items-center justify-center">
-                    <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
-                    <p className="text-muted-foreground">No holidays added yet</p>
+                  <div className="text-center py-12 flex flex-col items-center justify-center">
+                    <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-40" />
+                    <p className="text-muted-foreground text-sm">No holidays added yet</p>
                   </div>
                 )}
               </div>

@@ -1043,6 +1043,32 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
       }, 0);
     }
     
+    // Add active session time if employee is currently checked in
+    if (todayAttendance?.checkIn && !todayAttendance?.checkOut) {
+      // Calculate live hours for active session
+      const now = new Date();
+      const checkInTime = new Date(todayAttendance.checkIn);
+      let grossHours = (now - checkInTime) / (1000 * 60 * 60);
+      
+      // Subtract break time from gross hours
+      let breakHours = 0;
+      if (Array.isArray(todayAttendance.breaks)) {
+        for (const breakItem of todayAttendance.breaks) {
+          if (breakItem?.startTime && breakItem?.endTime) {
+            const breakDuration = (new Date(breakItem.endTime) - new Date(breakItem.startTime)) / (1000 * 60 * 60);
+            breakHours += breakDuration;
+          } else if (breakItem?.startTime && !breakItem?.endTime) {
+            // Open break - don't count it towards working time
+            const breakDuration = (now - new Date(breakItem.startTime)) / (1000 * 60 * 60);
+            breakHours += breakDuration;
+          }
+        }
+      }
+      
+      const activeSessionHours = Math.max(0, grossHours - breakHours);
+      totalMonthHours += activeSessionHours;
+    }
+    
     // Convert decimal hours to label format (e.g., 12.5 => "12h 30m")
     const hoursInt = Math.floor(totalMonthHours);
     const minutesFloat = (totalMonthHours - hoursInt) * 60;

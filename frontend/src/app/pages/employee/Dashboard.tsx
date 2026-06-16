@@ -313,6 +313,11 @@ export default function EmployeeDashboard() {
     performance: "0%"
   });
 
+  /** Store completed month hours before today's live session (updated on each server sync). */
+  const monthHoursExclTodayRef = useRef(0);
+  /** Store whether we're currently tracking an active session for monthly total. */
+  const hasActiveTodayRef = useRef(false);
+
   /** Completed week hours before today's live session (updated on each server sync). */
   const weekHoursExclTodayRef = useRef(0);
 
@@ -343,6 +348,26 @@ export default function EmployeeDashboard() {
       applyWeekHours(hoursThisWeek, weekKey, true);
     },
     [applyWeekHours]
+  );
+
+  const applyTotalHours = useCallback((hours: number) => {
+    if (mountedRef.current) {
+      const hoursInt = Math.floor(hours);
+      const minutesFloat = (hours - hoursInt) * 60;
+      const minutesInt = Math.round(minutesFloat);
+      const label = `${hoursInt}h ${minutesInt}m`;
+      setKpiMetrics((prev) => ({ ...prev, totalHours: label }));
+    }
+  }, []);
+
+  const ingestMonthlyHoursFromServer = useCallback(
+    (monthlyTotal: number, todayLiveHours = 0) => {
+      // Store the baseline (all completed days' hours minus today's live portion)
+      monthHoursExclTodayRef.current = Math.max(0, monthlyTotal - todayLiveHours);
+      hasActiveTodayRef.current = todayLiveHours > 0;
+      applyTotalHours(monthlyTotal);
+    },
+    [applyTotalHours]
   );
 
   const syncWeeklyHours = useCallback(async () => {
@@ -519,6 +544,16 @@ export default function EmployeeDashboard() {
           
           // Update total hours KPI from summary
           const totalHoursLabel = (kpis as any).totalHoursLabel || '0h 0m';
+          const totalHoursMinutes = (kpis as any).totalHoursMinutes || 0;
+          const hoursWorkedToday = Number((kpis as any).hoursWorkedToday) || 0;
+          
+          // Extract the baseline monthly hours (total - today's live)
+          // For now, assume all the returned hours are the baseline since we haven't added active time yet
+          const monthlyHours = totalHoursMinutes / 60;
+          const todayLiveHours = hoursWorkedToday;
+          
+          ingestMonthlyHoursFromServer(monthlyHours, todayLiveHours);
+          
           if (mountedRef.current) {
             setKpiMetrics((prev) => ({
               ...prev,
@@ -1207,6 +1242,18 @@ export default function EmployeeDashboard() {
     const interval = setInterval(tick, 5000);
     return () => clearInterval(interval);
   }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, workingHours, applyWeekHours]);
+
+  // Live "Total Hours" — server baseline + today's worked hours (updates monthly total while checked in)
+  useEffect(() => {
+    if (!todayAttendance.isCheckedIn || !hasActiveTodayRef.current) return;
+    const tick = () => {
+      const todayPart = workingHours;
+      applyTotalHours(monthHoursExclTodayRef.current + todayPart);
+    };
+    tick();
+    const interval = setInterval(tick, 5000);
+    return () => clearInterval(interval);
+  }, [todayAttendance.isCheckedIn, workingHours, applyTotalHours]);
 
   const formatTime = safeFormatTime;
 

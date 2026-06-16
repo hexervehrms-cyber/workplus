@@ -1,6 +1,6 @@
 /**
- * Chat Socket.IO Event Handlers
- * Handles real-time messaging with Teams integration and admin notifications
+ * Chat Socket.IO Event Handlers - Phase 1 & 2
+ * Handles real-time messaging, rooms, and unread count updates
  */
 
 import ChatMessage from '../models/ChatMessage.js';
@@ -14,6 +14,13 @@ import {
   resolveUserTenantOrg,
 } from './chatAccessHelpers.js';
 import { sendTeamsMessage } from '../config/teamsConfig.js';
+import {
+  registerUserSocket,
+  unregisterUserSocket,
+  authorizedChatRoomJoin,
+  leaveChatRoom,
+  isUserOnline
+} from './chatRoomManager.js';
 
 async function effectiveTenantId(socket) {
   if (socket.tenantId) return socket.tenantId;
@@ -33,13 +40,139 @@ export const initializeChatHandlers = (io) => {
 
     logger.info(`Chat socket connected: ${socket.id} for user ${userId}`);
 
-    // Join user-specific room for direct messages
-    socket.join(`user_${userId}`);
+    // PHASE 1: Track active sockets per user
+    if (userId) {
+      registerUserSocket(userId, socket.id);
+    }
+
+    // PHASE 1: Join identity rooms
+    socket.join(`user:${userId}`);
+    if (tenantId) {
+      socket.join(`org:${tenantId}`);
+    }
+
+    // PHASE 3: Mark user as online and emit presence:update
+    (async () => {
+      try {
+        if (!userId || !tenantId) return;
+
+        // Update user presence in database
+        const user = await User.findByIdAndUpdate(
+          userId,
+          {
+            presenceStatus: 'online',
+            lastSeen: new Date()
+          },
+          { new: true }
+        ).select('presenceStatus lastSeen').lean();
+
+        if (user) {
+          logger.info(`User ${userId} marked online`, {
+            presenceStatus: user.presenceStatus,
+            lastSeen: user.lastSeen
+          });
+
+          // PHASE 3: Emit presence:update to org room only (org isolation)
+          io.to(`org:${tenantId}`).emit('presence:update', {
+            userId: String(userId),
+            presenceStatus: 'online',
+            lastSeen: user.lastSeen,
+            orgId: String(tenantId)
+          });
+
+          logger.info(`Presence update emitted to org ${tenantId}`, {
+            userId: String(userId),
+            presenceStatus: 'online'
+          });
+        }
+      } catch (error) {
+        logger.warn(`Failed to update presence on connect for ${userId}`, error.message);
+      }
+    })();
 
     /**
-     * Send message event
+     * PHASE 1: Join conversation or group room
+     * Event: chat:room:join
+     * Payload: { conversationId?, groupId? }
+     */
+    socket.on('chat:room:join', async (data) => {
+      try {
+        const { conversationId, groupId } = data || {};
+        tenantId = await effectiveTenantId(socket);
+
+        if (conversationId) {
+          // Verify user is participant in conversation
+          const access = await assertConversationAccess(conversationId, userId, tenantId);
+          if (!access.ok) {
+            logger.warn(`User ${userId} denied access to conversation ${conversationId}`);
+            socket.emit('chat:error', { message: 'Access denied to conversation' });
+            return;
+          }
+          
+          const joined = authorizedChatRoomJoin(socket, {
+            conversationId,
+            isParticipant: true
+          });
+          
+          if (joined) {
+            socket.emit('chat:room:joined', { conversationId });
+          }
+          return;
+        }
+
+        if (groupId) {
+          // Verify user is member of group
+          const group = await ChatGroup.findOne({
+            conversationId: groupId,
+            orgId: tenantId,
+            members: userId
+          }).lean();
+          
+          if (!group) {
+            logger.warn(`User ${userId} denied access to group ${groupId}`);
+            socket.emit('chat:error', { message: 'Access denied to group' });
+            return;
+          }
+
+          const joined = authorizedChatRoomJoin(socket, {
+            groupId,
+            isMember: true
+          });
+          
+          if (joined) {
+            socket.emit('chat:room:joined', { groupId });
+          }
+        }
+      } catch (error) {
+        logger.error('Error joining chat room', error);
+        socket.emit('chat:error', { message: 'Failed to join room' });
+      }
+    });
+
+    /**
+     * PHASE 1: Leave conversation or group room
+     * Event: chat:room:leave
+     * Payload: { conversationId?, groupId? }
+     */
+    socket.on('chat:room:leave', (data) => {
+      try {
+        const { conversationId, groupId } = data || {};
+        leaveChatRoom(socket, { conversationId, groupId });
+        socket.emit('chat:room:left', { conversationId, groupId });
+      } catch (error) {
+        logger.error('Error leaving chat room', error);
+        socket.emit('chat:error', { message: 'Failed to leave room' });
+      }
+    });
+
+    /**
+     * PHASE 2: Send message event
      * Emitted by: Client
-     * Data: { recipientId, content, messageType, teamsIntegration }
+     * Data: { recipientId, content, messageType, teamsIntegration, conversationId }
+     * Emits:
+     *  - chat:message:new (canonical event)
+     *  - chat:new_message (backward compat)
+     *  - unread count updates
      */
     socket.on('chat:send_message', async (data) => {
       try {
@@ -59,6 +192,8 @@ export const initializeChatHandlers = (io) => {
           }
 
           const conversationId = String(groupConversationId);
+          tenantId = await effectiveTenantId(socket);
+          
           const group = await ChatGroup.findOne({
             conversationId,
             orgId: tenantId,
@@ -69,6 +204,7 @@ export const initializeChatHandlers = (io) => {
             return;
           }
 
+          // Create and save message
           const message = new ChatMessage({
             senderId: userId,
             recipientId: null,
@@ -90,19 +226,28 @@ export const initializeChatHandlers = (io) => {
           await message.save();
           await message.populate('sender', 'name email avatar');
 
-          const basePayload = {
-            messageId: message._id,
-            senderId: message.senderId,
-            senderName: message.sender.name,
-            senderAvatar: message.sender.avatar,
-            content: message.content.text,
-            timestamp: message.createdAt,
+          // Build canonical message payload with all required fields (Phase 2)
+          const messagePayload = {
+            _id: String(message._id),
+            messageId: message.messageId,
             conversationId: message.conversationId,
+            groupId: conversationId,
+            senderId: String(message.senderId),
+            senderName: message.sender?.name || 'User',
+            senderAvatar: message.sender?.avatar || null,
+            content: message.content?.text || '',
+            messageType: message.messageType,
+            createdAt: message.createdAt,
+            updatedAt: message.updatedAt,
+            status: 'sent',
           };
 
+          // Emit canonical event to group room
+          io.to(`group:${conversationId}`).emit('chat:message:new', messagePayload);
+          // Backward compat: emit old event
           for (const mid of group.members) {
-            io.to(`user_${mid}`).emit('chat:new_message', {
-              ...basePayload,
+            io.to(`user:${mid}`).emit('chat:new_message', {
+              ...messagePayload,
               status: mid.toString() === userId ? 'sent' : 'delivered',
             });
           }
@@ -122,17 +267,21 @@ export const initializeChatHandlers = (io) => {
           return;
         }
 
+        // Validate recipient is in same org
         const recipientCheck = await assertRecipientInOrg(recipientId, tenantId);
         if (!recipientCheck.ok) {
           socket.emit('chat:error', { message: recipientCheck.message });
           return;
         }
 
-        // Create message document
+        // Create conversation ID
+        const conversationId = [userId, recipientId].sort().join('_');
+
+        // Create and save message document
         const message = new ChatMessage({
           senderId: userId,
           recipientId,
-          conversationId: [userId, recipientId].sort().join('_'),
+          conversationId,
           messageType,
           content: {
             text: content
@@ -191,27 +340,38 @@ export const initializeChatHandlers = (io) => {
           }
         }
 
-        // Emit to recipient
-        io.to(`user_${recipientId}`).emit('chat:new_message', {
-          messageId: message._id,
-          senderId: message.senderId,
-          senderName: message.sender.name,
-          senderAvatar: message.sender.avatar,
-          content: message.content.text,
-          timestamp: message.createdAt,
+        // Build canonical message payload (Phase 2)
+        const messagePayload = {
+          _id: String(message._id),
+          messageId: message.messageId,
           conversationId: message.conversationId,
+          senderId: String(message.senderId),
+          senderName: message.sender?.name || 'User',
+          senderAvatar: message.sender?.avatar || null,
+          receiverId: String(recipientId),
+          content: message.content?.text || '',
+          messageType: message.messageType,
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+          status: 'sent',
+        };
+
+        // PHASE 2: Emit canonical event to conversation room
+        io.to(`chat:${conversationId}`).emit('chat:message:new', messagePayload);
+
+        // PHASE 2: Emit to recipient
+        io.to(`user:${recipientId}`).emit('chat:message:new', {
+          ...messagePayload,
           status: 'delivered'
         });
 
-        // Also emit to sender so they see their own message
+        // Backward compat: emit old event to both
+        io.to(`user:${recipientId}`).emit('chat:new_message', {
+          ...messagePayload,
+          status: 'delivered'
+        });
         socket.emit('chat:new_message', {
-          messageId: message._id,
-          senderId: message.senderId,
-          senderName: message.sender.name,
-          senderAvatar: message.sender.avatar,
-          content: message.content.text,
-          timestamp: message.createdAt,
-          conversationId: message.conversationId,
+          ...messagePayload,
           status: 'sent'
         });
 
@@ -592,10 +752,70 @@ export const initializeChatHandlers = (io) => {
     });
 
     /**
-     * Disconnect handler
+     * Disconnect handler - Phase 1 socket cleanup, Phase 3 offline presence
      */
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       logger.info(`Chat socket disconnected: ${socket.id} for user ${userId}`);
+      
+      // PHASE 1: Unregister socket and check if user is now offline
+      if (userId) {
+        const isNowOffline = unregisterUserSocket(userId, socket.id);
+        
+        // PHASE 3: Mark offline only if no active sockets remain
+        if (isNowOffline) {
+          logger.info(`User ${userId} is now offline (no active sockets)`);
+          
+          try {
+            if (!tenantId) {
+              // Try to resolve tenantId if not available
+              const user = await User.findById(userId)
+                .select('orgId tenantId organizationId')
+                .lean();
+              if (user) {
+                tenantId = user.orgId || user.tenantId || user.organizationId;
+              }
+            }
+
+            if (tenantId) {
+              // Update user presence in database
+              const updated = await User.findByIdAndUpdate(
+                userId,
+                {
+                  presenceStatus: 'offline',
+                  lastSeen: new Date()
+                },
+                { new: true }
+              ).select('presenceStatus lastSeen').lean();
+
+              if (updated) {
+                logger.info(`User ${userId} marked offline`, {
+                  presenceStatus: updated.presenceStatus,
+                  lastSeen: updated.lastSeen
+                });
+
+                // PHASE 3: Emit presence:update to org room only (org isolation)
+                io.to(`org:${tenantId}`).emit('presence:update', {
+                  userId: String(userId),
+                  presenceStatus: 'offline',
+                  lastSeen: updated.lastSeen,
+                  orgId: String(tenantId)
+                });
+
+                logger.info(`Offline presence update emitted to org ${tenantId}`, {
+                  userId: String(userId),
+                  presenceStatus: 'offline'
+                });
+              }
+            }
+          } catch (error) {
+            logger.warn(`Failed to update presence on disconnect for ${userId}`, error.message);
+          }
+        } else {
+          logger.info(`User ${userId} still has active sockets, not marking offline`, {
+            socketCount: socket.io.sockets.sockets.size
+          });
+        }
+      }
     });
   });
 };

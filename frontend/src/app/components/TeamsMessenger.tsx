@@ -79,6 +79,7 @@ interface ChatUser {
   role: string;
   avatar?: string;
   isOnline: boolean;
+  lastSeen?: string;
   unreadCount: number;
   lastMessage?: string;
   lastMessageTime?: string;
@@ -118,6 +119,59 @@ interface Conversation {
   messageCount: number;
 }
 
+// Socket event payloads
+interface PresenceUpdatePayload {
+  userId?: string;
+  presenceStatus?: 'online' | 'offline';
+  lastSeen?: string;
+  orgId?: string;
+}
+
+interface ChatErrorPayload {
+  message?: string;
+}
+
+interface ChatNewMessagePayload {
+  messageId: string;
+  senderId: string;
+  conversationId?: string;
+  content: string;
+  senderName: string;
+  senderAvatar?: string;
+  timestamp: string;
+  messageType?: string;
+}
+
+interface ChatMessageReadPayload {
+  messageId: string;
+}
+
+interface ChatUserTypingPayload {
+  conversationId?: string;
+  userId: string;
+  isTyping: boolean;
+}
+
+interface ChatMessageEditedPayload {
+  messageId?: string;
+  newContent?: string;
+  conversationId?: string;
+}
+
+interface ChatAvatarUpdatedPayload {
+  userId: string;
+  avatar: string;
+}
+
+interface ChatMessageDeletedPayload {
+  messageId?: string;
+  conversationId?: string;
+}
+
+interface ChatConversationsPayload {
+  conversations: unknown;
+}
+
 function resolveAuthUserId(user: { id?: string; userId?: string } | null | undefined): string {
   if (!user) return '';
   return String(user.userId || user.id || '');
@@ -129,6 +183,25 @@ function getActiveConversationId(selected: ChatUser | null, myId: string): strin
     return selected.conversationId;
   }
   return [myId, selected.id].sort().join('_');
+}
+
+function formatDateLabel(date: Date | string): string {
+  const messageDate = new Date(date);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  
+  const isToday = messageDate.toDateString() === today.toDateString();
+  const isYesterday = messageDate.toDateString() === yesterday.toDateString();
+  
+  if (isToday) return 'Today';
+  if (isYesterday) return 'Yesterday';
+  
+  return messageDate.toLocaleDateString('en-US', { 
+    year: messageDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined,
+    month: 'short',
+    day: 'numeric'
+  });
 }
 
 export default function TeamsMessenger() {
@@ -211,7 +284,7 @@ export default function TeamsMessenger() {
     email: (u.email && String(u.email).trim()) || 'Email not on file',
     role: u.role || 'employee',
     avatar: resolveAvatarUrl(u.avatar),
-    isOnline: true,
+    isOnline: (u.presenceStatus || 'offline') === 'online',
     unreadCount: 0,
     lastMessage: '',
     lastMessageTime: '',
@@ -460,31 +533,22 @@ export default function TeamsMessenger() {
         appSocket.on('chat:group_deleted', onGroupDeleted);
 
         reg('chat:error', (data: unknown) => {
-          const typedData = data as { message?: string } | undefined;
+          const typedData = data as ChatErrorPayload | undefined;
           if (!typedData) return;
           if (cancelled) return;
-          const msg = data?.message || 'Could not send message';
+          const msg = typedData.message || 'Could not send message';
           toast.error(msg);
           setMessages((prev) => prev.filter((m) => !m.messageId.startsWith('temp-')));
           setSending(false);
         });
 
         reg('chat:new_message', (data: unknown) => {
-          const typedData = data as {
-            messageId: string;
-            senderId: string;
-            conversationId?: string;
-            content: string;
-            senderName: string;
-            senderAvatar?: string;
-            timestamp: string;
-            messageType?: string;
-          } | undefined;
+          const typedData = data as ChatNewMessagePayload | undefined;
           if (!typedData) return;
           if (cancelled) return;
-          const incomingId = String(data.messageId);
-          const senderId = String(data.senderId);
-          const convId = String(data.conversationId || '');
+          const incomingId = String(typedData.messageId);
+          const senderId = String(typedData.senderId);
+          const convId = String(typedData.conversationId || '');
 
           setMessages((prev) => {
             const sel = selectedUserRef.current;
@@ -503,15 +567,15 @@ export default function TeamsMessenger() {
                 if (
                   !replaced &&
                   msg.messageId.startsWith('temp-') &&
-                  msg.content === data.content
+                  msg.content === typedData.content
                 ) {
                   replaced = true;
                   return {
                     ...msg,
                     messageId: incomingId,
                     status: 'delivered' as const,
-                    timestamp: new Date(data.timestamp),
-                    messageType: data.messageType || msg.messageType,
+                    timestamp: new Date(typedData.timestamp),
+                    messageType: typedData.messageType || msg.messageType,
                   };
                 }
                 return msg;
@@ -524,102 +588,129 @@ export default function TeamsMessenger() {
               {
                 messageId: incomingId,
                 senderId,
-                senderName: data.senderName,
-                senderAvatar: data.senderAvatar,
-                content: data.content,
-                timestamp: new Date(data.timestamp),
+                senderName: typedData.senderName,
+                senderAvatar: typedData.senderAvatar,
+                content: typedData.content,
+                timestamp: new Date(typedData.timestamp),
                 isOwn: false,
                 status: 'delivered' as const,
-                messageType: data.messageType || 'text',
+                messageType: typedData.messageType || 'text',
               },
             ];
           });
         });
 
         reg('chat:message_read', (data: unknown) => {
-          const typedData = data as { messageId: string } | undefined;
+          const typedData = data as ChatMessageReadPayload | undefined;
           if (!typedData) return;
           if (cancelled) return;
           setMessages((prev) =>
             prev.map((msg) =>
-              String(msg.messageId) === String(data.messageId) ? { ...msg, status: 'read' } : msg
+              String(msg.messageId) === String(typedData.messageId) ? { ...msg, status: 'read' } : msg
             )
           );
         });
 
         reg('chat:user_typing', (data: unknown) => {
-          const typedData = data as {
-            conversationId?: string;
-            userId: string;
-            isTyping: boolean;
-          } | undefined;
+          const typedData = data as ChatUserTypingPayload | undefined;
           if (!typedData) return;
           if (cancelled) return;
           const sel = selectedUserRef.current;
           if (!sel) return;
           if (sel.chatKind === 'group') {
-            if (String(data.conversationId || '') !== String(sel.conversationId)) return;
-            if (String(data.userId) === myId) return;
-            setIsTyping(!!data.isTyping);
+            if (String(typedData.conversationId || '') !== String(sel.conversationId)) return;
+            if (String(typedData.userId) === myId) return;
+            setIsTyping(!!typedData.isTyping);
             return;
           }
-          if (String(data.userId) === sel.id) {
-            setIsTyping(!!data.isTyping);
+          if (String(typedData.userId) === sel.id) {
+            setIsTyping(!!typedData.isTyping);
           }
         });
 
         reg('chat:message_edited', (data: unknown) => {
-          const typedData = data as { messageId?: string; newContent?: string; conversationId?: string } | undefined;
+          const typedData = data as ChatMessageEditedPayload | undefined;
           if (!typedData) return;
           if (cancelled) return;
           const sel = selectedUserRef.current;
           if (
-            data.conversationId &&
-            getActiveConversationId(sel, myId) !== String(data.conversationId)
+            typedData.conversationId &&
+            getActiveConversationId(sel, myId) !== String(typedData.conversationId)
           ) {
             return;
           }
           setMessages((prev) =>
             prev.map((msg) =>
-              String(msg.messageId) === String(data.messageId)
-                ? { ...msg, content: data.newContent ?? msg.content }
+              String(msg.messageId) === String(typedData.messageId)
+                ? { ...msg, content: typedData.newContent ?? msg.content }
                 : msg
             )
           );
         });
 
         reg('chat:avatar_updated', (data: unknown) => {
-          const typedData = data as { userId: string; avatar: string } | undefined;
+          const typedData = data as ChatAvatarUpdatedPayload | undefined;
           if (!typedData) return;
           if (cancelled) return;
-          const url = resolveAvatarUrl(data.avatar);
+          const url = resolveAvatarUrl(typedData.avatar);
           setUsers((prev) =>
-            prev.map((u) => (u.id === String(data.userId) ? { ...u, avatar: url } : u))
+            prev.map((u) => (u.id === String(typedData.userId) ? { ...u, avatar: url } : u))
           );
           setSelectedUser((prev) =>
-            prev && prev.id === String(data.userId) ? { ...prev, avatar: url } : prev
+            prev && prev.id === String(typedData.userId) ? { ...prev, avatar: url } : prev
+          );
+        });
+
+        reg('presence:update', (data: unknown) => {
+          const typedData = data as PresenceUpdatePayload | undefined;
+          if (!typedData || !typedData.userId) return;
+          if (cancelled) return;
+          
+          const userId = String(typedData.userId);
+          const isOnline = (typedData.presenceStatus || 'offline') === 'online';
+          
+          // Update users list
+          setUsers((prev) =>
+            prev.map((u) =>
+              u.id === userId
+                ? { ...u, isOnline, lastSeen: typedData.lastSeen }
+                : u
+            )
+          );
+          
+          // Update selected user if it matches
+          setSelectedUser((prev) =>
+            prev && prev.id === userId
+              ? { ...prev, isOnline, lastSeen: typedData.lastSeen }
+              : prev
           );
         });
 
         reg('chat:message_deleted', (data: unknown) => {
-          const typedData = data as { messageId?: string; conversationId?: string } | undefined;
+          const typedData = data as ChatMessageDeletedPayload | undefined;
           if (!typedData) return;
           if (cancelled) return;
           const sel = selectedUserRef.current;
           if (
-            data.conversationId &&
-            getActiveConversationId(sel, myId) !== String(data.conversationId)
+            typedData.conversationId &&
+            getActiveConversationId(sel, myId) !== String(typedData.conversationId)
           ) {
             return;
           }
-          setMessages((prev) => prev.filter((msg) => String(msg.messageId) !== String(data.messageId)));
+          setMessages((prev) => prev.filter((msg) => String(msg.messageId) !== String(typedData.messageId)));
         });
 
         appSocket.emit('chat:get_conversations', {});
-        reg('chat:conversations', (data: { conversations: unknown }) => {
-          if (cancelled) return;
-          setConversations(data.conversations);
-        });
+        reg(
+          'chat:conversations',
+          (data: unknown) => {
+            const typedData = data as ChatConversationsPayload | undefined;
+            if (!typedData) return;
+            if (cancelled) return;
+            const conversations = Array.isArray(typedData.conversations) ? typedData.conversations : [];
+            setConversations(conversations);
+          }
+        );
 
         reg(
           'call:incoming',
@@ -634,10 +725,10 @@ export default function TeamsMessenger() {
             if (cancelled || nativeCallBusyRef.current) return;
             nativeCallBusyRef.current = true;
             const offer: IncomingCallOffer = {
-              callerId: String(data.callerId),
-              callerName: data.callerName || 'User',
-              sdp: data.sdp,
-              withVideo: !!data.withVideo,
+              callerId: String(typedData.callerId),
+              callerName: typedData.callerName || 'User',
+              sdp: typedData.sdp,
+              withVideo: !!typedData.withVideo,
             };
             setNativeIncomingOffer(offer);
             setNativeCallRole('callee');
@@ -686,6 +777,16 @@ export default function TeamsMessenger() {
         limit: 50
       });
 
+      // Mark conversation as read
+      const markAsRead = async () => {
+        try {
+          await apiPatch(`/chat/conversations/${encodeURIComponent(conversationId)}/mark-read`, {});
+        } catch (error) {
+          // Non-critical - don't break the chat if mark-read fails
+          console.debug('Mark read failed:', error);
+        }
+      };
+
       // Set up listener for history response
       const handleHistory = (data: any) => {
         if (String(data.conversationId) !== conversationId) return;
@@ -711,6 +812,8 @@ export default function TeamsMessenger() {
         }
 
         setMessages(formattedMessages.reverse());
+        // Mark as read after loading messages
+        markAsRead();
       };
 
       appSocket.on('chat:history', handleHistory);
@@ -1340,9 +1443,9 @@ export default function TeamsMessenger() {
     <>
     <div className="h-full min-h-0 flex flex-1 bg-background overflow-hidden">
       {/* Sidebar - Users List */}
-      <div className="w-80 shrink-0 border-r border-border bg-card flex flex-col min-h-0">
+      <div className="w-[360px] shrink-0 border-r border-border bg-card flex flex-col min-h-0">
         {/* Header */}
-        <div className="p-4 border-b border-border">
+        <div className="sticky top-0 z-10 p-4 border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
           <div className="flex items-center justify-between mb-4 gap-2">
             <h2 className="text-lg font-semibold">Messages</h2>
             <div className="flex items-center gap-1 shrink-0">
@@ -1378,7 +1481,7 @@ export default function TeamsMessenger() {
               placeholder="Search people and groups..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 rounded-xl bg-background/50"
+              className="pl-10 rounded-lg bg-background/50 border-border/50"
             />
           </div>
         </div>
@@ -1408,40 +1511,42 @@ export default function TeamsMessenger() {
                         key={g.id}
                         type="button"
                         onClick={() => setSelectedUser(g)}
-                        className={`w-full p-3 rounded-lg mb-2 text-left transition-colors ${
+                        className={`w-full p-3 rounded-lg mb-2 text-left transition-all duration-200 ${
                           selectedUser?.id === g.id
                             ? 'bg-accent border border-primary/40 shadow-sm'
-                            : 'border border-transparent hover:bg-accent'
+                            : 'border border-transparent hover:bg-accent/50'
                         }`}
                       >
-                        <div className="flex items-center gap-3">
-                          <Avatar className="h-10 w-10">
-                            <AvatarFallback>
+                        <div className="flex items-start gap-3">
+                          <Avatar className="h-10 w-10 shrink-0 mt-0.5">
+                            <AvatarFallback className="bg-primary/10">
                               <UsersRound className="h-5 w-5 text-muted-foreground" />
                             </AvatarFallback>
                           </Avatar>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <p className="font-medium truncate text-foreground">{g.name}</p>
-                              <Badge
-                                variant="outline"
-                                className="text-xs shrink-0 bg-muted text-foreground border-border"
-                              >
-                                Group
-                              </Badge>
+                            <div className="flex items-center gap-2 justify-between mb-0.5">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <p className="font-medium truncate text-foreground text-sm">{g.name}</p>
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs shrink-0 bg-muted text-foreground border-border"
+                                >
+                                  Group
+                                </Badge>
+                              </div>
                             </div>
-                            <p className="text-xs text-muted-foreground truncate">{g.email}</p>
+                            <p className="text-xs text-muted-foreground truncate mb-1">{g.email}</p>
                             {g.lastMessage ? (
-                              <p className="text-xs text-muted-foreground/80 truncate mt-0.5">
+                              <p className="text-xs text-muted-foreground/70 truncate line-clamp-1">
                                 {g.lastMessage}
-                                {g.lastMessageTime ? ` · ${g.lastMessageTime}` : ''}
                               </p>
                             ) : null}
                           </div>
                           {g.unreadCount > 0 && (
-                            <Badge variant="default" className="ml-2">
-                              {g.unreadCount}
-                            </Badge>
+                            <Badge variant="default" className="ml-2 shrink-0">{g.unreadCount}</Badge>
+                          )}
+                          {g.lastMessageTime && (
+                            <p className="text-xs text-muted-foreground/60 shrink-0 ml-2">{g.lastMessageTime}</p>
                           )}
                         </div>
                       </button>
@@ -1459,15 +1564,15 @@ export default function TeamsMessenger() {
                 <button
                   key={contact.id}
                   onClick={() => setSelectedUser(contact)}
-                  className={`w-full p-3 rounded-lg mb-2 text-left transition-colors ${
+                  className={`w-full p-3 rounded-lg mb-2 text-left transition-all duration-200 ${
                     selectedUser?.id === contact.id
                       ? 'bg-accent border border-primary/40 shadow-sm'
-                      : 'border border-transparent hover:bg-accent'
+                      : 'border border-transparent hover:bg-accent/50'
                   }`}
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="relative">
-                      <Avatar className="h-10 w-10">
+                  <div className="flex items-start gap-3">
+                    <div className="relative mt-0.5">
+                      <Avatar className="h-10 w-10 shrink-0">
                         <AvatarImage src={contact.avatar} />
                         <AvatarFallback>{contact.name.charAt(0)}</AvatarFallback>
                       </Avatar>
@@ -1476,25 +1581,39 @@ export default function TeamsMessenger() {
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium truncate text-foreground">{contact.name}</p>
-                        <Badge
-                          variant="outline"
-                          className={`text-xs shrink-0 ${roleBadgeClass(contact.role, selectedUser?.id === contact.id)}`}
-                        >
-                          {formatRoleLabel(contact.role)}
-                        </Badge>
+                      <div className="flex items-center gap-2 justify-between mb-0.5">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <p className="font-medium truncate text-foreground text-sm">{contact.name}</p>
+                          <Badge
+                            variant="outline"
+                            className={`text-xs shrink-0 ${roleBadgeClass(contact.role, selectedUser?.id === contact.id)}`}
+                          >
+                            {formatRoleLabel(contact.role)}
+                          </Badge>
+                        </div>
                       </div>
-                      <p className="text-xs text-muted-foreground truncate">{contact.email}</p>
+                      <p className="text-xs text-muted-foreground truncate mb-1">{contact.email}</p>
                       {contact.lastMessage ? (
-                        <p className="text-xs text-muted-foreground/80 truncate mt-0.5">
+                        <p className="text-xs text-muted-foreground/70 truncate line-clamp-1">
                           {contact.lastMessage}
-                          {contact.lastMessageTime ? ` · ${contact.lastMessageTime}` : ''}
                         </p>
                       ) : null}
+                      {!contact.isOnline && contact.lastSeen && (
+                        <p className="text-xs text-muted-foreground/60 mt-0.5">
+                          Last seen {new Date(contact.lastSeen).toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </p>
+                      )}
                     </div>
                     {contact.unreadCount > 0 && (
-                      <Badge variant="default" className="ml-2">{contact.unreadCount}</Badge>
+                      <Badge variant="default" className="ml-2 shrink-0">{contact.unreadCount}</Badge>
+                    )}
+                    {contact.lastMessageTime && (
+                      <p className="text-xs text-muted-foreground/60 shrink-0 ml-2">{contact.lastMessageTime}</p>
                     )}
                   </div>
                 </button>
@@ -1512,13 +1631,13 @@ export default function TeamsMessenger() {
         {selectedUser ? (
           <>
             {/* Chat Header */}
-            <div className="border-b border-border bg-card p-4 flex items-center justify-between shrink-0">
+            <div className="sticky top-0 z-20 border-b border-border bg-card p-4 flex items-center justify-between shrink-0 h-14">
               <div className="flex items-center gap-3 min-w-0">
-                <Avatar className="h-10 w-10 shrink-0">
+                <Avatar className="h-12 w-12 shrink-0">
                   <AvatarImage src={selectedUser.avatar} />
                   <AvatarFallback>
                     {selectedUser.chatKind === 'group' ? (
-                      <UsersRound className="h-5 w-5 text-muted-foreground" />
+                      <UsersRound className="h-6 w-6 text-muted-foreground" />
                     ) : (
                       (selectedUser.name || 'U').charAt(0)
                     )}
@@ -1526,7 +1645,7 @@ export default function TeamsMessenger() {
                 </Avatar>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-semibold truncate">{selectedUser.name}</p>
+                    <p className="font-semibold truncate text-base">{selectedUser.name}</p>
                     {selectedUser.chatKind === 'group' ? (
                       <Badge variant="outline" className="text-xs shrink-0 bg-muted text-foreground border-border">
                         Group
@@ -1551,9 +1670,11 @@ export default function TeamsMessenger() {
                   <p className="text-xs text-muted-foreground break-all truncate">
                     {selectedUser.chatKind === 'group'
                       ? selectedUser.memberIds?.length
-                        ? `${selectedUser.memberIds.length} members`
+                        ? `Group • ${selectedUser.memberIds.length} members`
                         : 'Group chat'
-                      : selectedUser.email}
+                      : selectedUser.isOnline
+                        ? 'Online'
+                        : 'Offline'}
                   </p>
                 </div>
               </div>
@@ -1599,7 +1720,6 @@ export default function TeamsMessenger() {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-56">
                     <DropdownMenuItem
-                      type="button"
                       onClick={() => setShowProfileDialog(true)}
                     >
                       <User className="w-4 h-4 mr-2" />
@@ -1608,7 +1728,6 @@ export default function TeamsMessenger() {
                     {selectedUser.chatKind === 'group' ? (
                       <>
                         <DropdownMenuItem
-                          type="button"
                           onClick={() => {
                             setEditGroupName(selectedUser.name);
                             setShowEditGroupDialog(true);
@@ -1619,7 +1738,6 @@ export default function TeamsMessenger() {
                           Edit group name
                         </DropdownMenuItem>
                         <DropdownMenuItem
-                          type="button"
                           onClick={() => {
                             setAddGroupMemberIds(new Set());
                             setShowAddGroupMembersDialog(true);
@@ -1629,7 +1747,6 @@ export default function TeamsMessenger() {
                           Add members
                         </DropdownMenuItem>
                         <DropdownMenuItem
-                          type="button"
                           onClick={() => groupAvatarInputRef.current?.click()}
                           disabled={!canManageSelectedGroup || avatarUploading}
                         >
@@ -1638,7 +1755,6 @@ export default function TeamsMessenger() {
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
-                          type="button"
                           className="text-destructive focus:text-destructive"
                           onClick={() => void handleDeleteGroup()}
                           disabled={!canManageSelectedGroup || savingGroup}
@@ -1650,7 +1766,6 @@ export default function TeamsMessenger() {
                     ) : (
                       <>
                         <DropdownMenuItem
-                          type="button"
                           onClick={() => profileAvatarInputRef.current?.click()}
                         >
                           <Camera className="w-4 h-4 mr-2" />
@@ -1658,7 +1773,6 @@ export default function TeamsMessenger() {
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
-                          type="button"
                           className="text-destructive focus:text-destructive"
                           onClick={handleRemoveContact}
                         >
@@ -1666,7 +1780,6 @@ export default function TeamsMessenger() {
                           Remove contact
                         </DropdownMenuItem>
                         <DropdownMenuItem
-                          type="button"
                           onClick={() =>
                             toast.info(
                               'Calls use Microsoft Teams meetings inside WorkPlus. Your org must have Teams Graph permissions configured.'
@@ -1687,78 +1800,120 @@ export default function TeamsMessenger() {
               ref={messagesScrollRef}
               className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4"
             >
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {messages.length === 0 ? (
                   <div className="flex items-center justify-center h-full text-muted-foreground">
-                    <p>No messages yet. Start the conversation!</p>
+                    <div className="text-center py-12">
+                      <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                      <p className="text-sm">No messages yet</p>
+                      <p className="text-xs text-muted-foreground/60 mt-1">Start a conversation by typing a message</p>
+                    </div>
                   </div>
                 ) : (
-                  messages.map((message) => (
-                    <div
-                      key={message.messageId}
-                      className={`group flex items-end gap-2 ${message.isOwn ? 'justify-end' : 'justify-start'}`}
-                    >
-                      <div
-                        className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-                          message.isOwn
-                            ? 'bg-green-500 text-white'
-                            : 'bg-orange-500 text-white'
-                        }`}
-                      >
-                        {message.messageType === 'file' && message.content ? (
-                          <a
-                            href={buildFileUrl(message.content)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm underline break-all"
+                  <>
+                    {(() => {
+                      let prevDate: string | null = null;
+                      const messagesWithSeparators: Array<{
+                        type: 'separator' | 'message';
+                        date?: string;
+                        message?: Message;
+                      }> = [];
+                      
+                      for (const msg of messages) {
+                        const dateLabel = formatDateLabel(msg.timestamp);
+                        if (dateLabel !== prevDate) {
+                          prevDate = dateLabel;
+                          messagesWithSeparators.push({ type: 'separator', date: dateLabel });
+                        }
+                        messagesWithSeparators.push({ type: 'message', message: msg });
+                      }
+                      
+                      return messagesWithSeparators.map((item) => {
+                        if (item.type === 'separator') {
+                          return (
+                            <div key={`sep-${item.date}`} className="flex items-center gap-3 my-3">
+                              <div className="flex-1 h-px bg-border" />
+                              <span className="text-xs text-muted-foreground font-medium px-2">
+                                {item.date}
+                              </span>
+                              <div className="flex-1 h-px bg-border" />
+                            </div>
+                          );
+                        }
+                        
+                        const message = item.message!;
+                        return (
+                          <div
+                            key={message.messageId}
+                            className={`group flex items-end gap-2 ${message.isOwn ? 'justify-end' : 'justify-start'}`}
                           >
-                            View attachment
-                          </a>
-                        ) : (
-                          <>
-                            {!message.isOwn &&
-                              selectedUser.chatKind === 'group' &&
-                              message.messageType !== 'system' && (
-                                <p className="text-xs font-semibold opacity-95 mb-1">
+                            {!message.isOwn && selectedUser.chatKind === 'group' && (
+                              <Avatar className="h-8 w-8 shrink-0 flex-none">
+                                <AvatarImage src={message.senderAvatar} />
+                                <AvatarFallback className="text-xs">
+                                  {message.senderName.charAt(0)}
+                                </AvatarFallback>
+                              </Avatar>
+                            )}
+                            <div className={message.isOwn ? '' : selectedUser.chatKind === 'group' ? '' : ''}>
+                              {!message.isOwn && selectedUser.chatKind === 'group' && (
+                                <p className="text-xs font-medium text-muted-foreground px-3 mb-1">
                                   {message.senderName}
                                 </p>
                               )}
-                            <p className="text-sm break-words">{message.content}</p>
-                          </>
-                        )}
-                        <div className="flex items-center gap-1 mt-1 text-xs opacity-90">
-                          <span>
-                            {new Date(message.timestamp).toLocaleDateString('en-US', { 
-                              month: 'short', 
-                              day: 'numeric' 
-                            })} {new Date(message.timestamp).toLocaleTimeString('en-US', { 
-                              hour: '2-digit', 
-                              minute: '2-digit' 
-                            })}
-                          </span>
-                          {message.isOwn && (
-                            message.status === 'read' ? (
-                              <CheckCheck className="w-3 h-3" />
-                            ) : (
-                              <Check className="w-3 h-3" />
-                            )
-                          )}
-                        </div>
-                      </div>
-                      {canDeleteMessage(message) && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 opacity-0 group-hover:opacity-100 shrink-0 text-muted-foreground hover:text-destructive"
-                          aria-label="Delete message"
-                          onClick={() => handleDeleteMessage(message.messageId)}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
-                      )}
-                    </div>
-                  ))
+                              <div
+                                className={`max-w-xs lg:max-w-md px-4 py-2 rounded-2xl flex flex-col gap-1 ${
+                                  message.isOwn
+                                    ? 'bg-primary text-primary-foreground rounded-br-none'
+                                    : 'bg-muted text-foreground rounded-bl-none'
+                                }`}
+                              >
+                                {message.messageType === 'file' && message.content ? (
+                                  <a
+                                    href={buildFileUrl(message.content)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-sm underline hover:opacity-80 break-all"
+                                  >
+                                    View attachment
+                                  </a>
+                                ) : (
+                                  <p className="text-sm break-words leading-relaxed">{message.content}</p>
+                                )}
+                                <div className={`flex items-center gap-1 text-xs ${message.isOwn ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+                                  <span>
+                                    {new Date(message.timestamp).toLocaleTimeString('en-US', { 
+                                      hour: '2-digit', 
+                                      minute: '2-digit' 
+                                    })}
+                                  </span>
+                                  {message.isOwn && (
+                                    message.status === 'read' ? (
+                                      <CheckCheck className="w-3.5 h-3.5" />
+                                    ) : (
+                                      <Check className="w-3.5 h-3.5" />
+                                    )
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                            {canDeleteMessage(message) && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 opacity-0 group-hover:opacity-100 shrink-0 flex-none text-muted-foreground hover:text-destructive"
+                                aria-label="Delete message"
+                                onClick={() => handleDeleteMessage(message.messageId)}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+                          </div>
+                        );
+                      });
+                    })()}
+                  </>
                 )}
                 {isTyping && (
                   <div className="flex items-center gap-2 text-muted-foreground">
@@ -1779,7 +1934,7 @@ export default function TeamsMessenger() {
             </div>
 
             {/* Message Input */}
-            <div className="border-t border-border bg-card p-4 shrink-0">
+            <div className="sticky bottom-0 z-20 border-t border-border bg-card p-4 shrink-0">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1792,40 +1947,49 @@ export default function TeamsMessenger() {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  disabled={sending}
+                  disabled={sending || !selectedUser}
                   onClick={() => fileInputRef.current?.click()}
-                  aria-label="Attach file"
+                  title="Attach file"
+                  className="shrink-0"
                 >
                   <Paperclip className="w-4 h-4" />
                 </Button>
                 <Input
-                  placeholder="Type a message..."
+                  placeholder={selectedUser ? "Type a message..." : "Select a chat to message"}
                   value={messageInput}
                   onChange={(e) => {
                     setMessageInput(e.target.value);
-                    handleTyping();
+                    if (selectedUser) handleTyping();
                   }}
                   onKeyPress={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
+                    if (e.key === 'Enter' && !e.shiftKey && selectedUser) {
                       e.preventDefault();
                       handleSendMessage();
                     }
                   }}
-                  className="flex-1"
+                  disabled={!selectedUser}
+                  className="flex-1 rounded-full h-9 px-4"
                 />
                 <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
                   <PopoverTrigger asChild>
-                    <Button type="button" variant="ghost" size="sm" aria-label="Insert emoji">
+                    <Button 
+                      type="button" 
+                      variant="ghost" 
+                      size="sm" 
+                      disabled={!selectedUser}
+                      title="Insert emoji"
+                      className="shrink-0"
+                    >
                       <Smile className="w-4 h-4" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-64 p-2" align="end">
+                  <PopoverContent className="w-56 p-2" align="end">
                     <div className="grid grid-cols-6 gap-1">
                       {CHAT_EMOJIS.map((emoji) => (
                         <button
                           key={emoji}
                           type="button"
-                          className="text-lg hover:bg-muted rounded p-1"
+                          className="text-lg hover:bg-muted rounded p-1 transition-colors"
                           onClick={() => appendEmoji(emoji)}
                         >
                           {emoji}
@@ -1836,8 +2000,9 @@ export default function TeamsMessenger() {
                 </Popover>
                 <Button
                   onClick={handleSendMessage}
-                  disabled={!messageInput.trim() || sending}
+                  disabled={!selectedUser || !messageInput.trim() || sending}
                   size="sm"
+                  className="shrink-0"
                 >
                   {sending ? (
                     <Loader2 className="w-4 h-4 animate-spin" />

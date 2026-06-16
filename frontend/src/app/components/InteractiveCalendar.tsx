@@ -364,11 +364,21 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Calendar Days */}
-          <div className="grid grid-cols-7 gap-0 border border-t-0 border-foreground/20 rounded-b-xl overflow-hidden shadow-sm bg-background flex-grow auto-rows-fr w-full">
+          <div className="grid grid-cols-7 gap-0 border border-t-0 border-foreground/20 rounded-b-xl overflow-visible shadow-sm bg-background flex-grow auto-rows-fr w-full">
             {getDaysInMonth(currentMonth).map((day, _index) => {
+              // Calculate if this is the last column (every 7th element) or last row
+              const isLastColumn = (_index + 1) % 7 === 0;
+              const daysInMonth = getDaysInMonth(currentMonth);
+              const isLastRow = _index >= daysInMonth.length - 7;
+              
               if (!day) {
                 return (
-                  <div key={_index} className="p-1 bg-muted/20 border-r border-b border-foreground/10 last-of-type:border-r-0 min-h-[72px]" />
+                  <div 
+                    key={_index} 
+                    className={`p-1 bg-muted/20 border-b border-foreground/10 min-h-[56px] sm:min-h-[64px] xl:min-h-[68px] ${
+                      !isLastColumn ? 'border-r border-foreground/10' : ''
+                    } ${isLastRow ? '' : ''}`} 
+                  />
                 );
               }
 
@@ -381,21 +391,23 @@ export default function InteractiveCalendar() {
               return (
                 <div
                   key={_index}
-                  className="relative group calendar-date-3d hover:z-50 border-r border-b border-foreground/10 last-of-type:border-r-0 min-h-[72px]"
+                  className={`relative group border-b border-foreground/10 min-h-[56px] sm:min-h-[64px] xl:min-h-[68px] overflow-visible ${
+                    !isLastColumn ? 'border-r border-foreground/10' : ''
+                  }`}
                 >
                   <button
                     type="button"
                     onClick={() => !weekend && !holiday && openLeaveForm(day)}
                     disabled={weekend || holiday}
                     className={`
-                      w-full h-full p-2 text-xs font-medium transition-all duration-500 relative flex flex-col items-center justify-center
+                      w-full h-full p-2 text-xs font-medium transition-colors duration-200 relative flex flex-col items-center justify-center
                       ${weekend ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold' : ''}
                       ${holiday ? 'dark:bg-green-950 dark:text-green-200 bg-green-50 text-green-700 cursor-not-allowed font-semibold' : ''}
                       ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold' : ''}
                       ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold' : ''}
                       ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 font-semibold' : ''}
-                      ${!weekend && !holiday && !leave ? 'dark:text-foreground dark:bg-slate-800 dark:hover:bg-slate-700 text-foreground cursor-pointer bg-slate-50 hover:bg-slate-100 hover:text-slate-900 hover:font-semibold' : ''}
-                      focus:outline-none focus:ring-2 focus:ring-slate-300 focus:ring-inset
+                      ${!weekend && !holiday && !leave ? 'dark:text-foreground dark:bg-slate-800 dark:hover:bg-slate-700 text-foreground cursor-pointer bg-slate-50 hover:bg-primary/5 hover:border-primary/30 hover:text-slate-900 hover:font-semibold' : ''}
+                      focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary/30
                     `}
                   >
                     <span className="relative z-10 block">{day.getDate()}</span>
@@ -416,9 +428,9 @@ export default function InteractiveCalendar() {
                     </div>
                   </button>
                   
-                  {/* Tooltip for holidays and leaves */}
+                  {/* Tooltip for holidays and leaves - positioned inside cell or constrained */}
                   {(holiday || leave) && (
-                    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-20 whitespace-nowrap">
+                    <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-20 whitespace-nowrap">
                       {holiday && holidayInfo ? (
                         <>
                           <div className="font-medium">{holidayInfo.name}</div>
@@ -437,7 +449,7 @@ export default function InteractiveCalendar() {
                   
                   {/* Clickable day tooltip */}
                   {!weekend && !holiday && !leave && (
-                    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-primary text-primary-foreground text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-20 whitespace-nowrap">
+                    <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 px-3 py-2 bg-primary text-primary-foreground text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-20 whitespace-nowrap">
                       <div className="font-medium">Apply for Leave</div>
                       <div className="text-primary-foreground/80">Click to request</div>
                       {/* Tooltip arrow */}

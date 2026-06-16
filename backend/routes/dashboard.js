@@ -367,21 +367,33 @@ router.get("/recent-leave-requests", asyncHandler(async (req, res) => {
 /**
  * GET /api/dashboard/todays-attendance
  * Get today's attendance summary
- * OPTIMIZED: Use aggregation pipeline instead of find + populate
+ * Includes active check-ins (checkIn exists, checkOut may be null)
+ * OPTIMIZED: Use aggregation pipeline with pagination
  */
 router.get("/todays-attendance", asyncHandler(async (req, res) => {
   const userOrgId = assertScopedOrgId(req, res);
   if (!userOrgId) return;
   
   const { start: today, end: tomorrow } = getDayBounds();
+  const page = Math.max(1, parseInt(req.query.page || '1', 10) || 1);
+  const limit = Math.max(1, Math.min(100, parseInt(req.query.limit || '10', 10) || 10));
+  const skip = (page - 1) * limit;
 
   const orgMatch = buildOrgIdFlexible(userOrgId);
+
+  // Get total count
+  const totalCount = await Attendance.countDocuments({
+    ...orgMatch,
+    date: { $gte: today, $lt: tomorrow },
+    checkIn: { $exists: true, $ne: null }
+  });
 
   const todaysAttendance = await Attendance.aggregate([
     {
       $match: {
         ...orgMatch,
-        date: { $gte: today, $lt: tomorrow }
+        date: { $gte: today, $lt: tomorrow },
+        checkIn: { $exists: true, $ne: null }
       }
     },
     {
@@ -424,17 +436,37 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
         status: 1,
         date: 1,
         breaks: { $ifNull: ['$breaks', []] },
-        meetings: { $ifNull: ['$meetings', []] }
+        meetings: { $ifNull: ['$meetings', []] },
+        // Add computed current duration if still checked in
+        isCheckedIn: {
+          $cond: [
+            { $and: [{ $ne: ['$checkIn', null] }, { $eq: ['$checkOut', null] }] },
+            true,
+            false
+          ]
+        }
       }
     },
     {
       $sort: { checkIn: -1 }
+    },
+    {
+      $skip: skip
+    },
+    {
+      $limit: limit
     }
   ]);
   
   res.json({
     success: true,
-    data: todaysAttendance
+    data: todaysAttendance,
+    pagination: {
+      page,
+      limit,
+      total: totalCount,
+      totalPages: Math.ceil(totalCount / limit)
+    }
   });
 }));
 

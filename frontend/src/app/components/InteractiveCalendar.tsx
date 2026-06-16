@@ -316,8 +316,8 @@ export default function InteractiveCalendar() {
   return (
     <>
       {/* Interactive Calendar */}
-      <Card className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-hidden flex flex-col h-full">
-        <div className="space-y-6 flex-1 flex flex-col min-w-0 overflow-hidden">
+      <Card className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-visible flex flex-col w-full">
+        <div className="space-y-6 flex-1 flex flex-col min-w-0 w-full">
           {/* Calendar Header */}
           <div className="flex items-center justify-between p-1 bg-muted/20 rounded-xl border border-foreground/10 flex-shrink-0">
             <h3 className="font-semibold text-lg text-foreground ml-4">Apply Leave</h3>
@@ -364,11 +364,11 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Calendar Days */}
-          <div className="grid grid-cols-7 gap-0 border border-t-0 border-foreground/20 rounded-b-xl overflow-hidden shadow-sm bg-background flex-1 min-h-0 auto-rows-fr">
+          <div className="grid grid-cols-7 gap-0 border border-t-0 border-foreground/20 rounded-b-xl overflow-hidden shadow-sm bg-background flex-grow auto-rows-fr w-full">
             {getDaysInMonth(currentMonth).map((day, _index) => {
               if (!day) {
                 return (
-                  <div key={_index} className="p-1 bg-muted/20 border-r border-b border-foreground/10 last-of-type:border-r-0" />
+                  <div key={_index} className="p-1 bg-muted/20 border-r border-b border-foreground/10 last-of-type:border-r-0 min-h-[72px]" />
                 );
               }
 
@@ -381,14 +381,14 @@ export default function InteractiveCalendar() {
               return (
                 <div
                   key={_index}
-                  className="relative group calendar-date-3d hover:z-50 border-r border-b border-foreground/10 last-of-type:border-r-0"
+                  className="relative group calendar-date-3d hover:z-50 border-r border-b border-foreground/10 last-of-type:border-r-0 min-h-[72px]"
                 >
                   <button
                     type="button"
                     onClick={() => !weekend && !holiday && openLeaveForm(day)}
                     disabled={weekend || holiday}
                     className={`
-                      w-full h-full p-2 text-xs font-medium transition-all duration-500 relative flex flex-col items-center justify-center min-h-[72px]
+                      w-full h-full p-2 text-xs font-medium transition-all duration-500 relative flex flex-col items-center justify-center
                       ${weekend ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold' : ''}
                       ${holiday ? 'dark:bg-green-950 dark:text-green-200 bg-green-50 text-green-700 cursor-not-allowed font-semibold' : ''}
                       ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold' : ''}

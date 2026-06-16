@@ -2066,6 +2066,164 @@ router.get('/bulk-export', authenticate, authorize('super_admin', 'admin', 'hr')
 }));
 
 /**
+ * POST /api/attendance/:attendanceId/status
+ * Update attendance status (admin, hr, super_admin only)
+ * Request body: { status, reason }
+ * Allowed statuses: "present", "absent", "on-leave", "approved-leave", "lwp", "comp-off", "ncns", "sandwich-leave"
+ */
+router.post('/:attendanceId/status', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+  const { status, reason } = req.body;
+  const attendanceId = req.params.attendanceId;
+  const currentUserId = req.user.userId;
+  const authOrgId = req.user.orgId;
+  const authRole = req.user.role;
+
+  // Validate status
+  const allowedStatuses = ['present', 'absent', 'on-leave', 'approved-leave', 'lwp', 'comp-off', 'ncns', 'sandwich-leave'];
+  if (!status || !allowedStatuses.includes(status)) {
+    return res.status(400).json({
+      success: false,
+      message: `Invalid status. Allowed values: ${allowedStatuses.join(', ')}`,
+      code: 'INVALID_STATUS'
+    });
+  }
+
+  try {
+    // Find the attendance record
+    const attendance = await Attendance.findById(attendanceId);
+    
+    if (!attendance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Attendance record not found',
+        code: 'RECORD_NOT_FOUND'
+      });
+    }
+
+    // Validate org isolation - user can only update attendance in their org
+    if (String(attendance.orgId) !== String(authOrgId) && authRole !== 'super_admin') {
+      logger.warn('Organization scope violation attempted on attendance status update', {
+        recordOrgId: attendance.orgId,
+        authOrgId,
+        role: authRole,
+        userId: currentUserId,
+        attendanceId
+      });
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized to update attendance in this organization',
+        code: 'ORG_MISMATCH'
+      });
+    }
+
+    // Update attendance record
+    const now = new Date();
+    attendance.status = status;
+    attendance.statusChangedBy = currentUserId;
+    attendance.statusChangedAt = now;
+    attendance.statusChangeReason = reason || null;
+    
+    await attendance.save();
+
+    // Log activity
+    try {
+      const employeeName = attendance.employeeName || 'Employee';
+      const log = await ActivityLog.logActivity({
+        userId: currentUserId,
+        orgId: attendance.orgId,
+        action: 'attendance_status_updated',
+        entity: {
+          entityType: 'attendance',
+          entityId: attendance._id,
+          entityName: `${employeeName} - Status Updated to ${status}`,
+        },
+        details: {
+          previousStatus: attendance.status,
+          newStatus: status,
+          reason: reason || null,
+          employeeName: employeeName,
+          attendanceId: String(attendance._id),
+          date: attendance.date,
+          changedBy: currentUserId,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        severity: 'medium',
+        category: 'admin',
+      });
+      
+      // Emit activity log in real-time
+      if (req.emitActivityUpdate) {
+        req.emitActivityUpdate(log, attendance.orgId);
+      }
+    } catch (logError) {
+      logger.warn('Failed to log attendance status update activity', { error: logError.message });
+    }
+
+    // Sync to attendance history
+    try {
+      await syncAttendanceHistoryFromRecord(attendance, {
+        userId: attendance.userId,
+        orgId: attendance.orgId,
+        employeeId: attendance.employeeId,
+        updatedBy: currentUserId,
+      });
+    } catch (syncError) {
+      logger.warn('Failed to sync attendance history after status update', { error: syncError.message });
+    }
+
+    // Emit real-time update
+    if (req.emitAttendanceUpdate) {
+      req.emitAttendanceUpdate(attendance, attendance.orgId);
+    }
+
+    // Emit KPI update to admin dashboard
+    if (global.io) {
+      emitAttendanceKPIUpdate(global.io, attendance.orgId, {
+        action: 'status_updated',
+        employeeId: attendance.employeeId,
+        status: status
+      }).catch(err => logger.error('Failed to emit KPI update on status change', { error: err.message }));
+    }
+
+    logger.info('Attendance status updated successfully', {
+      attendanceId: attendance._id,
+      newStatus: status,
+      changedBy: currentUserId,
+      orgId: attendance.orgId,
+      reason: reason || null
+    });
+
+    // Return updated attendance record (populated)
+    const updatedRecord = await Attendance.findById(attendanceId)
+      .populate('userId', 'name email')
+      .populate('employeeId', 'employeeCode department')
+      .populate('statusChangedBy', 'name email')
+      .lean();
+
+    res.json({
+      success: true,
+      message: `Attendance status updated to ${status}`,
+      data: updatedRecord
+    });
+
+  } catch (error) {
+    logger.error('Failed to update attendance status', {
+      error: error.message,
+      attendanceId,
+      userId: currentUserId,
+      orgId: authOrgId
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update attendance status',
+      code: 'STATUS_UPDATE_FAILED',
+      details: error.message
+    });
+  }
+}));
+
+/**
  * GET /api/attendance/record/:id
  * Full attendance record for admin view dialog
  */

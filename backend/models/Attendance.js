@@ -15,7 +15,7 @@ const attendanceSchema = new mongoose.Schema(
     },
     status: { 
       type: String, 
-      enum: ["present", "absent", "on-leave", "half-day", "late"], 
+      enum: ["present", "absent", "on-leave", "half-day", "late", "approved-leave", "lwp", "comp-off", "ncns", "sandwich-leave"], 
       default: "present",
       index: true
     },
@@ -59,6 +59,9 @@ const attendanceSchema = new mongoose.Schema(
       notes: { type: String }
     },
     notes: { type: String },
+    statusChangedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    statusChangedAt: { type: Date },
+    statusChangeReason: { type: String },
     orgId: { type: String, required: true, index: true },
     isReEntry: { type: Boolean, default: false },
     previousAttendanceId: { type: mongoose.Schema.Types.ObjectId, ref: "Attendance" }

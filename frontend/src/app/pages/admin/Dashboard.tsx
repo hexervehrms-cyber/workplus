@@ -260,6 +260,10 @@ export default function AdminDashboard() {
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequestRow[]>([]);
   const [todaysAttendance, setTodaysAttendance] = useState<AttendanceRow[]>([]);
   const [todayBreakLog, setTodayBreakLog] = useState<BreakRow[]>([]);
+  const [attendancePage, setAttendancePage] = useState(1);
+  const [attendancePagination, setAttendancePagination] = useState({ total: 0, totalPages: 1 });
+  const [breakPage, setBreakPage] = useState(1);
+  const breakPageSize = 10;
   const [lastUpdate, setLastUpdate] = useState(Date.now()); // Force re-render timestamp
 
   const chartExpenseData = useMemo(() => ensureArray<ExpenseTrendRow>(expenseData), [expenseData]);
@@ -417,15 +421,48 @@ export default function AdminDashboard() {
       
       // PHASE 3 OPTIMIZATION: Removed ghost endpoint /attendance/today-breaks
       // Break count now comes from /dashboard/admin/summary endpoint
-      // Only fetch the attendance table for lazy-load
-      const attendanceResponse = await apiGet<{ success?: boolean; data?: AttendanceRow[] }>(
-        '/dashboard/todays-attendance',
+      // Fetch attendance table with pagination
+      const attendanceResponse = await apiGet<{ 
+        success?: boolean; 
+        data?: AttendanceRow[];
+        pagination?: { page: number; limit: number; total: number; totalPages: number };
+      }>(
+        `/dashboard/todays-attendance?page=${attendancePage}&limit=10`,
         false
       );
       
       if (!mounted.current) return;
       if (attendanceResponse?.success !== false) {
-        setTodaysAttendance(extractApiList<AttendanceRow>(attendanceResponse));
+        const attendanceData = extractApiList<AttendanceRow>(attendanceResponse);
+        setTodaysAttendance(attendanceData);
+        
+        // Extract break log from attendance data
+        const breaks: BreakRow[] = [];
+        attendanceData.forEach((att, idx) => {
+          if (Array.isArray(att.breaks)) {
+            att.breaks.forEach((br, breakIdx) => {
+              if (br.startTime) {
+                breaks.push({
+                  attendanceId: att._id || `att-${idx}`,
+                  breakIndex: breakIdx,
+                  employeeName: att.employeeName || 'Unknown',
+                  department: att.department || 'N/A',
+                  type: br.breakType || 'break',
+                  startTime: br.startTime,
+                  endTime: br.endTime || null,
+                  duration: br.duration || 0,
+                  status: br.endTime ? 'completed' : 'active'
+                });
+              }
+            });
+          }
+        });
+        setTodayBreakLog(breaks);
+        
+        // Update pagination info
+        if (attendanceResponse?.pagination) {
+          setAttendancePagination(attendanceResponse.pagination);
+        }
       }
       setLastUpdate(Date.now());
     } catch (error) {
@@ -1229,6 +1266,40 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             )}
           </TableBody>
         </Table>
+        
+        {/* Pagination Controls */}
+        {attendancePagination.totalPages > 1 && (
+          <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4">
+            <p className="text-xs sm:text-sm text-muted-foreground">
+              Showing <span className="font-semibold">{(attendancePage - 1) * 10 + 1}</span> to{' '}
+              <span className="font-semibold">
+                {Math.min(attendancePage * 10, attendancePagination.total)}
+              </span>{' '}
+              of <span className="font-semibold">{attendancePagination.total}</span> records
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setAttendancePage(p => Math.max(1, p - 1))}
+                disabled={attendancePage === 1}
+              >
+                Previous
+              </Button>
+              <div className="text-xs font-medium">
+                Page {attendancePage} of {attendancePagination.totalPages}
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setAttendancePage(p => Math.min(attendancePagination.totalPages, p + 1))}
+                disabled={attendancePage === attendancePagination.totalPages}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card className="rounded-2xl overflow-hidden">
@@ -1284,6 +1355,45 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             )}
           </TableBody>
         </Table>
+        
+        {/* Pagination Controls for Break Records */}
+        {(() => {
+          const totalBreakPages = Math.ceil(safeTodayBreakLog.length / breakPageSize);
+          const breakStart = (breakPage - 1) * breakPageSize;
+          const breakEnd = Math.min(breakPage * breakPageSize, safeTodayBreakLog.length);
+          const paginatedBreaks = safeTodayBreakLog.slice(breakStart, breakEnd);
+          
+          return totalBreakPages > 1 ? (
+            <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4">
+              <p className="text-xs sm:text-sm text-muted-foreground">
+                Showing <span className="font-semibold">{breakStart + 1}</span> to{' '}
+                <span className="font-semibold">{breakEnd}</span> of{' '}
+                <span className="font-semibold">{safeTodayBreakLog.length}</span> break records
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setBreakPage(p => Math.max(1, p - 1))}
+                  disabled={breakPage === 1}
+                >
+                  Previous
+                </Button>
+                <div className="text-xs font-medium">
+                  Page {breakPage} of {totalBreakPages}
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setBreakPage(p => Math.min(totalBreakPages, p + 1))}
+                  disabled={breakPage === totalBreakPages}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          ) : null;
+        })()}
       </Card>
 
       {/* Chat Widget */}

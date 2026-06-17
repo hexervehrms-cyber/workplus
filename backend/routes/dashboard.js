@@ -381,20 +381,30 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
 
   const orgMatch = buildOrgIdFlexible(userOrgId);
 
-  // Get total count
-  const totalCount = await Attendance.countDocuments({
+  // Filter for active check-ins only (not checked out)
+  // Must match /admin/summary loggedInEmployees query for consistency
+  const activeAttendanceFilter = {
     ...orgMatch,
     date: { $gte: today, $lt: tomorrow },
-    checkIn: { $exists: true, $ne: null }
-  });
+    // Check-in exists using both field names
+    $and: [
+      { $or: [{ checkIn: { $exists: true, $ne: null } }, { checkInTime: { $exists: true, $ne: null } }] },
+      // Not checked out using both field names
+      {
+        $and: [
+          { $or: [{ checkOut: { $exists: false } }, { checkOut: null }] },
+          { $or: [{ checkOutTime: { $exists: false } }, { checkOutTime: null }] }
+        ]
+      }
+    ]
+  };
+
+  // Get total count
+  const totalCount = await Attendance.countDocuments(activeAttendanceFilter);
 
   const todaysAttendance = await Attendance.aggregate([
     {
-      $match: {
-        ...orgMatch,
-        date: { $gte: today, $lt: tomorrow },
-        checkIn: { $exists: true, $ne: null }
-      }
+      $match: activeAttendanceFilter
     },
     {
       $lookup: {
@@ -1479,20 +1489,30 @@ router.get("/today-attendance", authorize('super_admin', 'admin', 'hr', 'manager
     const { start: today, end: tomorrow } = getDayBounds();
     const orgMatch = buildOrgIdFlexible(orgId);
 
-    // Get total count with same filter as query
-    const totalCount = await Attendance.countDocuments({
+    // Filter for active check-ins only (not checked out)
+    // Must match /admin/summary loggedInEmployees query for consistency
+    const activeAttendanceFilter = {
       ...orgMatch,
       date: { $gte: today, $lt: tomorrow },
-      checkIn: { $exists: true, $ne: null }
-    });
+      // Check-in exists using both field names
+      $and: [
+        { $or: [{ checkIn: { $exists: true, $ne: null } }, { checkInTime: { $exists: true, $ne: null } }] },
+        // Not checked out using both field names
+        {
+          $and: [
+            { $or: [{ checkOut: { $exists: false } }, { checkOut: null }] },
+            { $or: [{ checkOutTime: { $exists: false } }, { checkOutTime: null }] }
+          ]
+        }
+      ]
+    };
+
+    // Get total count with same filter as query
+    const totalCount = await Attendance.countDocuments(activeAttendanceFilter);
 
     const records = await Attendance.aggregate([
       {
-        $match: {
-          ...orgMatch,
-          date: { $gte: today, $lt: tomorrow },
-          checkIn: { $exists: true, $ne: null }
-        }
+        $match: activeAttendanceFilter
       },
       {
         $lookup: {

@@ -364,14 +364,14 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Calendar Grid Wrapper - Unified header + body */}
-          <div className="w-full rounded-xl border border-border/60 bg-background overflow-visible shadow-sm flex-1 flex flex-col min-h-0 relative isolate">
+          <div className="w-full rounded-xl border border-slate-300/80 dark:border-slate-700/80 bg-background overflow-visible shadow-sm flex-1 flex flex-col min-h-0 relative isolate">
             {/* Weekday Headers */}
-            <div className="grid grid-cols-7 gap-0 bg-muted/30 border-b border-foreground/10">
+            <div className="grid grid-cols-7 gap-0 bg-muted/30 border-b border-slate-300/80 dark:border-slate-700/80">
               {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, idx) => (
                 <div 
                   key={day} 
                   className={`text-center text-xs font-semibold text-foreground/80 p-3 h-10 flex items-center justify-center ${
-                    (idx + 1) % 7 !== 0 ? 'border-r border-foreground/10' : ''
+                    (idx + 1) % 7 !== 0 ? 'border-r border-slate-300/80 dark:border-slate-700/80' : ''
                   }`}
                 >
                   {day}
@@ -390,8 +390,8 @@ export default function InteractiveCalendar() {
                     <div 
                       key={_index} 
                       className={`min-h-[92px] sm:min-h-[104px] xl:min-h-[112px] bg-muted/10 ${
-                        !isLastColumn ? 'border-r border-border/40' : ''
-                      } ${!isLastRow ? 'border-b border-border/40' : ''}`} 
+                        !isLastColumn ? 'border-r border-slate-300/80 dark:border-slate-700/80' : ''
+                      } ${!isLastRow ? 'border-b border-slate-300/80 dark:border-slate-700/80' : ''}`} 
                     />
                   );
                 }
@@ -413,8 +413,8 @@ export default function InteractiveCalendar() {
                   <div
   key={formatLocalDateString(day)}
   className={`min-h-[76px] sm:min-h-[92px] xl:min-h-[104px] group/cell overflow-visible relative p-1 ${
-    !isLastColumn ? 'border-r border-border/40' : ''
-  } ${!isLastRow ? 'border-b border-border/40' : ''}`}
+    !isLastColumn ? 'border-r border-slate-300/80 dark:border-slate-700/80' : ''
+  } ${!isLastRow ? 'border-b border-slate-300/80 dark:border-slate-700/80' : ''}`}
 >
                     <motion.button
                       type="button"

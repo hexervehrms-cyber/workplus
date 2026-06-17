@@ -364,7 +364,7 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Calendar Grid Wrapper - Unified header + body */}
-          <div className="w-full rounded-xl border border-slate-300/80 dark:border-slate-700/80 bg-background overflow-visible shadow-sm flex-1 flex flex-col min-h-0 relative isolate" style={{ perspective: '1000px' }}>
+          <div className="w-full rounded-xl border border-slate-300/80 dark:border-slate-700/80 bg-background overflow-visible shadow-sm flex-1 flex flex-col min-h-0 relative isolate" style={{ perspective: '1100px' }}>
             {/* Weekday Headers */}
             <div className="grid grid-cols-7 gap-0 bg-muted/30 border-b border-slate-300/80 dark:border-slate-700/80">
               {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, idx) => (
@@ -401,45 +401,62 @@ export default function InteractiveCalendar() {
                 const leave = hasLeave(day);
                 const leaveStatus = getLeaveStatus(day);
                 const holidayInfo = getHolidayForDay(day);
+                const isAvailableDate = !weekend && !holiday && !leave;
                 const tooltipText = holiday && holidayInfo 
                   ? holidayInfo.name 
                   : leave 
                   ? `${(leaveStatus?.charAt(0) ?? '').toUpperCase()}${leaveStatus?.slice(1) ?? ''} Leave`
-                  : !weekend && !holiday && !leave 
+                  : isAvailableDate
                   ? 'Click to request leave'
                   : undefined;
 
                 return (
                   <div
   key={formatLocalDateString(day)}
-  className={`min-h-[76px] sm:min-h-[92px] xl:min-h-[104px] group/cell overflow-visible relative p-1 ${
+  className={`min-h-[76px] sm:min-h-[92px] xl:min-h-[104px] group/cell overflow-visible relative p-[5px] ${
     !isLastColumn ? 'border-r border-slate-300/80 dark:border-slate-700/80' : ''
   } ${!isLastRow ? 'border-b border-slate-300/80 dark:border-slate-700/80' : ''}`}
 >
                     <motion.button
                       type="button"
-                      onClick={() => !weekend && !holiday && openLeaveForm(day)}
-                      disabled={weekend || holiday}
+                      onClick={() => isAvailableDate && openLeaveForm(day)}
+                      disabled={!isAvailableDate}
                       aria-label={tooltipText}
-                      whileHover={!weekend && !holiday ? { y: -5, scale: 1.018, rotateX: 2.5, rotateY: -1.5 } : undefined}
-                      whileTap={!weekend && !holiday ? { y: -1, scale: 0.992, rotateX: 0, rotateY: 0 } : undefined}
-                      transition={{ type: "spring", stiffness: 850, damping: 44, mass: 0.22, restDelta: 0.001, restSpeed: 0.001 }}
+                      whileHover={isAvailableDate ? { y: -7, scale: 1.016, rotateX: 3, rotateY: -2, z: 28 } : undefined}
+                      whileTap={isAvailableDate ? { y: -2, scale: 0.992, rotateX: 0, rotateY: 0, z: 8 } : undefined}
+                      transition={{ type: "spring", stiffness: 560, damping: 36, mass: 0.28, restDelta: 0.001, restSpeed: 0.001 }}
                       className={`
                         w-full h-full relative group/tile flex flex-col items-center justify-center rounded-none border overflow-hidden transform-gpu will-change-transform [transform-style:preserve-3d] [backface-visibility:hidden] font-medium text-xs
                         ${weekend ? 'dark:bg-red-950/40 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out' : ''}
                         ${holiday ? 'dark:bg-emerald-950/40 dark:text-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed font-semibold border-emerald-200/50 dark:border-emerald-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out' : ''}
-                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950/50 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold border-blue-200/50 dark:border-blue-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out' : ''}
-                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950/50 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold border-yellow-200/50 dark:border-yellow-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out' : ''}
-                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950/50 dark:text-red-200 bg-red-50 text-red-700 font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out' : ''}
-                        ${!weekend && !holiday && !leave ? 'border-transparent bg-background/95 text-foreground cursor-pointer dark:bg-slate-800/60 dark:text-foreground transition-[background-color,border-color,box-shadow,color,opacity] duration-100 ease-out hover:z-40 hover:border-emerald-400/80 hover:bg-emerald-50/85 hover:text-emerald-700 hover:shadow-[0_10px_24px_rgba(16,185,129,0.24)] dark:hover:bg-emerald-950/25 dark:hover:border-emerald-600/70 dark:hover:text-emerald-200' : ''}
+                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950/50 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold border-blue-200/50 dark:border-blue-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out cursor-default' : ''}
+                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950/50 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold border-yellow-200/50 dark:border-yellow-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out cursor-default' : ''}
+                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950/50 dark:text-red-200 bg-red-50 text-red-700 font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out cursor-default' : ''}
+                        ${isAvailableDate ? 'border-transparent bg-background/95 text-foreground cursor-pointer dark:bg-slate-800/60 dark:text-foreground transition-[background-color,border-color,box-shadow,color,opacity,filter] duration-150 ease-out hover:z-50 hover:border-emerald-400/90 hover:bg-emerald-50/90 hover:text-emerald-700 hover:shadow-[0_18px_40px_rgba(16,185,129,0.26),0_0_22px_rgba(16,185,129,0.14)] hover:brightness-[1.03] dark:hover:bg-emerald-950/30 dark:hover:border-emerald-500/80 dark:hover:text-emerald-200 dark:hover:shadow-[0_18px_40px_rgba(16,185,129,0.18),0_0_26px_rgba(16,185,129,0.16)]' : ''}
                         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60
                       `}
                     >
-                      {/* Fast static glow overlay for available cells */}
-                      {!weekend && !holiday && !leave && (
-                        <motion.span 
+                      {/* Floating glass glow overlay for available cells */}
+                      {isAvailableDate && (
+                        <span 
                           aria-hidden="true" 
-                          className="pointer-events-none absolute inset-0 opacity-0 group-hover/tile:opacity-100 transition-opacity duration-100 bg-gradient-to-br from-white/25 via-emerald-400/10 to-emerald-500/15 dark:from-white/5 dark:via-emerald-400/10 dark:to-emerald-900/20" 
+                          className="pointer-events-none absolute inset-0 rounded-none opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 bg-gradient-to-br from-white/30 via-emerald-300/5 to-emerald-400/8 dark:from-white/8 dark:via-emerald-400/5 dark:to-emerald-500/8" 
+                        />
+                      )}
+
+                      {/* Top highlight for floating glass effect */}
+                      {isAvailableDate && (
+                        <span 
+                          aria-hidden="true" 
+                          className="pointer-events-none absolute top-0 left-0 right-0 h-1/3 opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 bg-gradient-to-b from-white/40 to-transparent rounded-none" 
+                        />
+                      )}
+
+                      {/* Floating underside glow */}
+                      {isAvailableDate && (
+                        <span 
+                          aria-hidden="true" 
+                          className="pointer-events-none absolute inset-0 -bottom-2 rounded-none opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 blur-md bg-gradient-radial from-emerald-400/20 to-transparent" 
                         />
                       )}
                       

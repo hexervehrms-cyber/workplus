@@ -328,8 +328,8 @@ export default function InteractiveCalendar() {
   return (
     <>
       {/* Interactive Calendar */}
-      <Card className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-visible flex flex-col w-full">
-        <div className="space-y-6 flex-1 flex flex-col min-w-0 w-full">
+      <Card className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-visible flex flex-col w-full h-full">
+        <div className="space-y-5 flex-1 flex flex-col min-w-0 w-full h-full">
           {/* Calendar Header */}
           <div className="flex items-center justify-between p-1 bg-muted/20 rounded-xl border border-foreground/10 flex-shrink-0">
             <h3 className="font-semibold text-lg text-foreground ml-4">Apply Leave</h3>
@@ -364,7 +364,7 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Calendar Grid Wrapper - Unified header + body */}
-          <div className="w-full rounded-xl border border-foreground/20 bg-background overflow-visible shadow-sm">
+          <div className="w-full rounded-xl border border-border/60 bg-background overflow-visible shadow-sm flex-1 flex flex-col min-h-0 relative isolate">
             {/* Weekday Headers */}
             <div className="grid grid-cols-7 gap-0 bg-muted/30 border-b border-foreground/10">
               {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, idx) => (
@@ -380,7 +380,7 @@ export default function InteractiveCalendar() {
             </div>
 
             {/* Calendar Days */}
-            <div className="grid grid-cols-7 gap-0 bg-background">
+            <div className="grid grid-cols-7 gap-0 bg-background flex-1 overflow-visible relative">
               {calendarDays.map((day, _index) => {
                 const isLastColumn = (_index + 1) % 7 === 0;
                 const isLastRow = _index >= calendarDays.length - 7;
@@ -389,9 +389,9 @@ export default function InteractiveCalendar() {
                   return (
                     <div 
                       key={_index} 
-                      className={`min-h-[56px] sm:min-h-[64px] xl:min-h-[68px] bg-muted/20 ${
-                        !isLastColumn ? 'border-r border-foreground/10' : ''
-                      } ${!isLastRow ? 'border-b border-foreground/10' : ''}`} 
+                      className={`min-h-[92px] sm:min-h-[104px] xl:min-h-[112px] bg-muted/10 ${
+                        !isLastColumn ? 'border-r border-border/40' : ''
+                      } ${!isLastRow ? 'border-b border-border/40' : ''}`} 
                     />
                   );
                 }
@@ -412,42 +412,55 @@ export default function InteractiveCalendar() {
                 return (
                   <div
   key={formatLocalDateString(day)}
-  className={`min-h-[64px] sm:min-h-[72px] xl:min-h-[78px] group overflow-visible ${
-    !isLastColumn ? 'border-r border-foreground/10' : ''
-  } ${!isLastRow ? 'border-b border-foreground/10' : ''}`}
+  className={`min-h-[92px] sm:min-h-[104px] xl:min-h-[112px] group overflow-visible relative ${
+    !isLastColumn ? 'border-r border-border/40' : ''
+  } ${!isLastRow ? 'border-b border-border/40' : ''}`}
 >
                     <motion.button
                       type="button"
                       onClick={() => !weekend && !holiday && openLeaveForm(day)}
                       disabled={weekend || holiday}
                       title={tooltipText}
-                      whileHover={!weekend && !holiday ? { y: -8, scale: 1.04 } : {}}
-                      transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                      whileHover={!weekend && !holiday ? { y: -10, scale: 1.035 } : {}}
+                      whileTap={!weekend && !holiday ? { scale: 0.98 } : {}}
+                      transition={{ type: 'spring', stiffness: 260, damping: 22, mass: 0.7 }}
                       className={`
-                        w-full h-full p-2 text-xs font-medium transition-all duration-200 flex flex-col items-center justify-center relative
-                        ${weekend ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold' : ''}
-                        ${holiday ? 'dark:bg-green-950 dark:text-green-200 bg-green-50 text-green-700 cursor-not-allowed font-semibold' : ''}
-                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold' : ''}
-                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold' : ''}
-                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 font-semibold' : ''}
-                        ${!weekend && !holiday && !leave ? 'dark:text-foreground dark:bg-slate-800 dark:hover:bg-slate-700 text-foreground cursor-pointer bg-slate-50 hover:bg-primary/5 hover:ring-1 hover:ring-inset hover:ring-primary/30 hover:border-green-300 hover:shadow-[0_18px_45px_rgba(34,197,94,0.22)] dark:hover:border-green-700 dark:hover:bg-green-950/30' : ''}
-                        focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary/30
+                        w-full h-full p-3 text-xs font-medium transition-all duration-300 ease-out flex flex-col items-center justify-center relative transform-gpu will-change-transform
+                        ${weekend ? 'dark:bg-red-950/40 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold' : ''}
+                        ${holiday ? 'dark:bg-emerald-950/40 dark:text-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed font-semibold' : ''}
+                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950/50 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold' : ''}
+                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950/50 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold' : ''}
+                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950/50 dark:text-red-200 bg-red-50 text-red-700 font-semibold' : ''}
+                        ${!weekend && !holiday && !leave ? 'relative group/cell rounded-xl border border-border/60 bg-background/80 text-foreground cursor-pointer dark:bg-slate-800/60 dark:text-foreground hover:border-emerald-300/80 hover:bg-emerald-50/70 hover:shadow-[0_20px_50px_rgba(16,185,129,0.22)] dark:hover:bg-emerald-950/30 dark:hover:border-emerald-700/70 active:scale-[0.98]' : ''}
+                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background
                       `}
                     >
-                      <span className="block">{day.getDate()}</span>
+                      {/* Hover gradient overlay for available cells */}
+                      {!weekend && !holiday && !leave && (
+                        <motion.div
+                          className="absolute inset-0 rounded-xl opacity-0 group-hover/cell:opacity-100 transition-opacity duration-300 pointer-events-none bg-gradient-to-br from-emerald-400/10 via-transparent to-emerald-500/10"
+                          initial={{ opacity: 0 }}
+                          whileHover={{ opacity: 1 }}
+                        />
+                      )}
+                      
+                      <span className="block relative z-10 text-base font-semibold">{day.getDate()}</span>
                       
                       {/* Status indicators */}
-                      <div className="mt-1 flex gap-1">
+                      <div className="mt-1.5 flex gap-1 relative z-10">
                         {leave && (
-                          <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                            leaveStatus === 'approved' ? 'bg-primary' :
-                            leaveStatus === 'pending' ? 'bg-yellow-500' :
-                            'bg-destructive'
-                          }`} />
+                          <motion.div 
+                            className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                              leaveStatus === 'approved' ? 'bg-blue-500' :
+                              leaveStatus === 'pending' ? 'bg-yellow-500' :
+                              'bg-red-500'
+                            }`}
+                            layoutId={`leave-indicator-${formatLocalDateString(day)}`}
+                          />
                         )}
                         
                         {holiday && (
-                          <div className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
+                          <div className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" />
                         )}
                       </div>
                     </motion.button>
@@ -457,33 +470,25 @@ export default function InteractiveCalendar() {
             </div>
           </div>
 
-          {/* Legend */}
-          <div className="mt-6 p-4 bg-muted/30 rounded-xl border border-foreground/10 flex-shrink-0">
-            <h4 className="text-sm font-medium text-foreground mb-3">Legend</h4>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-red-100 border border-red-200 flex items-center justify-center flex-shrink-0">
-                  <div className="w-2 h-2 rounded-full bg-red-500" />
-                </div>
-                <span className="text-xs text-muted-foreground">Weekend</span>
+          {/* Legend - Compact and premium */}
+          <div className="mt-4 p-4 bg-gradient-to-r from-muted/40 to-muted/20 rounded-xl border border-border/50 flex-shrink-0">
+            <h4 className="text-xs font-semibold text-foreground/80 mb-3 uppercase tracking-wide">Status Legend</h4>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-red-500/80 flex-shrink-0 shadow-sm" />
+                <span className="text-xs text-muted-foreground truncate">Weekend</span>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-green-100 border border-green-200 flex items-center justify-center flex-shrink-0">
-                  <div className="w-2 h-2 rounded-full bg-green-500" />
-                </div>
-                <span className="text-xs text-muted-foreground">Holiday</span>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-emerald-500/80 flex-shrink-0 shadow-sm" />
+                <span className="text-xs text-muted-foreground truncate">Holiday</span>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
-                  <div className="w-2 h-2 rounded-full bg-primary" />
-                </div>
-                <span className="text-xs text-muted-foreground">Approved Leave</span>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-blue-500/80 flex-shrink-0 shadow-sm" />
+                <span className="text-xs text-muted-foreground truncate">Approved</span>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-yellow-100 border border-yellow-200 flex items-center justify-center flex-shrink-0">
-                  <div className="w-2 h-2 rounded-full bg-yellow-500" />
-                </div>
-                <span className="text-xs text-muted-foreground">Pending Leave</span>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-yellow-500/80 flex-shrink-0 shadow-sm" />
+                <span className="text-xs text-muted-foreground truncate">Pending</span>
               </div>
             </div>
           </div>

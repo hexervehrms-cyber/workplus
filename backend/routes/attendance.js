@@ -922,6 +922,7 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     {
       $set: {
         checkOut: checkOutTime,
+        checkOutTime: checkOutTime,
         hoursWorked: Math.round(hoursWorked * 100) / 100,
         checkOutLocation: location || 'Office',
         checkOutIP: req.ip || req.connection.remoteAddress,
@@ -932,6 +933,25 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   )
     .populate('userId', 'name email avatar')
     .populate('employeeId', 'employeeCode department');
+  
+  if (updatedAttendance) {
+    console.log('[CHECKOUT SAVED DOC]', JSON.stringify({
+      _id: updatedAttendance._id,
+      userId: updatedAttendance.userId,
+      employeeId: updatedAttendance.employeeId,
+      employeeName: updatedAttendance.employeeName,
+      orgId: updatedAttendance.orgId,
+      organizationId: updatedAttendance.organizationId,
+      date: updatedAttendance.date,
+      localDate: updatedAttendance.localDate,
+      checkIn: updatedAttendance.checkIn,
+      checkInTime: updatedAttendance.checkInTime,
+      checkOut: updatedAttendance.checkOut,
+      checkOutTime: updatedAttendance.checkOutTime,
+      hoursWorked: updatedAttendance.hoursWorked,
+      status: updatedAttendance.status
+    }, null, 2));
+  }
 
   if (!updatedAttendance) {
     const closed = await Attendance.findById(attendance._id).lean();
@@ -1962,9 +1982,19 @@ router.post('/bulk-import', authorize('super_admin', 'admin', 'hr'), asyncHandle
         if (existingAttendance) {
           // Update existing record
           existingAttendance.checkIn = checkInTime || existingAttendance.checkIn;
+          existingAttendance.checkInTime = checkInTime || existingAttendance.checkInTime;
           existingAttendance.checkOut = checkOutTime || existingAttendance.checkOut;
+          existingAttendance.checkOutTime = checkOutTime || existingAttendance.checkOutTime;
           existingAttendance.status = attendanceStatus;
           existingAttendance.notes = notes || existingAttendance.notes;
+          // Ensure canonical org fields
+          existingAttendance.orgId = userOrgId;
+          existingAttendance.organizationId = userOrgId;
+          existingAttendance.companyId = userOrgId;
+          // Ensure localDate
+          if (!existingAttendance.localDate) {
+            existingAttendance.localDate = attendanceDate.toISOString().split('T')[0];
+          }
           
           // Calculate hours worked
           if (checkInTime && checkOutTime) {
@@ -1973,20 +2003,27 @@ router.post('/bulk-import', authorize('super_admin', 'admin', 'hr'), asyncHandle
 
           await existingAttendance.save();
         } else {
-          // Create new record
+          // Create new record with canonical fields
           const hoursWorked = checkInTime && checkOutTime ? (checkOutTime - checkInTime) / (1000 * 60 * 60) : 0;
+          const localDate = attendanceDate.toISOString().split('T')[0];
 
           await Attendance.create({
             userId: employee.userId,
             employeeId: employee._id,
             employeeName: employee.firstName + ' ' + employee.lastName,
             date: attendanceDate,
+            localDate,
             checkIn: checkInTime,
+            checkInTime: checkInTime,
             checkOut: checkOutTime,
+            checkOutTime: checkOutTime,
             status: attendanceStatus,
             hoursWorked,
             notes,
-            orgId: userOrgId
+            orgId: userOrgId,
+            organizationId: userOrgId,
+            companyId: userOrgId,
+            timezone: 'Asia/Kolkata'
           });
         }
 

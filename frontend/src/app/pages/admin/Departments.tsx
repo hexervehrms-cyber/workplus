@@ -771,13 +771,13 @@ export default function AdminDepartments() {
           </div>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-5">
           {filteredDepartments.map((department) => (
             <Card
               key={deptKey(department)}
               role="button"
               tabIndex={0}
-              className="p-6 rounded-xl cursor-pointer transition-all hover:shadow-md hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              className="min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm hover:shadow-lg hover:-translate-y-0.5 cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               onClick={() => openDepartmentDetail(department)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
@@ -786,73 +786,80 @@ export default function AdminDepartments() {
                 }
               }}
             >
-              <div className="flex items-start justify-between mb-4">
-                <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center">
-                  <Building2 className="w-6 h-6 text-primary" />
-                </div>
-                <div className="flex flex-col items-end gap-1">
-                  <span
-                    className={`px-2 py-1 text-xs rounded-full ${
-                      department.isActive !== false
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-gray-100 text-gray-600'
-                    }`}
-                  >
-                    {department.isActive !== false ? 'Active' : 'Inactive'}
-                  </span>
-                  {department.source === 'employees' && (
-                    <span className="px-2 py-0.5 text-[10px] rounded-full bg-amber-100 text-amber-900">
-                      From employees
+              <div className="flex h-full min-h-[260px] flex-col p-5">
+                {/* Header */}
+                <div className="flex items-start justify-between mb-3 min-w-0">
+                  <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center shrink-0">
+                    <Building2 className="w-5 h-5 text-primary" />
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span
+                      className={`px-2 py-0.5 text-xs font-medium rounded-full whitespace-nowrap ${
+                        department.isActive !== false
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                          : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+                      }`}
+                    >
+                      {department.isActive !== false ? 'Active' : 'Inactive'}
                     </span>
+                    {department.source === 'employees' && (
+                      <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-300 whitespace-nowrap">
+                        From employees
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 min-w-0 mb-4">
+                  <h3 className="font-semibold text-foreground truncate mb-1">{department.name}</h3>
+                  {department.code && (
+                    <p className="text-xs text-foreground/70 truncate mb-2">Code: {department.code}</p>
                   )}
+                  <p className="text-sm text-foreground/60 line-clamp-2 mb-3">
+                    {department.description || 'No description'}
+                  </p>
                 </div>
-              </div>
-              <h3 className="font-semibold mb-1">{department.name}</h3>
-              {department.code && (
-                <p className="text-xs text-muted-foreground mb-2">Code: {department.code}</p>
-              )}
-              <p className="text-sm text-muted-foreground mb-4 min-h-[2.5rem] line-clamp-2">
-                {department.description || 'No description'}
-              </p>
-              <div className="space-y-2 text-sm text-muted-foreground mb-4">
-                <div className="flex items-center justify-between">
-                  <span>Head:</span>
-                  <span className="font-medium text-foreground">{department.headName || '—'}</span>
+
+                {/* Compact Info */}
+                <div className="grid grid-cols-2 gap-2 mb-4 text-xs">
+                  <div className="min-w-0">
+                    <p className="text-foreground/50 truncate">Head</p>
+                    <p className="font-medium text-foreground truncate">{department.headName || '—'}</p>
+                  </div>
+                  <div className="min-w-0 text-right">
+                    <p className="text-foreground/50">Employees</p>
+                    <p className="font-medium text-foreground">{department.employeeCount ?? 0}</p>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span>Employees:</span>
-                  <span className="font-medium text-foreground">{department.employeeCount ?? 0}</span>
-                </div>
-              </div>
-              <div className="flex items-center justify-between text-xs text-primary font-medium mb-3">
-                <span>View details</span>
-                <ChevronRight className="w-4 h-4" />
-              </div>
-              <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="rounded-lg flex-1"
-                  onClick={(e) => openEditForm(department, e)}
-                >
-                  <Edit className="w-4 h-4 mr-1" />
-                  Edit
-                </Button>
-                {department._id && (
+
+                {/* Footer Actions */}
+                <div className="border-t border-border/50 pt-3 flex gap-2 w-full" onClick={(e) => e.stopPropagation()}>
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
-                    className="rounded-lg text-destructive hover:bg-destructive/10"
-                    onClick={() => {
-                      setDeletingDepartmentId(department._id);
-                      setShowDeleteConfirm(true);
-                    }}
+                    className="flex-1 min-w-0 h-8 rounded-lg text-xs"
+                    onClick={(e) => openEditForm(department, e)}
                   >
-                    <Trash2 className="w-4 h-4" />
+                    <Edit className="w-3.5 h-3.5 mr-1 shrink-0" />
+                    <span className="truncate">Edit</span>
                   </Button>
-                )}
+                  {department._id && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="w-8 h-8 p-0 rounded-lg text-destructive hover:bg-destructive/10"
+                      onClick={() => {
+                        setDeletingDepartmentId(department._id);
+                        setShowDeleteConfirm(true);
+                      }}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                </div>
               </div>
             </Card>
           ))}

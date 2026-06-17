@@ -572,30 +572,109 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   try {
     const timezone = getUserTimezone(req) || 'Asia/Kolkata';
     
-    attendance = await Attendance.create({
-      userId: effectiveUserId,
-      employeeId: effectiveEmployeeId,
-      employeeName: effectiveEmployeeName,
-      date: today,
-      checkIn: new Date(),
-      timezone,
-      status: 'present',
-      orgId: effectiveOrgId,
-      checkInLocation: location || 'Office',
-      checkInIP: req.ip || req.connection.remoteAddress,
-      checkInNotes: notes,
-      ...(isReEntry
-        ? { isReEntry: true, previousAttendanceId: existingAttendance._id }
-        : {}),
-    });
+    // Calculate localDate as YYYY-MM-DD in India timezone
+    const localDate = today.toISOString().split('T')[0];
+    
+    // If attendance already exists for today, update it with missing canonical fields instead of creating duplicate
+    if (existingAttendance && !isReEntry) {
+      attendance = await Attendance.findByIdAndUpdate(
+        existingAttendance._id,
+        {
+          $set: {
+            // Canonical fields
+            orgId: effectiveOrgId,
+            organizationId: effectiveOrgId,
+            companyId: effectiveOrgId,
+            userId: effectiveUserId,
+            employeeId: effectiveEmployeeId,
+            employeeName: effectiveEmployeeName,
+            date: today,
+            localDate,
+            checkIn: new Date(),
+            checkInTime: new Date(),
+            checkOut: null,
+            checkOutTime: null,
+            status: 'checked_in',
+            timezone,
+            breaks: existingAttendance.breaks || [],
+            checkInLocation: location || 'Office',
+            checkInIP: req.ip || req.connection.remoteAddress,
+            checkInNotes: notes
+          }
+        },
+        { new: true, runValidators: false }
+      );
+      console.log('[CHECKIN UPDATED DOC - EXISTING]', JSON.stringify({
+        _id: attendance._id,
+        userId: attendance.userId,
+        employeeId: attendance.employeeId,
+        employeeName: attendance.employeeName,
+        orgId: attendance.orgId,
+        organizationId: attendance.organizationId,
+        date: attendance.date,
+        localDate: attendance.localDate,
+        checkIn: attendance.checkIn,
+        checkInTime: attendance.checkInTime,
+        checkOut: attendance.checkOut,
+        checkOutTime: attendance.checkOutTime,
+        status: attendance.status,
+        breaks: attendance.breaks,
+        timezone: attendance.timezone
+      }, null, 2));
+    } else {
+      // Create new attendance record
+      attendance = await Attendance.create({
+        userId: effectiveUserId,
+        employeeId: effectiveEmployeeId,
+        employeeName: effectiveEmployeeName,
+        // Canonical fields
+        orgId: effectiveOrgId,
+        organizationId: effectiveOrgId,
+        companyId: effectiveOrgId,
+        date: today,
+        localDate,
+        checkIn: new Date(),
+        checkInTime: new Date(),
+        checkOut: null,
+        checkOutTime: null,
+        timezone,
+        status: 'checked_in',
+        breaks: [],
+        checkInLocation: location || 'Office',
+        checkInIP: req.ip || req.connection.remoteAddress,
+        checkInNotes: notes,
+        ...(isReEntry
+          ? { isReEntry: true, previousAttendanceId: existingAttendance._id }
+          : {}),
+      });
 
-    logger.info('Attendance check-in created successfully', {
+      console.log('[CHECKIN SAVED DOC]', JSON.stringify({
+        _id: attendance._id,
+        userId: attendance.userId,
+        employeeId: attendance.employeeId,
+        employeeName: attendance.employeeName,
+        orgId: attendance.orgId,
+        organizationId: attendance.organizationId,
+        date: attendance.date,
+        localDate: attendance.localDate,
+        checkIn: attendance.checkIn,
+        checkInTime: attendance.checkInTime,
+        checkOut: attendance.checkOut,
+        checkOutTime: attendance.checkOutTime,
+        status: attendance.status,
+        breaks: attendance.breaks,
+        timezone: attendance.timezone
+      }, null, 2));
+    }
+
+    logger.info('Attendance check-in created/updated successfully', {
       attendanceId: attendance._id,
       userId: effectiveUserId,
       employeeId: effectiveEmployeeId,
       orgId: effectiveOrgId,
       timezone,
       isReEntry,
+      isUpdate: Boolean(existingAttendance && !isReEntry)
     });
   } catch (createError) {
     const dupCode = createError?.code === 11000 || createError?.cause?.code === 11000;

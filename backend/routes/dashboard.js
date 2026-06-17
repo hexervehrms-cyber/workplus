@@ -381,20 +381,30 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
 
   const orgMatch = buildOrgIdFlexible(userOrgId);
 
-  // Get total count
-  const totalCount = await Attendance.countDocuments({
+  // Filter for active check-ins only (not checked out)
+  // Must match /admin/summary loggedInEmployees query for consistency
+  const activeAttendanceFilter = {
     ...orgMatch,
     date: { $gte: today, $lt: tomorrow },
-    checkIn: { $exists: true, $ne: null }
-  });
+    // Check-in exists using both field names
+    $and: [
+      { $or: [{ checkIn: { $exists: true, $ne: null } }, { checkInTime: { $exists: true, $ne: null } }] },
+      // Not checked out using both field names
+      {
+        $and: [
+          { $or: [{ checkOut: { $exists: false } }, { checkOut: null }] },
+          { $or: [{ checkOutTime: { $exists: false } }, { checkOutTime: null }] }
+        ]
+      }
+    ]
+  };
+
+  // Get total count
+  const totalCount = await Attendance.countDocuments(activeAttendanceFilter);
 
   const todaysAttendance = await Attendance.aggregate([
     {
-      $match: {
-        ...orgMatch,
-        date: { $gte: today, $lt: tomorrow },
-        checkIn: { $exists: true, $ne: null }
-      }
+      $match: activeAttendanceFilter
     },
     {
       $lookup: {
@@ -465,7 +475,9 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
       page,
       limit,
       total: totalCount,
-      totalPages: Math.ceil(totalCount / limit)
+      totalPages: Math.ceil(totalCount / limit),
+      hasPrev: page > 1,
+      hasNext: page < Math.ceil(totalCount / limit)
     }
   });
 }));
@@ -1461,6 +1473,7 @@ router.get("/leave-requests", authorize('super_admin', 'admin', 'hr', 'manager')
 /**
  * GET /api/dashboard/today-attendance
  * Get today's attendance records with pagination
+ * Supports status filter and pagination
  */
 router.get("/today-attendance", authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -1470,29 +1483,17 @@ router.get("/today-attendance", authorize('super_admin', 'admin', 'hr', 'manager
   
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 10));
-  const date = req.query.date ? new Date(req.query.date) : new Date();
-  
-  // Set date to midnight UTC for day boundary
-  const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const dayEnd = new Date(dayStart);
-  dayEnd.setDate(dayEnd.getDate() + 1);
-  
+  const skip = (page - 1) * limit;
+
   try {
+    const { start: today, end: tomorrow } = getDayBounds();
     const orgMatch = buildOrgIdFlexible(orgId);
-    
-    // SHARED FILTER: Must match KPI "Logged In Employees" query for consistency
-    // Support both old and new field names for backwards compatibility
-    // org match: orgId / organizationId / companyId
-    // date match: localDate (string YYYY-MM-DD) or date (Date range)
-    // check-in match: checkIn or checkInTime
-    // active match: checkOut/checkOutTime null or missing
-    const loggedInFilter = {
+
+    // Filter for active check-ins only (not checked out)
+    // Must match /admin/summary loggedInEmployees query for consistency
+    const activeAttendanceFilter = {
       ...orgMatch,
-      // Date range using both localDate and date formats
-      $or: [
-        { date: { $gte: dayStart, $lt: dayEnd } },
-        { localDate: { $gte: dayStart.toISOString().split('T')[0], $lt: dayEnd.toISOString().split('T')[0] } }
-      ],
+      date: { $gte: today, $lt: tomorrow },
       // Check-in exists using both field names
       $and: [
         { $or: [{ checkIn: { $exists: true, $ne: null } }, { checkInTime: { $exists: true, $ne: null } }] },
@@ -1505,70 +1506,84 @@ router.get("/today-attendance", authorize('super_admin', 'admin', 'hr', 'manager
         }
       ]
     };
-    
-    console.log('[ADMIN USER]', {
-      userId: req.user?.userId,
-      role: req.user?.role,
-      orgId: req.user?.orgId
-    });
-    console.log('[ADMIN ORG ID]', orgId);
-    console.log('[TODAY FILTER]', JSON.stringify(loggedInFilter, null, 2));
-    
-    const todayCount = await Attendance.countDocuments(loggedInFilter);
-    console.log('[TODAY COUNT]', todayCount);
-    
-    // Debug: fetch latest attendance docs for same org
-    const latestDocs = await Attendance.find({ ...orgMatch }).sort({ createdAt: -1 }).limit(5).lean();
-    console.log('[LATEST ATTENDANCE DOCS SAME ORG]', JSON.stringify(latestDocs.map(d => ({
-      _id: d._id,
-      orgId: d.orgId,
-      organizationId: d.organizationId,
-      userId: d.userId,
-      employeeId: d.employeeId,
-      date: d.date,
-      localDate: d.localDate,
-      checkIn: d.checkIn,
-      checkInTime: d.checkInTime,
-      checkOut: d.checkOut,
-      checkOutTime: d.checkOutTime,
-      status: d.status,
-      createdAt: d.createdAt
-    })), null, 2));
-    
-    const total = await Attendance.countDocuments(loggedInFilter);
-    
-    const records = await Attendance.find(loggedInFilter)
-      .populate('employeeId', 'department')
-      .sort({ checkIn: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .lean();
-    
-    // Transform response - must match frontend AttendanceRow type
-    const data = records.map(att => ({
-      _id: att._id,
-      employeeName: att.employeeName || 'Unknown',
-      department: att.employeeId?.department || 'N/A',
-      employeeId: {
-        _id: att.employeeId?._id || att.userId,
-        department: att.employeeId?.department || 'N/A'
+
+    // Get total count with same filter as query
+    const totalCount = await Attendance.countDocuments(activeAttendanceFilter);
+
+    const records = await Attendance.aggregate([
+      {
+        $match: activeAttendanceFilter
       },
-      checkIn: att.checkIn,
-      checkOut: att.checkOut,
-      hoursWorked: att.hoursWorked || 0,
-      breaks: att.breaks || [],
-      status: att.status
-    }));
+      {
+        $lookup: {
+          from: 'employees',
+          localField: 'employeeId',
+          foreignField: '_id',
+          as: 'employee'
+        }
+      },
+      {
+        $unwind: {
+          path: '$employee',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'employee.userId',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      {
+        $unwind: {
+          path: '$user',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $project: {
+          _id: 1,
+          employeeName: { $ifNull: ['$user.name', 'Unknown'] },
+          employeeEmail: '$user.email',
+          department: { $ifNull: ['$employee.department', 'N/A'] },
+          checkIn: 1,
+          checkOut: 1,
+          hoursWorked: { $ifNull: ['$hoursWorked', 0] },
+          status: 1,
+          date: 1,
+          breaks: { $ifNull: ['$breaks', []] },
+          meetings: { $ifNull: ['$meetings', []] },
+          isCheckedIn: {
+            $cond: [
+              { $and: [{ $ne: ['$checkIn', null] }, { $eq: ['$checkOut', null] }] },
+              true,
+              false
+            ]
+          }
+        }
+      },
+      {
+        $sort: { checkIn: -1 }
+      },
+      {
+        $skip: skip
+      },
+      {
+        $limit: limit
+      }
+    ]);
     
-    const totalPages = Math.ceil(total / limit);
+    const totalPages = Math.ceil(totalCount / limit);
     
     res.json({
       success: true,
-      data,
+      data: records,
       pagination: {
         page,
         limit,
-        total,
+        total: totalCount,
         totalPages,
         hasNext: page < totalPages,
         hasPrev: page > 1

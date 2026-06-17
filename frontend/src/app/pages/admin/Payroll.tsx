@@ -680,12 +680,16 @@ export default function Payroll() {
     }
   };
 
-  const downloadSlipFile = async (slipId: string, month: number, year: number) => {
+  const downloadSlipFile = async (slipId: string, month: number, year: number, employeeName: string = '') => {
     const blob = await fetchSalarySlipBlob(slipId);
     const objectUrl = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = objectUrl;
-    a.download = `salary-slip-${year}-${String(month).padStart(2, '0')}.html`;
+    // Use PDF extension for downloaded files
+    const filename = employeeName 
+      ? `Payslip-${employeeName}-${month}-${year}.pdf`
+      : `salary-slip-${year}-${String(month).padStart(2, '0')}.pdf`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -695,7 +699,8 @@ export default function Payroll() {
   const handleDownloadSalarySlip = async (slipId: string, month?: number, year?: number) => {
     try {
       const slip = salarySlips.find((s) => s._id === slipId) || viewingSlip;
-      await downloadSlipFile(slipId, month ?? slip?.month ?? 0, year ?? slip?.year ?? 0);
+      const employeeName = slip?.employeeName || '';
+      await downloadSlipFile(slipId, month ?? slip?.month ?? 0, year ?? slip?.year ?? 0, employeeName);
       toast.success('Salary slip downloaded');
     } catch (error) {
       console.error('Error downloading salary slip:', error);
@@ -725,8 +730,14 @@ export default function Payroll() {
 
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       try {
-        const blob = await fetchSalarySlipBlob(slip._id);
-        setPreviewUrl(URL.createObjectURL(blob));
+        // Request PDF for inline preview by appending inline=1 query param
+        const blobResponse = await apiFetchBlob(`salary/slip/${slip._id}/download?inline=1`, {
+          headers: { Accept: 'application/pdf,text/html,*/*' },
+        });
+        
+        // Ensure blob has correct MIME type for PDF rendering
+        const pdfBlob = blobResponse.type ? blobResponse : new Blob([blobResponse], { type: 'application/pdf' });
+        setPreviewUrl(URL.createObjectURL(pdfBlob));
       } catch (blobError) {
         console.error('Error loading salary slip blob:', blobError);
         toast.error('Failed to load salary slip preview: ' + (blobError instanceof Error ? blobError.message : 'Unknown error'));
@@ -1786,60 +1797,73 @@ export default function Payroll() {
 
       {/* View Salary Slip Dialog */}
       <Dialog open={showViewSlipDialog} onOpenChange={(open) => !open && closeViewSlipDialog()}>
-        <DialogContent className="max-w-6xl w-[95vw] max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
-          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
-            <DialogTitle>Salary payslip preview</DialogTitle>
-            <DialogDescription>
-              {viewingSlip && `${viewingSlip.employeeName || 'Employee'} - ${new Date(viewingSlip.year, viewingSlip.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`}
-            </DialogDescription>
+        <DialogContent className="w-full max-w-[95vw] md:max-w-[1100px] h-[90vh] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden rounded-xl">
+          <DialogHeader className="px-6 pt-6 pb-3 shrink-0 border-b border-border">
+            <DialogTitle className="text-xl">Salary Slip Preview</DialogTitle>
+            {viewingSlip && (
+              <DialogDescription className="text-sm mt-1">
+                {new Date(viewingSlip.year, viewingSlip.month - 1).toLocaleDateString('en-US', {
+                  month: 'long',
+                  year: 'numeric',
+                })}{' '}
+                · <span className="capitalize">{viewingSlip.status}</span>
+              </DialogDescription>
+            )}
           </DialogHeader>
 
           {viewSlipLoading ? (
-            <div className="flex justify-center items-center min-h-[480px]">
-              <Loader className="w-8 h-8 animate-spin" />
+            <div className="flex flex-col items-center justify-center flex-1 gap-3">
+              <Loader className="w-10 h-10 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">Loading salary slip...</p>
             </div>
           ) : viewingSlip ? (
             <>
-              <div className="px-6 pb-2 flex flex-wrap items-center gap-3 text-sm shrink-0">
-                <Badge variant={viewingSlip.status === 'approved' ? 'default' : 'secondary'}>
-                  {viewingSlip.status || 'pending'}
-                </Badge>
-                <span className="text-muted-foreground">
-                  Net: <span className="font-semibold text-foreground">₹{safeFormatInr(viewingSlip.netSalary ?? 0)}</span>
-                </span>
-              </div>
-              <div className="flex-1 overflow-auto px-4 py-2 min-h-0">
+              <div className="flex-1 overflow-hidden flex items-center justify-center bg-muted/30 p-4">
                 {previewUrl ? (
-                  <iframe
-                    title="Salary slip preview"
-                    src={previewUrl}
-                    className="w-full h-[78vh] rounded-lg border border-border bg-white"
-                    style={{ minWidth: '900px' }}
-                  />
-                ) : null}
+                  <div className="w-full h-full bg-white rounded-lg border border-border shadow-sm overflow-hidden">
+                    <iframe
+                      title="Salary slip preview"
+                      src={previewUrl}
+                      className="w-full h-full border-0"
+                      style={{ 
+                        minWidth: '100%',
+                        minHeight: '100%',
+                        backgroundColor: '#ffffff'
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div className="text-center text-muted-foreground">
+                    <p className="text-sm">Unable to load salary slip preview</p>
+                  </div>
+                )}
               </div>
-              <div className="flex gap-2 justify-end border-t px-6 py-4 shrink-0">
-                <Button variant="outline" onClick={closeViewSlipDialog} className="rounded-lg">
-                  Close
-                </Button>
-                <Button variant="outline" onClick={() => handleOpenSalarySlip(viewingSlip._id)} className="rounded-lg">
-                  Open in new tab
-                </Button>
-                <Button
-                  onClick={() => handleDownloadSalarySlip(viewingSlip._id, viewingSlip.month, viewingSlip.year)}
-                  className="rounded-lg"
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Download
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => handleDeleteSalarySlip(viewingSlip._id)}
-                  className="rounded-lg text-red-600"
-                >
-                  <Trash2 className="w-4 h-4 mr-2" />
-                  Delete
-                </Button>
+              <div className="px-6 py-4 border-t border-border shrink-0 bg-muted/20 flex items-center justify-between gap-2">
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={closeViewSlipDialog} className="rounded-lg">
+                    Close
+                  </Button>
+                  <Button variant="outline" onClick={() => handleOpenSalarySlip(viewingSlip._id)} className="rounded-lg">
+                    Open in new tab
+                  </Button>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    onClick={() => handleDownloadSalarySlip(viewingSlip._id, viewingSlip.month, viewingSlip.year)}
+                    className="rounded-lg"
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Download PDF
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => handleDeleteSalarySlip(viewingSlip._id)}
+                    className="rounded-lg text-red-600"
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete
+                  </Button>
+                </div>
               </div>
             </>
           ) : null}

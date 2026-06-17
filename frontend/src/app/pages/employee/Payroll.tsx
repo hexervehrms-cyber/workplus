@@ -199,11 +199,14 @@ export default function Payroll() {
     setPreviewLoading(true);
     try {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
-      const blob = await fetchSalarySlipBlob(slipId);
+      // Request PDF for inline preview by appending inline=1 query param
+      const blobResponse = await apiFetchBlob(`salary/slip/${slipId}/download?inline=1`, {
+        headers: { Accept: 'application/pdf,text/html,*/*' },
+      });
       
-      // Ensure blob has correct MIME type for HTML rendering
-      const htmlBlob = blob.type ? blob : new Blob([blob], { type: 'text/html; charset=utf-8' });
-      const objectUrl = URL.createObjectURL(htmlBlob);
+      // Ensure blob has correct MIME type for PDF/HTML rendering
+      const contentBlob = blobResponse.type ? blobResponse : new Blob([blobResponse], { type: 'application/pdf' });
+      const objectUrl = URL.createObjectURL(contentBlob);
       setPreviewUrl(objectUrl);
     } catch (error: any) {
       console.error('Error loading payslip preview:', error);
@@ -323,39 +326,52 @@ export default function Payroll() {
   return (
     <div className="p-6 space-y-6">
       <Dialog open={previewOpen} onOpenChange={(open) => !open && closePreview()}>
-        <DialogContent className="max-w-6xl w-[95vw] max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
-          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
-            <DialogTitle>Salary payslip preview</DialogTitle>
+        <DialogContent className="w-full max-w-[95vw] md:max-w-[1100px] h-[90vh] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden rounded-xl">
+          <DialogHeader className="px-6 pt-6 pb-3 shrink-0 border-b border-border">
+            <DialogTitle className="text-xl">Salary Slip Preview</DialogTitle>
             {viewingSlip && (
-              <DialogDescription>
+              <DialogDescription className="text-sm mt-1">
                 {new Date(viewingSlip.year, viewingSlip.month - 1).toLocaleDateString('en-US', {
                   month: 'long',
                   year: 'numeric',
                 })}{' '}
-                · {viewingSlip.status}
+                · <span className="capitalize">{viewingSlip.status}</span>
               </DialogDescription>
             )}
           </DialogHeader>
-          <div className="flex-1 overflow-auto px-4 py-2 min-h-0">
+          <div className="flex-1 overflow-hidden flex items-center justify-center bg-muted/30 p-4">
             {previewLoading ? (
-              <div className="flex items-center justify-center h-[500px]">
-                <Loader className="w-8 h-8 animate-spin text-primary" />
+              <div className="flex flex-col items-center justify-center gap-3">
+                <Loader className="w-10 h-10 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">Loading salary slip...</p>
               </div>
             ) : previewUrl ? (
-              <iframe
-                title="Salary slip preview"
-                src={previewUrl}
-                className="w-full h-[78vh] rounded-lg border border-border bg-white"
-                style={{ minWidth: '900px' }}
-              />
-            ) : null}
+              <div className="w-full h-full bg-white rounded-lg border border-border shadow-sm overflow-hidden">
+                <iframe
+                  title="Salary slip preview"
+                  src={previewUrl}
+                  className="w-full h-full border-0"
+                  style={{ 
+                    minWidth: '100%',
+                    minHeight: '100%',
+                    backgroundColor: '#ffffff'
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="text-center text-muted-foreground">
+                <p className="text-sm">Unable to load salary slip preview</p>
+              </div>
+            )}
           </div>
-          <DialogFooter className="px-6 py-4 border-t border-border shrink-0">
-            <Button variant="outline" onClick={closePreview}>Close</Button>
+          <DialogFooter className="px-6 py-4 border-t border-border shrink-0 bg-muted/20 flex items-center justify-between gap-2">
+            <Button variant="outline" onClick={closePreview} className="rounded-lg">
+              Close
+            </Button>
             {viewingSlip && (
-              <Button onClick={() => void handleDownloadSalarySlip(viewingSlip._id)}>
+              <Button onClick={() => void handleDownloadSalarySlip(viewingSlip._id)} className="rounded-lg">
                 <Download className="w-4 h-4 mr-2" />
-                Download
+                Download PDF
               </Button>
             )}
           </DialogFooter>

@@ -421,25 +421,31 @@ export default function InteractiveCalendar() {
                       onClick={() => !weekend && !holiday && openLeaveForm(day)}
                       disabled={weekend || holiday}
                       aria-label={tooltipText}
-                      whileHover={!weekend && !holiday ? { y: -3, scale: 1.012, transition: { type: "spring", stiffness: 700, damping: 42, mass: 0.25 } } : {}}
-                      whileTap={!weekend && !holiday ? { y: 0, scale: 0.992, transition: { duration: 0.045, ease: "easeOut" } } : {}}
+                      onMouseMove={(event) => {
+                        if (weekend || holiday) return;
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        const x = event.clientX - rect.left;
+                        const y = event.clientY - rect.top;
+                        event.currentTarget.style.setProperty('--mouse-x', `${x}px`);
+                        event.currentTarget.style.setProperty('--mouse-y', `${y}px`);
+                      }}
                       className={`
-                        w-full h-full relative flex flex-col items-center justify-center rounded-none border transition-[background-color,border-color,box-shadow,opacity] duration-75 ease-out transform-gpu will-change-transform font-medium text-xs
-                        ${weekend ? 'dark:bg-red-950/40 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold border-red-200/50 dark:border-red-900/50' : ''}
-                        ${holiday ? 'dark:bg-emerald-950/40 dark:text-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed font-semibold border-emerald-200/50 dark:border-emerald-900/50' : ''}
-                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950/50 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold border-blue-200/50 dark:border-blue-900/50' : ''}
-                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950/50 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold border-yellow-200/50 dark:border-yellow-900/50' : ''}
-                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950/50 dark:text-red-200 bg-red-50 text-red-700 font-semibold border-red-200/50 dark:border-red-900/50' : ''}
-                        ${!weekend && !holiday && !leave ? 'relative group/tile border-transparent bg-background/95 text-foreground cursor-pointer dark:bg-slate-800/60 dark:text-foreground hover:z-30 hover:border-emerald-400/80 hover:bg-emerald-50/85 hover:shadow-[0_6px_16px_rgba(16,185,129,0.20)] dark:hover:bg-emerald-950/25 dark:hover:border-emerald-600/70 hover:text-emerald-700 dark:hover:text-emerald-200' : ''}
+                        w-full h-full relative group/tile flex flex-col items-center justify-center rounded-none border overflow-hidden transform-gpu will-change-transform font-medium text-xs
+                        ${weekend ? 'dark:bg-red-950/40 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-75 ease-out' : ''}
+                        ${holiday ? 'dark:bg-emerald-950/40 dark:text-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed font-semibold border-emerald-200/50 dark:border-emerald-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-75 ease-out' : ''}
+                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950/50 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold border-blue-200/50 dark:border-blue-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-75 ease-out' : ''}
+                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950/50 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold border-yellow-200/50 dark:border-yellow-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-75 ease-out' : ''}
+                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950/50 dark:text-red-200 bg-red-50 text-red-700 font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-75 ease-out' : ''}
+                        ${!weekend && !holiday && !leave ? 'border-transparent bg-background/95 text-foreground cursor-pointer dark:bg-slate-800/60 dark:text-foreground transition-[transform,background-color,border-color,box-shadow,color,opacity] duration-75 ease-out hover:z-30 hover:-translate-y-[3px] hover:scale-[1.012] hover:border-emerald-400/80 hover:bg-emerald-50/85 hover:text-emerald-700 hover:shadow-[0_8px_20px_rgba(16,185,129,0.20)] active:translate-y-0 active:scale-[0.99] dark:hover:bg-emerald-950/25 dark:hover:border-emerald-600/70 dark:hover:text-emerald-200' : ''}
                         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60
                       `}
                     >
-                      {/* Hover gradient overlay for available cells */}
+                      {/* Cursor-follow spotlight overlay for available cells */}
                       {!weekend && !holiday && !leave && (
-                        <motion.div
-                          className="absolute inset-0 rounded-none opacity-0 group-hover/tile:opacity-100 transition-opacity duration-75 pointer-events-none bg-gradient-to-br from-emerald-400/8 via-transparent to-emerald-500/8"
-                          initial={{ opacity: 0 }}
-                          whileHover={{ opacity: 1 }}
+                        <span 
+                          aria-hidden="true" 
+                          className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-75 group-hover/tile:opacity-100" 
+                          style={{ background: 'radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(16,185,129,0.20), transparent 42%)' }} 
                         />
                       )}
                       

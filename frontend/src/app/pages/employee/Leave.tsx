@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Calendar as CalendarIcon, CheckCircle, XCircle, Clock, Plus, Edit2, Download, Trash2, AlertCircle, Eye } from 'lucide-react';
+import { Calendar as CalendarIcon, CheckCircle, XCircle, Clock, Plus, Edit2, Download, AlertCircle, Eye } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -128,6 +128,8 @@ export default function Leave() {
   const [showLeaveForm, setShowLeaveForm] = useState(false);
   const [submittingLeave, setSubmittingLeave] = useState(false);
   const [editingLeaveId, setEditingLeaveId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 10;
   const [formData, setFormData] = useState({
     type: '',
     startDate: '',
@@ -628,204 +630,282 @@ export default function Leave() {
           <h3 className="font-semibold text-base sm:text-lg text-foreground">Your Leave Requests</h3>
           <p className="text-xs sm:text-sm text-muted-foreground mt-1">All your leave requests and their status</p>
         </div>
-        <div className="p-4 sm:p-6 space-y-3 sm:space-y-4">
+        <div className="p-4 sm:p-6">
           {leaveHistory && leaveHistory.length > 0 ? (
-            leaveHistory.map((leave) => (
-              <div key={leave._id} className="p-3 sm:p-4 rounded-xl bg-gradient-to-r from-muted/40 to-muted/20 border border-foreground/10 hover:border-foreground/20 hover:shadow-md transition-all duration-200">
-                <div className="flex flex-col sm:flex-row items-start sm:items-start justify-between gap-2 sm:gap-3 mb-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-2 mb-2">
-                      <h4 className="font-semibold text-sm sm:text-base text-foreground truncate">{leave.leaveType || leave.type || 'Leave'}</h4>
-                      {((leave as any).isHourlyLeave || (leave as any).isShortLeave) && (
-                        <Badge variant="outline" className="rounded-lg text-xs flex-shrink-0">
-                          <Clock className="w-3 h-3 mr-1" />
-                          Hourly
-                        </Badge>
-                      )}
-                      {((leave as any).isHalfDay && (leave as any).halfDaySession === 'first_half') && (
-                        <Badge variant="outline" className="rounded-lg text-xs flex-shrink-0">First half</Badge>
-                      )}
-                      {((leave as any).isHalfDay && (leave as any).halfDaySession === 'second_half') && (
-                        <Badge variant="outline" className="rounded-lg text-xs flex-shrink-0">Second half</Badge>
-                      )}
-                      <Badge
-                        variant={
-                          leave.status === 'approved' ? 'default' :
-                          leave.status === 'pending' ? 'secondary' :
-                          'destructive'
-                        }
-                        className="rounded-lg text-xs flex-shrink-0"
-                      >
-                        {leave.status === 'approved' && <CheckCircle className="w-3 h-3 mr-1" />}
-                        {leave.status === 'pending' && <Clock className="w-3 h-3 mr-1" />}
-                        {leave.status === 'rejected' && <XCircle className="w-3 h-3 mr-1" />}
-                        {leave.status?.charAt(0).toUpperCase() + leave.status?.slice(1)}
-                      </Badge>
-                    </div>
-                    <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2">{leave.reason}</p>
-                  </div>
-                  <span className="text-xs sm:text-sm font-bold text-primary flex-shrink-0">
-                    {((leave as any).isHourlyLeave || (leave as any).isShortLeave) && (leave as any).hours 
-                      ? `${(leave as any).hours.toFixed(1)} hrs` 
-                      : `${leave.days || (((leave as any).isHalfDay) ? 0.5 : 1)} days`}
-                  </span>
-                </div>
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4 text-xs sm:text-sm text-muted-foreground pt-3 border-t border-foreground/10 mb-3">
-                  <div className="flex items-center gap-1">
-                    <CalendarIcon className="w-4 h-4 text-primary/60 flex-shrink-0" />
-                    <span>{new Date(leave.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                  </div>
-                  {((leave as any).isHourlyLeave || (leave as any).isShortLeave) && (leave as any).startTime && (leave as any).endTime ? (
-                    <>
-                      <span className="text-foreground/40 hidden sm:inline">•</span>
-                      <div className="flex items-center gap-1">
-                        <Clock className="w-4 h-4 text-primary/60 flex-shrink-0" />
-                        <span>{(leave as any).startTime} - {(leave as any).endTime}</span>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-foreground/40 hidden sm:inline">→</span>
-                      <div className="flex items-center gap-1">
-                        <CalendarIcon className="w-4 h-4 text-primary/60 flex-shrink-0" />
-                        <span>{new Date(leave.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                      </div>
-                    </>
-                  )}
-                </div>
-                <div className="flex flex-col sm:flex-row gap-2 pt-3 border-t border-foreground/10">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    className="rounded-lg flex-1 text-xs sm:text-sm"
-                    type="button"
-                    onClick={() => setViewingLeave(leave)}
-                  >
-                    <Eye className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
-                    View
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="rounded-lg flex-1 text-xs sm:text-sm"
-                    onClick={() => {
-                      setEditingLeaveId(leave._id);
-                  setFormData({
-                    type: leave.leaveType || leave.type || '',
-                    startDate: new Date(leave.startDate).toISOString().split('T')[0],
-                    endDate: new Date(leave.endDate).toISOString().split('T')[0],
-                    startTime: (leave as any).startTime || '',
-                    endTime: (leave as any).endTime || '',
-                    reason: leave.reason || '',
-                    leaveDuration: (() => {
-                      const l = leave as any;
-                      if (l.isHourlyLeave || l.isShortLeave) return 'hourly' as const;
-                      if (l.isHalfDay && l.halfDaySession === 'first_half') return 'first_half' as const;
-                      if (l.isHalfDay && l.halfDaySession === 'second_half') return 'second_half' as const;
-                      return 'full' as const;
-                    })()
-                  });
-                      setShowLeaveForm(true);
-                    }}
-                    disabled={leave.status !== 'pending'}
-                  >
-                    <Edit2 className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
-                    Edit
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="rounded-lg flex-1 text-xs sm:text-sm"
-                    onClick={() => {
-                      // Download functionality - generate PDF or download as file
-                      const leaveData = `
-Leave Request Details
-=====================
-Type: ${leave.leaveType || leave.type}
-Status: ${leave.status}
-From: ${new Date(leave.startDate).toLocaleDateString()}
-To: ${new Date(leave.endDate).toLocaleDateString()}
-Days: ${leave.days || 1}
-Reason: ${leave.reason}
-                      `;
-                      const element = document.createElement('a');
-                      element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(leaveData));
-                      element.setAttribute('download', `leave-request-${leave._id}.txt`);
-                      element.style.display = 'none';
-                      document.body.appendChild(element);
-                      element.click();
-                      document.body.removeChild(element);
-                      // toast.success('Leave request downloaded');
-                    }}
-                  >
-                    <Download className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
-                    Download
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="destructive"
-                    className="rounded-lg flex-1 text-xs sm:text-sm"
-                    onClick={async () => {
-                      if (!authUserId) return;
-                      if (confirm('Are you sure you want to delete this leave request?')) {
-                        try {
-                          // Calculate days to restore
-                          // Get employeeId
-                          let employeeId = user?.employeeId;
-                          if (!employeeId) {
-                            const employeeResponse = await EmployeeService.getEmployeeByUserId(authUserId);
-                            if (employeeResponse && employeeResponse._id) {
-                              employeeId = employeeResponse._id;
-                            }
-                          }
-                          
-                          await LeaveRequestService.deleteLeaveRequest(leave._id);
-                          clearApiCache();
-                          toast.success('Leave request deleted');
-                          
-                          const updatedLeaves = await LeaveRequestService.getLeaveRequestsByUserId(authUserId);
-                          const list = extractApiList(updatedLeaves).map((row) =>
-                            normalizeLeaveRow(row as Record<string, unknown>)
-                          );
-                          setLeaveHistory(list);
-                          
-                          // Refresh balance
-                          if (employeeId) {
-                            const now = new Date();
-                            const year = now.getFullYear();
-                            const month = now.getMonth() + 1;
-                            
-                            const balanceResponse = await LeaveAllocationService.getEmployeeBalance(employeeId, year, month);
-                            if (balanceResponse.success) {
-                              const parsed = parseBalanceApiResponse(balanceResponse);
-                              setLeaveBalance(parsed.balances);
-                              setHasLeaveAllocation(parsed.hasAllocation);
-                            }
-                          }
-                        } catch (error) {
-                          console.error('Error deleting leave request:', error);
-                          toast.error(
-                            error instanceof Error ? error.message : 'Failed to delete leave request'
-                          );
-                        }
-                      }
-                    }}
-                    disabled={leave.status !== 'pending'}
-                  >
-                    <Trash2 className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
-                    Delete
-                  </Button>
-                </div>
+            <>
+              {/* Desktop Table View */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-foreground/10 bg-muted/20">
+                      <th className="text-left py-3 px-4 font-semibold text-foreground">Leave Type</th>
+                      <th className="text-left py-3 px-4 font-semibold text-foreground">Reason</th>
+                      <th className="text-center py-3 px-4 font-semibold text-foreground">Start Date</th>
+                      <th className="text-center py-3 px-4 font-semibold text-foreground">End Date</th>
+                      <th className="text-center py-3 px-4 font-semibold text-foreground">Days</th>
+                      <th className="text-center py-3 px-4 font-semibold text-foreground">Status</th>
+                      <th className="text-right py-3 px-4 font-semibold text-foreground">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      const start = (currentPage - 1) * pageSize;
+                      const end = start + pageSize;
+                      const paginatedLeaves = leaveHistory.slice(start, end);
+                      
+                      return paginatedLeaves.map((leave, idx) => (
+                        <tr 
+                          key={leave._id} 
+                          className={`border-b border-foreground/5 hover:bg-muted/20 transition-colors ${idx % 2 === 0 ? 'bg-background' : 'bg-muted/5'}`}
+                        >
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{leave.leaveType || leave.type || 'Leave'}</span>
+                              {((leave as any).isHourlyLeave || (leave as any).isShortLeave) && (
+                                <Badge variant="outline" className="text-xs py-0"><Clock className="w-3 h-3" /></Badge>
+                              )}
+                              {((leave as any).isHalfDay && (leave as any).halfDaySession === 'first_half') && (
+                                <Badge variant="outline" className="text-xs py-0">1st half</Badge>
+                              )}
+                              {((leave as any).isHalfDay && (leave as any).halfDaySession === 'second_half') && (
+                                <Badge variant="outline" className="text-xs py-0">2nd half</Badge>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 max-w-xs text-muted-foreground truncate">{leave.reason}</td>
+                          <td className="py-3 px-4 text-center">{new Date(leave.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                          <td className="py-3 px-4 text-center">{new Date(leave.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                          <td className="py-3 px-4 text-center font-semibold">
+                            {((leave as any).isHourlyLeave || (leave as any).isShortLeave) && (leave as any).hours 
+                              ? `${(leave as any).hours.toFixed(1)} h` 
+                              : `${leave.days || (((leave as any).isHalfDay) ? 0.5 : 1)}`}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <Badge
+                              variant={
+                                leave.status === 'approved' ? 'default' :
+                                leave.status === 'pending' ? 'secondary' :
+                                'destructive'
+                              }
+                              className="text-xs"
+                            >
+                              {leave.status === 'approved' && <CheckCircle className="w-3 h-3 mr-1" />}
+                              {leave.status === 'pending' && <Clock className="w-3 h-3 mr-1" />}
+                              {leave.status === 'rejected' && <XCircle className="w-3 h-3 mr-1" />}
+                              {leave.status?.charAt(0).toUpperCase() + leave.status?.slice(1)}
+                            </Badge>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 w-8 p-0"
+                                type="button"
+                                title="View details"
+                                onClick={() => setViewingLeave(leave)}
+                              >
+                                <Eye className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 w-8 p-0"
+                                title={leave.status !== 'pending' ? 'Can only edit pending requests' : 'Edit request'}
+                                onClick={() => {
+                                  setEditingLeaveId(leave._id);
+                                  setFormData({
+                                    type: leave.leaveType || leave.type || '',
+                                    startDate: new Date(leave.startDate).toISOString().split('T')[0],
+                                    endDate: new Date(leave.endDate).toISOString().split('T')[0],
+                                    startTime: (leave as any).startTime || '',
+                                    endTime: (leave as any).endTime || '',
+                                    reason: leave.reason || '',
+                                    leaveDuration: (() => {
+                                      const l = leave as any;
+                                      if (l.isHourlyLeave || l.isShortLeave) return 'hourly' as const;
+                                      if (l.isHalfDay && l.halfDaySession === 'first_half') return 'first_half' as const;
+                                      if (l.isHalfDay && l.halfDaySession === 'second_half') return 'second_half' as const;
+                                      return 'full' as const;
+                                    })()
+                                  });
+                                  setShowLeaveForm(true);
+                                }}
+                                disabled={leave.status !== 'pending'}
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 w-8 p-0"
+                                title="Download"
+                                onClick={() => {
+                                  const leaveData = `Leave Request Details\n\nType: ${leave.leaveType || leave.type}\nStatus: ${leave.status}\nFrom: ${new Date(leave.startDate).toLocaleDateString()}\nTo: ${new Date(leave.endDate).toLocaleDateString()}\nDays: ${leave.days || 1}\nReason: ${leave.reason}`;
+                                  const blob = new Blob([leaveData], { type: 'text/plain' });
+                                  const url = URL.createObjectURL(blob);
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = `leave-request-${new Date(leave.startDate).toISOString().split('T')[0]}.txt`;
+                                  a.click();
+                                  URL.revokeObjectURL(url);
+                                }}
+                              >
+                                <Download className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ));
+                    })()}
+                  </tbody>
+                </table>
               </div>
-            ))
+
+              {/* Mobile Card View */}
+              <div className="md:hidden space-y-3">
+                {(() => {
+                  const start = (currentPage - 1) * pageSize;
+                  const end = start + pageSize;
+                  const paginatedLeaves = leaveHistory.slice(start, end);
+                  
+                  return paginatedLeaves.map((leave) => (
+                    <div key={leave._id} className="p-4 rounded-xl bg-muted/20 border border-foreground/10 hover:border-foreground/20 hover:shadow-md transition-all">
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <h4 className="font-semibold text-foreground">{leave.leaveType || leave.type || 'Leave'}</h4>
+                            {((leave as any).isHourlyLeave || (leave as any).isShortLeave) && (
+                              <Badge variant="outline" className="text-xs"><Clock className="w-3 h-3 mr-1" />Hourly</Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground line-clamp-2">{leave.reason}</p>
+                        </div>
+                        <Badge
+                          variant={
+                            leave.status === 'approved' ? 'default' :
+                            leave.status === 'pending' ? 'secondary' :
+                            'destructive'
+                          }
+                          className="text-xs flex-shrink-0"
+                        >
+                          {leave.status === 'approved' && <CheckCircle className="w-3 h-3 mr-1" />}
+                          {leave.status === 'pending' && <Clock className="w-3 h-3 mr-1" />}
+                          {leave.status === 'rejected' && <XCircle className="w-3 h-3 mr-1" />}
+                          {leave.status?.charAt(0).toUpperCase() + leave.status?.slice(1)}
+                        </Badge>
+                      </div>
+                      <div className="text-xs text-muted-foreground mb-3 py-2 border-y border-foreground/10">
+                        <div className="flex justify-between mb-1">
+                          <span>{new Date(leave.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                          <span className="font-semibold text-primary">
+                            {((leave as any).isHourlyLeave || (leave as any).isShortLeave) && (leave as any).hours 
+                              ? `${(leave as any).hours.toFixed(1)} hrs` 
+                              : `${leave.days || (((leave as any).isHalfDay) ? 0.5 : 1)} days`}
+                          </span>
+                          <span>{new Date(leave.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="secondary" className="flex-1 h-8 text-xs" onClick={() => setViewingLeave(leave)}>
+                          <Eye className="w-3 h-3 mr-1" />View
+                        </Button>
+                        <Button size="sm" variant="outline" className="flex-1 h-8 text-xs" disabled={leave.status !== 'pending'} onClick={() => {
+                          setEditingLeaveId(leave._id);
+                          setFormData({
+                            type: leave.leaveType || leave.type || '',
+                            startDate: new Date(leave.startDate).toISOString().split('T')[0],
+                            endDate: new Date(leave.endDate).toISOString().split('T')[0],
+                            startTime: (leave as any).startTime || '',
+                            endTime: (leave as any).endTime || '',
+                            reason: leave.reason || '',
+                            leaveDuration: (() => {
+                              const l = leave as any;
+                              if (l.isHourlyLeave || l.isShortLeave) return 'hourly' as const;
+                              if (l.isHalfDay && l.halfDaySession === 'first_half') return 'first_half' as const;
+                              if (l.isHalfDay && l.halfDaySession === 'second_half') return 'second_half' as const;
+                              return 'full' as const;
+                            })()
+                          });
+                          setShowLeaveForm(true);
+                        }}>
+                          <Edit2 className="w-3 h-3 mr-1" />Edit
+                        </Button>
+                        <Button size="sm" variant="outline" className="h-8 w-10 p-0" onClick={() => {
+                          const leaveData = `Leave Request Details\n\nType: ${leave.leaveType || leave.type}\nStatus: ${leave.status}\nFrom: ${new Date(leave.startDate).toLocaleDateString()}\nTo: ${new Date(leave.endDate).toLocaleDateString()}\nDays: ${leave.days || 1}\nReason: ${leave.reason}`;
+                          const blob = new Blob([leaveData], { type: 'text/plain' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `leave-request-${new Date(leave.startDate).toISOString().split('T')[0]}.txt`;
+                          a.click();
+                          URL.revokeObjectURL(url);
+                        }}>
+                          <Download className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ));
+                })()}
+              </div>
+
+              {/* Pagination Controls */}
+              {(() => {
+                const totalPages = Math.ceil(leaveHistory.length / pageSize);
+                const start = (currentPage - 1) * pageSize + 1;
+                const end = Math.min(currentPage * pageSize, leaveHistory.length);
+                
+                return (
+                  <div className="pt-6 border-t border-foreground/10">
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <p className="text-xs sm:text-sm text-muted-foreground">
+                        Showing <span className="font-semibold text-foreground">{start}</span> to <span className="font-semibold text-foreground">{end}</span> of <span className="font-semibold text-foreground">{leaveHistory.length}</span> requests
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 px-3"
+                          onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                          disabled={currentPage === 1}
+                        >
+                          Previous
+                        </Button>
+                        <div className="flex items-center gap-1">
+                          {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                            <Button
+                              key={page}
+                              size="sm"
+                              variant={page === currentPage ? 'default' : 'outline'}
+                              className={`h-8 w-8 p-0 text-xs ${page === currentPage ? '' : ''}`}
+                              onClick={() => setCurrentPage(page)}
+                            >
+                              {page}
+                            </Button>
+                          ))}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 px-3"
+                          onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                          disabled={currentPage === totalPages}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </>
           ) : (
-            <div className="text-center py-8 sm:py-12">
-              <CalendarIcon className="w-10 h-10 sm:w-12 sm:h-12 text-muted-foreground/30 mx-auto mb-2 sm:mb-3" />
-              <p className="text-muted-foreground font-medium text-sm sm:text-base">No leave requests yet</p>
-              <p className="text-xs sm:text-sm text-muted-foreground/70 mt-1">Click the "Request Leave" button to submit your first leave request</p>
+            <div className="text-center py-8">
+              <CalendarIcon className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-40" />
+              <p className="text-muted-foreground">No leave requests yet</p>
+              <p className="text-xs text-muted-foreground mt-1">Submit your first leave request to see it here</p>
             </div>
           )}
         </div>

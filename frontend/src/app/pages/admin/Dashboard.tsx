@@ -341,9 +341,18 @@ export default function AdminDashboard() {
     }
 
     const attPayload = unwrap(attendanceResponse);
+    console.log('[DEBUG-DASHBOARD] Attendance API Response:', {
+      status: attendanceResponse.status,
+      payload: attPayload,
+      data: attPayload?.data,
+      pagination: attPayload?.pagination
+    });
     if (attPayload?.success !== false) {
-      setTodaysAttendance(extractApiList<AttendanceRow>(attPayload?.data || []));
+      const extractedAtt = extractApiList<AttendanceRow>(attPayload?.data || []);
+      console.log('[DEBUG-DASHBOARD] Extracted attendance rows:', extractedAtt);
+      setTodaysAttendance(extractedAtt);
       if (attPayload?.pagination) {
+        console.log('[DEBUG-DASHBOARD] Setting pagination:', attPayload.pagination);
         setAttendancePagination(attPayload.pagination);
       }
     }
@@ -471,8 +480,16 @@ export default function AdminDashboard() {
         `/dashboard/today-attendance?page=${newPage}&limit=10`,
         false
       );
+      console.log('[DEBUG-DASHBOARD] Pagination response:', {
+        page: newPage,
+        status: response?.success,
+        dataLength: response?.data?.length,
+        pagination: response?.pagination
+      });
       if (response?.success !== false) {
-        setTodaysAttendance(extractApiList<AttendanceRow>(response?.data || []));
+        const extractedAtt = extractApiList<AttendanceRow>(response?.data || []);
+        console.log('[DEBUG-DASHBOARD] Extracted attendance (pagination):', extractedAtt.length);
+        setTodaysAttendance(extractedAtt);
         if (response?.pagination) {
           setAttendancePagination(response.pagination);
         }
@@ -1286,14 +1303,19 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             </TableRow>
           </TableHeader>
           <TableBody>
-            {safeTodaysAttendance.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                  No attendance records for today
-                </TableCell>
-              </TableRow>
-            ) : (
-              safeTodaysAttendance.map((attendance) => {
+            {(() => {
+              console.log('[DEBUG-DASHBOARD] Table render - safeTodaysAttendance.length:', safeTodaysAttendance.length);
+              console.log('[DEBUG-DASHBOARD] Table render - safeTodaysAttendance:', safeTodaysAttendance);
+              if (safeTodaysAttendance.length === 0) {
+                return (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                      No attendance records for today
+                    </TableCell>
+                  </TableRow>
+                );
+              }
+              return safeTodaysAttendance.map((attendance) => {
                 const breakInfo = summarizeAttendanceBreaks(attendance.breaks);
                 const rowKey = attendance._id || `${safeCell(attendance.employeeName)}-${attendance.checkIn}`;
                 return (
@@ -1326,7 +1348,7 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
                   </TableRow>
                 );
               })
-            )}
+            })()}
           </TableBody>
         </Table>
         

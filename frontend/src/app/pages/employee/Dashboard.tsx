@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { motion } from 'framer-motion';
 import { KPICard } from '../../components/KPICard';
 import ChatWidget from '../../components/ChatWidget';
 import { useAuth } from '../../context/AuthContext';
@@ -1888,9 +1889,9 @@ export default function EmployeeDashboard() {
               </p>
             </div>
             <div className="overflow-visible">
-              <div className="px-6 py-5 space-y-3">
+              <div className="px-6 py-5 space-y-3 overflow-visible relative isolate">
                 {holidays && holidays.length > 0 ? (
-                  <div className="space-y-3">
+                  <div className="space-y-3 overflow-visible">
                     {holidays
                       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
                       .map((holiday) => {
@@ -1900,12 +1901,14 @@ export default function EmployeeDashboard() {
                         const isUpcoming = holidayDate >= today;
 
                         return (
-                          <div
+                          <motion.div
                             key={holiday._id || holiday.id}
-                            className={`p-4 rounded-lg border transition-all duration-200 box-border w-full flex flex-col gap-2 ${
+                            whileHover={{ y: -5, scale: 1.015, transition: { type: "spring", stiffness: 240, damping: 24, mass: 0.75 } }}
+                            whileTap={{ scale: 0.99 }}
+                            className={`relative group/holiday overflow-visible p-4 rounded-xl border transition-all duration-300 ease-out box-border w-full flex flex-col gap-2 transform-gpu will-change-transform hover:z-30 ${
                               isUpcoming
-                                ? 'dark:bg-green-950 dark:border-green-800 dark:text-green-200 bg-green-50 border-green-200 shadow-sm hover:shadow-md'
-                                : 'dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400 bg-gray-50 border-gray-200 opacity-80 hover:opacity-100'
+                                ? 'dark:bg-emerald-950/50 dark:border-emerald-800/70 dark:text-emerald-200 bg-emerald-50/80 border-emerald-200/70 shadow-sm hover:border-emerald-300 hover:bg-emerald-50/95 hover:shadow-[0_16px_40px_rgba(16,185,129,0.18)] dark:hover:bg-emerald-950/70 dark:hover:border-emerald-700/80'
+                                : 'dark:bg-slate-800/40 dark:border-slate-700/50 dark:text-slate-400 bg-gray-50/80 border-gray-200/70 opacity-80 hover:opacity-100 hover:shadow-sm'
                             }`}
                           >
                             <div className="flex items-start justify-between gap-2 min-w-0">
@@ -1921,12 +1924,16 @@ export default function EmployeeDashboard() {
                                 </p>
                               </div>
                               {isUpcoming && (
-                                <span className="px-2 py-1 text-xs dark:bg-green-900 dark:text-green-200 bg-green-100 text-green-700 rounded-full flex-shrink-0 whitespace-nowrap">
+                                <motion.span 
+                                  initial={{ opacity: 0, scale: 0.95 }}
+                                  whileHover={{ opacity: 1, scale: 1 }}
+                                  className="px-2 py-1 text-xs dark:bg-emerald-900/60 dark:text-emerald-200 bg-emerald-100/80 text-emerald-700 rounded-full flex-shrink-0 whitespace-nowrap transition-all duration-300"
+                                >
                                   Upcoming
-                                </span>
+                                </motion.span>
                               )}
                             </div>
-                          </div>
+                          </motion.div>
                         );
                       })}
                   </div>

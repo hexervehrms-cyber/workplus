@@ -421,36 +421,32 @@ export default function InteractiveCalendar() {
                       onClick={() => !weekend && !holiday && openLeaveForm(day)}
                       disabled={weekend || holiday}
                       aria-label={tooltipText}
-                      whileHover={!weekend && !holiday ? { y: -7, scale: 1.025, rotateX: 4, rotateY: -3, transition: { type: "spring", stiffness: 320, damping: 26, mass: 0.6 } } : {}}
-                      whileTap={!weekend && !holiday ? { y: -2, scale: 0.985, rotateX: 0, rotateY: 0, transition: { duration: 0.09, ease: "easeOut" } } : {}}
+                      onMouseMove={(event) => {
+                        if (weekend || holiday) return;
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        const x = event.clientX - rect.left;
+                        const y = event.clientY - rect.top;
+                        event.currentTarget.style.setProperty('--mouse-x', `${x}px`);
+                        event.currentTarget.style.setProperty('--mouse-y', `${y}px`);
+                      }}
                       className={`
-                        w-full h-full relative flex flex-col items-center justify-center rounded-none border transition-all duration-200 ease-out transform-gpu will-change-transform [transform-style:preserve-3d] [backface-visibility:hidden] font-medium text-xs
-                        ${weekend ? 'dark:bg-red-950/40 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold border-red-200/50 dark:border-red-900/50' : ''}
-                        ${holiday ? 'dark:bg-emerald-950/40 dark:text-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed font-semibold border-emerald-200/50 dark:border-emerald-900/50' : ''}
-                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950/50 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold border-blue-200/50 dark:border-blue-900/50' : ''}
-                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950/50 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold border-yellow-200/50 dark:border-yellow-900/50' : ''}
-                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950/50 dark:text-red-200 bg-red-50 text-red-700 font-semibold border-red-200/50 dark:border-red-900/50' : ''}
-                        ${!weekend && !holiday && !leave ? 'relative group/tile border-transparent bg-background/95 text-foreground cursor-pointer dark:bg-slate-800/60 dark:text-foreground hover:z-40 hover:border-emerald-300/80 hover:bg-emerald-50/80 hover:shadow-[0_16px_38px_rgba(16,185,129,0.22)] dark:hover:bg-emerald-950/30 dark:hover:border-emerald-700/70' : ''}
+                        w-full h-full relative group/tile flex flex-col items-center justify-center rounded-none border overflow-hidden transform-gpu will-change-transform font-medium text-xs
+                        ${weekend ? 'dark:bg-red-950/40 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-75 ease-out' : ''}
+                        ${holiday ? 'dark:bg-emerald-950/40 dark:text-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed font-semibold border-emerald-200/50 dark:border-emerald-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-75 ease-out' : ''}
+                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950/50 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold border-blue-200/50 dark:border-blue-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-75 ease-out' : ''}
+                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950/50 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold border-yellow-200/50 dark:border-yellow-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-75 ease-out' : ''}
+                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950/50 dark:text-red-200 bg-red-50 text-red-700 font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-75 ease-out' : ''}
+                        ${!weekend && !holiday && !leave ? 'border-transparent bg-background/95 text-foreground cursor-pointer dark:bg-slate-800/60 dark:text-foreground transition-[transform,background-color,border-color,box-shadow,color,opacity] duration-75 ease-out hover:z-30 hover:-translate-y-[3px] hover:scale-[1.012] hover:border-emerald-400/80 hover:bg-emerald-50/85 hover:text-emerald-700 hover:shadow-[0_8px_20px_rgba(16,185,129,0.20)] active:translate-y-0 active:scale-[0.99] dark:hover:bg-emerald-950/25 dark:hover:border-emerald-600/70 dark:hover:text-emerald-200' : ''}
                         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60
                       `}
                     >
-                      {/* Hover gradient overlay for available cells */}
+                      {/* Cursor-follow spotlight overlay for available cells */}
                       {!weekend && !holiday && !leave && (
-                        <>
-                          {/* Premium depth gradient */}
-                          <motion.div
-                            className="absolute inset-0 rounded-none opacity-0 group-hover/tile:opacity-100 transition-opacity duration-200 pointer-events-none bg-gradient-to-br from-white/30 via-emerald-400/10 to-emerald-600/10 dark:from-white/5 dark:via-emerald-400/10 dark:to-emerald-900/20"
-                            initial={{ opacity: 0 }}
-                            whileHover={{ opacity: 1 }}
-                          />
-                          
-                          {/* Subtle top highlight */}
-                          <motion.div
-                            className="absolute inset-x-0 top-0 h-px bg-white/60 opacity-0 group-hover/tile:opacity-100 transition-opacity duration-200 dark:bg-white/10 pointer-events-none"
-                            initial={{ opacity: 0 }}
-                            whileHover={{ opacity: 1 }}
-                          />
-                        </>
+                        <span 
+                          aria-hidden="true" 
+                          className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-75 group-hover/tile:opacity-100" 
+                          style={{ background: 'radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(16,185,129,0.20), transparent 42%)' }} 
+                        />
                       )}
                       
                       <span className="block relative z-10 text-base font-semibold">{day.getDate()}</span>

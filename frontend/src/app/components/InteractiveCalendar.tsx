@@ -421,8 +421,8 @@ export default function InteractiveCalendar() {
                       onClick={() => !weekend && !holiday && openLeaveForm(day)}
                       disabled={weekend || holiday}
                       aria-label={tooltipText}
-                      whileHover={!weekend && !holiday ? { y: -5, scale: 1.018, rotateX: 2.5, rotateY: -1.5, transition: { type: "spring", stiffness: 900, damping: 46, mass: 0.22, restDelta: 0.001, restSpeed: 0.001 } } : undefined}
-                      whileTap={!weekend && !holiday ? { y: -1, scale: 0.992, rotateX: 0, rotateY: 0, transition: { type: "spring", stiffness: 1000, damping: 50, mass: 0.18 } } : undefined}
+                      whileHover={!weekend && !holiday ? { y: -5, scale: 1.018, rotateX: 2.5, rotateY: -1.5 } : undefined}
+                      whileTap={!weekend && !holiday ? { y: -1, scale: 0.992, rotateX: 0, rotateY: 0 } : undefined}
                       transition={{ type: "spring", stiffness: 850, damping: 44, mass: 0.22, restDelta: 0.001, restSpeed: 0.001 }}
                       className={`
                         w-full h-full relative group/tile flex flex-col items-center justify-center rounded-none border overflow-hidden transform-gpu will-change-transform [transform-style:preserve-3d] [backface-visibility:hidden] font-medium text-xs

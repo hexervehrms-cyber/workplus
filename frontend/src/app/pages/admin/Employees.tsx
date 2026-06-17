@@ -1012,13 +1012,13 @@ export default function Employees() {
       </div>
 
       {/* Employee Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-6">
         {filteredEmployees.map((employee) => {
           if (!employee.userId) return null;
           return (
           <Card 
             key={employee._id} 
-            className="p-6 rounded-xl cursor-pointer hover:shadow-lg transition-all duration-200 hover:border-primary/50 group"
+            className="p-6 rounded-xl cursor-pointer hover:shadow-lg transition-all duration-200 hover:border-primary/50 group min-w-0 overflow-hidden"
             onClick={() => handleEmployeeClick(employee._id)}
           >
             <div className="flex items-start justify-between mb-4">
@@ -1040,73 +1040,73 @@ export default function Employees() {
               </div>
             </div>
             
-            <h3 className="font-semibold text-lg mb-1 group-hover:text-primary transition-colors">
+            <h3 className="font-semibold text-lg mb-1 group-hover:text-primary transition-colors truncate">
               {employee.userId?.name || employee.userId?.email || 'Unknown'}
               <span className="ml-2 text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
                 Click to view correspondence →
               </span>
             </h3>
-            <p className="text-sm text-muted-foreground mb-3">{employee.designation}</p>
+            <p className="text-sm text-muted-foreground mb-3 truncate">{employee.designation}</p>
             
             <div className="space-y-2 text-sm text-muted-foreground mb-4">
-              <div className="flex items-center gap-2">
-                <Briefcase className="w-4 h-4" />
-                <span>{employee.department || 'No Department'}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <Briefcase className="w-4 h-4 shrink-0" />
+                <span className="truncate">{employee.department || 'No Department'}</span>
               </div>
-              <div className="flex items-center gap-2">
-                <Mail className="w-4 h-4" />
-                <span>{employee.userId?.email || '—'}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <Mail className="w-4 h-4 shrink-0" />
+                <span className="truncate">{employee.userId?.email || '—'}</span>
               </div>
-              <div className="flex items-center gap-2">
-                <Phone className="w-4 h-4" />
-                <span>{employee.phone || 'No Phone'}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <Phone className="w-4 h-4 shrink-0" />
+                <span className="truncate">{employee.phone || 'No Phone'}</span>
               </div>
-              <div className="flex items-center gap-2">
-                <DollarSign className="w-4 h-4" />
-                <span>Salary: {formatCurrency(employee.baseSalary || 0)}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <DollarSign className="w-4 h-4 shrink-0" />
+                <span className="truncate">Salary: {formatCurrency(employee.baseSalary || 0)}</span>
               </div>
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4" />
-                <span>Joined: {employee.joiningDate ? new Date(employee.joiningDate).toLocaleDateString() : 'N/A'}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <Calendar className="w-4 h-4 shrink-0" />
+                <span className="truncate">Joined: {employee.joiningDate ? new Date(employee.joiningDate).toLocaleDateString() : 'N/A'}</span>
               </div>
             </div>
             
-            <div className="flex gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full">
               <Button 
                 variant="outline" 
                 size="sm" 
-                className="flex-1"
+                className="w-full min-w-0 justify-center whitespace-nowrap"
                 onClick={(e) => {
                   e.stopPropagation();
                   openEditModal(employee);
                 }}
               >
-                <Edit className="w-4 h-4 mr-1" />
+                <Edit className="w-4 h-4 mr-1 shrink-0" />
                 Edit
               </Button>
               <Button 
                 variant="outline" 
                 size="sm" 
-                className="flex-1"
+                className="w-full min-w-0 justify-center whitespace-nowrap"
                 onClick={(e) => {
                   e.stopPropagation();
                   openPasswordResetModal(employee);
                 }}
               >
-                <Key className="w-4 h-4 mr-1" />
-                Reset Password
+                <Key className="w-4 h-4 mr-1 shrink-0" />
+                Reset
               </Button>
               <Button 
                 variant="outline" 
                 size="sm" 
-                className="flex-1 text-destructive hover:bg-destructive/10"
+                className="w-full min-w-0 justify-center whitespace-nowrap text-destructive hover:bg-destructive/10"
                 onClick={(e) => {
                   e.stopPropagation();
                   setDeletingEmployeeId(employee._id);
                   setShowDeleteConfirm(true);
                 }}
               >
-                <Trash2 className="w-4 h-4 mr-1" />
+                <Trash2 className="w-4 h-4 mr-1 shrink-0" />
                 Delete
               </Button>
             </div>

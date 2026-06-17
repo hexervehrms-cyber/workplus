@@ -211,13 +211,6 @@ export default function AdminDashboard() {
   const [filterType, setFilterType] = useState('month');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
-  
-  // Organization selection for super_admin
-  const isSuperAdmin = user?.role === 'super_admin';
-  const [selectedOrgId, setSelectedOrgId] = useState<string>('');
-  const [organizations, setOrganizations] = useState<Array<{ _id: string; name: string }>>([]);
-  const [loadingOrgs, setLoadingOrgs] = useState(isSuperAdmin);
-  
   const [dashboardStats, setDashboardStats] = useState<DashboardStats>(defaultDashboardStats);
   const [quickStats, setQuickStats] = useState<QuickStats>(defaultQuickStats);
   const [expenseData, setExpenseData] = useState<ExpenseTrendRow[]>([]);
@@ -252,33 +245,6 @@ export default function AdminDashboard() {
     [formatCurrency]
   );
   
-  // Fetch organizations for super_admin on mount
-  useEffect(() => {
-    if (!isSuperAdmin || !mounted.current) return;
-    
-    (async () => {
-      try {
-        await ensureAccessToken();
-        const response = await apiGet<{ success?: boolean; data?: Array<{ _id: string; name: string; isActive?: boolean }> }>(
-          '/organizations?page=1&limit=100',
-          false
-        );
-        if (response?.data) {
-          const activeOrgs = response.data.filter(o => o.isActive !== false);
-          setOrganizations(activeOrgs);
-          // Auto-select first organization if available
-          if (activeOrgs.length > 0 && !selectedOrgId) {
-            setSelectedOrgId(activeOrgs[0]._id);
-          }
-        }
-      } catch (error) {
-        console.warn('[ADMIN-DASHBOARD] Failed to load organizations:', error);
-      } finally {
-        setLoadingOrgs(false);
-      }
-    })();
-  }, [isSuperAdmin, mounted]);
-  
   // Edit leave modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingLeave, setEditingLeave] = useState<EditingLeave | null>(null);
@@ -291,11 +257,6 @@ export default function AdminDashboard() {
   const refreshDashboardData = useCallback(async () => {
     const gen = nextGeneration();
 
-    // For super_admin, require organization selection
-    if (isSuperAdmin && !selectedOrgId) {
-      return;
-    }
-
     console.log('⚡ [ADMIN-DASHBOARD] Loading KPI summary first with period:', filterType);
     
     await ensureAccessToken();
@@ -306,9 +267,6 @@ export default function AdminDashboard() {
     if (filterType === 'custom' && customStartDate && customEndDate) {
       params.append('startDate', customStartDate);
       params.append('endDate', customEndDate);
-    }
-    if (isSuperAdmin && selectedOrgId) {
-      params.append('orgId', selectedOrgId);
     }
 
     // PHASE 1: Fetch critical KPI summary first
@@ -356,28 +314,12 @@ export default function AdminDashboard() {
     // PHASE 2: Lazy-load tables/charts after KPIs with Promise.allSettled
     console.log('⚡ [ADMIN-DASHBOARD] Loading tables with pagination...');
     
-    const buildTableParams = (baseParams: URLSearchParams) => {
-      if (isSuperAdmin && selectedOrgId) {
-        baseParams.append('orgId', selectedOrgId);
-      }
-      return baseParams.toString();
-    };
-    
     const [expenseTrendsResponse, leaveResponse, attendanceResponse, breakResponse] =
       await Promise.allSettled([
         apiGet<{ success?: boolean; data?: ExpenseTrendRow[] }>('/dashboard/expense-trends', false),
-        apiGet<{ success?: boolean; data?: any; pagination?: any }>(
-          `/dashboard/leave-requests?status=pending&page=1&limit=10&period=${filterType}${isSuperAdmin && selectedOrgId ? `&orgId=${selectedOrgId}` : ''}`,
-          false
-        ),
-        apiGet<{ success?: boolean; data?: any; pagination?: any }>(
-          `/dashboard/today-attendance?page=1&limit=10${isSuperAdmin && selectedOrgId ? `&orgId=${selectedOrgId}` : ''}`,
-          false
-        ),
-        apiGet<{ success?: boolean; data?: any; pagination?: any }>(
-          `/dashboard/break-records?page=1&limit=10${isSuperAdmin && selectedOrgId ? `&orgId=${selectedOrgId}` : ''}`,
-          false
-        ),
+        apiGet<{ success?: boolean; data?: any; pagination?: any }>(`/dashboard/leave-requests?status=pending&page=1&limit=10&period=${filterType}`, false),
+        apiGet<{ success?: boolean; data?: any; pagination?: any }>('/dashboard/today-attendance?page=1&limit=10', false),
+        apiGet<{ success?: boolean; data?: any; pagination?: any }>('/dashboard/break-records?page=1&limit=10', false),
       ]);
 
     if (!mounted.current || isStale(gen)) return;
@@ -508,9 +450,8 @@ export default function AdminDashboard() {
   const handleLeavePageChange = useCallback(async (newPage: number) => {
     setLeavePage(newPage);
     try {
-      const orgParam = isSuperAdmin && selectedOrgId ? `&orgId=${selectedOrgId}` : '';
       const response = await apiGet<{ success?: boolean; data?: any; pagination?: any }>(
-        `/dashboard/leave-requests?status=pending&page=${newPage}&limit=10&period=${filterType}${orgParam}`,
+        `/dashboard/leave-requests?status=pending&page=${newPage}&limit=10&period=${filterType}`,
         false
       );
       if (response?.success !== false) {
@@ -522,14 +463,13 @@ export default function AdminDashboard() {
     } catch (error) {
       console.error('Error changing leave page:', error);
     }
-  }, [filterType, isSuperAdmin, selectedOrgId]);
+  }, [filterType]);
 
   const handleAttendancePageChange = useCallback(async (newPage: number) => {
     setAttendancePage(newPage);
     try {
-      const orgParam = isSuperAdmin && selectedOrgId ? `&orgId=${selectedOrgId}` : '';
       const response = await apiGet<{ success?: boolean; data?: any; pagination?: any }>(
-        `/dashboard/today-attendance?page=${newPage}&limit=10${orgParam}`,
+        `/dashboard/today-attendance?page=${newPage}&limit=10`,
         false
       );
       if (response?.success !== false) {
@@ -542,14 +482,13 @@ export default function AdminDashboard() {
     } catch (error) {
       console.error('Error changing attendance page:', error);
     }
-  }, [isSuperAdmin, selectedOrgId]);
+  }, []);
 
   const handleBreakPageChange = useCallback(async (newPage: number) => {
     setBreakPage(newPage);
     try {
-      const orgParam = isSuperAdmin && selectedOrgId ? `&orgId=${selectedOrgId}` : '';
       const response = await apiGet<{ success?: boolean; data?: any; pagination?: any }>(
-        `/dashboard/break-records?page=${newPage}&limit=10${orgParam}`,
+        `/dashboard/break-records?page=${newPage}&limit=10`,
         false
       );
       if (response?.success !== false && Array.isArray(response?.data)) {
@@ -638,7 +577,7 @@ export default function AdminDashboard() {
     return () => {
       // clearInterval(pollInterval);
     };
-  }, [filterType, customStartDate, customEndDate, refreshDashboardData, mounted, selectedOrgId]);
+  }, [filterType, customStartDate, customEndDate, refreshDashboardData, mounted]);
 
   useEffect(() => {
     const uid = authUserKey(user);
@@ -987,51 +926,6 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
         <h1 className="text-3xl font-bold text-foreground mb-2">Admin Dashboard</h1>
         <p className="text-muted-foreground">Organization overview and management</p>
       </div>
-
-      {/* Organization Selection for Super Admin */}
-      {isSuperAdmin && (
-        <Card className="p-6 rounded-2xl border-blue-200 bg-blue-50">
-          <h3 className="font-semibold text-lg mb-4 flex items-center gap-2">
-            <AlertCircle className="w-5 h-5 text-blue-600" />
-            Select Organization
-          </h3>
-          {loadingOrgs ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Loading organizations...
-            </div>
-          ) : organizations.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No organizations available</p>
-          ) : (
-            <Select value={selectedOrgId} onValueChange={setSelectedOrgId}>
-              <SelectTrigger className="w-full md:w-64 rounded-xl">
-                <SelectValue placeholder="Select an organization" />
-              </SelectTrigger>
-              <SelectContent>
-                {organizations.map((org) => (
-                  <SelectItem key={org._id} value={org._id}>
-                    {org.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <p className="text-xs text-muted-foreground mt-3">
-            Select an organization to view its dashboard data, attendance, and leave requests.
-          </p>
-        </Card>
-      )}
-
-      {/* Empty State if Super Admin with No Organization Selected */}
-      {isSuperAdmin && !selectedOrgId && (
-        <Card className="p-12 rounded-2xl border-dashed border-2 border-muted-foreground/30 flex flex-col items-center justify-center text-center">
-          <AlertCircle className="w-12 h-12 text-muted-foreground/50 mb-4" />
-          <h2 className="text-xl font-semibold text-muted-foreground mb-2">Select an Organization</h2>
-          <p className="text-sm text-muted-foreground max-w-md">
-            To view dashboard data, you must first select an organization from the selector above.
-          </p>
-        </Card>
-      )}
 
       {/* Announcement Banner */}
       <Card className="p-4 bg-gradient-to-r from-accent/20 to-accent/10 border-accent/30 rounded-2xl">

@@ -72,7 +72,7 @@ const navigationItems: NavItem[] = [
   { 
     icon: Clock, 
     label: 'Attendance', 
-    path: '/admin/attendance-calendar', 
+    path: '/admin/attendance', 
     roles: ['admin', 'hr']
   },
   { icon: Receipt, label: 'Expenses', path: '/admin/expenses', roles: ['admin', 'hr'] },

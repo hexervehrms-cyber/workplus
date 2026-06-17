@@ -21,12 +21,10 @@ import {
   Settings,
   Shield,
   Briefcase,
-  Target,
   Award,
   ShieldCheck,
   FolderOpen,
   ChevronDown,
-  Phone,
   Zap,
   ChevronLeft,
   Package
@@ -74,24 +72,8 @@ const navigationItems: NavItem[] = [
   { 
     icon: Clock, 
     label: 'Attendance', 
-    path: '/admin/attendance', 
-    roles: ['admin', 'hr'],
-    children: [
-      { icon: CalendarDays, label: 'Calendar View', path: '/admin/attendance-calendar', roles: ['admin', 'hr'] },
-      { icon: FileText, label: 'History', path: '/admin/attendance-history', roles: ['admin', 'hr'] },
-    ]
-  },
-  { 
-    icon: Zap, 
-    label: 'Sales', 
-    path: '/admin/sales', 
-    roles: ['admin'],
-    children: [
-      { icon: BarChart3, label: 'Dashboard', path: '/admin/sales', roles: ['admin'] },
-      { icon: Target, label: 'Leads', path: '/admin/sales/leads', roles: ['admin'] },
-      { icon: TrendingUp, label: 'Deals', path: '/admin/sales/deals', roles: ['admin'] },
-      { icon: Phone, label: 'Calls', path: '/admin/sales/calls', roles: ['admin'] }
-    ]
+    path: '/admin/attendance-calendar', 
+    roles: ['admin', 'hr']
   },
   { icon: Receipt, label: 'Expenses', path: '/admin/expenses', roles: ['admin', 'hr'] },
   { 

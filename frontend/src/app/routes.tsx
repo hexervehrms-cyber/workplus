@@ -45,7 +45,6 @@ const EmployeeCorrespondence = lazy(() => import('./pages/admin/EmployeeCorrespo
 const AdminDepartments = lazy(() => import('./pages/admin/Departments'));
 const AdminRoles = lazy(() => import('./pages/admin/Roles'));
 const LeaveRequests = lazy(() => import('./pages/admin/LeaveRequests'));
-const AttendanceAdmin = lazy(() => import('./pages/admin/Attendance'));
 const ExpensesAdmin = lazy(() => import('./pages/admin/Expenses'));
 const AnnouncementsAdmin = lazyPage(() => import('./pages/admin/Announcements'));
 const AdminChat = lazyPage(() => import('./pages/admin/Chat'));
@@ -54,16 +53,12 @@ const AdminHolidayCalendar = lazy(() => import('./pages/admin/HolidayCalendar'))
 const AdminPayroll = lazyPage(() => import('./pages/admin/Payroll'));
 const AdminPayrollRuns = lazy(() => import('./pages/admin/PayrollCalculation'));
 const AttendanceCalendar = lazy(() => import('./pages/admin/AttendanceCalendar'));
-const AttendanceHistory = lazy(() => import('./pages/admin/AttendanceHistory'));
 const LeaveAllocation = lazy(() => import('./pages/admin/LeaveAllocation'));
 const LeaveSettings = lazy(() => import('./pages/admin/LeaveSettings'));
 const AdminSettings = lazyPage(() => import('./pages/admin/Settings'));
 
 // Sales Pages - Lazy loaded
-const SalesDashboard = lazy(() => import('./pages/sales/SalesDashboard'));
-const Leads = lazy(() => import('./pages/sales/Leads'));
-const Deals = lazy(() => import('./pages/sales/Deals'));
-const Calls = lazy(() => import('./pages/sales/Calls'));
+// (Removed)
 
 // Employee Pages - Lazy loaded
 const EmployeeDashboard = lazy(() => import('./pages/employee/Dashboard'));
@@ -272,7 +267,7 @@ const routes = [
         path: 'admin/attendance',
         element: (
           <ProtectedRoute requiredRole={[...HR_ADMIN]}>
-            <AttendanceAdmin />
+            <AttendanceCalendar />
           </ProtectedRoute>
         ),
       },
@@ -281,14 +276,6 @@ const routes = [
         element: (
           <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AttendanceCalendar />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/attendance-history',
-        element: (
-          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
-            <AttendanceHistory />
           </ProtectedRoute>
         ),
       },
@@ -359,38 +346,6 @@ const routes = [
         element: (
           <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminChat />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/sales',
-        element: (
-          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
-            <SalesDashboard />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/sales/leads',
-        element: (
-          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
-            <Leads />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/sales/deals',
-        element: (
-          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
-            <Deals />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/sales/calls',
-        element: (
-          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
-            <Calls />
           </ProtectedRoute>
         ),
       },

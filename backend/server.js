@@ -845,12 +845,10 @@ app.post("/api/auth/create-admin", asyncHandler(async (req, res) => {
 }));
 
 // Dashboard routes (with authentication and role-based authorization)
-// Admin/HR dashboard - organization-specific metrics
-app.use("/api/dashboard", ...authedTenant, authorize('admin', 'hr'), dashboardRoutes);
-// Super Admin dashboard - platform-wide metrics
-app.use("/api/dashboard", ...authedTenant, authorize('super_admin'), dashboardSuperAdminRoutes);
-// Employee dashboard - self-service employee data only
-app.use("/api/dashboard", ...authedTenant, authorize('employee', 'manager', 'accountant'), dashboardEmployeeRoutes);
+// Each dashboard route handles its own authorization, so we only mount with auth + org validation
+app.use("/api/dashboard", ...authedTenant, dashboardRoutes);
+app.use("/api/dashboard", ...authedTenant, dashboardSuperAdminRoutes);
+app.use("/api/dashboard", ...authedTenant, dashboardEmployeeRoutes);
 app.use("/api/employee-dashboard", ...authedTenant, authorize('employee', 'manager', 'accountant'), employeeDashboardRoutes);
 
 // ============================================================================

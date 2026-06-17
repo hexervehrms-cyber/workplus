@@ -133,7 +133,7 @@ function getDayBounds(baseDate = new Date(), timezone = 'Asia/Kolkata') {
  * Get dashboard statistics with optional date filtering
  * OPTIMIZED: Combined aggregations, lean queries, caching, monitoring, and circuit breaker
  */
-router.get("/stats", asyncHandler(async (req, res) => {
+router.get("/stats", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   // Disable caching for real-time data
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
@@ -241,7 +241,7 @@ router.get("/stats", asyncHandler(async (req, res) => {
  * GET /api/dashboard/expense-trends
  * Get expense trends for charts
  */
-router.get("/expense-trends", asyncHandler(async (req, res) => {
+router.get("/expense-trends", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   
@@ -296,7 +296,7 @@ router.get("/expense-trends", asyncHandler(async (req, res) => {
  * Get recent leave requests for approval
  * OPTIMIZED: Use lean() and single aggregation pipeline
  */
-router.get("/recent-leave-requests", asyncHandler(async (req, res) => {
+router.get("/recent-leave-requests", authorize('admin', 'hr'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   const limit = parseInt(req.query.limit) || 10;
@@ -370,7 +370,7 @@ router.get("/recent-leave-requests", asyncHandler(async (req, res) => {
  * Includes active check-ins (checkIn exists, checkOut may be null)
  * OPTIMIZED: Use aggregation pipeline with pagination
  */
-router.get("/todays-attendance", asyncHandler(async (req, res) => {
+router.get("/todays-attendance", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   const userOrgId = assertScopedOrgId(req, res);
   if (!userOrgId) return;
   
@@ -486,7 +486,7 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
  * GET /api/dashboard/department-stats
  * Get department-wise statistics
  */
-router.get("/department-stats", asyncHandler(async (req, res) => {
+router.get("/department-stats", authorize('admin', 'hr'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   
@@ -523,7 +523,7 @@ router.get("/department-stats", asyncHandler(async (req, res) => {
  * GET /api/dashboard/recent-activities
  * Get recent system activities
  */
-router.get("/recent-activities", asyncHandler(async (req, res) => {
+router.get("/recent-activities", authorize('admin', 'hr'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   const limit = parseInt(req.query.limit) || 20;
@@ -589,7 +589,7 @@ router.get("/recent-activities", asyncHandler(async (req, res) => {
  * Get quick statistics for widgets
  * OPTIMIZED: Reduced queries, caching, monitoring, and circuit breaker
  */
-router.get("/quick-stats", asyncHandler(async (req, res) => {
+router.get("/quick-stats", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   // Disable caching for real-time data
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
@@ -833,7 +833,7 @@ router.post("/test-kpi-emit", asyncHandler(async (req, res) => {
  * GET /api/dashboard/weekly-productivity
  * Get weekly productivity data for admin dashboard
  */
-router.get("/weekly-productivity", asyncHandler(async (req, res) => {
+router.get("/weekly-productivity", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   
@@ -927,7 +927,7 @@ router.get("/health", asyncHandler(async (req, res) => {
  * POST /api/dashboard/cache/clear
  * Clear dashboard cache (admin only)
  */
-router.post("/cache/clear", asyncHandler(async (req, res) => {
+router.post("/cache/clear", authorize('admin', 'hr'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   
@@ -943,7 +943,7 @@ router.post("/cache/clear", asyncHandler(async (req, res) => {
  * POST /api/dashboard/circuit-breaker/reset
  * Reset circuit breakers (admin only)
  */
-router.post("/circuit-breaker/reset", asyncHandler(async (req, res) => {
+router.post("/circuit-breaker/reset", authorize('admin'), asyncHandler(async (req, res) => {
   dashboardStatsBreaker.reset();
   dashboardQuickStatsBreaker.reset();
   
@@ -960,7 +960,7 @@ router.post("/circuit-breaker/reset", asyncHandler(async (req, res) => {
  * Supports period filtering: today, week, month, year, custom
  * 30 second cache
  */
-router.get("/admin/summary", asyncHandler(async (req, res) => {
+router.get("/admin/summary", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   
   let orgId;

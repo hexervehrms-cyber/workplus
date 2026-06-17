@@ -364,7 +364,7 @@ export default function InteractiveCalendar() {
           </div>
 
           {/* Calendar Grid Wrapper - Unified header + body */}
-          <div className="w-full rounded-xl border border-foreground/20 bg-background overflow-hidden shadow-sm">
+          <div className="w-full rounded-xl border border-foreground/20 bg-background overflow-visible shadow-sm">
             {/* Weekday Headers */}
             <div className="grid grid-cols-7 gap-0 bg-muted/30 border-b border-foreground/10">
               {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, idx) => (
@@ -412,7 +412,7 @@ export default function InteractiveCalendar() {
                 return (
                   <div
   key={formatLocalDateString(day)}
-  className={`min-h-[64px] sm:min-h-[72px] xl:min-h-[78px] group overflow-hidden ${
+  className={`min-h-[64px] sm:min-h-[72px] xl:min-h-[78px] group overflow-visible ${
     !isLastColumn ? 'border-r border-foreground/10' : ''
   } ${!isLastRow ? 'border-b border-foreground/10' : ''}`}
 >
@@ -421,14 +421,16 @@ export default function InteractiveCalendar() {
                       onClick={() => !weekend && !holiday && openLeaveForm(day)}
                       disabled={weekend || holiday}
                       title={tooltipText}
+                      whileHover={!weekend && !holiday ? { y: -8, scale: 1.04 } : {}}
+                      transition={{ type: 'spring', stiffness: 300, damping: 25 }}
                       className={`
-                        w-full h-full p-2 text-xs font-medium transition-colors duration-200 flex flex-col items-center justify-center
+                        w-full h-full p-2 text-xs font-medium transition-all duration-200 flex flex-col items-center justify-center relative
                         ${weekend ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold' : ''}
                         ${holiday ? 'dark:bg-green-950 dark:text-green-200 bg-green-50 text-green-700 cursor-not-allowed font-semibold' : ''}
                         ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold' : ''}
                         ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold' : ''}
                         ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 font-semibold' : ''}
-                        ${!weekend && !holiday && !leave ? 'dark:text-foreground dark:bg-slate-800 dark:hover:bg-slate-700 text-foreground cursor-pointer bg-slate-50 hover:bg-primary/5 hover:ring-1 hover:ring-inset hover:ring-primary/30' : ''}
+                        ${!weekend && !holiday && !leave ? 'dark:text-foreground dark:bg-slate-800 dark:hover:bg-slate-700 text-foreground cursor-pointer bg-slate-50 hover:bg-primary/5 hover:ring-1 hover:ring-inset hover:ring-primary/30 hover:border-green-300 hover:shadow-[0_18px_45px_rgba(34,197,94,0.22)] dark:hover:border-green-700 dark:hover:bg-green-950/30' : ''}
                         focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary/30
                       `}
                     >

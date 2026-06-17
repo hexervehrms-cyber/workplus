@@ -440,7 +440,7 @@ export default function InteractiveCalendar() {
                       {isAvailableDate && (
                         <span 
                           aria-hidden="true" 
-                          className="pointer-events-none absolute inset-0 rounded-none opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 bg-gradient-to-br from-white/30 via-emerald-300/5 to-emerald-400/8 dark:from-white/8 dark:via-emerald-400/5 dark:to-emerald-500/8" 
+                          className="pointer-events-none absolute inset-0 opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 bg-gradient-to-br from-white/35 via-emerald-300/12 to-emerald-500/18 dark:from-white/8 dark:via-emerald-400/12 dark:to-emerald-900/24" 
                         />
                       )}
 
@@ -448,7 +448,7 @@ export default function InteractiveCalendar() {
                       {isAvailableDate && (
                         <span 
                           aria-hidden="true" 
-                          className="pointer-events-none absolute top-0 left-0 right-0 h-1/3 opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 bg-gradient-to-b from-white/40 to-transparent rounded-none" 
+                          className="pointer-events-none absolute inset-x-2 top-1 h-px opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 bg-white/70 dark:bg-white/15" 
                         />
                       )}
 
@@ -456,7 +456,7 @@ export default function InteractiveCalendar() {
                       {isAvailableDate && (
                         <span 
                           aria-hidden="true" 
-                          className="pointer-events-none absolute inset-0 -bottom-2 rounded-none opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 blur-md bg-gradient-radial from-emerald-400/20 to-transparent" 
+                          className="pointer-events-none absolute -bottom-2 left-3 right-3 h-4 rounded-full opacity-0 blur-md group-hover/tile:opacity-70 transition-opacity duration-150 bg-emerald-400/30 dark:bg-emerald-500/20" 
                         />
                       )}
                       

@@ -1027,11 +1027,20 @@ router.get("/admin/summary", asyncHandler(async (req, res) => {
       // Financial totals (expenses, payroll) in selected period
       getFinancialTotals(orgId, rangeStart, rangeEnd),
       
-      // Logged in today: have checkIn, no checkOut
+      // Logged in today: have checkIn, no checkOut (support both old and new field names)
       Attendance.countDocuments({
         ...todayAttendanceFilter,
-        checkIn: { $exists: true, $ne: null },
-        $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
+        // Check-in exists using both field names
+        $and: [
+          { $or: [{ checkIn: { $exists: true, $ne: null } }, { checkInTime: { $exists: true, $ne: null } }] },
+          // Not checked out using both field names
+          {
+            $and: [
+              { $or: [{ checkOut: { $exists: false } }, { checkOut: null }] },
+              { $or: [{ checkOutTime: { $exists: false } }, { checkOutTime: null }] }
+            ]
+          }
+        ]
       }).then(count => {
         console.log('[ADMIN-SUMMARY] todayAttendanceFilter:', JSON.stringify(todayAttendanceFilter, null, 2));
         console.log('[ADMIN-SUMMARY] loggedInCount:', count);
@@ -1270,10 +1279,16 @@ router.get("/break-records", authorize('super_admin', 'admin', 'hr', 'manager'),
   try {
     const orgMatch = buildOrgIdFlexible(orgId);
     
-    // Get attendance records for the day with breaks
+    const dayStartStr = dayStart.toISOString().split('T')[0];
+    const dayEndStr = dayEnd.toISOString().split('T')[0];
+    
+    // Get attendance records for the day with breaks - support both date formats
     const attendanceRecords = await Attendance.find({
       ...orgMatch,
-      date: { $gte: dayStart, $lt: dayEnd },
+      $or: [
+        { date: { $gte: dayStart, $lt: dayEnd } },
+        { localDate: { $gte: dayStartStr, $lt: dayEndStr } }
+      ],
       breaks: { $exists: true, $elemMatch: { startTime: { $exists: true } } }
     })
     .select('employeeId employeeName breaks')
@@ -1466,17 +1481,61 @@ router.get("/today-attendance", authorize('super_admin', 'admin', 'hr', 'manager
     const orgMatch = buildOrgIdFlexible(orgId);
     
     // SHARED FILTER: Must match KPI "Logged In Employees" query for consistency
-    // Only show employees who are currently logged in (checked in, not checked out)
+    // Support both old and new field names for backwards compatibility
+    // org match: orgId / organizationId / companyId
+    // date match: localDate (string YYYY-MM-DD) or date (Date range)
+    // check-in match: checkIn or checkInTime
+    // active match: checkOut/checkOutTime null or missing
     const loggedInFilter = {
       ...orgMatch,
-      date: { $gte: dayStart, $lt: dayEnd },
-      checkIn: { $exists: true, $ne: null },
-      $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
+      // Date range using both localDate and date formats
+      $or: [
+        { date: { $gte: dayStart, $lt: dayEnd } },
+        { localDate: { $gte: dayStart.toISOString().split('T')[0], $lt: dayEnd.toISOString().split('T')[0] } }
+      ],
+      // Check-in exists using both field names
+      $and: [
+        { $or: [{ checkIn: { $exists: true, $ne: null } }, { checkInTime: { $exists: true, $ne: null } }] },
+        // Not checked out using both field names
+        {
+          $and: [
+            { $or: [{ checkOut: { $exists: false } }, { checkOut: null }] },
+            { $or: [{ checkOutTime: { $exists: false } }, { checkOutTime: null }] }
+          ]
+        }
+      ]
     };
     
+    console.log('[ADMIN USER]', {
+      userId: req.user?.userId,
+      role: req.user?.role,
+      orgId: req.user?.orgId
+    });
+    console.log('[ADMIN ORG ID]', orgId);
+    console.log('[TODAY FILTER]', JSON.stringify(loggedInFilter, null, 2));
+    
+    const todayCount = await Attendance.countDocuments(loggedInFilter);
+    console.log('[TODAY COUNT]', todayCount);
+    
+    // Debug: fetch latest attendance docs for same org
+    const latestDocs = await Attendance.find({ ...orgMatch }).sort({ createdAt: -1 }).limit(5).lean();
+    console.log('[LATEST ATTENDANCE DOCS SAME ORG]', JSON.stringify(latestDocs.map(d => ({
+      _id: d._id,
+      orgId: d.orgId,
+      organizationId: d.organizationId,
+      userId: d.userId,
+      employeeId: d.employeeId,
+      date: d.date,
+      localDate: d.localDate,
+      checkIn: d.checkIn,
+      checkInTime: d.checkInTime,
+      checkOut: d.checkOut,
+      checkOutTime: d.checkOutTime,
+      status: d.status,
+      createdAt: d.createdAt
+    })), null, 2));
+    
     const total = await Attendance.countDocuments(loggedInFilter);
-    console.log('[TODAY-ATTENDANCE] loggedInFilter:', JSON.stringify(loggedInFilter, null, 2));
-    console.log('[TODAY-ATTENDANCE] total logged-in count:', total);
     
     const records = await Attendance.find(loggedInFilter)
       .populate('employeeId', 'department')

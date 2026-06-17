@@ -23,7 +23,7 @@ import {
   buildOrgIdFlexible,
   countEmployeesCurrentlyOnBreak,
 } from "../utils/attendanceQueryHelpers.js";
-import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
+import { assertScopedOrgId, resolveDashboardOrgId } from "../utils/orgScopeHelpers.js";
 
 // Import specialized dashboard routes
 import superAdminRoutes from "./dashboard-superadmin.js";
@@ -963,8 +963,36 @@ router.post("/circuit-breaker/reset", asyncHandler(async (req, res) => {
 router.get("/admin/summary", asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   
-  const orgId = assertScopedOrgId(req, res);
-  if (!orgId) return;
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
+  
+  // If orgId is null (unscoped user), return empty stats
+  if (!orgId) {
+    return res.json({
+      success: true,
+      data: {
+        kpis: {
+          totalEmployees: 0,
+          presentToday: 0,
+          avgProductivity: 0,
+          thisMonthExpense: 0,
+          thisMonthPayroll: 0,
+          totalCost: 0,
+          loggedInEmployees: 0,
+          onLeave: 0,
+          onBreak: 0
+        }
+      }
+    });
+  }
   
   const { 
     period = 'month', 
@@ -1276,8 +1304,25 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
 router.get("/break-records", authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   
-  const orgId = assertScopedOrgId(req, res);
-  if (!orgId) return;
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
+  
+  // If orgId is null (unscoped user), return empty
+  if (!orgId) {
+    return res.json({
+      success: true,
+      data: [],
+      pagination: { page: 1, limit: 10, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+    });
+  }
   
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 10));
@@ -1371,8 +1416,25 @@ router.get("/break-records", authorize('super_admin', 'admin', 'hr', 'manager'),
 router.get("/leave-requests", authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   
-  const orgId = assertScopedOrgId(req, res);
-  if (!orgId) return;
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
+  
+  // If orgId is null (unscoped user), return empty
+  if (!orgId) {
+    return res.json({
+      success: true,
+      data: [],
+      pagination: { page: 1, limit: 10, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+    });
+  }
   
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 10));
@@ -1478,8 +1540,25 @@ router.get("/leave-requests", authorize('super_admin', 'admin', 'hr', 'manager')
 router.get("/today-attendance", authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   
-  const orgId = assertScopedOrgId(req, res);
-  if (!orgId) return;
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
+  
+  // If orgId is null (unscoped user), return empty
+  if (!orgId) {
+    return res.json({
+      success: true,
+      data: [],
+      pagination: { page: 1, limit: 10, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+    });
+  }
   
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 10));

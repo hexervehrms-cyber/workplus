@@ -144,10 +144,10 @@ export function structureLookupQuery(req, structureId) {
 /**
  * Resolve organization ID for Admin Dashboard endpoints.
  * - super_admin: MUST provide ?orgId or ?organizationId query param. No "system" allowed for org-scoped data.
- * - normal admin/hr: Uses req.user.orgId (already scoped to specific organization)
+ * - normal admin/hr/manager: Uses req.user.orgId (already scoped to specific organization, or null which is acceptable)
  * 
  * @throws {Error} with statusCode=400 and code='ORG_SELECTION_REQUIRED' if super_admin has no selection
- * @returns {string} Valid organization ID (never "system")
+ * @returns {string|null} Valid organization ID (never "system" for org-scoped queries)
  */
 export function resolveDashboardOrgId(req) {
   const role = req.user?.role;
@@ -176,17 +176,11 @@ export function resolveDashboardOrgId(req) {
     return selected;
   }
   
-  // For normal admin/hr/manager roles, use their assigned organization
-  const userOrgId = req.user?.orgId || req.user?.tenantId || req.user?.organizationId;
-  
-  if (!userOrgId || String(userOrgId) === 'system') {
-    const err = new Error('Organization scope missing');
-    err.statusCode = 400;
-    err.code = 'ORG_SCOPE_MISSING';
-    throw err;
-  }
-  
-  return String(userOrgId);
+  // For normal admin/hr/manager roles, use original simple logic
+  // - Returns req.user.orgId if set and not "system"
+  // - Returns null otherwise (which is valid - will show empty results if truly unscoped)
+  const userOrgId = userOrgIdFromReq(req);
+  return userOrgId;
 }
 
 /**

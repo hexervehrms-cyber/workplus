@@ -56,10 +56,6 @@ const navigationItems: NavItem[] = [
   // Admin & HR
   { icon: LayoutDashboard, label: 'Dashboard', path: '/admin', roles: ['admin', 'hr'] },
   { icon: Users, label: 'Employees', path: '/admin/employees', roles: ['admin', 'hr'] },
-  { icon: Users, label: 'Invites', path: '/admin/invites', roles: ['admin', 'hr'] },
-  { icon: Briefcase, label: 'Onboarding', path: '/admin/employee-onboarding', roles: ['admin', 'hr'] },
-  { icon: Zap, label: 'Bulk Operations', path: '/admin/bulk-operations', roles: ['admin', 'hr'] },
-  { icon: Users, label: 'Admin Management', path: '/admin/admin-management', roles: ['admin'] },
   { icon: FolderOpen, label: 'Company Docs', path: '/admin/company-docs', roles: ['admin', 'hr'] },
   { icon: Building2, label: 'Departments', path: '/admin/departments', roles: ['admin', 'hr'] },
   { icon: ShieldCheck, label: 'Roles', path: '/admin/roles', roles: ['admin'] },

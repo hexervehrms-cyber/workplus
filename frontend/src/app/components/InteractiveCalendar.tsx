@@ -412,7 +412,7 @@ export default function InteractiveCalendar() {
                 return (
                   <div
   key={formatLocalDateString(day)}
-  className={`min-h-[92px] sm:min-h-[104px] xl:min-h-[112px] group overflow-visible relative ${
+  className={`min-h-[76px] sm:min-h-[92px] xl:min-h-[104px] group/cell overflow-visible relative p-1 ${
     !isLastColumn ? 'border-r border-border/40' : ''
   } ${!isLastRow ? 'border-b border-border/40' : ''}`}
 >
@@ -421,24 +421,23 @@ export default function InteractiveCalendar() {
                       onClick={() => !weekend && !holiday && openLeaveForm(day)}
                       disabled={weekend || holiday}
                       title={tooltipText}
-                      whileHover={!weekend && !holiday ? { y: -10, scale: 1.035 } : {}}
-                      whileTap={!weekend && !holiday ? { scale: 0.98 } : {}}
-                      transition={{ type: 'spring', stiffness: 260, damping: 22, mass: 0.7 }}
+                      whileHover={!weekend && !holiday ? { y: -8, scale: 1.03, transition: { type: "spring", stiffness: 240, damping: 24, mass: 0.75 } } : {}}
+                      whileTap={!weekend && !holiday ? { scale: 0.98, transition: { duration: 0.12, ease: "easeOut" } } : {}}
                       className={`
-                        w-full h-full p-3 text-xs font-medium transition-all duration-300 ease-out flex flex-col items-center justify-center relative transform-gpu will-change-transform
-                        ${weekend ? 'dark:bg-red-950/40 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold' : ''}
-                        ${holiday ? 'dark:bg-emerald-950/40 dark:text-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed font-semibold' : ''}
-                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950/50 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold' : ''}
-                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950/50 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold' : ''}
-                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950/50 dark:text-red-200 bg-red-50 text-red-700 font-semibold' : ''}
-                        ${!weekend && !holiday && !leave ? 'relative group/cell rounded-xl border border-border/60 bg-background/80 text-foreground cursor-pointer dark:bg-slate-800/60 dark:text-foreground hover:border-emerald-300/80 hover:bg-emerald-50/70 hover:shadow-[0_20px_50px_rgba(16,185,129,0.22)] dark:hover:bg-emerald-950/30 dark:hover:border-emerald-700/70 active:scale-[0.98]' : ''}
-                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background
+                        w-full h-full relative flex flex-col items-center justify-center rounded-xl border transition-all duration-300 ease-out transform-gpu will-change-transform font-medium text-xs
+                        ${weekend ? 'dark:bg-red-950/40 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold border-red-200/50 dark:border-red-900/50' : ''}
+                        ${holiday ? 'dark:bg-emerald-950/40 dark:text-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed font-semibold border-emerald-200/50 dark:border-emerald-900/50' : ''}
+                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950/50 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold border-blue-200/50 dark:border-blue-900/50' : ''}
+                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950/50 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold border-yellow-200/50 dark:border-yellow-900/50' : ''}
+                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950/50 dark:text-red-200 bg-red-50 text-red-700 font-semibold border-red-200/50 dark:border-red-900/50' : ''}
+                        ${!weekend && !holiday && !leave ? 'relative group/tile border-transparent bg-background/90 text-foreground cursor-pointer dark:bg-slate-800/60 dark:text-foreground hover:z-40 hover:border-emerald-300/80 hover:bg-emerald-50/80 hover:shadow-[0_18px_42px_rgba(16,185,129,0.20)] dark:hover:bg-emerald-950/30 dark:hover:border-emerald-700/70' : ''}
+                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60
                       `}
                     >
                       {/* Hover gradient overlay for available cells */}
                       {!weekend && !holiday && !leave && (
                         <motion.div
-                          className="absolute inset-0 rounded-xl opacity-0 group-hover/cell:opacity-100 transition-opacity duration-300 pointer-events-none bg-gradient-to-br from-emerald-400/10 via-transparent to-emerald-500/10"
+                          className="absolute inset-0 rounded-xl opacity-0 group-hover/tile:opacity-100 transition-opacity duration-300 pointer-events-none bg-gradient-to-br from-emerald-400/10 via-transparent to-emerald-500/10"
                           initial={{ opacity: 0 }}
                           whileHover={{ opacity: 1 }}
                         />
@@ -447,7 +446,7 @@ export default function InteractiveCalendar() {
                       <span className="block relative z-10 text-base font-semibold">{day.getDate()}</span>
                       
                       {/* Status indicators */}
-                      <div className="mt-1.5 flex gap-1 relative z-10">
+                      <div className="mt-1 flex gap-1 relative z-10">
                         {leave && (
                           <motion.div 
                             className={`w-2 h-2 rounded-full flex-shrink-0 ${

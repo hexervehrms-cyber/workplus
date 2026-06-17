@@ -23,7 +23,7 @@ import {
   buildOrgIdFlexible,
   countEmployeesCurrentlyOnBreak,
 } from "../utils/attendanceQueryHelpers.js";
-import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
+import { assertScopedOrgId, resolveDashboardOrgId } from "../utils/orgScopeHelpers.js";
 
 // Import specialized dashboard routes
 import superAdminRoutes from "./dashboard-superadmin.js";
@@ -963,8 +963,16 @@ router.post("/circuit-breaker/reset", asyncHandler(async (req, res) => {
 router.get("/admin/summary", asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   
-  const orgId = assertScopedOrgId(req, res);
-  if (!orgId) return;
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
   
   const { 
     period = 'month', 
@@ -1276,8 +1284,16 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
 router.get("/break-records", authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   
-  const orgId = assertScopedOrgId(req, res);
-  if (!orgId) return;
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
   
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 10));
@@ -1371,8 +1387,16 @@ router.get("/break-records", authorize('super_admin', 'admin', 'hr', 'manager'),
 router.get("/leave-requests", authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   
-  const orgId = assertScopedOrgId(req, res);
-  if (!orgId) return;
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
   
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 10));
@@ -1478,8 +1502,16 @@ router.get("/leave-requests", authorize('super_admin', 'admin', 'hr', 'manager')
 router.get("/today-attendance", authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   
-  const orgId = assertScopedOrgId(req, res);
-  if (!orgId) return;
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
   
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 10));

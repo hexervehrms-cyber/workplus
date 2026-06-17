@@ -142,6 +142,54 @@ export function structureLookupQuery(req, structureId) {
 }
 
 /**
+ * Resolve organization ID for Admin Dashboard endpoints.
+ * - super_admin: MUST provide ?orgId or ?organizationId query param. No "system" allowed for org-scoped data.
+ * - normal admin/hr: Uses req.user.orgId (already scoped to specific organization)
+ * 
+ * @throws {Error} with statusCode=400 and code='ORG_SELECTION_REQUIRED' if super_admin has no selection
+ * @returns {string} Valid organization ID (never "system")
+ */
+export function resolveDashboardOrgId(req) {
+  const role = req.user?.role;
+  
+  if (role === 'super_admin') {
+    // Super admin MUST explicitly select organization for dashboard
+    const selectedOrgId = req.query?.orgId || req.query?.organizationId;
+    
+    if (!selectedOrgId) {
+      const err = new Error('Organization selection required');
+      err.statusCode = 400;
+      err.code = 'ORG_SELECTION_REQUIRED';
+      throw err;
+    }
+    
+    const selected = String(selectedOrgId).trim();
+    
+    // Reject "system" - dashboard data is always org-scoped, never system-wide
+    if (selected === 'system' || selected === 'workplus_system') {
+      const err = new Error('Invalid organization scope for dashboard');
+      err.statusCode = 400;
+      err.code = 'INVALID_ORG_SCOPE';
+      throw err;
+    }
+    
+    return selected;
+  }
+  
+  // For normal admin/hr/manager roles, use their assigned organization
+  const userOrgId = req.user?.orgId || req.user?.tenantId || req.user?.organizationId;
+  
+  if (!userOrgId || String(userOrgId) === 'system') {
+    const err = new Error('Organization scope missing');
+    err.statusCode = 400;
+    err.code = 'ORG_SCOPE_MISSING';
+    throw err;
+  }
+  
+  return String(userOrgId);
+}
+
+/**
  * Resolve an employee by Mongo _id or linked userId, with tenant checks for non–super_admin.
  */
 export async function findScopedEmployee(req, employeeId) {

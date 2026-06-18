@@ -284,6 +284,171 @@ router.get('/employee/:employeeId',
 );
 
 /**
+ * POST /api/assets/my
+ * Create asset for logged-in employee
+ * Accessible by employees
+ * (Registered before /:id so paths are not swallowed.)
+ */
+router.post('/my',
+  authenticate,
+  authorize('employee', 'manager', 'admin', 'hr', 'super_admin'),
+  asyncHandler(async (req, res) => {
+    const {
+      assetName,
+      assetType,
+      specifications,
+      financial,
+      assignment,
+      condition
+    } = req.body;
+
+    try {
+      if (!assetName || !assetType) {
+        return res.status(400).json({
+          success: false,
+          message: 'Asset name and type are required'
+        });
+      }
+
+      // Get employee ID for current user
+      const employee = await Employee.findOne({ userId: req.user.userId, orgId: req.user.orgId }).select('_id');
+      if (!employee) {
+        return res.status(404).json({
+          success: false,
+          message: 'Employee profile not found'
+        });
+      }
+
+      const assetTag = `AST-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+
+      const asset = await AssetAssigned.create({
+        assetTag,
+        assetName,
+        assetType,
+        category: 'IT_Equipment',
+        specifications: specifications || {},
+        financial: financial || {},
+        condition: condition || 'good',
+        assignment: {
+          ...(assignment || {}),
+          assignedTo: employee._id,
+          assignedBy: req.user.userId,
+          assignmentDate: new Date()
+        },
+        status: 'assigned',
+        orgId: req.user.orgId
+      });
+
+      logger.info('Employee asset created', {
+        assetId: asset._id,
+        employeeId: employee._id,
+        createdBy: req.user.userId,
+        orgId: req.user.orgId
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Asset created successfully',
+        data: asset
+      });
+    } catch (error) {
+      logger.error('Create employee asset error', {
+        error: error.message,
+        userId: req.user.userId,
+        orgId: req.user.orgId,
+        stack: error.stack
+      });
+      res.status(500).json({
+        success: false,
+        message: 'Failed to create asset'
+      });
+    }
+  })
+);
+
+/**
+ * PUT /api/assets/my/:id
+ * Update own asset for logged-in employee
+ * Can only update assets assigned to self
+ * (Registered before /:id so paths are not swallowed.)
+ */
+router.put('/my/:id',
+  authenticate,
+  authorize('employee', 'manager', 'admin', 'hr', 'super_admin'),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const {
+      assetName,
+      assetType,
+      specifications,
+      financial,
+      assignment,
+      condition
+    } = req.body;
+
+    try {
+      // Get employee ID for current user
+      const employee = await Employee.findOne({ userId: req.user.userId, orgId: req.user.orgId }).select('_id');
+      if (!employee) {
+        return res.status(404).json({
+          success: false,
+          message: 'Employee profile not found'
+        });
+      }
+
+      // Get asset and verify ownership
+      const asset = await AssetAssigned.findOne({
+        _id: id,
+        orgId: req.user.orgId,
+        'assignment.assignedTo': employee._id
+      });
+
+      if (!asset) {
+        return res.status(404).json({
+          success: false,
+          message: 'Asset not found or you do not have permission to edit it'
+        });
+      }
+
+      // Update allowed fields only
+      if (assetName) asset.assetName = assetName;
+      if (assetType) asset.assetType = assetType;
+      if (specifications) asset.specifications = { ...asset.specifications, ...specifications };
+      if (financial) asset.financial = { ...asset.financial, ...financial };
+      if (condition) asset.condition = condition;
+      if (assignment && assignment.location) {
+        asset.assignment.location = assignment.location;
+      }
+      
+      asset.updatedAt = new Date();
+      await asset.save();
+
+      logger.info('Employee asset updated', {
+        assetId: asset._id,
+        employeeId: employee._id,
+        updatedBy: req.user.userId
+      });
+
+      res.json({
+        success: true,
+        message: 'Asset updated successfully',
+        data: asset
+      });
+    } catch (error) {
+      logger.error('Update employee asset error', {
+        error: error.message,
+        userId: req.user.userId,
+        assetId: req.params.id
+      });
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update asset'
+      });
+    }
+  })
+);
+
+/**
  * GET /api/assets/:id
  * Get asset details
  */

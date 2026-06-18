@@ -34,7 +34,7 @@ interface NotificationIntegrationsPayload {
 }
 
 export default function AdminSettings() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [admin, setAdmin] = useState<AdminData | null>(null);
   const [editedAdmin, setEditedAdmin] = useState<AdminData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -271,13 +271,24 @@ export default function AdminSettings() {
       });
 
       if (response.success) {
-        toast.success('Password changed successfully');
+        toast.success('Password changed successfully. Please login again.');
         setPasswordData({
           currentPassword: '',
           newPassword: '',
           confirmPassword: ''
         });
         setShowPasswordForm(false);
+
+        // Backend has revoked tokens, so logout and redirect to login
+        setTimeout(async () => {
+          try {
+            await logout();
+          } catch (error) {
+            console.error('Logout after password change failed:', error);
+            // Force redirect to login even if logout errors
+            window.location.href = '/login';
+          }
+        }, 1500);
       }
     } catch (error: any) {
       console.error('Error changing password:', error);

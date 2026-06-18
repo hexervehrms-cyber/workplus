@@ -43,7 +43,7 @@ function mapEmployeeRecord(raw: Record<string, unknown>, fallbackEmail?: string)
 }
 
 export default function EmployeeSettings() {
-  const { user, setUser } = useAuth();
+  const { user, setUser, logout } = useAuth();
   const [employee, setEmployee] = useState<EmployeeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -206,13 +206,24 @@ export default function EmployeeSettings() {
       });
 
       if (response.success) {
-        toast.success('Password changed successfully');
+        toast.success('Password changed successfully. Please login again.');
         setPasswordData({
           currentPassword: '',
           newPassword: '',
           confirmPassword: '',
         });
         setShowPasswordForm(false);
+
+        // Backend has revoked tokens, so logout and redirect to login
+        setTimeout(async () => {
+          try {
+            await logout();
+          } catch (error) {
+            console.error('Logout after password change failed:', error);
+            // Force redirect to login even if logout errors
+            window.location.href = '/login';
+          }
+        }, 1500);
       }
     } catch (error: unknown) {
       console.error('Error changing password:', error);

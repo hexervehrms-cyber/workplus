@@ -257,20 +257,27 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         return;
       }
 
-      const result = await apiPost<{ data?: Record<string, unknown> }>(
+      // TASK 6: Frontend sends clear payload with normalized field names
+      const result = await apiPost<{ success?: boolean; data?: Record<string, unknown>; message?: string }>(
         'documents/acknowledgments',
         {
           documentId,
-          employeeId: currentEmployeeId,
-          employeeName: currentEmployeeName || 'Employee',
-          organizationId: String(orgId),
-          acknowledgedAt: new Date().toISOString(),
-          ipAddress: ipAddress,
-          accepted: accepted,
+          readConfirmed: true,
+          termsAccepted: true,
         }
       );
 
-      // Use response data if available, otherwise create acknowledgment object
+      // TASK 5: Robust frontend success validation - do not show success unless backend confirms
+      const isSuccess =
+        result?.success === true ||
+        result?.data?.success === true ||
+        result?.status === 'success';
+
+      if (!isSuccess) {
+        throw new Error(result?.message || result?.data?.message || 'Failed to create acknowledgment');
+      }
+
+      // Use response data from server
       const acknowledgedData = result?.data || {
         id: `ack_${Date.now()}`,
         documentId,
@@ -278,7 +285,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         employeeName: currentEmployeeName,
         acknowledgedAt: new Date().toISOString(),
         status: 'Completed',
-        accepted,
+        accepted: true,
       };
 
       // Update local acknowledgments state with the new acknowledgment keyed by documentId
@@ -294,10 +301,18 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
       setSelectedDocument(null);
       
       // Refresh acknowledgments to ensure persistence on page reload
-      await loadAcknowledgments();
+      // and update card badges from server
+      setTimeout(async () => {
+        await loadAcknowledgments();
+        await loadDocuments();
+      }, 500);
     } catch (error) {
       console.error('Error submitting acknowledgment:', error);
-      toast.error('Error submitting acknowledgment');
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : (error as any)?.response?.data?.message 
+        || 'Failed to submit acknowledgment';
+      toast.error(errorMessage);
     }
   };
 

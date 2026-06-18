@@ -200,13 +200,13 @@ export default function EmployeeSettings() {
 
     try {
       setSaving(true);
-      const response = await apiClient.post('/auth/reset-password', {
+      const response = await apiClient.post('/auth/change-password', {
         currentPassword: passwordData.currentPassword,
         newPassword: passwordData.newPassword,
       });
 
       if (response.success) {
-        toast.success('Password reset successfully');
+        toast.success('Password changed successfully');
         setPasswordData({
           currentPassword: '',
           newPassword: '',
@@ -215,9 +215,9 @@ export default function EmployeeSettings() {
         setShowPasswordForm(false);
       }
     } catch (error: unknown) {
-      console.error('Error resetting password:', error);
-      const err = error as { message?: string; data?: { message?: string } };
-      toast.error(err.data?.message || err.message || 'Failed to reset password');
+      console.error('Error changing password:', error);
+      const err = error as { response?: { data?: { message?: string } }; message?: string };
+      toast.error(err.response?.data?.message || err.message || 'Failed to change password');
     } finally {
       setSaving(false);
     }

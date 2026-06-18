@@ -265,13 +265,13 @@ export default function AdminSettings() {
 
     try {
       setSaving(true);
-      const response = await apiClient.post<unknown>('/auth/reset-password', {
+      const response = await apiClient.post<unknown>('/auth/change-password', {
         currentPassword: passwordData.currentPassword,
         newPassword: passwordData.newPassword
       });
 
       if (response.success) {
-        toast.success('Password reset successfully');
+        toast.success('Password changed successfully');
         setPasswordData({
           currentPassword: '',
           newPassword: '',
@@ -280,8 +280,8 @@ export default function AdminSettings() {
         setShowPasswordForm(false);
       }
     } catch (error: any) {
-      console.error('Error resetting password:', error);
-      toast.error(error.response?.data?.message || 'Failed to reset password');
+      console.error('Error changing password:', error);
+      toast.error(error.response?.data?.message || 'Failed to change password');
     } finally {
       setSaving(false);
     }

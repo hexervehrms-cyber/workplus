@@ -175,6 +175,43 @@ router.get('/',
  * Employee self-adds asset to their own portfolio
  * Protected: employee only, uses authenticated user context
  */
+
+// Category and assetType enum mappings (defined once, not per-request)
+const CATEGORY_ENUM = ['IT_Equipment', 'Office_Furniture', 'Vehicle', 'Software', 'Security', 'Other'];
+const ASSET_TYPE_ENUM = ['laptop', 'desktop', 'monitor', 'keyboard', 'mouse', 'headset', 'mobile_phone', 'tablet',
+                         'printer', 'scanner', 'projector', 'camera', 'software_license', 'access_card', 'vehicle',
+                         'furniture', 'equipment', 'other'];
+
+const ASSET_TYPE_TO_CATEGORY = {
+  'laptop': 'IT_Equipment',
+  'desktop': 'IT_Equipment',
+  'monitor': 'IT_Equipment',
+  'keyboard': 'IT_Equipment',
+  'mouse': 'IT_Equipment',
+  'headset': 'IT_Equipment',
+  'mobile_phone': 'IT_Equipment',
+  'tablet': 'IT_Equipment',
+  'printer': 'IT_Equipment',
+  'scanner': 'IT_Equipment',
+  'projector': 'IT_Equipment',
+  'camera': 'IT_Equipment',
+  'software_license': 'Software',
+  'access_card': 'Security',
+  'vehicle': 'Vehicle',
+  'furniture': 'Office_Furniture',
+  'equipment': 'IT_Equipment',
+  'other': 'Other'
+};
+
+const CATEGORY_TO_ASSET_TYPE = {
+  'IT_Equipment': 'laptop',
+  'Office_Furniture': 'furniture',
+  'Vehicle': 'vehicle',
+  'Software': 'software_license',
+  'Security': 'access_card',
+  'Other': 'other'
+};
+
 router.post('/my',
   authenticate,
   asyncHandler(async (req, res) => {
@@ -225,27 +262,36 @@ router.post('/my',
         });
       }
 
+      // Normalize category and assetType - support both formats
+      let finalCategory = category;
+      let finalAssetType = category;
+
+      if (CATEGORY_ENUM.includes(category)) {
+        // Frontend sent category enum (expected format)
+        finalCategory = category;
+        finalAssetType = CATEGORY_TO_ASSET_TYPE[category] || 'other';
+      } else if (ASSET_TYPE_ENUM.includes(category)) {
+        // Frontend sent assetType enum (fallback format for flexibility)
+        finalAssetType = category;
+        finalCategory = ASSET_TYPE_TO_CATEGORY[category] || 'Other';
+      } else {
+        // Invalid category - reject with 400
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid asset category'
+        });
+      }
+
       // Generate unique assetTag
       const assetTag = `AST-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
-
-      // Map category to valid assetType enum
-      const categoryToAssetTypeMap = {
-        'IT_Equipment': 'laptop', // Default IT equipment to laptop
-        'Office_Furniture': 'furniture',
-        'Vehicle': 'vehicle',
-        'Software': 'software_license',
-        'Security': 'access_card',
-        'Other': 'other'
-      };
-      const assetType = categoryToAssetTypeMap[category] || 'other';
 
       // Create asset with employee-specific fields
       // Backend enforces protected fields from authenticated user
       const asset = await AssetAssigned.create({
         assetTag,
         assetName: finalAssetName,
-        assetType: assetType,
-        category: category,
+        assetType: finalAssetType,
+        category: finalCategory,
         specifications: {
           serialNumber: serialNumber || ''
         },

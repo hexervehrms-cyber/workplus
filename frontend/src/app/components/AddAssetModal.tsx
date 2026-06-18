@@ -115,7 +115,7 @@ export default function AddAssetModal({ isOpen, onClose, onSuccess }: AddAssetMo
     } catch (error) {
       console.error('Error adding asset:', error);
       toast.error(
-        error instanceof Error ? error.message : 'Failed to add asset. Please try again.'
+        error?.response?.data?.message || error instanceof Error ? error.message : 'Failed to add asset. Please try again.'
       );
     } finally {
       setLoading(false);

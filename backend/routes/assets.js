@@ -228,12 +228,23 @@ router.post('/my',
       // Generate unique assetTag
       const assetTag = `AST-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
 
+      // Map category to valid assetType enum
+      const categoryToAssetTypeMap = {
+        'IT_Equipment': 'laptop', // Default IT equipment to laptop
+        'Office_Furniture': 'furniture',
+        'Vehicle': 'vehicle',
+        'Software': 'software_license',
+        'Security': 'access_card',
+        'Other': 'other'
+      };
+      const assetType = categoryToAssetTypeMap[category] || 'other';
+
       // Create asset with employee-specific fields
       // Backend enforces protected fields from authenticated user
       const asset = await AssetAssigned.create({
         assetTag,
         assetName: finalAssetName,
-        assetType: category, // Use category as assetType for now
+        assetType: assetType,
         category: category,
         specifications: {
           serialNumber: serialNumber || ''
@@ -252,7 +263,7 @@ router.post('/my',
         description: description,
         employeeNotes: employeeNotes,
         status: 'pending_review',
-        orgId: String(req.user.orgId),
+        orgId: req.user.orgId,
         createdBy: req.user.userId,
         createdByRole: 'employee',
         source: 'employee_self_added'
@@ -276,13 +287,16 @@ router.post('/my',
 
     } catch (error) {
       logger.error('Employee create asset error', {
-        error: error.message,
+        message: error.message,
+        name: error.name,
+        errors: error.errors,
         userId: req.user.userId,
+        category: req.body.category,
         body: req.body
       });
       res.status(500).json({
         success: false,
-        message: 'Failed to add asset'
+        message: error.message || 'Failed to add asset'
       });
     }
   })

@@ -1,7 +1,7 @@
 import express from "express";
 import mongoose from "mongoose";
 import { asyncHandler } from "../middleware/errorHandler.js";
-import { authenticate } from "../middleware/auth.js";
+import { authenticate, authorize } from "../middleware/auth.js";
 import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import LeaveRequest from "../models/LeaveRequest.js";
@@ -23,7 +23,7 @@ import {
   buildOrgIdFlexible,
   countEmployeesCurrentlyOnBreak,
 } from "../utils/attendanceQueryHelpers.js";
-import { assertScopedOrgId } from "../utils/orgScopeHelpers.js";
+import { assertScopedOrgId, resolveDashboardOrgId } from "../utils/orgScopeHelpers.js";
 
 // Import specialized dashboard routes
 import superAdminRoutes from "./dashboard-superadmin.js";
@@ -133,7 +133,7 @@ function getDayBounds(baseDate = new Date(), timezone = 'Asia/Kolkata') {
  * Get dashboard statistics with optional date filtering
  * OPTIMIZED: Combined aggregations, lean queries, caching, monitoring, and circuit breaker
  */
-router.get("/stats", asyncHandler(async (req, res) => {
+router.get("/stats", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   // Disable caching for real-time data
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
@@ -241,7 +241,7 @@ router.get("/stats", asyncHandler(async (req, res) => {
  * GET /api/dashboard/expense-trends
  * Get expense trends for charts
  */
-router.get("/expense-trends", asyncHandler(async (req, res) => {
+router.get("/expense-trends", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   
@@ -296,7 +296,7 @@ router.get("/expense-trends", asyncHandler(async (req, res) => {
  * Get recent leave requests for approval
  * OPTIMIZED: Use lean() and single aggregation pipeline
  */
-router.get("/recent-leave-requests", asyncHandler(async (req, res) => {
+router.get("/recent-leave-requests", authorize('admin', 'hr'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   const limit = parseInt(req.query.limit) || 10;
@@ -367,22 +367,44 @@ router.get("/recent-leave-requests", asyncHandler(async (req, res) => {
 /**
  * GET /api/dashboard/todays-attendance
  * Get today's attendance summary
- * OPTIMIZED: Use aggregation pipeline instead of find + populate
+ * Includes active check-ins (checkIn exists, checkOut may be null)
+ * OPTIMIZED: Use aggregation pipeline with pagination
  */
-router.get("/todays-attendance", asyncHandler(async (req, res) => {
+router.get("/todays-attendance", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   const userOrgId = assertScopedOrgId(req, res);
   if (!userOrgId) return;
   
   const { start: today, end: tomorrow } = getDayBounds();
+  const page = Math.max(1, parseInt(req.query.page || '1', 10) || 1);
+  const limit = Math.max(1, Math.min(100, parseInt(req.query.limit || '10', 10) || 10));
+  const skip = (page - 1) * limit;
 
   const orgMatch = buildOrgIdFlexible(userOrgId);
 
+  // Filter for active check-ins only (not checked out)
+  // Must match /admin/summary loggedInEmployees query for consistency
+  const activeAttendanceFilter = {
+    ...orgMatch,
+    date: { $gte: today, $lt: tomorrow },
+    // Check-in exists using both field names
+    $and: [
+      { $or: [{ checkIn: { $exists: true, $ne: null } }, { checkInTime: { $exists: true, $ne: null } }] },
+      // Not checked out using both field names
+      {
+        $and: [
+          { $or: [{ checkOut: { $exists: false } }, { checkOut: null }] },
+          { $or: [{ checkOutTime: { $exists: false } }, { checkOutTime: null }] }
+        ]
+      }
+    ]
+  };
+
+  // Get total count
+  const totalCount = await Attendance.countDocuments(activeAttendanceFilter);
+
   const todaysAttendance = await Attendance.aggregate([
     {
-      $match: {
-        ...orgMatch,
-        date: { $gte: today, $lt: tomorrow }
-      }
+      $match: activeAttendanceFilter
     },
     {
       $lookup: {
@@ -424,17 +446,39 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
         status: 1,
         date: 1,
         breaks: { $ifNull: ['$breaks', []] },
-        meetings: { $ifNull: ['$meetings', []] }
+        meetings: { $ifNull: ['$meetings', []] },
+        // Add computed current duration if still checked in
+        isCheckedIn: {
+          $cond: [
+            { $and: [{ $ne: ['$checkIn', null] }, { $eq: ['$checkOut', null] }] },
+            true,
+            false
+          ]
+        }
       }
     },
     {
       $sort: { checkIn: -1 }
+    },
+    {
+      $skip: skip
+    },
+    {
+      $limit: limit
     }
   ]);
   
   res.json({
     success: true,
-    data: todaysAttendance
+    data: todaysAttendance,
+    pagination: {
+      page,
+      limit,
+      total: totalCount,
+      totalPages: Math.ceil(totalCount / limit),
+      hasPrev: page > 1,
+      hasNext: page < Math.ceil(totalCount / limit)
+    }
   });
 }));
 
@@ -442,7 +486,7 @@ router.get("/todays-attendance", asyncHandler(async (req, res) => {
  * GET /api/dashboard/department-stats
  * Get department-wise statistics
  */
-router.get("/department-stats", asyncHandler(async (req, res) => {
+router.get("/department-stats", authorize('admin', 'hr'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   
@@ -479,7 +523,7 @@ router.get("/department-stats", asyncHandler(async (req, res) => {
  * GET /api/dashboard/recent-activities
  * Get recent system activities
  */
-router.get("/recent-activities", asyncHandler(async (req, res) => {
+router.get("/recent-activities", authorize('admin', 'hr'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   const limit = parseInt(req.query.limit) || 20;
@@ -545,7 +589,7 @@ router.get("/recent-activities", asyncHandler(async (req, res) => {
  * Get quick statistics for widgets
  * OPTIMIZED: Reduced queries, caching, monitoring, and circuit breaker
  */
-router.get("/quick-stats", asyncHandler(async (req, res) => {
+router.get("/quick-stats", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   // Disable caching for real-time data
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
@@ -789,7 +833,7 @@ router.post("/test-kpi-emit", asyncHandler(async (req, res) => {
  * GET /api/dashboard/weekly-productivity
  * Get weekly productivity data for admin dashboard
  */
-router.get("/weekly-productivity", asyncHandler(async (req, res) => {
+router.get("/weekly-productivity", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   
@@ -883,7 +927,7 @@ router.get("/health", asyncHandler(async (req, res) => {
  * POST /api/dashboard/cache/clear
  * Clear dashboard cache (admin only)
  */
-router.post("/cache/clear", asyncHandler(async (req, res) => {
+router.post("/cache/clear", authorize('admin', 'hr'), asyncHandler(async (req, res) => {
   const orgId = assertScopedOrgId(req, res);
   if (!orgId) return;
   
@@ -899,7 +943,7 @@ router.post("/cache/clear", asyncHandler(async (req, res) => {
  * POST /api/dashboard/circuit-breaker/reset
  * Reset circuit breakers (admin only)
  */
-router.post("/circuit-breaker/reset", asyncHandler(async (req, res) => {
+router.post("/circuit-breaker/reset", authorize('admin'), asyncHandler(async (req, res) => {
   dashboardStatsBreaker.reset();
   dashboardQuickStatsBreaker.reset();
   
@@ -913,74 +957,230 @@ router.post("/circuit-breaker/reset", asyncHandler(async (req, res) => {
  * GET /api/dashboard/admin/summary
  * Optimized summary endpoint for admin dashboard KPI cards
  * Returns only critical data needed for KPI rendering
- * 15-30 second cache
+ * Supports period filtering: today, week, month, year, custom
+ * 30 second cache
  */
-router.get("/admin/summary", asyncHandler(async (req, res) => {
-  res.set('Cache-Control', 'public, max-age=30');
+router.get("/admin/summary", authorize('admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   
-  const orgId = assertScopedOrgId(req, res);
-  if (!orgId) return;
-  const { period = 'this_month' } = req.query;
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
+  
+  // If orgId is null (unscoped user), return empty stats
+  if (!orgId) {
+    return res.json({
+      success: true,
+      data: {
+        kpis: {
+          totalEmployees: 0,
+          presentToday: 0,
+          avgProductivity: 0,
+          thisMonthExpense: 0,
+          thisMonthPayroll: 0,
+          totalCost: 0,
+          loggedInEmployees: 0,
+          onLeave: 0,
+          onBreak: 0
+        }
+      }
+    });
+  }
+  
+  const { 
+    period = 'month', 
+    startDate: customStart = null, 
+    endDate: customEnd = null,
+    timezone = 'Asia/Kolkata'
+  } = req.query;
   
   try {
-    const cacheKey = `dashboard:admin:${orgId}:${period}`;
-    const cachedSummary = await dashboardCache.getAsync('/dashboard/admin/summary', orgId, { period });
-    if (cachedSummary) {
-      return res.json({ success: true, data: cachedSummary, cached: true });
+    // Get date range based on period
+    let rangeStart, rangeEnd;
+    const now = new Date();
+    
+    if (period === 'custom' && customStart && customEnd) {
+      rangeStart = new Date(customStart);
+      rangeEnd = new Date(customEnd);
+      rangeEnd.setHours(23, 59, 59, 999);
+    } else if (period === 'today') {
+      rangeStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      rangeEnd = new Date(rangeStart);
+      rangeEnd.setDate(rangeEnd.getDate() + 1);
+    } else if (period === 'week') {
+      rangeStart = new Date(now);
+      rangeStart.setDate(now.getDate() - now.getDay());
+      rangeStart.setHours(0, 0, 0, 0);
+      rangeEnd = new Date(rangeStart);
+      rangeEnd.setDate(rangeEnd.getDate() + 7);
+    } else if (period === 'quarter') {
+      const quarter = Math.floor(now.getMonth() / 3);
+      rangeStart = new Date(now.getFullYear(), quarter * 3, 1);
+      rangeEnd = new Date(now.getFullYear(), (quarter + 1) * 3, 1);
+    } else if (period === 'year') {
+      rangeStart = new Date(now.getFullYear(), 0, 1);
+      rangeEnd = new Date(now.getFullYear() + 1, 0, 1);
+    } else { // default: month
+      rangeStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      rangeEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     }
     
-    const { startDate: rangeStart, endDate: rangeEnd } = getDateRange(String(period));
-    const now = new Date();
-    const { start: startOfDay, end: endOfDay } = getDayBounds(now);
     const orgMatch = buildOrgIdFlexible(orgId);
     
+    // Calculate today's bounds for "logged in" and "on break" counts
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(todayStart);
+    todayEnd.setDate(todayEnd.getDate() + 1);
+    
+    // Query filters for the selected period
+    const periodAttendanceFilter = {
+      ...orgMatch,
+      date: { $gte: rangeStart, $lt: rangeEnd }
+    };
+    
+    // Query filters for today only (for logged in, on break)
+    const todayAttendanceFilter = {
+      ...orgMatch,
+      date: { $gte: todayStart, $lt: todayEnd }
+    };
+    
+    // Parallel KPI calculations
     const [
       totalEmployees,
       financialTotals,
-      todayStats,
-      onLeaveCount,
       loggedInCount,
-      onBreakCount
+      onBreakCount,
+      onLeaveCount,
+      presentCount,
+      avgProductivity
     ] = await Promise.all([
+      // Total active employees in org
       countOrgEmployees(orgId),
+      
+      // Financial totals (expenses, payroll) in selected period
       getFinancialTotals(orgId, rangeStart, rangeEnd),
-      Attendance.countDocuments({ ...orgMatch, date: { $gte: startOfDay, $lt: endOfDay }, status: 'present' }),
+      
+      // Logged in today: have checkIn, no checkOut (support both old and new field names)
+      Attendance.countDocuments({
+        ...todayAttendanceFilter,
+        // Check-in exists using both field names
+        $and: [
+          { $or: [{ checkIn: { $exists: true, $ne: null } }, { checkInTime: { $exists: true, $ne: null } }] },
+          // Not checked out using both field names
+          {
+            $and: [
+              { $or: [{ checkOut: { $exists: false } }, { checkOut: null }] },
+              { $or: [{ checkOutTime: { $exists: false } }, { checkOutTime: null }] }
+            ]
+          }
+        ]
+      }).then(count => {
+        console.log('[ADMIN-SUMMARY] todayAttendanceFilter:', JSON.stringify(todayAttendanceFilter, null, 2));
+        console.log('[ADMIN-SUMMARY] loggedInCount:', count);
+        return count;
+      }),
+      
+      // On break today: has active break in breaks array
+      Attendance.countDocuments({
+        ...todayAttendanceFilter,
+        breaks: { 
+          $elemMatch: { 
+            startTime: { $exists: true, $ne: null },
+            $or: [{ endTime: { $exists: false } }, { endTime: null }]
+          }
+        }
+      }),
+      
+      // On leave in selected period: approved leaves overlapping period
       LeaveRequest.countDocuments({
         orgId,
         status: 'approved',
-        startDate: { $lte: now },
-        endDate: { $gte: now }
+        startDate: { $lte: rangeEnd },
+        endDate: { $gte: rangeStart }
+      }).then(count => {
+        // For period != today, use unique employee count
+        if (period !== 'today') {
+          return LeaveRequest.aggregate([
+            {
+              $match: {
+                orgId,
+                status: 'approved',
+                startDate: { $lte: rangeEnd },
+                endDate: { $gte: rangeStart }
+              }
+            },
+            {
+              $group: { _id: '$employeeId', count: { $sum: 1 } }
+            },
+            {
+              $count: 'total'
+            }
+          ]).then(result => result[0]?.total || 0);
+        }
+        return count;
       }),
+      
+      // Present count in period (distinct employees with 'present' status)
       Attendance.countDocuments({
-        ...orgMatch,
-        date: { $gte: startOfDay, $lt: endOfDay },
-        checkIn: { $exists: true, $ne: null },
-        $or: [{ checkOut: { $exists: false } }, { checkOut: null }]
+        ...periodAttendanceFilter,
+        status: 'present'
       }),
-      countEmployeesCurrentlyOnBreak(Attendance, orgMatch, startOfDay, endOfDay)
+      
+      // Average productivity: use avgProductivity from attendanceQueryHelpers if available
+      (async () => {
+        try {
+          const result = await Attendance.aggregate([
+            {
+              $match: {
+                ...periodAttendanceFilter,
+                hoursWorked: { $exists: true, $gt: 0 }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                avgHours: { $avg: '$hoursWorked' }
+              }
+            }
+          ]);
+          return result[0]?.avgHours ? Math.round(result[0].avgHours * 10) / 10 : 0;
+        } catch (e) {
+          return 0;
+        }
+      })()
     ]);
     
     const summary = {
       kpis: {
-        totalEmployees,
-        loggedInEmployees: loggedInCount,
-        onBreak: onBreakCount,
-        onLeave: onLeaveCount,
-        thisMonthExpense: financialTotals.thisMonthExpenses,
-        thisMonthPayroll: financialTotals.thisMonthPayroll,
-        totalCost: financialTotals.totalCost,
-        presentToday: todayStats,
-        avgProductivity: 75 // Placeholder - can add real calc if needed
+        totalEmployees: totalEmployees || 0,
+        loggedInEmployees: loggedInCount || 0,
+        onBreak: onBreakCount || 0,
+        onLeave: onLeaveCount || 0,
+        presentToday: presentCount || 0,
+        thisMonthExpense: financialTotals?.thisMonthExpenses || 0,
+        thisMonthPayroll: financialTotals?.thisMonthPayroll || 0,
+        totalCost: (financialTotals?.totalCost || 0),
+        avgProductivity: avgProductivity || 0
+      },
+      period,
+      dateRange: {
+        start: rangeStart.toISOString(),
+        end: rangeEnd.toISOString()
       },
       lastUpdated: new Date().toISOString()
     };
     
-    dashboardCache.set('/dashboard/admin/summary', orgId, summary, { period }, 30000);
-    
     res.json({ success: true, data: summary });
   } catch (error) {
     console.error('Error fetching admin summary:', error);
-    res.status(500).json({ success: false, message: 'Failed to load dashboard summary' });
+    res.status(500).json({ success: false, message: 'Failed to load dashboard summary', error: error.message });
   }
 }));
 
@@ -1043,6 +1243,32 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
       }, 0);
     }
     
+    // Add active session time if employee is currently checked in
+    if (todayAttendance?.checkIn && !todayAttendance?.checkOut) {
+      // Calculate live hours for active session
+      const now = new Date();
+      const checkInTime = new Date(todayAttendance.checkIn);
+      let grossHours = (now - checkInTime) / (1000 * 60 * 60);
+      
+      // Subtract break time from gross hours
+      let breakHours = 0;
+      if (Array.isArray(todayAttendance.breaks)) {
+        for (const breakItem of todayAttendance.breaks) {
+          if (breakItem?.startTime && breakItem?.endTime) {
+            const breakDuration = (new Date(breakItem.endTime) - new Date(breakItem.startTime)) / (1000 * 60 * 60);
+            breakHours += breakDuration;
+          } else if (breakItem?.startTime && !breakItem?.endTime) {
+            // Open break - don't count it towards working time
+            const breakDuration = (now - new Date(breakItem.startTime)) / (1000 * 60 * 60);
+            breakHours += breakDuration;
+          }
+        }
+      }
+      
+      const activeSessionHours = Math.max(0, grossHours - breakHours);
+      totalMonthHours += activeSessionHours;
+    }
+    
     // Convert decimal hours to label format (e.g., 12.5 => "12h 30m")
     const hoursInt = Math.floor(totalMonthHours);
     const minutesFloat = (totalMonthHours - hoursInt) * 60;
@@ -1067,6 +1293,388 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
   } catch (error) {
     console.error('Error fetching employee summary:', error);
     res.status(500).json({ success: false, message: 'Failed to load dashboard summary' });
+  }
+}));
+
+/**
+ * GET /api/dashboard/break-records
+ * Get all break records for a given date with pagination
+ * Breaks are extracted from Attendance.breaks[] array
+ */
+router.get("/break-records", authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
+  
+  // If orgId is null (unscoped user), return empty
+  if (!orgId) {
+    return res.json({
+      success: true,
+      data: [],
+      pagination: { page: 1, limit: 10, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+    });
+  }
+  
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 10));
+  const date = req.query.date ? new Date(req.query.date) : new Date();
+  
+  // Set date to midnight UTC for day boundary
+  const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayEnd = new Date(dayStart);
+  dayEnd.setDate(dayEnd.getDate() + 1);
+  
+  try {
+    const orgMatch = buildOrgIdFlexible(orgId);
+    
+    const dayStartStr = dayStart.toISOString().split('T')[0];
+    const dayEndStr = dayEnd.toISOString().split('T')[0];
+    
+    // Get attendance records for the day with breaks - support both date formats
+    const attendanceRecords = await Attendance.find({
+      ...orgMatch,
+      $or: [
+        { date: { $gte: dayStart, $lt: dayEnd } },
+        { localDate: { $gte: dayStartStr, $lt: dayEndStr } }
+      ],
+      breaks: { $exists: true, $elemMatch: { startTime: { $exists: true } } }
+    })
+    .select('employeeId employeeName breaks')
+    .populate('employeeId', 'department')
+    .sort({ createdAt: -1 })
+    .lean();
+    
+    // Flatten breaks from all attendance records
+    const allBreaks = [];
+    attendanceRecords.forEach(att => {
+      if (Array.isArray(att.breaks)) {
+        att.breaks.forEach((breakItem, idx) => {
+          if (breakItem?.startTime) {
+            allBreaks.push({
+              _id: `${att._id}-break-${idx}`,
+              attendanceId: att._id,
+              employeeId: att.employeeId?._id || null,
+              employeeName: att.employeeName || 'Unknown',
+              department: att.employeeId?.department || 'N/A',
+              breakIndex: idx,
+              breakType: breakItem.breakType || 'regular',
+              startTime: breakItem.startTime,
+              endTime: breakItem.endTime || null,
+              duration: breakItem.duration || 0,
+              status: breakItem.endTime ? 'ended' : 'active'
+            });
+          }
+        });
+      }
+    });
+    
+    // Sort by start time descending
+    allBreaks.sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
+    
+    // Paginate
+    const total = allBreaks.length;
+    const totalPages = Math.ceil(total / limit);
+    const start = (page - 1) * limit;
+    const paginatedBreaks = allBreaks.slice(start, start + limit);
+    
+    res.json({
+      success: true,
+      data: paginatedBreaks,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching break records:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to load break records', 
+      error: error.message 
+    });
+  }
+}));
+
+/**
+ * GET /api/dashboard/leave-requests
+ * Get pending leave requests for admin dashboard
+ * Supports status filter and pagination
+ */
+router.get("/leave-requests", authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
+  
+  // If orgId is null (unscoped user), return empty
+  if (!orgId) {
+    return res.json({
+      success: true,
+      data: [],
+      pagination: { page: 1, limit: 10, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+    });
+  }
+  
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 10));
+  const status = req.query.status || 'pending';
+  const period = req.query.period || 'month';
+  
+  // Calculate period date range
+  let rangeStart, rangeEnd;
+  const now = new Date();
+  
+  if (period === 'today') {
+    rangeStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    rangeEnd = new Date(rangeStart);
+    rangeEnd.setDate(rangeEnd.getDate() + 1);
+  } else if (period === 'week') {
+    rangeStart = new Date(now);
+    rangeStart.setDate(now.getDate() - now.getDay());
+    rangeStart.setHours(0, 0, 0, 0);
+    rangeEnd = new Date(rangeStart);
+    rangeEnd.setDate(rangeEnd.getDate() + 7);
+  } else if (period === 'quarter') {
+    const quarter = Math.floor(now.getMonth() / 3);
+    rangeStart = new Date(now.getFullYear(), quarter * 3, 1);
+    rangeEnd = new Date(now.getFullYear(), (quarter + 1) * 3, 1);
+  } else if (period === 'year') {
+    rangeStart = new Date(now.getFullYear(), 0, 1);
+    rangeEnd = new Date(now.getFullYear() + 1, 0, 1);
+  } else { // month
+    rangeStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    rangeEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  }
+  
+  try {
+    // Build query - for pending leaves, show all not yet processed; for others, filter by period
+    const leaveQuery = {
+      orgId,
+      status
+    };
+    
+    if (status === 'pending') {
+      // All pending leaves, not filtered by period
+    } else if (status === 'approved' || status === 'rejected') {
+      // Filter by period for approved/rejected
+      leaveQuery.createdAt = { $gte: rangeStart, $lt: rangeEnd };
+    }
+    
+    const total = await LeaveRequest.countDocuments(leaveQuery);
+    
+    const leaves = await LeaveRequest.find(leaveQuery)
+      .populate('employeeId', 'department')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+    
+    // Transform response - must match frontend LeaveRequestRow type
+    const data = leaves.map(leave => ({
+      _id: leave._id,
+      employeeName: leave.employeeName || 'Unknown',
+      employeeEmail: leave.employeeEmail || 'N/A',
+      department: leave.employeeId?.department || 'N/A',
+      type: leave.type,
+      leaveType: leave.type,
+      startDate: leave.startDate,
+      endDate: leave.endDate,
+      reason: leave.reason,
+      status: leave.status,
+      createdAt: leave.createdAt,
+      userId: {
+        name: leave.employeeName || 'Unknown'
+      }
+    }));
+    
+    const totalPages = Math.ceil(total / limit);
+    
+    res.json({
+      success: true,
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching leave requests:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to load leave requests', 
+      error: error.message 
+    });
+  }
+}));
+
+/**
+ * GET /api/dashboard/today-attendance
+ * Get today's attendance records with pagination
+ * Supports status filter and pagination
+ */
+router.get("/today-attendance", authorize('super_admin', 'admin', 'hr', 'manager'), asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  
+  let orgId;
+  try {
+    orgId = resolveDashboardOrgId(req);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message,
+      code: err.code
+    });
+  }
+  
+  // If orgId is null (unscoped user), return empty
+  if (!orgId) {
+    return res.json({
+      success: true,
+      data: [],
+      pagination: { page: 1, limit: 10, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+    });
+  }
+  
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 10));
+  const skip = (page - 1) * limit;
+
+  try {
+    const { start: today, end: tomorrow } = getDayBounds();
+    const orgMatch = buildOrgIdFlexible(orgId);
+
+    // Filter for active check-ins only (not checked out)
+    // Must match /admin/summary loggedInEmployees query for consistency
+    const activeAttendanceFilter = {
+      ...orgMatch,
+      date: { $gte: today, $lt: tomorrow },
+      // Check-in exists using both field names
+      $and: [
+        { $or: [{ checkIn: { $exists: true, $ne: null } }, { checkInTime: { $exists: true, $ne: null } }] },
+        // Not checked out using both field names
+        {
+          $and: [
+            { $or: [{ checkOut: { $exists: false } }, { checkOut: null }] },
+            { $or: [{ checkOutTime: { $exists: false } }, { checkOutTime: null }] }
+          ]
+        }
+      ]
+    };
+
+    // Get total count with same filter as query
+    const totalCount = await Attendance.countDocuments(activeAttendanceFilter);
+
+    const records = await Attendance.aggregate([
+      {
+        $match: activeAttendanceFilter
+      },
+      {
+        $lookup: {
+          from: 'employees',
+          localField: 'employeeId',
+          foreignField: '_id',
+          as: 'employee'
+        }
+      },
+      {
+        $unwind: {
+          path: '$employee',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'employee.userId',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      {
+        $unwind: {
+          path: '$user',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $project: {
+          _id: 1,
+          employeeName: { $ifNull: ['$user.name', 'Unknown'] },
+          employeeEmail: '$user.email',
+          department: { $ifNull: ['$employee.department', 'N/A'] },
+          checkIn: 1,
+          checkOut: 1,
+          hoursWorked: { $ifNull: ['$hoursWorked', 0] },
+          status: 1,
+          date: 1,
+          breaks: { $ifNull: ['$breaks', []] },
+          meetings: { $ifNull: ['$meetings', []] },
+          isCheckedIn: {
+            $cond: [
+              { $and: [{ $ne: ['$checkIn', null] }, { $eq: ['$checkOut', null] }] },
+              true,
+              false
+            ]
+          }
+        }
+      },
+      {
+        $sort: { checkIn: -1 }
+      },
+      {
+        $skip: skip
+      },
+      {
+        $limit: limit
+      }
+    ]);
+    
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.json({
+      success: true,
+      data: records,
+      pagination: {
+        page,
+        limit,
+        total: totalCount,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching today attendance:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to load attendance records', 
+      error: error.message 
+    });
   }
 }));
 

@@ -1,6 +1,7 @@
 /**
  * Socket.IO Client Service - Production Ready
  * Features: Auto reconnect, cleanup, connection state, error handling
+ * PHASE 1 & 2: Room management, duplicate listener prevention
  */
 
 /// <reference types="vite/client" />
@@ -35,6 +36,8 @@ export class SocketService {
   private role: string | null = null;
   private tenantId: string | null = null;
   private onStateChange?: (state: ConnectionState) => void;
+  // PHASE 1: Track current room joins to prevent duplicates
+  private currentRooms: Set<string> = new Set();
 
   constructor() {
     this.socket = null;
@@ -85,6 +88,9 @@ export class SocketService {
         this.socket.disconnect();
         this.socket = null;
       }
+
+      // Reset rooms on new connection
+      this.currentRooms.clear();
 
       this.setState('connecting');
 
@@ -226,6 +232,7 @@ export class SocketService {
       this.socket.disconnect();
       this.socket = null;
       this.listeners.clear();
+      this.currentRooms.clear();
       this.setState('disconnected');
       console.log('Socket.IO disconnected');
     }
@@ -240,13 +247,21 @@ export class SocketService {
     }
   }
 
-  // Listen to events from server
+  // Listen to events from server (PHASE 2: Avoid duplicate listeners, PART C: presence listener cleanup)
   on(event: string, callback: EventCallback): void {
     // Store callback for reconnection
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
-    this.listeners.get(event)!.add(callback);
+    
+    const callbacks = this.listeners.get(event)!;
+    // PHASE 2: Only register if not already registered
+    if (callbacks.has(callback)) {
+      console.warn(`Listener for event "${event}" already registered, skipping duplicate`);
+      return;
+    }
+    
+    callbacks.add(callback);
 
     // Register with socket
     if (this.socket) {
@@ -254,10 +269,10 @@ export class SocketService {
     }
   }
 
-  // Remove event listener
+  // Remove event listener (PHASE 2: Exact handler reference cleanup for PART C: presence cleanup)
   off(event: string, callback?: EventCallback): void {
     if (callback) {
-      // Remove specific callback
+      // Remove specific callback - PART C uses this for presence:update cleanup
       this.listeners.get(event)?.delete(callback);
       if (this.socket) {
         this.socket.off(event, callback);
@@ -296,14 +311,58 @@ export class SocketService {
     return this.socket;
   }
 
-  // Join a room
+  // PHASE 1: Join chat room with authorization
+  joinChatRoom(conversationId?: string, groupId?: string): void {
+    if (this.socket && this.socket.connected) {
+      const roomIdentifier = conversationId || groupId || '';
+      if (!roomIdentifier) {
+        console.warn('joinChatRoom: no conversationId or groupId provided');
+        return;
+      }
+      
+      const room = `${conversationId ? 'chat:' : 'group:'}${roomIdentifier}`;
+      if (this.currentRooms.has(room)) {
+        console.debug(`Already in room: ${room}`);
+        return;
+      }
+      
+      this.socket.emit('chat:room:join', { conversationId, groupId });
+      this.currentRooms.add(room);
+      console.log(`Joining room: ${room}`);
+    } else {
+      console.warn('Cannot join room: Socket not connected');
+    }
+  }
+
+  // PHASE 1: Leave chat room safely
+  leaveChatRoom(conversationId?: string, groupId?: string): void {
+    if (this.socket && this.socket.connected) {
+      const roomIdentifier = conversationId || groupId || '';
+      if (!roomIdentifier) {
+        console.warn('leaveChatRoom: no conversationId or groupId provided');
+        return;
+      }
+      
+      const room = `${conversationId ? 'chat:' : 'group:'}${roomIdentifier}`;
+      if (!this.currentRooms.has(room)) {
+        console.debug(`Not in room: ${room}`);
+        return;
+      }
+      
+      this.socket.emit('chat:room:leave', { conversationId, groupId });
+      this.currentRooms.delete(room);
+      console.log(`Leaving room: ${room}`);
+    }
+  }
+
+  // Join a room (legacy compatibility)
   joinRoom(room: string): void {
     if (this.socket && this.socket.connected) {
       this.socket.emit('join', room);
     }
   }
 
-  // Leave a room
+  // Leave a room (legacy compatibility)
   leaveRoom(room: string): void {
     if (this.socket && this.socket.connected) {
       this.socket.emit('leave', room);

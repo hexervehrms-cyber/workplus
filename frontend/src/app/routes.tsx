@@ -42,31 +42,23 @@ const SuperAdminChat = lazy(() => import('./pages/super-admin/Chat'));
 const AdminDashboard = lazy(() => import('./pages/admin/Dashboard'));
 const Employees = lazy(() => import('./pages/admin/Employees'));
 const EmployeeCorrespondence = lazy(() => import('./pages/admin/EmployeeCorrespondence'));
-const InviteManagement = lazy(() => import('./pages/admin/InviteManagement'));
 const AdminDepartments = lazy(() => import('./pages/admin/Departments'));
 const AdminRoles = lazy(() => import('./pages/admin/Roles'));
 const LeaveRequests = lazy(() => import('./pages/admin/LeaveRequests'));
-const AttendanceAdmin = lazy(() => import('./pages/admin/Attendance'));
 const ExpensesAdmin = lazy(() => import('./pages/admin/Expenses'));
 const AnnouncementsAdmin = lazyPage(() => import('./pages/admin/Announcements'));
 const AdminChat = lazyPage(() => import('./pages/admin/Chat'));
-const HREmployeeOnboarding = lazy(() => import('./pages/admin/EmployeeOnboarding'));
 const AdminCompanyDocs = lazy(() => import('./pages/admin/CompanyDocs'));
 const AdminHolidayCalendar = lazy(() => import('./pages/admin/HolidayCalendar'));
 const AdminPayroll = lazyPage(() => import('./pages/admin/Payroll'));
 const AdminPayrollRuns = lazy(() => import('./pages/admin/PayrollCalculation'));
 const AttendanceCalendar = lazy(() => import('./pages/admin/AttendanceCalendar'));
-const AttendanceHistory = lazy(() => import('./pages/admin/AttendanceHistory'));
 const LeaveAllocation = lazy(() => import('./pages/admin/LeaveAllocation'));
 const LeaveSettings = lazy(() => import('./pages/admin/LeaveSettings'));
 const AdminSettings = lazyPage(() => import('./pages/admin/Settings'));
-const AdminManagement = lazy(() => import('./pages/admin/AdminManagement'));
 
 // Sales Pages - Lazy loaded
-const SalesDashboard = lazy(() => import('./pages/sales/SalesDashboard'));
-const Leads = lazy(() => import('./pages/sales/Leads'));
-const Deals = lazy(() => import('./pages/sales/Deals'));
-const Calls = lazy(() => import('./pages/sales/Calls'));
+// (Removed)
 
 // Employee Pages - Lazy loaded
 const EmployeeDashboard = lazy(() => import('./pages/employee/Dashboard'));
@@ -92,7 +84,6 @@ const ADMIN_ONLY = ['admin'] as const;
 
 const AdminSalaryStructure = lazy(() => import('./pages/admin/SalaryStructure'));
 const AdminSalaryCycle = lazy(() => import('./pages/admin/SalaryCycle'));
-const AdminBulkOperations = lazy(() => import('./pages/admin/BulkOperations'));
 const AdminAssets = lazy(() => import('./pages/admin/Assets'));
 
 const routes = [
@@ -225,14 +216,6 @@ const routes = [
         ),
       },
       {
-        path: 'admin/invites',
-        element: (
-          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
-            <InviteManagement />
-          </ProtectedRoute>
-        ),
-      },
-      {
         path: 'admin/departments',
         element: (
           <ProtectedRoute requiredRole={['admin', 'hr']}>
@@ -284,7 +267,7 @@ const routes = [
         path: 'admin/attendance',
         element: (
           <ProtectedRoute requiredRole={[...HR_ADMIN]}>
-            <AttendanceAdmin />
+            <AttendanceCalendar />
           </ProtectedRoute>
         ),
       },
@@ -293,14 +276,6 @@ const routes = [
         element: (
           <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AttendanceCalendar />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/attendance-history',
-        element: (
-          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
-            <AttendanceHistory />
           </ProtectedRoute>
         ),
       },
@@ -349,16 +324,6 @@ const routes = [
         ),
       },
       {
-        path: 'admin/bulk-operations',
-        element: (
-          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
-            <Suspense fallback={<LazyLoader />}>
-              <AdminBulkOperations />
-            </Suspense>
-          </ProtectedRoute>
-        ),
-      },
-      {
         path: 'admin/assets',
         element: (
           <ProtectedRoute requiredRole={[...HR_ADMIN]}>
@@ -381,48 +346,6 @@ const routes = [
         element: (
           <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminChat />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/employee-onboarding',
-        element: (
-          <ProtectedRoute requiredRole={[...HR_ADMIN]}>
-            <Suspense fallback={<LazyLoader />}>
-              <HREmployeeOnboarding />
-            </Suspense>
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/sales',
-        element: (
-          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
-            <SalesDashboard />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/sales/leads',
-        element: (
-          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
-            <Leads />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/sales/deals',
-        element: (
-          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
-            <Deals />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/sales/calls',
-        element: (
-          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
-            <Calls />
           </ProtectedRoute>
         ),
       },
@@ -541,14 +464,6 @@ const routes = [
         element: (
           <ProtectedRoute requiredRole={[...HR_ADMIN]}>
             <AdminSettings />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/admin-management',
-        element: (
-          <ProtectedRoute requiredRole={[...ADMIN_ONLY]}>
-            <AdminManagement />
           </ProtectedRoute>
         ),
       },

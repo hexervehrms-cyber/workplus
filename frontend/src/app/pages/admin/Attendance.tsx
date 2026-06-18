@@ -115,6 +115,11 @@ export default function AttendanceAdmin() {
   const [viewLoading, setViewLoading] = useState(false);
   const [viewRecord, setViewRecord] = useState<AttendanceRecord | null>(null);
   const [viewTitle, setViewTitle] = useState('Attendance details');
+  const [editOpen, setEditOpen] = useState(false);
+  const [editRecord, setEditRecord] = useState<AttendanceRecord | null>(null);
+  const [editStatus, setEditStatus] = useState<string>('');
+  const [editReason, setEditReason] = useState<string>('');
+  const [editLoading, setEditLoading] = useState(false);
 
   useEffect(() => {
     const authUserKey = user?.userId || user?.id;
@@ -567,11 +572,59 @@ export default function AttendanceAdmin() {
       case 'absent':
         return 'bg-red-100 text-red-800';
       case 'on-leave':
+      case 'approved-leave':
         return 'bg-blue-100 text-blue-800';
       case 'half-day':
         return 'bg-yellow-100 text-yellow-800';
+      case 'lwp':
+        return 'bg-orange-100 text-orange-800';
+      case 'comp-off':
+        return 'bg-purple-100 text-purple-800';
+      case 'ncns':
+        return 'bg-red-200 text-red-900';
+      case 'sandwich-leave':
+        return 'bg-indigo-100 text-indigo-800';
       default:
         return 'bg-green-100 text-green-800';
+    }
+  };
+
+  const openEditDialog = (record: AttendanceRecord) => {
+    setEditRecord(record);
+    setEditStatus(record.status || 'present');
+    setEditReason('');
+    setEditOpen(true);
+  };
+
+  const handleEditStatus = async () => {
+    if (!editRecord) return;
+
+    try {
+      setEditLoading(true);
+      await ensureAccessToken();
+
+      const response = await apiPost(`/attendance/${editRecord._id}/status`, {
+        status: editStatus,
+        reason: editReason,
+      });
+
+      if (response?.success) {
+        toast.success('Attendance status updated successfully');
+        setEditOpen(false);
+        setEditRecord(null);
+        setEditStatus('');
+        setEditReason('');
+        // Refresh attendance data
+        await fetchAttendance();
+        await fetchActivityLogs(activityStartDate || undefined, activityEndDate || undefined);
+      } else {
+        toast.error(response?.message || 'Failed to update attendance status');
+      }
+    } catch (error) {
+      console.error('Error updating attendance status:', error);
+      toast.error('Failed to update attendance status');
+    } finally {
+      setEditLoading(false);
     }
   };
 
@@ -846,16 +899,28 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
                       </span>
                     </td>
                     <td className="p-4 text-right">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="rounded-lg"
-                        onClick={() => openViewRecord(record)}
-                      >
-                        <Eye className="w-4 h-4 mr-1" />
-                        View
-                      </Button>
+                      <div className="flex gap-2 justify-end">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="rounded-lg"
+                          onClick={() => openViewRecord(record)}
+                        >
+                          <Eye className="w-4 h-4 mr-1" />
+                          View
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="rounded-lg"
+                          onClick={() => openEditDialog(record)}
+                        >
+                          <span className="w-4 h-4 mr-1">✎</span>
+                          Edit
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ));
@@ -1190,6 +1255,91 @@ Bob Johnson,bob.johnson@company.com,2026-05-05,,,absent,Sick leave`;
             </div>
           ) : (
             <p className="text-sm text-muted-foreground py-6 text-center">No attendance details available.</p>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Attendance Dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Attendance Status</DialogTitle>
+            <DialogDescription>Update the attendance status for this employee</DialogDescription>
+          </DialogHeader>
+
+          {editRecord && (
+            <div className="space-y-4">
+              <div className="text-sm">
+                <p className="text-muted-foreground text-xs mb-1">Employee</p>
+                <p className="font-medium">{editRecord.employeeName}</p>
+              </div>
+
+              <div className="text-sm">
+                <p className="text-muted-foreground text-xs mb-1">Date</p>
+                <p className="font-medium">{formatDate(editRecord.date)}</p>
+              </div>
+
+              <div className="text-sm">
+                <p className="text-muted-foreground text-xs mb-1">Current Status</p>
+                <span className={`inline-block px-2 py-0.5 text-xs rounded-full capitalize ${statusBadgeClass(editRecord.status)}`}>
+                  {editRecord.status}
+                </span>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium block mb-2">New Status</label>
+                <select
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm"
+                >
+                  <option value="present">Present</option>
+                  <option value="absent">Absent</option>
+                  <option value="on-leave">On Leave</option>
+                  <option value="approved-leave">Approved Leave</option>
+                  <option value="lwp">LWP (Leave Without Pay)</option>
+                  <option value="comp-off">Comp-Off</option>
+                  <option value="ncns">NCNS (No Call No Show)</option>
+                  <option value="sandwich-leave">Sandwich Leave</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium block mb-2">Reason / Notes</label>
+                <textarea
+                  value={editReason}
+                  onChange={(e) => setEditReason(e.target.value)}
+                  placeholder="Add a reason for this status change..."
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm resize-none"
+                  rows={3}
+                />
+              </div>
+
+              <div className="flex gap-2 justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => setEditOpen(false)}
+                  disabled={editLoading}
+                  className="rounded-lg"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleEditStatus}
+                  disabled={editLoading}
+                  className="rounded-lg bg-primary text-primary-foreground hover:bg-primary/90"
+                >
+                  {editLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Updating...
+                    </>
+                  ) : (
+                    'Update Status'
+                  )}
+                </Button>
+              </div>
+            </div>
           )}
         </DialogContent>
       </Dialog>

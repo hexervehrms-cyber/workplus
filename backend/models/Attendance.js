@@ -6,8 +6,17 @@ const attendanceSchema = new mongoose.Schema(
     employeeId: { type: mongoose.Schema.Types.ObjectId, ref: "Employee", index: true },
     employeeName: { type: String, required: true },
     date: { type: Date, required: true, index: true },
+    // Canonical org ID fields - save all three for flexibility
+    orgId: { type: String, required: true, index: true },
+    organizationId: { type: String, index: true }, // Alias for orgId
+    companyId: { type: String, index: true }, // Alias for orgId
+    // Local date as YYYY-MM-DD string for easy querying by local date
+    localDate: { type: String, index: true },
+    // Canonical check-in/out fields - save both formats
     checkIn: { type: Date },
+    checkInTime: { type: Date }, // Alias for checkIn
     checkOut: { type: Date },
+    checkOutTime: { type: Date }, // Alias for checkOut
     timezone: { 
       type: String, 
       default: 'Asia/Kolkata',
@@ -15,7 +24,7 @@ const attendanceSchema = new mongoose.Schema(
     },
     status: { 
       type: String, 
-      enum: ["present", "absent", "on-leave", "half-day", "late"], 
+      enum: ["present", "absent", "on-leave", "half-day", "late", "approved-leave", "lwp", "comp-off", "ncns", "sandwich-leave", "checked_in"], 
       default: "present",
       index: true
     },
@@ -43,6 +52,10 @@ const attendanceSchema = new mongoose.Schema(
       location: { type: String },
       ipAddress: { type: String }
     }],
+    // Check-in location and IP for audit trail
+    checkInLocation: { type: String },
+    checkInIP: { type: String },
+    checkInNotes: { type: String },
     meetings: [{
       startTime: { type: Date },
       endTime: { type: Date },
@@ -59,7 +72,9 @@ const attendanceSchema = new mongoose.Schema(
       notes: { type: String }
     },
     notes: { type: String },
-    orgId: { type: String, required: true, index: true },
+    statusChangedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    statusChangedAt: { type: Date },
+    statusChangeReason: { type: String },
     isReEntry: { type: Boolean, default: false },
     previousAttendanceId: { type: mongoose.Schema.Types.ObjectId, ref: "Attendance" }
   },

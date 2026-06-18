@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Calendar as CalendarIcon, Plus, CheckCircle, XCircle, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Card } from './ui/card';
-import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import {
   Dialog,
@@ -138,25 +138,34 @@ export default function InteractiveCalendar() {
     };
   }, [loadHolidays, loadLeaveHistory]);
 
-  // Get days in month
-  const getDaysInMonth = (date: Date) => {
+  // Get days in month - helper function that returns days array
+  const getDaysInMonth = (date: Date): Array<Date | null> => {
     const year = date.getFullYear();
     const month = date.getMonth();
+
     let firstDay = new Date(year, month, 1).getDay();
     firstDay = firstDay === 0 ? 6 : firstDay - 1;
+
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    
-    const days = [];
+    const days: Array<Date | null> = [];
+
     for (let i = 0; i < firstDay; i++) {
       days.push(null);
     }
-    
+
     for (let i = 1; i <= daysInMonth; i++) {
       days.push(new Date(year, month, i));
     }
-    
+
+    while (days.length % 7 !== 0) {
+      days.push(null);
+    }
+
     return days;
   };
+
+  // Memoize calendar days array to prevent unnecessary recalculations
+  const calendarDays = useMemo(() => getDaysInMonth(currentMonth), [currentMonth]);
 
   // Check if day is a weekend (1st/3rd Saturday or Sunday)
   const isWeekend = (day: Date) => {
@@ -210,21 +219,23 @@ export default function InteractiveCalendar() {
     });
   };
 
-  // Check if day has leave
+  // Check if day has leave - use normalized date strings for accurate comparison
   const hasLeave = (day: Date) => {
+    const dayStr = normalizeDate(day);
     return leaveHistory.some(leave => {
-      const startDate = new Date(leave.startDate);
-      const endDate = new Date(leave.endDate);
-      return day >= startDate && day <= endDate;
+      const startStr = normalizeDate(leave.startDate);
+      const endStr = normalizeDate(leave.endDate);
+      return dayStr >= startStr && dayStr <= endStr;
     });
   };
 
-  // Get leave status for day
+  // Get leave status for day - use normalized date strings for accurate comparison
   const getLeaveStatus = (day: Date) => {
+    const dayStr = normalizeDate(day);
     const leave = leaveHistory.find(leave => {
-      const startDate = new Date(leave.startDate);
-      const endDate = new Date(leave.endDate);
-      return day >= startDate && day <= endDate;
+      const startStr = normalizeDate(leave.startDate);
+      const endStr = normalizeDate(leave.endDate);
+      return dayStr >= startStr && dayStr <= endStr;
     });
     return leave?.status;
   };
@@ -317,8 +328,8 @@ export default function InteractiveCalendar() {
   return (
     <>
       {/* Interactive Calendar */}
-      <Card className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-hidden flex flex-col h-full">
-        <div className="space-y-6 flex-1 flex flex-col min-w-0 overflow-hidden">
+      <Card className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-visible flex flex-col w-full h-full">
+        <div className="space-y-5 flex-1 flex flex-col min-w-0 w-full h-full">
           {/* Calendar Header */}
           <div className="flex items-center justify-between p-1 bg-muted/20 rounded-xl border border-foreground/10 flex-shrink-0">
             <h3 className="font-semibold text-lg text-foreground ml-4">Apply Leave</h3>
@@ -352,143 +363,148 @@ export default function InteractiveCalendar() {
             </p>
           </div>
 
-          {/* Weekday Headers */}
-          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-hidden bg-muted/30 shadow-sm flex-shrink-0">
-            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => (
-              <div 
-                key={day} 
-                className={`text-center text-xs font-semibold text-foreground/80 p-3 border-r border-foreground/10 ${
-                  index === 6 ? 'border-r-0' : ''
-                }`}
-              >
-                {day}
-              </div>
-            ))}
-          </div>
-
-          {/* Calendar Days */}
-          <div className="grid grid-cols-7 gap-0 border border-foreground/20 rounded-xl overflow-hidden shadow-sm bg-background flex-1 min-h-0">
-            {getDaysInMonth(currentMonth).map((day, index) => {
-              if (!day) {
-                return (
-                  <div key={index} className="aspect-square p-1 bg-muted/20 border-r border-b border-foreground/10 last:border-r-0" />
-                );
-              }
-
-              const weekend = isWeekend(day);
-              const holiday = isHoliday(day);
-              const leave = hasLeave(day);
-              const leaveStatus = getLeaveStatus(day);
-              const isLastInRow = (index + 1) % 7 === 0;
-              const isLastRow = index >= getDaysInMonth(currentMonth).length - 7;
-              const holidayInfo = getHolidayForDay(day);
-
-              return (
-                <div
-                  key={index}
-                  className="relative group calendar-date-3d hover:z-50"
+          {/* Calendar Grid Wrapper - Unified header + body */}
+          <div className="w-full rounded-xl border border-slate-300/80 dark:border-slate-700/80 bg-background overflow-visible shadow-sm flex-1 flex flex-col min-h-0 relative isolate" style={{ perspective: '1100px' }}>
+            {/* Weekday Headers */}
+            <div className="grid grid-cols-7 gap-0 bg-muted/30 border-b border-slate-300/80 dark:border-slate-700/80">
+              {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, idx) => (
+                <div 
+                  key={day} 
+                  className={`text-center text-xs font-semibold text-foreground/80 p-3 h-10 flex items-center justify-center ${
+                    (idx + 1) % 7 !== 0 ? 'border-r border-slate-300/80 dark:border-slate-700/80' : ''
+                  }`}
                 >
-                  <button
-                    type="button"
-                    onClick={() => !weekend && !holiday && openLeaveForm(day)}
-                    disabled={weekend || holiday}
-                    className={`
-                      w-full aspect-square p-2 text-xs font-medium transition-all duration-500 border-r border-b border-foreground/10 relative overflow-visible
-                      ${isLastInRow ? 'border-r-0' : ''}
-                      ${isLastRow ? 'border-b-0' : ''}
-                      ${weekend ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold' : ''}
-                      ${holiday ? 'dark:bg-green-950 dark:text-green-200 bg-green-50 text-green-700 cursor-not-allowed font-semibold' : ''}
-                      ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950 dark:text-blue-200 bg-blue-50 text-blue-700 border-blue-200 font-semibold' : ''}
-                      ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold' : ''}
-                      ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950 dark:text-red-200 bg-red-50 text-red-700 font-semibold' : ''}
-                      ${!weekend && !holiday && !leave ? 'dark:text-foreground dark:bg-slate-800 dark:hover:bg-slate-700 text-foreground cursor-pointer bg-slate-50 hover:from-slate-100 hover:to-slate-200 hover:text-slate-900 hover:font-semibold' : ''}
-                      focus:outline-none focus:ring-2 focus:ring-slate-300 focus:ring-inset rounded-sm
-                    `}
-                    style={{
-                      transformStyle: 'preserve-3d',
-                    }}
-                  >
-                    <span className="relative z-10">{day.getDate()}</span>
-                    
-                    {/* Hover effect overlay */}
-                    {!weekend && !holiday && !leave && (
-                      <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-200 rounded-sm" />
-                    )}
-                    
-                    {/* Status indicators */}
-                    {leave && (
-                      <div className={`absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full ${
-                        leaveStatus === 'approved' ? 'bg-primary' :
-                        leaveStatus === 'pending' ? 'bg-yellow-500' :
-                        'bg-destructive'
-                      }`} />
-                    )}
-                    
-                    {holiday && (
-                      <div className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-green-500" />
-                    )}
-                  </button>
-                  
-                  {/* Tooltip for holidays and leaves */}
-                  {(holiday || leave) && (
-                    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-20 whitespace-nowrap">
-                      {holiday && holidayInfo ? (
-                        <>
-                          <div className="font-medium">{holidayInfo.name}</div>
-                          <div className="text-gray-300">Holiday</div>
-                        </>
-                      ) : leave ? (
-                        <>
-                          <div className="font-medium">{(leaveStatus?.charAt(0) ?? '').toUpperCase() + (leaveStatus?.slice(1) ?? '')} Leave</div>
-                          <div className="text-gray-300">Click for details</div>
-                        </>
-                      ) : null}
-                      {/* Tooltip arrow */}
-                      <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900" />
-                    </div>
-                  )}
-                  
-                  {/* Clickable day tooltip */}
-                  {!weekend && !holiday && !leave && (
-                    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-primary text-primary-foreground text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-20 whitespace-nowrap">
-                      <div className="font-medium">Apply for Leave</div>
-                      <div className="text-primary-foreground/80">Click to request</div>
-                      {/* Tooltip arrow */}
-                      <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-primary" />
-                    </div>
-                  )}
+                  {day}
                 </div>
-              );
-            })}
+              ))}
+            </div>
+
+            {/* Calendar Days */}
+            <div className="grid grid-cols-7 gap-0 bg-background flex-1 overflow-visible relative">
+              {calendarDays.map((day, _index) => {
+                const isLastColumn = (_index + 1) % 7 === 0;
+                const isLastRow = _index >= calendarDays.length - 7;
+                
+                if (!day) {
+                  return (
+                    <div 
+                      key={_index} 
+                      className={`min-h-[92px] sm:min-h-[104px] xl:min-h-[112px] bg-muted/10 ${
+                        !isLastColumn ? 'border-r border-slate-300/80 dark:border-slate-700/80' : ''
+                      } ${!isLastRow ? 'border-b border-slate-300/80 dark:border-slate-700/80' : ''}`} 
+                    />
+                  );
+                }
+
+                const weekend = isWeekend(day);
+                const holiday = isHoliday(day);
+                const leave = hasLeave(day);
+                const leaveStatus = getLeaveStatus(day);
+                const holidayInfo = getHolidayForDay(day);
+                const isAvailableDate = !weekend && !holiday && !leave;
+                const tooltipText = holiday && holidayInfo 
+                  ? holidayInfo.name 
+                  : leave 
+                  ? `${(leaveStatus?.charAt(0) ?? '').toUpperCase()}${leaveStatus?.slice(1) ?? ''} Leave`
+                  : isAvailableDate
+                  ? 'Click to request leave'
+                  : undefined;
+
+                return (
+                  <div
+  key={formatLocalDateString(day)}
+  className={`min-h-[76px] sm:min-h-[92px] xl:min-h-[104px] group/cell overflow-visible relative p-[5px] ${
+    !isLastColumn ? 'border-r border-slate-300/80 dark:border-slate-700/80' : ''
+  } ${!isLastRow ? 'border-b border-slate-300/80 dark:border-slate-700/80' : ''}`}
+>
+                    <motion.button
+                      type="button"
+                      onClick={() => isAvailableDate && openLeaveForm(day)}
+                      disabled={!isAvailableDate}
+                      aria-label={tooltipText}
+                      whileHover={isAvailableDate ? { y: -7, scale: 1.016, rotateX: 3, rotateY: -2, z: 28 } : undefined}
+                      whileTap={isAvailableDate ? { y: -2, scale: 0.992, rotateX: 0, rotateY: 0, z: 8 } : undefined}
+                      transition={{ type: "spring", stiffness: 560, damping: 36, mass: 0.28, restDelta: 0.001, restSpeed: 0.001 }}
+                      className={`
+                        w-full h-full relative group/tile flex flex-col items-center justify-center rounded-none border overflow-hidden transform-gpu will-change-transform [transform-style:preserve-3d] [backface-visibility:hidden] font-medium text-xs
+                        ${weekend ? 'dark:bg-red-950/40 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out' : ''}
+                        ${holiday ? 'dark:bg-emerald-950/40 dark:text-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed font-semibold border-emerald-200/50 dark:border-emerald-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out' : ''}
+                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950/50 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold border-blue-200/50 dark:border-blue-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out cursor-default' : ''}
+                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950/50 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold border-yellow-200/50 dark:border-yellow-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out cursor-default' : ''}
+                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950/50 dark:text-red-200 bg-red-50 text-red-700 font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out cursor-default' : ''}
+                        ${isAvailableDate ? 'border-transparent bg-background/95 text-foreground cursor-pointer dark:bg-slate-800/60 dark:text-foreground transition-[background-color,border-color,box-shadow,color,opacity,filter] duration-150 ease-out hover:z-50 hover:border-emerald-400/90 hover:bg-emerald-50/90 hover:text-emerald-700 hover:shadow-[0_18px_40px_rgba(16,185,129,0.26),0_0_22px_rgba(16,185,129,0.14)] hover:brightness-[1.03] dark:hover:bg-emerald-950/30 dark:hover:border-emerald-500/80 dark:hover:text-emerald-200 dark:hover:shadow-[0_18px_40px_rgba(16,185,129,0.18),0_0_26px_rgba(16,185,129,0.16)]' : ''}
+                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60
+                      `}
+                    >
+                      {/* Floating glass glow overlay for available cells */}
+                      {isAvailableDate && (
+                        <span 
+                          aria-hidden="true" 
+                          className="pointer-events-none absolute inset-0 opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 bg-gradient-to-br from-white/35 via-emerald-300/12 to-emerald-500/18 dark:from-white/8 dark:via-emerald-400/12 dark:to-emerald-900/24" 
+                        />
+                      )}
+
+                      {/* Top highlight for floating glass effect */}
+                      {isAvailableDate && (
+                        <span 
+                          aria-hidden="true" 
+                          className="pointer-events-none absolute inset-x-2 top-1 h-px opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 bg-white/70 dark:bg-white/15" 
+                        />
+                      )}
+
+                      {/* Floating underside glow */}
+                      {isAvailableDate && (
+                        <span 
+                          aria-hidden="true" 
+                          className="pointer-events-none absolute -bottom-2 left-3 right-3 h-4 rounded-full opacity-0 blur-md group-hover/tile:opacity-70 transition-opacity duration-150 bg-emerald-400/30 dark:bg-emerald-500/20" 
+                        />
+                      )}
+                      
+                      <span className="block relative z-10 text-base font-semibold">{day.getDate()}</span>
+                      
+                      {/* Status indicators */}
+                      <div className="mt-1 flex gap-1 relative z-10">
+                        {leave && (
+                          <motion.div 
+                            className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                              leaveStatus === 'approved' ? 'bg-blue-500' :
+                              leaveStatus === 'pending' ? 'bg-yellow-500' :
+                              'bg-red-500'
+                            }`}
+                            layoutId={`leave-indicator-${formatLocalDateString(day)}`}
+                          />
+                        )}
+                        
+                        {holiday && (
+                          <div className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" />
+                        )}
+                      </div>
+                    </motion.button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Legend */}
-          <div className="mt-6 p-4 bg-muted/30 rounded-xl border border-foreground/10 flex-shrink-0">
-            <h4 className="text-sm font-medium text-foreground mb-3">Legend</h4>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-red-100 border border-red-200 flex items-center justify-center flex-shrink-0">
-                  <div className="w-2 h-2 rounded-full bg-red-500" />
-                </div>
-                <span className="text-xs text-muted-foreground">Weekend</span>
+          {/* Legend - Compact and premium */}
+          <div className="mt-4 p-4 bg-gradient-to-r from-muted/40 to-muted/20 rounded-xl border border-border/50 flex-shrink-0">
+            <h4 className="text-xs font-semibold text-foreground/80 mb-3 uppercase tracking-wide">Status Legend</h4>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-red-500/80 flex-shrink-0 shadow-sm" />
+                <span className="text-xs text-muted-foreground truncate">Weekend</span>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-green-100 border border-green-200 flex items-center justify-center flex-shrink-0">
-                  <div className="w-2 h-2 rounded-full bg-green-500" />
-                </div>
-                <span className="text-xs text-muted-foreground">Holiday</span>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-emerald-500/80 flex-shrink-0 shadow-sm" />
+                <span className="text-xs text-muted-foreground truncate">Holiday</span>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
-                  <div className="w-2 h-2 rounded-full bg-primary" />
-                </div>
-                <span className="text-xs text-muted-foreground">Approved Leave</span>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-blue-500/80 flex-shrink-0 shadow-sm" />
+                <span className="text-xs text-muted-foreground truncate">Approved</span>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 rounded-full bg-yellow-100 border border-yellow-200 flex items-center justify-center flex-shrink-0">
-                  <div className="w-2 h-2 rounded-full bg-yellow-500" />
-                </div>
-                <span className="text-xs text-muted-foreground">Pending Leave</span>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-yellow-500/80 flex-shrink-0 shadow-sm" />
+                <span className="text-xs text-muted-foreground truncate">Pending</span>
               </div>
             </div>
           </div>

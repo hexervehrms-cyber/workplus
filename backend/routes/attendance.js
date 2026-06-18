@@ -572,30 +572,109 @@ router.post('/check-in', authorize('super_admin', 'admin', 'hr', 'manager', 'emp
   try {
     const timezone = getUserTimezone(req) || 'Asia/Kolkata';
     
-    attendance = await Attendance.create({
-      userId: effectiveUserId,
-      employeeId: effectiveEmployeeId,
-      employeeName: effectiveEmployeeName,
-      date: today,
-      checkIn: new Date(),
-      timezone,
-      status: 'present',
-      orgId: effectiveOrgId,
-      checkInLocation: location || 'Office',
-      checkInIP: req.ip || req.connection.remoteAddress,
-      checkInNotes: notes,
-      ...(isReEntry
-        ? { isReEntry: true, previousAttendanceId: existingAttendance._id }
-        : {}),
-    });
+    // Calculate localDate as YYYY-MM-DD in India timezone
+    const localDate = today.toISOString().split('T')[0];
+    
+    // If attendance already exists for today, update it with missing canonical fields instead of creating duplicate
+    if (existingAttendance && !isReEntry) {
+      attendance = await Attendance.findByIdAndUpdate(
+        existingAttendance._id,
+        {
+          $set: {
+            // Canonical fields
+            orgId: effectiveOrgId,
+            organizationId: effectiveOrgId,
+            companyId: effectiveOrgId,
+            userId: effectiveUserId,
+            employeeId: effectiveEmployeeId,
+            employeeName: effectiveEmployeeName,
+            date: today,
+            localDate,
+            checkIn: new Date(),
+            checkInTime: new Date(),
+            checkOut: null,
+            checkOutTime: null,
+            status: 'checked_in',
+            timezone,
+            breaks: existingAttendance.breaks || [],
+            checkInLocation: location || 'Office',
+            checkInIP: req.ip || req.connection.remoteAddress,
+            checkInNotes: notes
+          }
+        },
+        { new: true, runValidators: false }
+      );
+      console.log('[CHECKIN UPDATED DOC - EXISTING]', JSON.stringify({
+        _id: attendance._id,
+        userId: attendance.userId,
+        employeeId: attendance.employeeId,
+        employeeName: attendance.employeeName,
+        orgId: attendance.orgId,
+        organizationId: attendance.organizationId,
+        date: attendance.date,
+        localDate: attendance.localDate,
+        checkIn: attendance.checkIn,
+        checkInTime: attendance.checkInTime,
+        checkOut: attendance.checkOut,
+        checkOutTime: attendance.checkOutTime,
+        status: attendance.status,
+        breaks: attendance.breaks,
+        timezone: attendance.timezone
+      }, null, 2));
+    } else {
+      // Create new attendance record
+      attendance = await Attendance.create({
+        userId: effectiveUserId,
+        employeeId: effectiveEmployeeId,
+        employeeName: effectiveEmployeeName,
+        // Canonical fields
+        orgId: effectiveOrgId,
+        organizationId: effectiveOrgId,
+        companyId: effectiveOrgId,
+        date: today,
+        localDate,
+        checkIn: new Date(),
+        checkInTime: new Date(),
+        checkOut: null,
+        checkOutTime: null,
+        timezone,
+        status: 'checked_in',
+        breaks: [],
+        checkInLocation: location || 'Office',
+        checkInIP: req.ip || req.connection.remoteAddress,
+        checkInNotes: notes,
+        ...(isReEntry
+          ? { isReEntry: true, previousAttendanceId: existingAttendance._id }
+          : {}),
+      });
 
-    logger.info('Attendance check-in created successfully', {
+      console.log('[CHECKIN SAVED DOC]', JSON.stringify({
+        _id: attendance._id,
+        userId: attendance.userId,
+        employeeId: attendance.employeeId,
+        employeeName: attendance.employeeName,
+        orgId: attendance.orgId,
+        organizationId: attendance.organizationId,
+        date: attendance.date,
+        localDate: attendance.localDate,
+        checkIn: attendance.checkIn,
+        checkInTime: attendance.checkInTime,
+        checkOut: attendance.checkOut,
+        checkOutTime: attendance.checkOutTime,
+        status: attendance.status,
+        breaks: attendance.breaks,
+        timezone: attendance.timezone
+      }, null, 2));
+    }
+
+    logger.info('Attendance check-in created/updated successfully', {
       attendanceId: attendance._id,
       userId: effectiveUserId,
       employeeId: effectiveEmployeeId,
       orgId: effectiveOrgId,
       timezone,
       isReEntry,
+      isUpdate: Boolean(existingAttendance && !isReEntry)
     });
   } catch (createError) {
     const dupCode = createError?.code === 11000 || createError?.cause?.code === 11000;
@@ -843,6 +922,7 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
     {
       $set: {
         checkOut: checkOutTime,
+        checkOutTime: checkOutTime,
         hoursWorked: Math.round(hoursWorked * 100) / 100,
         checkOutLocation: location || 'Office',
         checkOutIP: req.ip || req.connection.remoteAddress,
@@ -853,6 +933,25 @@ router.post('/check-out', authorize('super_admin', 'admin', 'hr', 'manager', 'em
   )
     .populate('userId', 'name email avatar')
     .populate('employeeId', 'employeeCode department');
+  
+  if (updatedAttendance) {
+    console.log('[CHECKOUT SAVED DOC]', JSON.stringify({
+      _id: updatedAttendance._id,
+      userId: updatedAttendance.userId,
+      employeeId: updatedAttendance.employeeId,
+      employeeName: updatedAttendance.employeeName,
+      orgId: updatedAttendance.orgId,
+      organizationId: updatedAttendance.organizationId,
+      date: updatedAttendance.date,
+      localDate: updatedAttendance.localDate,
+      checkIn: updatedAttendance.checkIn,
+      checkInTime: updatedAttendance.checkInTime,
+      checkOut: updatedAttendance.checkOut,
+      checkOutTime: updatedAttendance.checkOutTime,
+      hoursWorked: updatedAttendance.hoursWorked,
+      status: updatedAttendance.status
+    }, null, 2));
+  }
 
   if (!updatedAttendance) {
     const closed = await Attendance.findById(attendance._id).lean();
@@ -1883,9 +1982,19 @@ router.post('/bulk-import', authorize('super_admin', 'admin', 'hr'), asyncHandle
         if (existingAttendance) {
           // Update existing record
           existingAttendance.checkIn = checkInTime || existingAttendance.checkIn;
+          existingAttendance.checkInTime = checkInTime || existingAttendance.checkInTime;
           existingAttendance.checkOut = checkOutTime || existingAttendance.checkOut;
+          existingAttendance.checkOutTime = checkOutTime || existingAttendance.checkOutTime;
           existingAttendance.status = attendanceStatus;
           existingAttendance.notes = notes || existingAttendance.notes;
+          // Ensure canonical org fields
+          existingAttendance.orgId = userOrgId;
+          existingAttendance.organizationId = userOrgId;
+          existingAttendance.companyId = userOrgId;
+          // Ensure localDate
+          if (!existingAttendance.localDate) {
+            existingAttendance.localDate = attendanceDate.toISOString().split('T')[0];
+          }
           
           // Calculate hours worked
           if (checkInTime && checkOutTime) {
@@ -1894,20 +2003,27 @@ router.post('/bulk-import', authorize('super_admin', 'admin', 'hr'), asyncHandle
 
           await existingAttendance.save();
         } else {
-          // Create new record
+          // Create new record with canonical fields
           const hoursWorked = checkInTime && checkOutTime ? (checkOutTime - checkInTime) / (1000 * 60 * 60) : 0;
+          const localDate = attendanceDate.toISOString().split('T')[0];
 
           await Attendance.create({
             userId: employee.userId,
             employeeId: employee._id,
             employeeName: employee.firstName + ' ' + employee.lastName,
             date: attendanceDate,
+            localDate,
             checkIn: checkInTime,
+            checkInTime: checkInTime,
             checkOut: checkOutTime,
+            checkOutTime: checkOutTime,
             status: attendanceStatus,
             hoursWorked,
             notes,
-            orgId: userOrgId
+            orgId: userOrgId,
+            organizationId: userOrgId,
+            companyId: userOrgId,
+            timezone: 'Asia/Kolkata'
           });
         }
 
@@ -2061,6 +2177,164 @@ router.get('/bulk-export', authenticate, authorize('super_admin', 'admin', 'hr')
       success: false,
       message: 'Failed to export attendance records',
       error: error.message
+    });
+  }
+}));
+
+/**
+ * POST /api/attendance/:attendanceId/status
+ * Update attendance status (admin, hr, super_admin only)
+ * Request body: { status, reason }
+ * Allowed statuses: "present", "absent", "on-leave", "approved-leave", "lwp", "comp-off", "ncns", "sandwich-leave"
+ */
+router.post('/:attendanceId/status', authorize('super_admin', 'admin', 'hr'), asyncHandler(async (req, res) => {
+  const { status, reason } = req.body;
+  const attendanceId = req.params.attendanceId;
+  const currentUserId = req.user.userId;
+  const authOrgId = req.user.orgId;
+  const authRole = req.user.role;
+
+  // Validate status
+  const allowedStatuses = ['present', 'absent', 'on-leave', 'approved-leave', 'lwp', 'comp-off', 'ncns', 'sandwich-leave'];
+  if (!status || !allowedStatuses.includes(status)) {
+    return res.status(400).json({
+      success: false,
+      message: `Invalid status. Allowed values: ${allowedStatuses.join(', ')}`,
+      code: 'INVALID_STATUS'
+    });
+  }
+
+  try {
+    // Find the attendance record
+    const attendance = await Attendance.findById(attendanceId);
+    
+    if (!attendance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Attendance record not found',
+        code: 'RECORD_NOT_FOUND'
+      });
+    }
+
+    // Validate org isolation - user can only update attendance in their org
+    if (String(attendance.orgId) !== String(authOrgId) && authRole !== 'super_admin') {
+      logger.warn('Organization scope violation attempted on attendance status update', {
+        recordOrgId: attendance.orgId,
+        authOrgId,
+        role: authRole,
+        userId: currentUserId,
+        attendanceId
+      });
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized to update attendance in this organization',
+        code: 'ORG_MISMATCH'
+      });
+    }
+
+    // Update attendance record
+    const now = new Date();
+    attendance.status = status;
+    attendance.statusChangedBy = currentUserId;
+    attendance.statusChangedAt = now;
+    attendance.statusChangeReason = reason || null;
+    
+    await attendance.save();
+
+    // Log activity
+    try {
+      const employeeName = attendance.employeeName || 'Employee';
+      const log = await ActivityLog.logActivity({
+        userId: currentUserId,
+        orgId: attendance.orgId,
+        action: 'attendance_status_updated',
+        entity: {
+          entityType: 'attendance',
+          entityId: attendance._id,
+          entityName: `${employeeName} - Status Updated to ${status}`,
+        },
+        details: {
+          previousStatus: attendance.status,
+          newStatus: status,
+          reason: reason || null,
+          employeeName: employeeName,
+          attendanceId: String(attendance._id),
+          date: attendance.date,
+          changedBy: currentUserId,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        severity: 'medium',
+        category: 'admin',
+      });
+      
+      // Emit activity log in real-time
+      if (req.emitActivityUpdate) {
+        req.emitActivityUpdate(log, attendance.orgId);
+      }
+    } catch (logError) {
+      logger.warn('Failed to log attendance status update activity', { error: logError.message });
+    }
+
+    // Sync to attendance history
+    try {
+      await syncAttendanceHistoryFromRecord(attendance, {
+        userId: attendance.userId,
+        orgId: attendance.orgId,
+        employeeId: attendance.employeeId,
+        updatedBy: currentUserId,
+      });
+    } catch (syncError) {
+      logger.warn('Failed to sync attendance history after status update', { error: syncError.message });
+    }
+
+    // Emit real-time update
+    if (req.emitAttendanceUpdate) {
+      req.emitAttendanceUpdate(attendance, attendance.orgId);
+    }
+
+    // Emit KPI update to admin dashboard
+    if (global.io) {
+      emitAttendanceKPIUpdate(global.io, attendance.orgId, {
+        action: 'status_updated',
+        employeeId: attendance.employeeId,
+        status: status
+      }).catch(err => logger.error('Failed to emit KPI update on status change', { error: err.message }));
+    }
+
+    logger.info('Attendance status updated successfully', {
+      attendanceId: attendance._id,
+      newStatus: status,
+      changedBy: currentUserId,
+      orgId: attendance.orgId,
+      reason: reason || null
+    });
+
+    // Return updated attendance record (populated)
+    const updatedRecord = await Attendance.findById(attendanceId)
+      .populate('userId', 'name email')
+      .populate('employeeId', 'employeeCode department')
+      .populate('statusChangedBy', 'name email')
+      .lean();
+
+    res.json({
+      success: true,
+      message: `Attendance status updated to ${status}`,
+      data: updatedRecord
+    });
+
+  } catch (error) {
+    logger.error('Failed to update attendance status', {
+      error: error.message,
+      attendanceId,
+      userId: currentUserId,
+      orgId: authOrgId
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update attendance status',
+      code: 'STATUS_UPDATE_FAILED',
+      details: error.message
     });
   }
 }));

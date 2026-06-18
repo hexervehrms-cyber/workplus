@@ -1281,27 +1281,39 @@ router.get(
           .lean();
       }
 
-      // For inline preview: return HTML
+      // For inline preview: return PDF (modern browsers can render PDF inline)
       if (inline) {
-        const htmlContent = buildSalarySlipHtml({
-          slip,
-          employee: employeeDoc,
-          organization: organization || {},
-        });
+        const employeeNameForPDF = employeeDoc ? 
+          `${employeeDoc.firstName || ''} ${employeeDoc.lastName || ''}`.trim() || 'Employee' 
+          : 'Employee';
+        
+        try {
+          const pdfBuffer = await generateSalarySlipPdf(
+            slip,
+            employeeDoc,
+            organization
+          );
 
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.setHeader('Content-Disposition', 'inline');
-        res.send(htmlContent);
+          res.setHeader('Content-Type', 'application/pdf');
+          res.setHeader('Content-Disposition', 'inline');
+          res.send(pdfBuffer);
 
-        await SalarySlip.findByIdAndUpdate(slipId, {
-          downloadedAt: new Date(),
-          $inc: { downloadCount: 1 }
-        });
+          await SalarySlip.findByIdAndUpdate(slipId, {
+            downloadedAt: new Date(),
+            $inc: { downloadCount: 1 }
+          });
 
-        logger.info("Salary slip preview accessed", {
-          slipId,
-          accessedBy: req.user.userId
-        });
+          logger.info("Salary slip PDF preview accessed", {
+            slipId,
+            accessedBy: req.user.userId
+          });
+        } catch (pdfError) {
+          logger.error("PDF generation for preview failed", {
+            slipId,
+            error: pdfError.message
+          });
+          return sendError(res, "Unable to generate PDF payslip preview", 500, "PDF_GENERATION_ERROR");
+        }
         return;
       }
 

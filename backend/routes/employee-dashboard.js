@@ -623,21 +623,35 @@ router.post('/attendance/checkin',
       standardTime.setHours(9, 0, 0, 0);
       const isLate = checkInTime > standardTime;
 
+      // Calculate localDate as YYYY-MM-DD in India timezone
+      const localDate = today.toISOString().split('T')[0];
+      const timezone = 'Asia/Kolkata';
+
       const attendanceData = {
         userId,
         employeeId: employee._id,
         employeeName: employee.userId.name,
+        // Canonical org ID fields
         orgId,
+        organizationId: orgId,
+        companyId: orgId,
         date: today,
+        localDate,
+        // Canonical check-in fields
         checkIn: checkInTime,
-        status: isLate ? 'late' : 'present',
+        checkInTime: checkInTime,
+        checkOut: null,
+        checkOutTime: null,
+        timezone,
+        status: isLate ? 'late' : 'checked_in',
+        breaks: [],
         notes: notes || '',
-        location: location || 'Office'
+        checkInLocation: location || 'Office'
       };
 
       let attendance;
       if (existingAttendance) {
-        // Update existing record
+        // Update existing record with canonical fields
         attendance = await Attendance.findByIdAndUpdate(
           existingAttendance._id,
           attendanceData,
@@ -647,6 +661,24 @@ router.post('/attendance/checkin',
         // Create new record
         attendance = await Attendance.create(attendanceData);
       }
+      
+      console.log('[EMPLOYEE-DASHBOARD CHECKIN SAVED]', JSON.stringify({
+        _id: attendance._id,
+        userId: attendance.userId,
+        employeeId: attendance.employeeId,
+        employeeName: attendance.employeeName,
+        orgId: attendance.orgId,
+        organizationId: attendance.organizationId,
+        date: attendance.date,
+        localDate: attendance.localDate,
+        checkIn: attendance.checkIn,
+        checkInTime: attendance.checkInTime,
+        checkOut: attendance.checkOut,
+        checkOutTime: attendance.checkOutTime,
+        status: attendance.status,
+        breaks: attendance.breaks,
+        timezone: attendance.timezone
+      }, null, 2));
 
       // Emit real-time update
       if (global.socketManager) {
@@ -738,16 +770,32 @@ router.post('/attendance/checkout',
       const workTime = checkOutTime - attendance.checkIn - totalBreakTime;
       const hoursWorked = Math.round((workTime / (1000 * 60 * 60)) * 100) / 100;
 
-      // Update attendance record
+      // Update attendance record with canonical fields
       const updatedAttendance = await Attendance.findByIdAndUpdate(
         attendance._id,
         {
           checkOut: checkOutTime,
+          checkOutTime: checkOutTime,
           hoursWorked,
           notes: notes || attendance.notes
         },
         { new: true }
       );
+      
+      console.log('[EMPLOYEE-DASHBOARD CHECKOUT SAVED]', JSON.stringify({
+        _id: updatedAttendance._id,
+        userId: updatedAttendance.userId,
+        employeeId: updatedAttendance.employeeId,
+        employeeName: updatedAttendance.employeeName,
+        date: updatedAttendance.date,
+        localDate: updatedAttendance.localDate,
+        checkIn: updatedAttendance.checkIn,
+        checkInTime: updatedAttendance.checkInTime,
+        checkOut: updatedAttendance.checkOut,
+        checkOutTime: updatedAttendance.checkOutTime,
+        hoursWorked: updatedAttendance.hoursWorked,
+        status: updatedAttendance.status
+      }, null, 2));
 
       // Emit real-time update
       if (global.socketManager) {

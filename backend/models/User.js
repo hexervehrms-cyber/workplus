@@ -145,6 +145,17 @@ const userSchema = new mongoose.Schema(
       trim: true,
       default: null,
     },
+    // Presence tracking for chat (Phase 3 minimal online/offline)
+    presenceStatus: {
+      type: String,
+      enum: ['online', 'offline'],
+      default: 'offline',
+      index: true
+    },
+    lastSeen: {
+      type: Date,
+      default: null
+    },
     // Organization context
     organization: { 
       type: String,

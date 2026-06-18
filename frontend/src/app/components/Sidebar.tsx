@@ -21,12 +21,10 @@ import {
   Settings,
   Shield,
   Briefcase,
-  Target,
   Award,
   ShieldCheck,
   FolderOpen,
   ChevronDown,
-  Phone,
   Zap,
   ChevronLeft,
   Package
@@ -56,10 +54,6 @@ const navigationItems: NavItem[] = [
   // Admin & HR
   { icon: LayoutDashboard, label: 'Dashboard', path: '/admin', roles: ['admin', 'hr'] },
   { icon: Users, label: 'Employees', path: '/admin/employees', roles: ['admin', 'hr'] },
-  { icon: Users, label: 'Invites', path: '/admin/invites', roles: ['admin', 'hr'] },
-  { icon: Briefcase, label: 'Onboarding', path: '/admin/employee-onboarding', roles: ['admin', 'hr'] },
-  { icon: Zap, label: 'Bulk Operations', path: '/admin/bulk-operations', roles: ['admin', 'hr'] },
-  { icon: Users, label: 'Admin Management', path: '/admin/admin-management', roles: ['admin'] },
   { icon: FolderOpen, label: 'Company Docs', path: '/admin/company-docs', roles: ['admin', 'hr'] },
   { icon: Building2, label: 'Departments', path: '/admin/departments', roles: ['admin', 'hr'] },
   { icon: ShieldCheck, label: 'Roles', path: '/admin/roles', roles: ['admin'] },
@@ -79,23 +73,7 @@ const navigationItems: NavItem[] = [
     icon: Clock, 
     label: 'Attendance', 
     path: '/admin/attendance', 
-    roles: ['admin', 'hr'],
-    children: [
-      { icon: CalendarDays, label: 'Calendar View', path: '/admin/attendance-calendar', roles: ['admin', 'hr'] },
-      { icon: FileText, label: 'History', path: '/admin/attendance-history', roles: ['admin', 'hr'] },
-    ]
-  },
-  { 
-    icon: Zap, 
-    label: 'Sales', 
-    path: '/admin/sales', 
-    roles: ['admin'],
-    children: [
-      { icon: BarChart3, label: 'Dashboard', path: '/admin/sales', roles: ['admin'] },
-      { icon: Target, label: 'Leads', path: '/admin/sales/leads', roles: ['admin'] },
-      { icon: TrendingUp, label: 'Deals', path: '/admin/sales/deals', roles: ['admin'] },
-      { icon: Phone, label: 'Calls', path: '/admin/sales/calls', roles: ['admin'] }
-    ]
+    roles: ['admin', 'hr']
   },
   { icon: Receipt, label: 'Expenses', path: '/admin/expenses', roles: ['admin', 'hr'] },
   { 

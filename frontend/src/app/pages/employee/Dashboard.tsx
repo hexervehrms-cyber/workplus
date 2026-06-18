@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { motion } from 'framer-motion';
 import { KPICard } from '../../components/KPICard';
 import ChatWidget from '../../components/ChatWidget';
 import { useAuth } from '../../context/AuthContext';
@@ -313,6 +314,11 @@ export default function EmployeeDashboard() {
     performance: "0%"
   });
 
+  /** Store completed month hours before today's live session (updated on each server sync). */
+  const monthHoursExclTodayRef = useRef(0);
+  /** Store whether we're currently tracking an active session for monthly total. */
+  const hasActiveTodayRef = useRef(false);
+
   /** Completed week hours before today's live session (updated on each server sync). */
   const weekHoursExclTodayRef = useRef(0);
 
@@ -343,6 +349,26 @@ export default function EmployeeDashboard() {
       applyWeekHours(hoursThisWeek, weekKey, true);
     },
     [applyWeekHours]
+  );
+
+  const applyTotalHours = useCallback((hours: number) => {
+    if (mountedRef.current) {
+      const hoursInt = Math.floor(hours);
+      const minutesFloat = (hours - hoursInt) * 60;
+      const minutesInt = Math.round(minutesFloat);
+      const label = `${hoursInt}h ${minutesInt}m`;
+      setKpiMetrics((prev) => ({ ...prev, totalHours: label }));
+    }
+  }, []);
+
+  const ingestMonthlyHoursFromServer = useCallback(
+    (monthlyTotal: number, todayLiveHours = 0) => {
+      // Store the baseline (all completed days' hours minus today's live portion)
+      monthHoursExclTodayRef.current = Math.max(0, monthlyTotal - todayLiveHours);
+      hasActiveTodayRef.current = todayLiveHours > 0;
+      applyTotalHours(monthlyTotal);
+    },
+    [applyTotalHours]
   );
 
   const syncWeeklyHours = useCallback(async () => {
@@ -393,15 +419,6 @@ export default function EmployeeDashboard() {
   }, [authUid]);
 
   const [holidays, setHolidays] = useState<Holiday[]>([]);
-  const [payrollCycleSummary, setPayrollCycleSummary] = useState<{
-    cycleStartDate: string;
-    cycleEndDate: string;
-    salaryReleaseDate: string;
-    salaryHoldUntil: string;
-    holdDays: number;
-    cycleLabel: string;
-    currency: string;
-  } | null>(null);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
   const [breakHistory, setBreakHistory] = useState<BreakRecord[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
@@ -519,6 +536,16 @@ export default function EmployeeDashboard() {
           
           // Update total hours KPI from summary
           const totalHoursLabel = (kpis as any).totalHoursLabel || '0h 0m';
+          const totalHoursMinutes = (kpis as any).totalHoursMinutes || 0;
+          const hoursWorkedToday = Number((kpis as any).hoursWorkedToday) || 0;
+          
+          // Extract the baseline monthly hours (total - today's live)
+          // For now, assume all the returned hours are the baseline since we haven't added active time yet
+          const monthlyHours = totalHoursMinutes / 60;
+          const todayLiveHours = hoursWorkedToday;
+          
+          ingestMonthlyHoursFromServer(monthlyHours, todayLiveHours);
+          
           if (mountedRef.current) {
             setKpiMetrics((prev) => ({
               ...prev,
@@ -538,10 +565,9 @@ export default function EmployeeDashboard() {
         tenantOrgId
       );
 
-      const [attendanceResult, holidaysResult, payrollResult] = await Promise.allSettled([
+      const [attendanceResult, holidaysResult] = await Promise.allSettled([
         apiGetSafe('/attendance/today', false),
         apiGetSafe(holidaysUrl, false),
-        apiGetSafe('/payroll/employee/cycle-summary', false),
       ]);
 
       const holidayKey = holidaysStorageKey(authUid, user?.orgId || user?.tenantId);
@@ -580,23 +606,6 @@ export default function EmployeeDashboard() {
         } catch (e) {
           console.warn('Failed to parse cached holidays');
         }
-      }
-
-      // Handle payroll cycle summary
-      if (
-        payrollResult.status === 'fulfilled' &&
-        payrollResult.value.ok &&
-        payrollResult.value.data &&
-        (payrollResult.value.data as { success?: boolean }).success !== false
-      ) {
-        const payrollPayload = payrollResult.value.data as { data?: Record<string, unknown> };
-        const cycleData = payrollPayload.data;
-        if (cycleData && typeof cycleData === 'object') {
-          console.log('✅ Loaded payroll cycle summary');
-          if (mountedRef.current) setPayrollCycleSummary(cycleData as typeof payrollCycleSummary);
-        }
-      } else {
-        console.warn('Payroll cycle summary unavailable');
       }
 
       const attendanceResolved =
@@ -1207,6 +1216,18 @@ export default function EmployeeDashboard() {
     const interval = setInterval(tick, 5000);
     return () => clearInterval(interval);
   }, [todayAttendance.isCheckedIn, todayAttendance.isOnBreak, workingHours, applyWeekHours]);
+
+  // Live "Total Hours" — server baseline + today's worked hours (updates monthly total while checked in)
+  useEffect(() => {
+    if (!todayAttendance.isCheckedIn || !hasActiveTodayRef.current) return;
+    const tick = () => {
+      const todayPart = workingHours;
+      applyTotalHours(monthHoursExclTodayRef.current + todayPart);
+    };
+    tick();
+    const interval = setInterval(tick, 5000);
+    return () => clearInterval(interval);
+  }, [todayAttendance.isCheckedIn, workingHours, applyTotalHours]);
 
   const formatTime = safeFormatTime;
 
@@ -1849,129 +1870,77 @@ export default function EmployeeDashboard() {
           />
         </div>
 
-        {/* Payroll Cycle Summary */}
-        {payrollCycleSummary && (
-          <Card className="rounded-2xl overflow-hidden">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-                    <Calendar className="w-5 h-5 text-primary" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-lg">Payroll Cycle</h3>
-                    <p className="text-sm text-muted-foreground">Current cycle dates</p>
-                  </div>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="p-3 bg-muted/50 rounded-lg">
-                  <p className="text-xs text-muted-foreground mb-1">Cycle</p>
-                  <p className="text-sm font-medium">{payrollCycleSummary.cycleLabel}</p>
-                </div>
-                <div className="p-3 bg-muted/50 rounded-lg">
-                  <p className="text-xs text-muted-foreground mb-1">Hold Period</p>
-                  <p className="text-sm font-medium">
-                    {payrollCycleSummary.cycleStartDate ? 
-                      `${new Date(payrollCycleSummary.cycleStartDate).toLocaleDateString('en-US', {
-                        month: 'short',
-                        day: 'numeric'
-                      })} - ${new Date(payrollCycleSummary.salaryHoldUntil).toLocaleDateString('en-US', {
-                        month: 'short',
-                        day: 'numeric'
-                      })}`
-                      : 'N/A'
-                    }
-                  </p>
-                </div>
-                <div className="p-3 bg-muted/50 rounded-lg">
-                  <p className="text-xs text-muted-foreground mb-1">Payment Date</p>
-                  <p className="text-sm font-medium">
-                    {payrollCycleSummary.salaryReleaseDate ?
-                      new Date(payrollCycleSummary.salaryReleaseDate).toLocaleDateString('en-US', {
-                        month: 'short',
-                        day: 'numeric'
-                      })
-                      : 'N/A'
-                    }
-                  </p>
-                </div>
-                <div className="p-3 bg-muted/50 rounded-lg">
-                  <p className="text-xs text-muted-foreground mb-1">Currency</p>
-                  <p className="text-sm font-medium">₹ {payrollCycleSummary.currency}</p>
-                </div>
-              </div>
-            </div>
-          </Card>
-        )}
-
         {/* Apply Leave Calendar and Holidays - Side by Side Layout */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-stretch">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start overflow-visible">
           {/* Apply leave — click a day on the calendar */}
-          <div className="min-w-0">
+          <div className="w-full overflow-visible">
             <InteractiveCalendar />
           </div>
 
           {/* Holidays */}
-          <Card className="rounded-2xl overflow-hidden flex flex-col h-full min-w-0">
-            <div className="p-6 border-b border-border flex-shrink-0">
-              <div>
-                <h3 className="font-semibold text-lg">Holidays</h3>
-                <p className="text-sm text-muted-foreground">
-                  {holidays.length > 0
-                    ? `${holidays.filter(h => new Date(h.date) >= new Date()).length} upcoming, ${holidays.length} total`
-                    : 'Company holidays'
-                  }
-                </p>
-              </div>
+          <Card className="rounded-2xl overflow-visible flex flex-col h-auto min-w-0 shadow-lg border-0 bg-gradient-to-br from-background to-muted/20">
+            <div className="px-6 py-5 border-b border-foreground/10 flex-shrink-0 bg-muted/30">
+              <h3 className="font-semibold text-lg text-foreground">Holidays</h3>
+              <p className="text-sm text-muted-foreground mt-1">
+                {holidays.length > 0
+                  ? `${holidays.filter(h => new Date(h.date) >= new Date()).length} upcoming, ${holidays.length} total`
+                  : 'Company holidays'
+                }
+              </p>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto">
-              <div className="p-6 space-y-3">
+            <div className="overflow-visible">
+              <div className="px-6 py-5 space-y-3 overflow-visible relative isolate">
                 {holidays && holidays.length > 0 ? (
-                  <div className="space-y-3">
+                  <div className="space-y-3 overflow-visible">
                     {holidays
                       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
                       .map((holiday) => {
                         const holidayDate = new Date(holiday.date);
                         const today = new Date();
+                        today.setHours(0, 0, 0, 0);
                         const isUpcoming = holidayDate >= today;
 
                         return (
-                          <div
+                          <motion.div
                             key={holiday._id || holiday.id}
-                            className={`p-3 rounded-lg border transition-all duration-300 holiday-item-3d box-border w-full ${isUpcoming
-                              ? 'dark:bg-green-950 dark:border-green-800 dark:text-green-200 bg-green-50 border-green-200 shadow-sm hover:shadow-lg hover:border-green-300'
-                              : 'dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 bg-gray-50 border-gray-200 opacity-75 hover:opacity-100'
-                              }`}
+                            whileHover={{ y: -5, scale: 1.015, transition: { type: "spring", stiffness: 240, damping: 24, mass: 0.75 } }}
+                            whileTap={{ scale: 0.99 }}
+                            className={`relative group/holiday overflow-visible p-4 rounded-xl border transition-all duration-300 ease-out box-border w-full flex flex-col gap-2 transform-gpu will-change-transform hover:z-30 ${
+                              isUpcoming
+                                ? 'dark:bg-emerald-950/50 dark:border-emerald-800/70 dark:text-emerald-200 bg-emerald-50/80 border-emerald-200/70 shadow-sm hover:border-emerald-300 hover:bg-emerald-50/95 hover:shadow-[0_16px_40px_rgba(16,185,129,0.18)] dark:hover:bg-emerald-950/70 dark:hover:border-emerald-700/80'
+                                : 'dark:bg-slate-800/40 dark:border-slate-700/50 dark:text-slate-400 bg-gray-50/80 border-gray-200/70 opacity-80 hover:opacity-100 hover:shadow-sm'
+                            }`}
                           >
-                            <div className="flex items-start justify-between">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2">
-                                  <p className="font-medium text-sm">{holiday.name}</p>
-                                  {isUpcoming && (
-                                    <span className="px-2 py-1 text-xs dark:bg-green-900 dark:text-green-200 bg-green-100 text-green-700 rounded-full">
-                                      Upcoming
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-xs text-muted-foreground mt-1">
+                            <div className="flex items-start justify-between gap-2 min-w-0">
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-sm break-words">{holiday.name}</p>
+                                <p className="text-xs text-muted-foreground mt-1 break-words">
                                   {holidayDate.toLocaleDateString('en-US', {
-                                    weekday: 'long',
-                                    month: 'long',
+                                    weekday: 'short',
+                                    month: 'short',
                                     day: 'numeric',
                                     year: 'numeric'
                                   })}
                                 </p>
                               </div>
+                              {isUpcoming && (
+                                <motion.span 
+                                  initial={{ opacity: 0, scale: 0.95 }}
+                                  whileHover={{ opacity: 1, scale: 1 }}
+                                  className="px-2 py-1 text-xs dark:bg-emerald-900/60 dark:text-emerald-200 bg-emerald-100/80 text-emerald-700 rounded-full flex-shrink-0 whitespace-nowrap transition-all duration-300"
+                                >
+                                  Upcoming
+                                </motion.span>
+                              )}
                             </div>
-                          </div>
+                          </motion.div>
                         );
                       })}
                   </div>
                 ) : (
-                  <div className="text-center py-8 flex flex-col items-center justify-center">
-                    <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
-                    <p className="text-muted-foreground">No holidays added yet</p>
+                  <div className="text-center py-12 flex flex-col items-center justify-center">
+                    <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-40" />
+                    <p className="text-muted-foreground text-sm">No holidays added yet</p>
                   </div>
                 )}
               </div>

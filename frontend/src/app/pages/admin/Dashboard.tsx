@@ -6,10 +6,8 @@ import {
   Receipt,
   DollarSign,
   Calendar,
-  Clock,
   AlertCircle,
   CheckCircle,
-  FileText,
   IndianRupee,
   LogIn,
   Coffee,
@@ -27,7 +25,6 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
-import { Progress } from '../../components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Input } from '../../components/ui/input';
 import {
@@ -52,7 +49,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 import { useIsMounted } from '../../hooks/useIsMounted';
 import { useFetchGeneration } from '../../hooks/useFetchGeneration';
 import { extractApiList } from '../../utils/api';
-import { apiGet, apiPatch, apiDelete, appendOrgIdParam, clearApiCache } from '../../utils/apiHelper';
+import { apiGet, apiPatch, apiDelete, clearApiCache } from '../../utils/apiHelper';
 import { ensureAccessToken } from '../../utils/sessionAuth';
 import { toast } from '../../utils/portalToast';
 import realTimeSocket from '../../utils/realTimeSocket';
@@ -126,16 +123,6 @@ type AttendanceRow = {
   breaks?: Array<{ startTime?: string; endTime?: string | null; breakType?: string }>;
 };
 
-type EmployeeOnBreakRow = {
-  employeeId?: string;
-  employeeName: string;
-  department?: string;
-  designation?: string;
-  breakType?: string;
-  breakStartTime?: string;
-  breakDuration?: number;
-};
-
 type EditingLeave = {
   id: string;
   type: string;
@@ -179,35 +166,6 @@ function safeNum(value: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function normalizeDashboardStats(raw: Partial<DashboardStats> | null | undefined): DashboardStats {
-  return {
-    totalEmployees: safeNum(raw?.totalEmployees, defaultDashboardStats.totalEmployees),
-    avgProductivity: safeNum(raw?.avgProductivity, defaultDashboardStats.avgProductivity),
-    thisMonthExpenses: safeNum(raw?.thisMonthExpenses, defaultDashboardStats.thisMonthExpenses),
-    thisMonthPayroll: safeNum(raw?.thisMonthPayroll, defaultDashboardStats.thisMonthPayroll),
-    totalCost: safeNum(raw?.totalCost, defaultDashboardStats.totalCost),
-    loggedInEmployees: safeNum(raw?.loggedInEmployees, defaultDashboardStats.loggedInEmployees),
-    onLeave: safeNum(raw?.onLeave, defaultDashboardStats.onLeave),
-  };
-}
-
-function normalizeQuickStats(raw: Partial<QuickStats> | null | undefined): QuickStats {
-  return {
-    totalEmployees: safeNum(raw?.totalEmployees, defaultQuickStats.totalEmployees),
-    presentToday: safeNum(raw?.presentToday, defaultQuickStats.presentToday),
-    attendanceRate: safeNum(raw?.attendanceRate, defaultQuickStats.attendanceRate),
-    pendingLeaves: safeNum(raw?.pendingLeaves, defaultQuickStats.pendingLeaves),
-    pendingExpenses: safeNum(raw?.pendingExpenses, defaultQuickStats.pendingExpenses),
-    activeUsers: safeNum(raw?.activeUsers, defaultQuickStats.activeUsers),
-    onLeave: safeNum(raw?.onLeave, defaultQuickStats.onLeave),
-    onBreak: safeNum(raw?.onBreak, defaultQuickStats.onBreak),
-    totalSales: safeNum(raw?.totalSales, defaultQuickStats.totalSales),
-    totalLoss: safeNum(raw?.totalLoss, defaultQuickStats.totalLoss),
-    totalBonus: safeNum(raw?.totalBonus, defaultQuickStats.totalBonus),
-    totalIncentive: safeNum(raw?.totalIncentive, defaultQuickStats.totalIncentive),
-  };
-}
-
 function formatTime(value?: string | null) {
   if (!value) return '—';
   const d = new Date(value);
@@ -245,11 +203,10 @@ function summarizeAttendanceBreaks(
 }
 
 export default function AdminDashboard() {
-  const { formatCurrency, convertAmount, selectedCurrency } = useCurrency();
+  const { formatCurrency, selectedCurrency } = useCurrency();
   const { user } = useAuth();
   const mounted = useIsMounted();
   const { nextGeneration, isStale } = useFetchGeneration();
-  const [selectedTab, setSelectedTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [filterType, setFilterType] = useState('month');
   const [customStartDate, setCustomStartDate] = useState('');
@@ -260,6 +217,12 @@ export default function AdminDashboard() {
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequestRow[]>([]);
   const [todaysAttendance, setTodaysAttendance] = useState<AttendanceRow[]>([]);
   const [todayBreakLog, setTodayBreakLog] = useState<BreakRow[]>([]);
+  const [attendancePage, setAttendancePage] = useState(1);
+  const [attendancePagination, setAttendancePagination] = useState({ page: 1, total: 0, totalPages: 1, hasNext: false, hasPrev: false });
+  const [leavePage, setLeavePage] = useState(1);
+  const [leavePagination, setLeavePagination] = useState({ page: 1, total: 0, totalPages: 1, hasNext: false, hasPrev: false });
+  const [breakPage, setBreakPage] = useState(1);
+  const [breakPagination, setBreakPagination] = useState({ page: 1, total: 0, totalPages: 1, hasNext: false, hasPrev: false });
   const [lastUpdate, setLastUpdate] = useState(Date.now()); // Force re-render timestamp
 
   const chartExpenseData = useMemo(() => ensureArray<ExpenseTrendRow>(expenseData), [expenseData]);
@@ -293,6 +256,12 @@ export default function AdminDashboard() {
 
   const refreshDashboardData = useCallback(async () => {
     const gen = nextGeneration();
+
+    console.log('⚡ [ADMIN-DASHBOARD] Loading KPI summary first with period:', filterType);
+    
+    await ensureAccessToken();
+
+    // Build period query params
     const params = new URLSearchParams();
     params.append('period', filterType);
     if (filterType === 'custom' && customStartDate && customEndDate) {
@@ -300,14 +269,10 @@ export default function AdminDashboard() {
       params.append('endDate', customEndDate);
     }
 
-    console.log('⚡ [ADMIN-DASHBOARD] Loading KPI summary first...');
-    
-    await ensureAccessToken();
-
-    // PHASE 3 OPTIMIZATION: Fetch critical KPI summary first
+    // PHASE 1: Fetch critical KPI summary first
     try {
       const summaryResponse = await apiGet<{ success?: boolean; data?: any }>(
-        `/dashboard/admin/summary?period=${filterType}`,
+        `/dashboard/admin/summary?${params.toString()}`,
         false
       );
 
@@ -339,25 +304,27 @@ export default function AdminDashboard() {
           totalIncentive: 0,
         });
         setLastUpdate(Date.now());
+        console.log('✅ [ADMIN-DASHBOARD] KPI summary loaded:', kpis);
       }
     } catch (error) {
       console.warn('[ADMIN-DASHBOARD] KPI summary failed:', error);
       // Use fallback zeros, don't block dashboard
     }
 
-    // PHASE 5 OPTIMIZATION: Lazy-load tables/charts after KPIs with Promise.allSettled
-    console.log('⚡ [ADMIN-DASHBOARD] Loading tables/charts in parallel...');
+    // PHASE 2: Lazy-load tables/charts after KPIs with Promise.allSettled
+    console.log('⚡ [ADMIN-DASHBOARD] Loading tables with pagination...');
     
-    const [expenseTrendsResponse, leaveResponse, attendanceResponse] =
+    const [expenseTrendsResponse, leaveResponse, attendanceResponse, breakResponse] =
       await Promise.allSettled([
         apiGet<{ success?: boolean; data?: ExpenseTrendRow[] }>('/dashboard/expense-trends', false),
-        apiGet<{ success?: boolean; data?: unknown }>('/dashboard/recent-leave-requests', false),
-        apiGet<{ success?: boolean; data?: AttendanceRow[] }>('/dashboard/todays-attendance', false),
+        apiGet<{ success?: boolean; data?: any; pagination?: any }>(`/dashboard/leave-requests?status=pending&page=1&limit=10&period=${filterType}`, false),
+        apiGet<{ success?: boolean; data?: any; pagination?: any }>('/dashboard/today-attendance?page=1&limit=10', false),
+        apiGet<{ success?: boolean; data?: any; pagination?: any }>('/dashboard/break-records?page=1&limit=10', false),
       ]);
 
     if (!mounted.current || isStale(gen)) return;
 
-    const unwrap = <T,>(r: PromiseSettledResult<{ success?: boolean; data?: T; message?: string }>) =>
+    const unwrap = <T,>(r: PromiseSettledResult<{ success?: boolean; data?: T; pagination?: any; message?: string }>) =>
       r.status === 'fulfilled' ? r.value : null;
 
     const trendsPayload = unwrap(expenseTrendsResponse);
@@ -367,16 +334,42 @@ export default function AdminDashboard() {
 
     const leavePayload = unwrap(leaveResponse);
     if (leavePayload?.success !== false) {
-      setLeaveRequests(extractApiList<LeaveRequestRow>(leavePayload));
+      setLeaveRequests(extractApiList<LeaveRequestRow>(leavePayload?.data || []));
+      if (leavePayload?.pagination) {
+        setLeavePagination(leavePayload.pagination);
+      }
     }
 
     const attPayload = unwrap(attendanceResponse);
     if (attPayload?.success !== false) {
-      setTodaysAttendance(extractApiList<AttendanceRow>(attPayload));
+      const extractedAtt = extractApiList<AttendanceRow>(attPayload?.data || []);
+      setTodaysAttendance(extractedAtt);
+      if (attPayload?.pagination) {
+        setAttendancePagination(attPayload.pagination);
+      }
+    }
+
+    const breakPayload = unwrap(breakResponse);
+    if (breakPayload?.success !== false && Array.isArray(breakPayload?.data)) {
+      const breakData = breakPayload.data;
+      setTodayBreakLog(breakData.map((br: any) => ({
+        attendanceId: br.attendanceId,
+        employeeId: br.employeeId,
+        employeeName: br.employeeName || 'Unknown',
+        department: br.department || 'N/A',
+        breakType: br.breakType,
+        startTime: br.startTime,
+        endTime: br.endTime || null,
+        duration: br.duration || 0,
+        status: br.status as 'active' | 'ended'
+      })));
+      if (breakPayload?.pagination) {
+        setBreakPagination(breakPayload.pagination);
+      }
     }
 
     console.log('✅ [ADMIN-DASHBOARD] All data loaded');
-  }, [filterType, customStartDate, customEndDate, mounted, nextGeneration, isStale, user]);
+  }, [filterType, customStartDate, customEndDate, mounted, nextGeneration, isStale]);
 
   const dashboardSocketDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -401,6 +394,13 @@ export default function AdminDashboard() {
     };
   }, []);
 
+  // Reset pagination when filters change
+  useEffect(() => {
+    setLeavePage(1);
+    setAttendancePage(1);
+    setBreakPage(1);
+  }, [filterType, customStartDate, customEndDate]);
+
   const refreshLeaveList = useCallback(async () => {
     const leaveResponse = await apiGet<{ success?: boolean; data?: unknown }>(
       '/dashboard/recent-leave-requests',
@@ -415,21 +415,101 @@ export default function AdminDashboard() {
     try {
       await ensureAccessToken();
       
-      // PHASE 3 OPTIMIZATION: Removed ghost endpoint /attendance/today-breaks
-      // Break count now comes from /dashboard/admin/summary endpoint
-      // Only fetch the attendance table for lazy-load
-      const attendanceResponse = await apiGet<{ success?: boolean; data?: AttendanceRow[] }>(
-        '/dashboard/todays-attendance',
+      // Fetch break records with pagination
+      const breakResponse = await apiGet<{ 
+        success?: boolean; 
+        data?: any[];
+        pagination?: { page: number; limit: number; total: number; totalPages: number };
+      }>(
+        `/dashboard/break-records?page=${breakPage}&limit=10`,
         false
       );
       
       if (!mounted.current) return;
-      if (attendanceResponse?.success !== false) {
-        setTodaysAttendance(extractApiList<AttendanceRow>(attendanceResponse));
+      if (breakResponse?.success !== false && Array.isArray(breakResponse?.data)) {
+        const breakData = breakResponse.data;
+        setTodayBreakLog(breakData.map((br: any) => ({
+          attendanceId: br.attendanceId,
+          employeeId: br.employeeId,
+          employeeName: br.employeeName || 'Unknown',
+          department: br.department || 'N/A',
+          breakType: br.breakType,
+          startTime: br.startTime,
+          endTime: br.endTime || null,
+          duration: br.duration || 0,
+          status: br.status as 'active' | 'ended'
+        })));
       }
       setLastUpdate(Date.now());
     } catch (error) {
-      console.error('Error refreshing attendance section:', error);
+      console.error('Error refreshing break section:', error);
+    }
+  }, [mounted, breakPage]);
+
+  // Pagination handlers
+  const handleLeavePageChange = useCallback(async (newPage: number) => {
+    setLeavePage(newPage);
+    try {
+      const response = await apiGet<{ success?: boolean; data?: any; pagination?: any }>(
+        `/dashboard/leave-requests?status=pending&page=${newPage}&limit=10&period=${filterType}`,
+        false
+      );
+      if (response?.success !== false) {
+        setLeaveRequests(extractApiList<LeaveRequestRow>(response?.data || []));
+        if (response?.pagination) {
+          setLeavePagination(response.pagination);
+        }
+      }
+    } catch (error) {
+      console.error('Error changing leave page:', error);
+    }
+  }, [filterType]);
+
+  const handleAttendancePageChange = useCallback(async (newPage: number) => {
+    setAttendancePage(newPage);
+    try {
+      const response = await apiGet<{ success?: boolean; data?: any; pagination?: any }>(
+        `/dashboard/today-attendance?page=${newPage}&limit=10`,
+        false
+      );
+      if (response?.success !== false) {
+        const extractedAtt = extractApiList<AttendanceRow>(response?.data || []);
+        setTodaysAttendance(extractedAtt);
+        if (response?.pagination) {
+          setAttendancePagination(response.pagination);
+        }
+      }
+    } catch (error) {
+      console.error('Error changing attendance page:', error);
+    }
+  }, []);
+
+  const handleBreakPageChange = useCallback(async (newPage: number) => {
+    setBreakPage(newPage);
+    try {
+      const response = await apiGet<{ success?: boolean; data?: any; pagination?: any }>(
+        `/dashboard/break-records?page=${newPage}&limit=10`,
+        false
+      );
+      if (response?.success !== false && Array.isArray(response?.data)) {
+        const breakData = response.data;
+        setTodayBreakLog(breakData.map((br: any) => ({
+          attendanceId: br.attendanceId,
+          employeeId: br.employeeId,
+          employeeName: br.employeeName || 'Unknown',
+          department: br.department || 'N/A',
+          breakType: br.breakType,
+          startTime: br.startTime,
+          endTime: br.endTime || null,
+          duration: br.duration || 0,
+          status: br.status as 'active' | 'ended'
+        })));
+        if (response?.pagination) {
+          setBreakPagination(response.pagination);
+        }
+      }
+    } catch (error) {
+      console.error('Error changing break page:', error);
     }
   }, [mounted]);
 
@@ -543,19 +623,19 @@ export default function AdminDashboard() {
       }
     };
 
-    const handleExpenseUpdate = (type: string, expense: any) => {
+    const handleExpenseUpdate = (type: string, _expense: any) => {
       if (type === 'created' || type === 'updated' || type === 'deleted') {
         scheduleDashboardRefresh();
       }
     };
 
-    const handleLeaveUpdate = (type: string, leave: any) => {
+    const handleLeaveUpdate = (type: string, _leave: any) => {
       if (type === 'created' || type === 'updated' || type === 'approved' || type === 'rejected') {
         scheduleDashboardRefresh();
       }
     };
 
-    const handleAttendanceUpdate = (attendance: any) => {
+    const handleAttendanceUpdate = (_attendance: any) => {
       scheduleDashboardRefresh();
     };
 
@@ -827,19 +907,8 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
     fetchProductivity();
   }, []);
 
-  // Currency amount display component with INR icon
-  const CurrencyAmount: React.FC<{ amount: number; className?: string }> = ({ amount, className }) => {
-    if (selectedCurrency.code === 'INR') {
-      return (
-        <div className={`flex items-center gap-1 ${className || ''}`}>
-          <IndianRupee className="w-4 h-4 text-primary" />
-          <span>{formatCurrency(amount).replace('₹', '')}</span>
-        </div>
-      );
-    }
-    
-    return <span className={className}>{formatCurrency(amount)}</span>;
-  };
+  // Currency amount display component with INR icon is not currently used
+  // Keeping selectedCurrency for future use
 
   if (loading) {
     return (
@@ -882,7 +951,7 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="day">Today</SelectItem>
+                <SelectItem value="today">Today</SelectItem>
                 <SelectItem value="week">This Week</SelectItem>
                 <SelectItem value="month">This Month</SelectItem>
                 <SelectItem value="quarter">This Quarter</SelectItem>
@@ -1165,6 +1234,39 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             )}
           </TableBody>
         </Table>
+        
+        {/* Pagination Controls for Leave Requests */}
+        {(() => {
+          return leavePagination.totalPages > 1 ? (
+            <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4">
+              <p className="text-xs sm:text-sm text-muted-foreground">
+                Showing page <span className="font-semibold">{leavePagination.page}</span> of{' '}
+                <span className="font-semibold">{leavePagination.totalPages}</span> ({leavePagination.total} total leave requests)
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleLeavePageChange(leavePage - 1)}
+                  disabled={!leavePagination.hasPrev}
+                >
+                  Previous
+                </Button>
+                <div className="text-xs font-medium">
+                  Page {leavePagination.page} of {leavePagination.totalPages}
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleLeavePageChange(leavePage + 1)}
+                  disabled={!leavePagination.hasNext}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          ) : null;
+        })()}
       </Card>
 
       {/* Employee Overview */}
@@ -1186,14 +1288,17 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             </TableRow>
           </TableHeader>
           <TableBody>
-            {safeTodaysAttendance.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                  No attendance records for today
-                </TableCell>
-              </TableRow>
-            ) : (
-              safeTodaysAttendance.map((attendance) => {
+            {(() => {
+              if (safeTodaysAttendance.length === 0) {
+                return (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                      No attendance records for today
+                    </TableCell>
+                  </TableRow>
+                );
+              }
+              return safeTodaysAttendance.map((attendance) => {
                 const breakInfo = summarizeAttendanceBreaks(attendance.breaks);
                 const rowKey = attendance._id || `${safeCell(attendance.employeeName)}-${attendance.checkIn}`;
                 return (
@@ -1226,9 +1331,40 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
                   </TableRow>
                 );
               })
-            )}
+            })()}
           </TableBody>
         </Table>
+        
+        {/* Pagination Controls */}
+        {attendancePagination.totalPages > 1 && (
+          <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4">
+            <p className="text-xs sm:text-sm text-muted-foreground">
+              Showing page <span className="font-semibold">{attendancePagination.page}</span> of{' '}
+              <span className="font-semibold">{attendancePagination.totalPages}</span> ({attendancePagination.total} total records)
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleAttendancePageChange(attendancePage - 1)}
+                disabled={!attendancePagination.hasPrev}
+              >
+                Previous
+              </Button>
+              <div className="text-xs font-medium">
+                Page {attendancePagination.page} of {attendancePagination.totalPages}
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleAttendancePageChange(attendancePage + 1)}
+                disabled={!attendancePagination.hasNext}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card className="rounded-2xl overflow-hidden">
@@ -1284,6 +1420,39 @@ Applied On: ${request.createdAt ? new Date(request.createdAt).toLocaleString() :
             )}
           </TableBody>
         </Table>
+        
+        {/* Pagination Controls for Break Records */}
+        {(() => {
+          return breakPagination.totalPages > 1 ? (
+            <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4">
+              <p className="text-xs sm:text-sm text-muted-foreground">
+                Showing page <span className="font-semibold">{breakPagination.page}</span> of{' '}
+                <span className="font-semibold">{breakPagination.totalPages}</span> ({breakPagination.total} total break records)
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleBreakPageChange(breakPage - 1)}
+                  disabled={!breakPagination.hasPrev}
+                >
+                  Previous
+                </Button>
+                <div className="text-xs font-medium">
+                  Page {breakPagination.page} of {breakPagination.totalPages}
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleBreakPageChange(breakPage + 1)}
+                  disabled={!breakPagination.hasNext}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          ) : null;
+        })()}
       </Card>
 
       {/* Chat Widget */}

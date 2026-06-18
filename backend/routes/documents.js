@@ -1398,12 +1398,50 @@ router.post(
   authenticate,
   asyncHandler(async (req, res) => {
     try {
+      // TASK 1: Normalize incoming payload - accept multiple field names
+      const rawDocumentId = req.body.documentId || req.body.docId || req.body.id;
+      const rawReadConfirmed = 
+        req.body.readConfirmed === true ||
+        req.body.readConfirmed === 'true' ||
+        req.body.hasRead === true ||
+        req.body.hasRead === 'true' ||
+        req.body.read === true ||
+        req.body.read === 'true';
+      
+      const rawTermsAccepted = 
+        req.body.termsAccepted === true ||
+        req.body.termsAccepted === 'true' ||
+        req.body.acceptedTerms === true ||
+        req.body.acceptedTerms === 'true' ||
+        req.body.accepted === true ||
+        req.body.accepted === 'true';
+
+      const isAccepted = rawReadConfirmed && rawTermsAccepted;
+
+      // Validation: documentId required, both confirmations must be true
+      if (!rawDocumentId) {
+        return sendError(
+          res,
+          "Document ID is required",
+          400,
+          "VALIDATION_ERROR"
+        );
+      }
+
+      if (!isAccepted) {
+        return sendError(
+          res,
+          "Please confirm that you have read and accepted the document terms",
+          400,
+          "VALIDATION_ERROR"
+        );
+      }
+
+      const documentId = String(rawDocumentId);
       const {
-        documentId,
         employeeId,
         acknowledgedAt,
         ipAddress,
-        accepted,
       } = req.body;
 
       let resolvedEmployeeId = req.user.userId;
@@ -1421,10 +1459,10 @@ router.post(
         }
       }
 
-      if (!documentId || !resolvedEmployeeId) {
+      if (!resolvedEmployeeId) {
         return sendError(
           res,
-          "Document ID and employee are required",
+          "Employee ID could not be determined",
           400,
           "VALIDATION_ERROR"
         );
@@ -1463,40 +1501,62 @@ router.post(
         }
       }
 
-      // Use idempotent upsert to handle duplicate submissions safely
-      const acknowledgment = await DocumentAcknowledgment.findOneAndUpdate(
-        {
-          documentId,
-          employeeId: resolvedEmployeeId,
-        },
-        {
-          $set: {
-            employeeName: String(req.user.name || "Employee"),
-            organizationId: String(resolvedOrgId || doc.organizationId),
-            acknowledgedAt: acknowledgedAt || new Date(),
-            ipAddress: ipAddress || undefined,
-            accepted: accepted === true || accepted === "true",
-            status: (accepted === true || accepted === "true") ? "Completed" : "Rejected",
-          },
-          $setOnInsert: {
-            createdAt: new Date(),
-          }
-        },
-        {
-          new: true,
-          upsert: true,
-          runValidators: true,
-        }
-      );
+      // TASK 2: Tenant-safe upsert filter - include organizationId
+      const finalOrgId = String(resolvedOrgId || doc.organizationId);
+      const upsertFilter = {
+        documentId: String(documentId),
+        employeeId: String(resolvedEmployeeId),
+        organizationId: finalOrgId,
+      };
 
-      return sendSuccess(res, acknowledgment, "Document acknowledged successfully");
+      try {
+        // Use idempotent upsert to handle duplicate submissions safely
+        const acknowledgment = await DocumentAcknowledgment.findOneAndUpdate(
+          upsertFilter,
+          {
+            $set: {
+              employeeName: String(req.user.name || "Employee"),
+              organizationId: finalOrgId,
+              acknowledgedAt: acknowledgedAt || new Date(),
+              ipAddress: ipAddress || undefined,
+              accepted: true,
+              status: "Completed",
+            },
+            $setOnInsert: {
+              createdAt: new Date(),
+            }
+          },
+          {
+            new: true,
+            upsert: true,
+            runValidators: true,
+          }
+        );
+
+        return sendSuccess(res, acknowledgment, "Document acknowledged successfully");
+      } catch (mongoError) {
+        // TASK 3: Handle duplicate key error gracefully
+        if (mongoError.code === 11000) {
+          logger.info("Duplicate acknowledgment (idempotent)", {
+            documentId,
+            employeeId: String(resolvedEmployeeId),
+            organizationId: finalOrgId,
+          });
+          
+          const existing = await DocumentAcknowledgment.findOne(upsertFilter);
+          if (existing) {
+            return sendSuccess(res, existing, "Document already acknowledged");
+          }
+        }
+        throw mongoError;
+      }
     } catch (error) {
       logger.error("Create acknowledgment error", {
         message: error.message,
         name: error.name,
         code: error.code,
         errors: error.errors,
-        documentId: req.body.documentId,
+        documentId: req.body.documentId || req.body.docId || req.body.id,
         employeeId: req.body.employeeId,
         userId: req.user?.userId,
         orgId: req.user?.orgId,

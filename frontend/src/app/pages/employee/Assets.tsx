@@ -2,14 +2,17 @@ import { useState, useEffect } from 'react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
-import { Loader2, Package, Laptop, DollarSign, Calendar, MapPin, User, Image as ImageIcon, X, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import { Loader2, Package, Laptop, DollarSign, Calendar, MapPin, User, Image as ImageIcon, X, ChevronLeft, ChevronRight, RefreshCw, Plus } from 'lucide-react';
 import { toast } from '../../utils/portalToast';
 import { apiGet } from '../../utils/apiHelper';
+import AddAssetModal from '../../components/AddAssetModal';
 
 interface Asset {
   _id: string;
   assetName: string;
   assetType: string;
+  status: string;
+  source?: string;
   specifications: {
     model?: string;
     serialNumber?: string;
@@ -31,7 +34,6 @@ interface Asset {
       desk?: string;
     };
   };
-  status: string;
   condition: string;
   photos?: Array<{
     photoData?: string;
@@ -47,6 +49,7 @@ export default function EmployeeAssets() {
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [assetPhotos, setAssetPhotos] = useState<any[]>([]);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
+  const [showAddAssetModal, setShowAddAssetModal] = useState(false);
 
   useEffect(() => {
     fetchAssets();
@@ -142,13 +145,14 @@ export default function EmployeeAssets() {
           <p className="text-muted-foreground mt-1">Assets assigned to you</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => void fetchAssets()}>
+          <Button type="button" variant="default" size="sm" onClick={() => setShowAddAssetModal(true)} className="rounded-lg">
+            <Plus className="w-4 h-4 mr-1" />
+            Add Asset
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => void fetchAssets()} className="rounded-lg">
             <RefreshCw className="w-4 h-4 mr-1" />
             Refresh
           </Button>
-          <p className="text-sm text-muted-foreground">
-            Contact HR to request new asset assignments
-          </p>
         </div>
       </div>
 
@@ -171,6 +175,16 @@ export default function EmployeeAssets() {
         <Card className="p-12 rounded-xl text-center">
           <Package className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
           <p className="text-muted-foreground">No assets assigned to you yet</p>
+          <Button 
+            type="button" 
+            variant="default" 
+            size="sm" 
+            onClick={() => setShowAddAssetModal(true)}
+            className="mt-4"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Add Your First Asset
+          </Button>
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -191,14 +205,21 @@ export default function EmployeeAssets() {
                 </div>
 
                 {/* Header */}
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-2">
                   <div className="flex-1">
                     <h3 className="font-semibold text-foreground">{asset.assetName}</h3>
                     <p className="text-sm text-muted-foreground">{asset.specifications?.model}</p>
                   </div>
-                  <Badge variant="default" className="bg-green-600">
-                    {asset.condition}
-                  </Badge>
+                  <div className="flex flex-col gap-1">
+                    <Badge variant="default" className="bg-green-600 text-xs">
+                      {asset.condition}
+                    </Badge>
+                    {asset.source === 'employee_self_added' && (
+                      <Badge variant="secondary" className="text-xs">
+                        {asset.status === 'pending_review' ? 'Pending' : 'Added'}
+                      </Badge>
+                    )}
+                  </div>
                 </div>
 
                 {/* Details */}
@@ -370,6 +391,16 @@ export default function EmployeeAssets() {
           </Card>
         </div>
       )}
+
+      {/* Add Asset Modal */}
+      <AddAssetModal 
+        isOpen={showAddAssetModal}
+        onClose={() => setShowAddAssetModal(false)}
+        onSuccess={() => {
+          setShowAddAssetModal(false);
+          void fetchAssets();
+        }}
+      />
     </div>
   );
 }

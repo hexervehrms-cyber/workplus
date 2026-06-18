@@ -109,7 +109,7 @@ const assetAssignedSchema = new mongoose.Schema(
     // Asset Status
     status: {
       type: String,
-      enum: ['available', 'assigned', 'in_use', 'maintenance', 'repair', 'retired', 'lost', 'stolen'],
+      enum: ['available', 'assigned', 'in_use', 'maintenance', 'repair', 'retired', 'lost', 'stolen', 'pending_review'],
       default: 'available',
       index: true
     },
@@ -234,6 +234,31 @@ const assetAssignedSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {}
     },
+    // Employee Self-Add Tracking
+    source: {
+      type: String,
+      enum: ['admin', 'employee_self_added'],
+      default: 'admin'
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+    createdByRole: {
+      type: String,
+      enum: ['admin', 'hr', 'employee'],
+      default: 'admin'
+    },
+    adminNotes: { type: String },
+    employeeNotes: { type: String },
+    description: { type: String },
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User"
+    },
+    approvedAt: { type: Date },
+
     // Soft delete
     isActive: {
       type: Boolean,

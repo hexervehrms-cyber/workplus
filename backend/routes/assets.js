@@ -171,6 +171,270 @@ router.get('/',
 );
 
 /**
+ * POST /api/assets/my
+ * Employee self-adds asset to their own portfolio
+ * Protected: employee only, uses authenticated user context
+ */
+router.post('/my',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const {
+      assetName,
+      name, // fallback name field
+      category,
+      serialNumber,
+      condition = 'excellent',
+      purchasePrice,
+      currentValue,
+      location,
+      description,
+      employeeNotes
+    } = req.body;
+
+    try {
+      // Validate required fields
+      const finalAssetName = assetName || name;
+      if (!finalAssetName || !category) {
+        return res.status(400).json({
+          success: false,
+          message: 'Asset name and category are required'
+        });
+      }
+
+      // Validate prices are numeric if provided
+      if (purchasePrice && isNaN(parseFloat(purchasePrice))) {
+        return res.status(400).json({
+          success: false,
+          message: 'Purchase price must be a valid number'
+        });
+      }
+
+      if (currentValue && isNaN(parseFloat(currentValue))) {
+        return res.status(400).json({
+          success: false,
+          message: 'Current value must be a valid number'
+        });
+      }
+
+      // Get the employee record for the logged-in user
+      const employee = await Employee.findOne({ userId: req.user.userId }).select('_id');
+      if (!employee) {
+        return res.status(404).json({
+          success: false,
+          message: 'Employee profile not found'
+        });
+      }
+
+      // Generate unique assetTag
+      const assetTag = `AST-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+
+      // Create asset with employee-specific fields
+      // Backend enforces protected fields from authenticated user
+      const asset = await AssetAssigned.create({
+        assetTag,
+        assetName: finalAssetName,
+        assetType: category, // Use category as assetType for now
+        category: category,
+        specifications: {
+          serialNumber: serialNumber || ''
+        },
+        financial: {
+          purchasePrice: purchasePrice ? parseFloat(purchasePrice) : 0,
+          currentValue: currentValue ? parseFloat(currentValue) : (purchasePrice ? parseFloat(purchasePrice) : 0)
+        },
+        condition: condition,
+        assignment: {
+          assignedTo: employee._id,
+          assignedBy: req.user.userId,
+          assignmentDate: new Date(),
+          location: location ? { desk: location } : undefined
+        },
+        description: description,
+        employeeNotes: employeeNotes,
+        status: 'pending_review',
+        orgId: String(req.user.orgId),
+        createdBy: req.user.userId,
+        createdByRole: 'employee',
+        source: 'employee_self_added'
+      });
+
+      logger.info('Employee asset created', {
+        assetId: asset._id,
+        assetTag: asset.assetTag,
+        assetName: finalAssetName,
+        createdBy: req.user.userId,
+        employeeId: employee._id,
+        orgId: req.user.orgId,
+        source: 'employee_self_added'
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Asset added successfully. Pending admin review.',
+        data: asset
+      });
+
+    } catch (error) {
+      logger.error('Employee create asset error', {
+        error: error.message,
+        userId: req.user.userId,
+        body: req.body
+      });
+      res.status(500).json({
+        success: false,
+        message: 'Failed to add asset'
+      });
+    }
+  })
+);
+
+/**
+ * GET /api/assets/my
+ * Get all assets assigned to logged-in employee (admin-assigned + self-added)
+ */
+router.get('/my',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      // Get the employee record for the logged-in user
+      const employee = await Employee.findOne({ userId: req.user.userId }).select('_id');
+      if (!employee) {
+        return res.status(404).json({
+          success: false,
+          message: 'Employee profile not found'
+        });
+      }
+
+      const orgId = String(req.user.orgId);
+
+      // Find all assets assigned to this employee in this org
+      const assets = await AssetAssigned.find({
+        'assignment.assignedTo': employee._id,
+        orgId: orgId,
+        isActive: true
+      })
+        .populate('assignment.assignedBy', 'name email')
+        .sort({ 'assignment.assignmentDate': -1 })
+        .lean();
+
+      const totalValue = assets.reduce((sum, asset) => {
+        return sum + (asset.financial?.currentValue || asset.financial?.purchasePrice || 0);
+      }, 0);
+
+      res.json({
+        success: true,
+        data: {
+          assets,
+          totalAssets: assets.length,
+          totalValue
+        }
+      });
+
+    } catch (error) {
+      logger.error('Get employee my assets error', {
+        error: error.message,
+        userId: req.user.userId
+      });
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch your assets'
+      });
+    }
+  })
+);
+
+/**
+ * PUT /api/assets/my/:id
+ * Employee updates their own asset (limited fields only)
+ */
+router.put('/my/:id',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const {
+      condition,
+      location,
+      description,
+      employeeNotes,
+      currentValue
+    } = req.body;
+
+    try {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(404).json({
+          success: false,
+          message: 'Asset not found'
+        });
+      }
+
+      // Get the employee record for the logged-in user
+      const employee = await Employee.findOne({ userId: req.user.userId }).select('_id');
+      if (!employee) {
+        return res.status(404).json({
+          success: false,
+          message: 'Employee profile not found'
+        });
+      }
+
+      const orgId = String(req.user.orgId);
+
+      // Find asset and verify ownership
+      const asset = await AssetAssigned.findById(id);
+      if (!asset) {
+        return res.status(404).json({
+          success: false,
+          message: 'Asset not found'
+        });
+      }
+
+      // Verify asset belongs to logged-in employee AND same org
+      if (String(asset.assignment.assignedTo) !== String(employee._id) || String(asset.orgId) !== orgId) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to update this asset'
+        });
+      }
+
+      // Update only safe fields
+      if (condition) asset.condition = condition;
+      if (location) {
+        asset.assignment.location = { desk: location };
+      }
+      if (description) asset.description = description;
+      if (employeeNotes) asset.employeeNotes = employeeNotes;
+      if (currentValue && !isNaN(parseFloat(currentValue))) {
+        asset.financial.currentValue = parseFloat(currentValue);
+      }
+
+      await asset.save();
+
+      logger.info('Employee updated asset', {
+        assetId: id,
+        updatedBy: req.user.userId,
+        fields: Object.keys({ condition, location, description, employeeNotes, currentValue })
+      });
+
+      res.json({
+        success: true,
+        message: 'Asset updated successfully',
+        data: asset
+      });
+
+    } catch (error) {
+      logger.error('Employee update asset error', {
+        error: error.message,
+        assetId: req.params.id,
+        userId: req.user.userId
+      });
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update asset'
+      });
+    }
+  })
+);
+
+/**
  * GET /api/assets/employee/:employeeId/total-value
  * (Registered before /:id so paths are not swallowed.)
  */
@@ -247,7 +511,7 @@ router.get('/employee/:employeeId',
         $or: [
           {
             'assignment.assignedTo': employeeId,
-            status: { $in: ['assigned', 'in_use'] }
+            status: { $in: ['assigned', 'in_use', 'pending_review'] }
           },
           {
             'assignment.assignedBy': userId,

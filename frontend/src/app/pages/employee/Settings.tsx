@@ -43,7 +43,7 @@ function mapEmployeeRecord(raw: Record<string, unknown>, fallbackEmail?: string)
 }
 
 export default function EmployeeSettings() {
-  const { user, setUser } = useAuth();
+  const { user, setUser, logout } = useAuth();
   const [employee, setEmployee] = useState<EmployeeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -200,24 +200,35 @@ export default function EmployeeSettings() {
 
     try {
       setSaving(true);
-      const response = await apiClient.post('/auth/reset-password', {
+      const response = await apiClient.post('/auth/change-password', {
         currentPassword: passwordData.currentPassword,
         newPassword: passwordData.newPassword,
       });
 
       if (response.success) {
-        toast.success('Password reset successfully');
+        toast.success('Password changed successfully. Please login again.');
         setPasswordData({
           currentPassword: '',
           newPassword: '',
           confirmPassword: '',
         });
         setShowPasswordForm(false);
+
+        // Backend has revoked tokens, so logout and redirect to login
+        setTimeout(async () => {
+          try {
+            await logout();
+          } catch (error) {
+            console.error('Logout after password change failed:', error);
+            // Force redirect to login even if logout errors
+            window.location.href = '/login';
+          }
+        }, 1500);
       }
     } catch (error: unknown) {
-      console.error('Error resetting password:', error);
-      const err = error as { message?: string; data?: { message?: string } };
-      toast.error(err.data?.message || err.message || 'Failed to reset password');
+      console.error('Error changing password:', error);
+      const err = error as { response?: { data?: { message?: string } }; message?: string };
+      toast.error(err.response?.data?.message || err.message || 'Failed to change password');
     } finally {
       setSaving(false);
     }

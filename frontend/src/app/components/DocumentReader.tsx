@@ -42,6 +42,7 @@ interface DocumentReaderProps {
   onSubmit: (documentId: string, accepted: boolean, ipAddress: string) => void;
   employeeId: string;
   isAlreadyAcknowledged?: boolean;
+  isAdmin?: boolean;
 }
 
 const DocumentReader: React.FC<DocumentReaderProps> = ({
@@ -50,6 +51,7 @@ const DocumentReader: React.FC<DocumentReaderProps> = ({
   onClose,
   onSubmit,
   isAlreadyAcknowledged = false,
+  isAdmin = false,
 }) => {
   const [hasRead, setHasRead] = useState(false);
   const [acceptsTerms, setAcceptsTerms] = useState(false);
@@ -272,7 +274,7 @@ const DocumentReader: React.FC<DocumentReaderProps> = ({
                   Close
                 </Button>
               </div>
-            ) : (
+            ) : !isAdmin ? (
               <div className="p-6 border-t border-border bg-background shrink-0">
                 <h3 className="font-semibold text-lg mb-2">Document acknowledgment</h3>
                 <p className="text-sm text-muted-foreground mb-4">
@@ -320,6 +322,12 @@ const DocumentReader: React.FC<DocumentReaderProps> = ({
                     )}
                   </Button>
                 </div>
+              </div>
+            ) : (
+              <div className="p-6 border-t border-border bg-muted/50 shrink-0">
+                <Button variant="outline" onClick={handleClose} className="rounded-xl w-full">
+                  Close
+                </Button>
               </div>
             )}
           </Card>

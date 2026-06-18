@@ -14,6 +14,7 @@
     "create-indexes": "node backend/scripts/createIndexes.js",
     "init-rbac": "node backend/scripts/initializeRBAC.js",
     "init-security": "node backend/scripts/initializeSecurity.js",
+    "fix-doc-ack-indexes": "node backend/scripts/fixDocumentAcknowledgmentIndexes.js",
     "setup": "npm run init-rbac && npm run init-security",
     "test": "vitest run",
     "test:watch": "vitest",

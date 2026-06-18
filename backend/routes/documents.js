@@ -16,6 +16,8 @@ import Employee from "../models/Employee.js";
 import GeneratedDocument from "../models/GeneratedDocument.js";
 import IssuedDocument from "../models/IssuedDocument.js";
 import DocumentAcknowledgment from "../models/DocumentAcknowledgment.js";
+import Notification from "../models/Notification.js";
+import User from "../models/User.js";
 import { sendSuccess, sendError, sendPaginated } from "../utils/apiResponse.js";
 import logger from "../utils/logger.js";
 import {
@@ -1392,11 +1394,22 @@ router.get(
 
 /**
  * POST /api/documents/acknowledgments
+ * Employee-only endpoint to acknowledge a document
  */
 router.post(
   "/acknowledgments",
   authenticate,
   asyncHandler(async (req, res) => {
+    // PHASE 3: Employee-only validation
+    if (req.user.role !== "employee") {
+      return sendError(
+        res,
+        "Only employees can acknowledge documents",
+        403,
+        "FORBIDDEN"
+      );
+    }
+
     try {
       // TASK 1: Normalize incoming payload - accept multiple field names
       const rawDocumentId = req.body.documentId || req.body.docId || req.body.id;
@@ -1532,6 +1545,62 @@ router.post(
             runValidators: true,
           }
         );
+
+        // PHASE 7: Create notification for admin only on NEW acknowledgments
+        // Check if this is a newly created acknowledgment by checking if it was just inserted
+        const isNewAcknowledgment = acknowledgment.createdAt && 
+          new Date(acknowledgment.createdAt).getTime() > (Date.now() - 5000); // Created within last 5 seconds
+
+        if (isNewAcknowledgment) {
+          try {
+            // Find all admins/hr in the same organization to notify
+            const admins = await User.find({
+              orgId: finalOrgId,
+              role: { $in: ['admin', 'hr', 'super_admin'] }
+            });
+
+            const documentTitle = doc.title || 'Document';
+            const employeeName = req.user.name || acknowledgment.employeeName || 'Employee';
+
+            // Create notification for each admin
+            for (const admin of admins) {
+              if (String(admin._id) !== String(req.user.userId)) {
+                try {
+                  await Notification.create({
+                    title: 'Document Acknowledged',
+                    message: `${employeeName} acknowledged "${documentTitle}"`,
+                    type: 'document',
+                    recipientId: admin._id,
+                    orgId: finalOrgId,
+                    priority: 'medium',
+                    actionUrl: `/admin/company-docs`,
+                    actionText: 'View Records',
+                    metadata: {
+                      documentId: String(documentId),
+                      employeeId: String(resolvedEmployeeId),
+                      employeeName: employeeName
+                    }
+                  });
+                } catch (notifErr) {
+                  logger.warn('Failed to create notification for admin', {
+                    adminId: admin._id,
+                    employeeId: resolvedEmployeeId,
+                    documentId,
+                    error: notifErr.message
+                  });
+                }
+              }
+            }
+          } catch (notifErr) {
+            logger.error('Error creating acknowledgment notifications', {
+              message: notifErr.message,
+              documentId,
+              employeeId: resolvedEmployeeId,
+              organizationId: finalOrgId
+            });
+            // Don't fail the acknowledgment if notification creation fails
+          }
+        }
 
         return sendSuccess(res, acknowledgment, "Document acknowledged successfully");
       } catch (mongoError) {

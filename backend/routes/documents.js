@@ -1463,38 +1463,45 @@ router.post(
         }
       }
 
-      const existingAcknowledgment = await DocumentAcknowledgment.findOne({
-        documentId,
-        employeeId: resolvedEmployeeId,
-      });
-
-      if (existingAcknowledgment) {
-        return sendSuccess(
-          res,
-          existingAcknowledgment,
-          "Document already acknowledged"
-        );
-      }
-
-      // Use resolved org ID from JWT, not from request body
-      const acknowledgment = await DocumentAcknowledgment.create({
-        documentId,
-        employeeId: resolvedEmployeeId,
-        employeeName: String(req.user.name || "Employee"),
-        organizationId: String(resolvedOrgId || doc.organizationId),
-        acknowledgedAt: acknowledgedAt || new Date(),
-        ipAddress,
-        accepted: accepted === true || accepted === "true",
-        status: (accepted === true || accepted === "true") ? "Completed" : "Rejected",
-      });
+      // Use idempotent upsert to handle duplicate submissions safely
+      const acknowledgment = await DocumentAcknowledgment.findOneAndUpdate(
+        {
+          documentId,
+          employeeId: resolvedEmployeeId,
+        },
+        {
+          $set: {
+            employeeName: String(req.user.name || "Employee"),
+            organizationId: String(resolvedOrgId || doc.organizationId),
+            acknowledgedAt: acknowledgedAt || new Date(),
+            ipAddress: ipAddress || undefined,
+            accepted: accepted === true || accepted === "true",
+            status: (accepted === true || accepted === "true") ? "Completed" : "Rejected",
+          },
+          $setOnInsert: {
+            createdAt: new Date(),
+          }
+        },
+        {
+          new: true,
+          upsert: true,
+          runValidators: true,
+        }
+      );
 
       return sendSuccess(res, acknowledgment, "Document acknowledged successfully");
     } catch (error) {
       logger.error("Create acknowledgment error", {
-        error: error.message,
+        message: error.message,
+        name: error.name,
+        code: error.code,
+        errors: error.errors,
         documentId: req.body.documentId,
+        employeeId: req.body.employeeId,
+        userId: req.user?.userId,
+        orgId: req.user?.orgId,
       });
-      return sendError(res, "Failed to create acknowledgment", 500, "ACKNOWLEDGMENT_ERROR");
+      return sendError(res, error.message || "Failed to create acknowledgment", 500, "ACKNOWLEDGMENT_ERROR");
     }
   })
 );

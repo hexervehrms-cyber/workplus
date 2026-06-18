@@ -257,7 +257,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         return;
       }
 
-      const result = await apiPost<{ data?: Record<string, unknown> }>(
+      const result = await apiPost<{ success?: boolean; data?: Record<string, unknown> }>(
         'documents/acknowledgments',
         {
           documentId,
@@ -270,7 +270,12 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         }
       );
 
-      // Use response data if available, otherwise create acknowledgment object
+      // Only show success if API confirms success
+      if (!result?.success && !result?.data) {
+        throw new Error(result?.message || 'Failed to create acknowledgment');
+      }
+
+      // Use response data from server
       const acknowledgedData = result?.data || {
         id: `ack_${Date.now()}`,
         documentId,
@@ -294,10 +299,16 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
       setSelectedDocument(null);
       
       // Refresh acknowledgments to ensure persistence on page reload
-      await loadAcknowledgments();
+      setTimeout(async () => {
+        await loadAcknowledgments();
+      }, 500);
     } catch (error) {
       console.error('Error submitting acknowledgment:', error);
-      toast.error('Error submitting acknowledgment');
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : (error as any)?.response?.data?.message 
+        || 'Failed to submit acknowledgment';
+      toast.error(errorMessage);
     }
   };
 

@@ -2072,7 +2072,12 @@ export default function EmployeeDashboard() {
                               variant={record.status === 'present' || record.status === 'checked_in' ? 'default' : 'secondary'}
                               className="text-xs capitalize"
                             >
-                              {record.status === 'checked_in' ? 'Checked In' : record.status === 'present' ? 'Present' : record.status || 'Absent'}
+                              {record.status === 'checked_in' ? 'Checked In' : 
+                               record.status === 'present' ? 'Present' : 
+                               record.status === 'weekend' ? 'Weekend' :
+                               record.status === 'holiday' ? 'Holiday' :
+                               record.status === 'absent' ? 'Absent' :
+                               record.status || 'Absent'}
                             </Badge>
                           </TableCell>
                           <TableCell>

@@ -10,6 +10,8 @@ import AttendanceHistory from '../models/AttendanceHistory.js';
 import Employee from '../models/Employee.js';
 import User from '../models/User.js';
 import ActivityLog from '../models/ActivityLog.js';
+import Holiday from '../models/Holiday.js';
+import mongoose from 'mongoose';
 import { authorize, authenticate } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
@@ -1143,8 +1145,9 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee', '
 
 /**
  * GET /api/attendance/my/history
- * Employee's daily attendance history (grouped by local date, not raw records)
- * Pagination AFTER grouping to show 10 days per page
+ * Employee's daily attendance history for last N calendar days
+ * Returns exactly N rows (one per calendar day), filling missing dates with absent/weekend/holiday
+ * Pagination AFTER filling to show 10 days per page
  * Query params: days=30, page=1, limit=10
  */
 router.get('/my/history', authorize('employee'), asyncHandler(async (req, res) => {
@@ -1172,16 +1175,16 @@ router.get('/my/history', authorize('employee'), asyncHandler(async (req, res) =
 
   const effectiveOrgId = String(employee.orgId || userOrgId);
 
-  // Calculate date range for last N calendar days in local timezone
+  // Calculate date range for last N calendar days
   const now = new Date();
   const rangeStart = new Date(now);
-  rangeStart.setDate(rangeStart.getDate() - days);
+  rangeStart.setDate(rangeStart.getDate() - days + 1);
   rangeStart.setHours(0, 0, 0, 0);
 
   const rangeEnd = new Date(now);
   rangeEnd.setHours(23, 59, 59, 999);
 
-  // Fetch all attendance records in date range (do NOT limit to 30 raw records)
+  // Fetch all attendance records in date range
   const records = await Attendance.find({
     userId: currentUserId,
     orgId: effectiveOrgId,
@@ -1197,7 +1200,6 @@ router.get('/my/history', authorize('employee'), asyncHandler(async (req, res) =
   records.forEach(record => {
     if (!record.date) return;
     
-    // Convert date to local date string in the timezone
     const dateObj = new Date(record.date);
     const localDateStr = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
     
@@ -1207,14 +1209,45 @@ router.get('/my/history', authorize('employee'), asyncHandler(async (req, res) =
     dailyMap.get(localDateStr).push(record);
   });
 
-  // Aggregate same-day records into daily summaries
-  const dailyRecords = Array.from(dailyMap.entries())
-    .sort((a, b) => b[0].localeCompare(a[0])) // Sort descending by date
-    .map(([dateStr, sessions]) => {
-      // dateStr is YYYY-MM-DD
-      const dateObj = new Date(dateStr + 'T00:00:00Z');
-      
-      // Find earliest check-in and latest check-out
+  // Fetch holidays for the date range
+  const holidays = await Holiday.find({
+    orgId: effectiveOrgId,
+    date: { $gte: rangeStart, $lte: rangeEnd }
+  })
+    .select('date name')
+    .lean();
+
+  const holidayMap = new Map();
+  holidays.forEach(holiday => {
+    const localDateStr = new Date(holiday.date).toISOString().split('T')[0];
+    holidayMap.set(localDateStr, holiday.name);
+  });
+
+  // Helper: Check if date is weekend (Saturday=6, Sunday=0)
+  const isWeekend = (dateStr) => {
+    const dateObj = new Date(dateStr + 'T00:00:00Z');
+    const dayOfWeek = dateObj.getUTCDay();
+    return dayOfWeek === 0 || dayOfWeek === 6;
+  };
+
+  // Build complete 30-day calendar (or N days)
+  const allDays = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const dateObj = new Date(now);
+    dateObj.setDate(dateObj.getDate() - i);
+    dateObj.setHours(0, 0, 0, 0);
+    const localDateStr = dateObj.toISOString().split('T')[0];
+    
+    allDays.push(localDateStr);
+  }
+
+  // Aggregate same-day records and fill missing dates
+  const dailyRecords = allDays.map(dateStr => {
+    const dateObj = new Date(dateStr + 'T00:00:00Z');
+    const sessions = dailyMap.get(dateStr) || [];
+    
+    if (sessions.length > 0) {
+      // Has attendance records - aggregate them
       let earliestCheckIn = null;
       let latestCheckOut = null;
       let totalHours = 0;
@@ -1240,12 +1273,10 @@ router.get('/my/history', authorize('employee'), asyncHandler(async (req, res) =
           totalHours += session.hoursWorked;
         }
         
-        // Track status (prefer 'present' if any session is present)
         if (session.status === 'present' || session.status === 'checked_in') {
           status = 'present';
         }
         
-        // Collect all breaks
         if (Array.isArray(session.breaks)) {
           allBreaks.push(...session.breaks);
         }
@@ -1269,14 +1300,37 @@ router.get('/my/history', authorize('employee'), asyncHandler(async (req, res) =
         hoursWorked: Math.round(totalHours * 100) / 100,
         status: status,
         breaksCount: allBreaks.length,
-        totalBreakMinutes: allBreaks.reduce((sum, br) => {
-          return sum + (br.duration || 0);
-        }, 0)
+        totalBreakMinutes: allBreaks.reduce((sum, br) => sum + (br.duration || 0), 0)
       };
-    });
+    } else {
+      // No attendance records - check for holiday or weekend
+      let status = 'absent';
+      
+      if (holidayMap.has(dateStr)) {
+        status = 'holiday';
+      } else if (isWeekend(dateStr)) {
+        status = 'weekend';
+      }
 
-  // Apply pagination AFTER grouping
-  const totalDays = dailyRecords.length;
+      return {
+        date: dateStr,
+        displayDate: dateObj.toLocaleDateString('en-US', {
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric'
+        }),
+        checkIn: null,
+        checkOut: null,
+        hoursWorked: 0,
+        status: status,
+        breaksCount: 0,
+        totalBreakMinutes: 0
+      };
+    }
+  });
+
+  // Apply pagination AFTER filling all N days
+  const totalDays = dailyRecords.length; // Always N (e.g., 30)
   const totalPages = Math.ceil(totalDays / limit);
   const skip = (page - 1) * limit;
   const paginatedRecords = dailyRecords.slice(skip, skip + limit);

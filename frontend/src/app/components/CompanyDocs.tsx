@@ -971,6 +971,7 @@ const CompanyDocs: React.FC<{ isAdmin?: boolean; isSuperAdmin?: boolean }> = ({
         onSubmit={handleAcknowledgmentSubmit}
         employeeId={String(user?.userId || user?.id || '')}
         isAlreadyAcknowledged={selectedDocument ? !!acknowledgments[selectedDocument.id] : false}
+        isAdmin={isAdmin}
       />
 
       {/* Edit Document Modal */}

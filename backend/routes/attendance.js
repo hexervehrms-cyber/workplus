@@ -10,6 +10,8 @@ import AttendanceHistory from '../models/AttendanceHistory.js';
 import Employee from '../models/Employee.js';
 import User from '../models/User.js';
 import ActivityLog from '../models/ActivityLog.js';
+import Holiday from '../models/Holiday.js';
+import mongoose from 'mongoose';
 import { authorize, authenticate } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
@@ -1137,6 +1139,319 @@ router.get('/', authorize('super_admin', 'admin', 'hr', 'manager', 'employee', '
       limit: parseInt(limit),
       total,
       pages: Math.ceil(total / limit)
+    }
+  });
+}));
+
+/**
+ * GET /api/attendance/my/history
+ * Employee's daily attendance history for last N calendar days
+ * Returns exactly N rows (one per calendar day), filling missing dates with absent/weekend/holiday
+ * Pagination AFTER filling to show 10 days per page
+ * Query params: days=30, page=1, limit=10
+ */
+router.get('/my/history', authorize('employee'), asyncHandler(async (req, res) => {
+  const currentUserId = req.user.userId;
+  const userOrgId = req.user.orgId;
+  const timezone = getUserTimezone(req) || 'Asia/Kolkata';
+  
+  const days = Math.min(parseInt(req.query.days, 10) || 30, 90);
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
+
+  // Resolve employee
+  const employee = await findEmployeeForSelfService(currentUserId, userOrgId, {
+    allowCrossOrgFallback: false,
+    createIfMissing: false
+  });
+
+  if (!employee) {
+    return res.status(404).json({
+      success: false,
+      message: 'Employee profile not found',
+      code: 'EMPLOYEE_NOT_FOUND'
+    });
+  }
+
+  const effectiveOrgId = String(employee.orgId || userOrgId);
+
+  // Calculate date range for last N calendar days
+  const now = new Date();
+  const rangeStart = new Date(now);
+  rangeStart.setDate(rangeStart.getDate() - days + 1);
+  rangeStart.setHours(0, 0, 0, 0);
+
+  const rangeEnd = new Date(now);
+  rangeEnd.setHours(23, 59, 59, 999);
+
+  // Fetch all attendance records in date range
+  const records = await Attendance.find({
+    userId: currentUserId,
+    orgId: effectiveOrgId,
+    date: { $gte: rangeStart, $lte: rangeEnd }
+  })
+    .select('date checkIn checkOut hoursWorked status breaks')
+    .sort({ date: -1, checkIn: -1 })
+    .lean();
+
+  // Group records by local date (YYYY-MM-DD)
+  const dailyMap = new Map();
+  
+  records.forEach(record => {
+    if (!record.date) return;
+    
+    const dateObj = new Date(record.date);
+    const localDateStr = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    if (!dailyMap.has(localDateStr)) {
+      dailyMap.set(localDateStr, []);
+    }
+    dailyMap.get(localDateStr).push(record);
+  });
+
+  // Fetch holidays for the date range
+  const holidays = await Holiday.find({
+    orgId: effectiveOrgId,
+    date: { $gte: rangeStart, $lte: rangeEnd }
+  })
+    .select('date name')
+    .lean();
+
+  const holidayMap = new Map();
+  holidays.forEach(holiday => {
+    const localDateStr = new Date(holiday.date).toISOString().split('T')[0];
+    holidayMap.set(localDateStr, holiday.name);
+  });
+
+  // Helper: Check if date is weekend (Saturday=6, Sunday=0)
+  const isWeekend = (dateStr) => {
+    const dateObj = new Date(dateStr + 'T00:00:00Z');
+    const dayOfWeek = dateObj.getUTCDay();
+    return dayOfWeek === 0 || dayOfWeek === 6;
+  };
+
+  // Build complete 30-day calendar (or N days)
+  const allDays = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const dateObj = new Date(now);
+    dateObj.setDate(dateObj.getDate() - i);
+    dateObj.setHours(0, 0, 0, 0);
+    const localDateStr = dateObj.toISOString().split('T')[0];
+    
+    allDays.push(localDateStr);
+  }
+
+  // Aggregate same-day records and fill missing dates
+  const dailyRecords = allDays.map(dateStr => {
+    const dateObj = new Date(dateStr + 'T00:00:00Z');
+    const sessions = dailyMap.get(dateStr) || [];
+    
+    if (sessions.length > 0) {
+      // Has attendance records - aggregate them
+      let earliestCheckIn = null;
+      let latestCheckOut = null;
+      let totalHours = 0;
+      let status = 'absent';
+      const allBreaks = [];
+      
+      sessions.forEach(session => {
+        if (session.checkIn) {
+          const checkInTime = new Date(session.checkIn);
+          if (!earliestCheckIn || checkInTime < earliestCheckIn) {
+            earliestCheckIn = checkInTime;
+          }
+        }
+        
+        if (session.checkOut) {
+          const checkOutTime = new Date(session.checkOut);
+          if (!latestCheckOut || checkOutTime > latestCheckOut) {
+            latestCheckOut = checkOutTime;
+          }
+        }
+        
+        if (session.hoursWorked) {
+          totalHours += session.hoursWorked;
+        }
+        
+        if (session.status === 'present' || session.status === 'checked_in') {
+          status = 'present';
+        }
+        
+        if (Array.isArray(session.breaks)) {
+          allBreaks.push(...session.breaks);
+        }
+      });
+
+      // Determine if currently checked in (for today only)
+      const isToday = dateStr === new Date().toISOString().split('T')[0];
+      if (isToday && earliestCheckIn && !latestCheckOut) {
+        status = 'checked_in';
+      }
+
+      return {
+        date: dateStr,
+        displayDate: dateObj.toLocaleDateString('en-US', {
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric'
+        }),
+        checkIn: earliestCheckIn ? earliestCheckIn.toISOString() : null,
+        checkOut: latestCheckOut ? latestCheckOut.toISOString() : null,
+        hoursWorked: Math.round(totalHours * 100) / 100,
+        status: status,
+        breaksCount: allBreaks.length,
+        totalBreakMinutes: allBreaks.reduce((sum, br) => sum + (br.duration || 0), 0)
+      };
+    } else {
+      // No attendance records - check for holiday or weekend
+      let status = 'absent';
+      
+      if (holidayMap.has(dateStr)) {
+        status = 'holiday';
+      } else if (isWeekend(dateStr)) {
+        status = 'weekend';
+      }
+
+      return {
+        date: dateStr,
+        displayDate: dateObj.toLocaleDateString('en-US', {
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric'
+        }),
+        checkIn: null,
+        checkOut: null,
+        hoursWorked: 0,
+        status: status,
+        breaksCount: 0,
+        totalBreakMinutes: 0
+      };
+    }
+  });
+
+  // Apply pagination AFTER filling all N days
+  const totalDays = dailyRecords.length; // Always N (e.g., 30)
+  const totalPages = Math.ceil(totalDays / limit);
+  const skip = (page - 1) * limit;
+  const paginatedRecords = dailyRecords.slice(skip, skip + limit);
+
+  res.json({
+    success: true,
+    data: {
+      records: paginatedRecords,
+      pagination: {
+        page,
+        limit,
+        totalDays,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      }
+    }
+  });
+}));
+
+/**
+ * GET /api/attendance/my/breaks
+ * Employee's break history with pagination
+ * Query params: page=1, limit=10, days=30
+ */
+router.get('/my/breaks', authorize('employee'), asyncHandler(async (req, res) => {
+  const currentUserId = req.user.userId;
+  const userOrgId = req.user.orgId;
+  const timezone = getUserTimezone(req) || 'Asia/Kolkata';
+  
+  const days = Math.min(parseInt(req.query.days, 10) || 30, 90);
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
+
+  // Resolve employee
+  const employee = await findEmployeeForSelfService(currentUserId, userOrgId, {
+    allowCrossOrgFallback: false,
+    createIfMissing: false
+  });
+
+  if (!employee) {
+    return res.status(404).json({
+      success: false,
+      message: 'Employee profile not found',
+      code: 'EMPLOYEE_NOT_FOUND'
+    });
+  }
+
+  const effectiveOrgId = String(employee.orgId || userOrgId);
+
+  // Calculate date range for last N calendar days
+  const now = new Date();
+  const rangeStart = new Date(now);
+  rangeStart.setDate(rangeStart.getDate() - days);
+  rangeStart.setHours(0, 0, 0, 0);
+
+  const rangeEnd = new Date(now);
+  rangeEnd.setHours(23, 59, 59, 999);
+
+  // Fetch attendance records with breaks in date range
+  const records = await Attendance.find({
+    userId: currentUserId,
+    orgId: effectiveOrgId,
+    date: { $gte: rangeStart, $lte: rangeEnd },
+    breaks: { $exists: true, $ne: [] } // Only records with breaks
+  })
+    .select('date breaks')
+    .sort({ date: -1 })
+    .lean();
+
+  // Flatten breaks into a single array
+  const allBreaks = [];
+  records.forEach(record => {
+    if (Array.isArray(record.breaks)) {
+      record.breaks.forEach(breakItem => {
+        if (breakItem.startTime && breakItem.endTime) { // Only completed breaks
+          allBreaks.push({
+            date: record.date ? new Date(record.date).toISOString().split('T')[0] : null,
+            displayDate: record.date ? new Date(record.date).toLocaleDateString('en-US', {
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric'
+            }) : null,
+            breakType: breakItem.breakType || breakItem.type || 'Regular',
+            startTime: breakItem.startTime,
+            endTime: breakItem.endTime,
+            durationMinutes: breakItem.duration || 0
+          });
+        }
+      });
+    }
+  });
+
+  // Sort by date descending, then by start time
+  allBreaks.sort((a, b) => {
+    const aDate = a.date ? new Date(a.date).getTime() : 0;
+    const bDate = b.date ? new Date(b.date).getTime() : 0;
+    if (bDate !== aDate) return bDate - aDate;
+    const aStart = a.startTime ? new Date(a.startTime).getTime() : 0;
+    const bStart = b.startTime ? new Date(b.startTime).getTime() : 0;
+    return bStart - aStart;
+  });
+
+  // Apply pagination
+  const totalRecords = allBreaks.length;
+  const totalPages = Math.ceil(totalRecords / limit);
+  const skip = (page - 1) * limit;
+  const paginatedBreaks = allBreaks.slice(skip, skip + limit);
+
+  res.json({
+    success: true,
+    data: {
+      records: paginatedBreaks,
+      pagination: {
+        page,
+        limit,
+        totalRecords,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      }
     }
   });
 }));

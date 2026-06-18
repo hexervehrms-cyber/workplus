@@ -96,6 +96,7 @@ interface AttendanceEvent {
 
 interface AttendanceRecord {
   date: string;
+  displayDate?: string;
   checkIn?: string;
   checkOut?: string;
   hoursWorked?: number;
@@ -423,6 +424,14 @@ export default function EmployeeDashboard() {
   const [breakHistory, setBreakHistory] = useState<BreakRecord[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [workingHours, setWorkingHours] = useState(0);
+  
+  const [attendanceHistoryPage, setAttendanceHistoryPage] = useState(1);
+  const [attendanceHistoryTotal, setAttendanceHistoryTotal] = useState(0);
+  const [attendanceHistoryTotalPages, setAttendanceHistoryTotalPages] = useState(0);
+  
+  const [breakHistoryPage, setBreakHistoryPage] = useState(1);
+  const [breakHistoryTotal, setBreakHistoryTotal] = useState(0);
+  const [breakHistoryTotalPages, setBreakHistoryTotalPages] = useState(0);
   // ============================================================================
   // DERIVED UI STATE - Computed from attendance state
   // ============================================================================
@@ -1061,46 +1070,81 @@ export default function EmployeeDashboard() {
     setBreakDisplaySeconds(0);
   }, []);
 
-  const fetchAttendanceHistory = useCallback(async () => {
+  const fetchBreakHistory = useCallback(async (pageNum = 1) => {
+    try {
+      const result = await apiGetSafe<{
+        success?: boolean;
+        data?: {
+          records: BreakRecord[];
+          pagination: {
+            page: number;
+            limit: number;
+            totalRecords: number;
+            totalPages: number;
+            hasNextPage: boolean;
+            hasPrevPage: boolean;
+          };
+        };
+      }>(
+        `/attendance/my/breaks?days=30&page=${pageNum}&limit=10`
+      );
+
+      if (result.ok && result.data?.success && result.data.data?.records) {
+        const records = result.data.data.records;
+        const pagination = result.data.data.pagination;
+        
+        if (!mountedRef.current) return;
+        setBreakHistory(records);
+        setBreakHistoryPage(pagination.page);
+        setBreakHistoryTotal(pagination.totalRecords);
+        setBreakHistoryTotalPages(pagination.totalPages);
+      }
+    } catch (err) {
+      debug.warn('Failed to fetch break history:', err);
+    }
+  }, []);
+
+  const fetchAttendanceHistory = useCallback(async (pageNum = 1) => {
     try {
       setAttendanceLoading(true);
 
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-      const result = await apiGetSafe<{ success?: boolean; data?: AttendanceRecord[] }>(
-        `/attendance?limit=30&startDate=${thirtyDaysAgo.toISOString()}`
+      // Use new endpoint that returns daily summaries with pagination
+      const result = await apiGetSafe<{
+        success?: boolean;
+        data?: {
+          records: AttendanceRecord[];
+          pagination: {
+            page: number;
+            limit: number;
+            totalDays: number;
+            totalPages: number;
+            hasNextPage: boolean;
+            hasPrevPage: boolean;
+          };
+        };
+      }>(
+        `/attendance/my/history?days=30&page=${pageNum}&limit=10`
       );
 
-      if (result.ok && result.data?.success && Array.isArray(result.data.data)) {
-        const rows = result.data.data;
+      if (result.ok && result.data?.success && result.data.data?.records) {
+        const records = result.data.data.records;
+        const pagination = result.data.data.pagination;
+        
         if (!mountedRef.current) return;
-        setAttendanceHistory(rows);
+        setAttendanceHistory(records);
+        setAttendanceHistoryPage(pagination.page);
+        setAttendanceHistoryTotal(pagination.totalDays);
+        setAttendanceHistoryTotalPages(pagination.totalPages);
 
-        const breaks: BreakRecord[] = [];
-        rows.forEach((record: AttendanceRecord) => {
-          if (record.breaks && Array.isArray(record.breaks)) {
-            record.breaks.forEach((breakItem: BreakRecord) => {
-              breaks.push({
-                date: record.date,
-                breakType: breakItem.breakType || 'regular',
-                startTime: breakItem.startTime,
-                endTime: breakItem.endTime,
-                duration: breakItem.endTime && breakItem.startTime
-                  ? Math.round((new Date(breakItem.endTime).getTime() - new Date(breakItem.startTime).getTime()) / (1000 * 60))
-                  : 0
-              });
-            });
-          }
-        });
-        setBreakHistory(breaks);
+        // Fetch break history for first page
+        await fetchBreakHistory(1);
       }
     } catch (err) {
       debug.warn('Failed to fetch attendance history:', err);
     } finally {
       if (mountedRef.current) setAttendanceLoading(false);
     }
-  }, []);
+  }, [fetchBreakHistory]);
 
   useEffect(() => {
     fetchAttendanceHistory();
@@ -1971,7 +2015,7 @@ export default function EmployeeDashboard() {
                 </div>
               </div>
               <Badge variant="outline" className="text-xs">
-                {attendanceHistory.length} Records
+                {attendanceHistoryTotal} Days
               </Badge>
             </div>
 
@@ -1985,61 +2029,93 @@ export default function EmployeeDashboard() {
                 <p className="text-muted-foreground">No attendance records found</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Check In</TableHead>
-                      <TableHead>Check Out</TableHead>
-                      <TableHead>Hours Worked</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Breaks</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {attendanceHistory.slice(0, 10).map((record: AttendanceRecord, index: number) => (
-                      <TableRow key={index}>
-                        <TableCell className="font-medium">
-                          {new Date(record.date).toLocaleDateString('en-US', {
-                            weekday: 'short',
-                            month: 'short',
-                            day: 'numeric'
-                          })}
-                        </TableCell>
-                        <TableCell>
-                          {record.checkIn
-                            ? new Date(record.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-                            : '-'}
-                        </TableCell>
-                        <TableCell>
-                          {record.checkOut
-                            ? new Date(record.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-                            : '-'}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="text-xs">
-                            {record.hoursWorked?.toFixed(2) || 0}h
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={record.status === 'present' ? 'default' : 'secondary'}
-                            className="text-xs capitalize"
-                          >
-                            {record.status || 'absent'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {record.breaks && record.breaks.length > 0
-                            ? `${record.breaks.length} break(s)`
-                            : '-'}
-                        </TableCell>
+              <>
+                <div className="overflow-x-auto mb-4">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Check In</TableHead>
+                        <TableHead>Check Out</TableHead>
+                        <TableHead>Hours Worked</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Breaks</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {attendanceHistory.map((record: AttendanceRecord, index: number) => (
+                        <TableRow key={index}>
+                          <TableCell className="font-medium">
+                            {record.displayDate || (record.date ? new Date(record.date).toLocaleDateString('en-US', {
+                              weekday: 'short',
+                              month: 'short',
+                              day: 'numeric'
+                            }) : '-')}
+                          </TableCell>
+                          <TableCell>
+                            {record.checkIn
+                              ? new Date(record.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                              : '-'}
+                          </TableCell>
+                          <TableCell>
+                            {record.checkOut
+                              ? new Date(record.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                              : '-'}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-xs">
+                              {record.hoursWorked?.toFixed(2) || 0}h
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={record.status === 'present' || record.status === 'checked_in' ? 'default' : 'secondary'}
+                              className="text-xs capitalize"
+                            >
+                              {record.status === 'checked_in' ? 'Checked In' : 
+                               record.status === 'present' ? 'Present' : 
+                               record.status === 'weekend' ? 'Weekend' :
+                               record.status === 'holiday' ? 'Holiday' :
+                               record.status === 'absent' ? 'Absent' :
+                               record.status || 'Absent'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {(record as any).breaksCount && (record as any).breaksCount > 0
+                              ? `${(record as any).breaksCount} break(s)`
+                              : '-'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                
+                {/* Pagination Controls */}
+                <div className="flex items-center justify-between mt-4 pt-4 border-t">
+                  <div className="text-sm text-muted-foreground">
+                    Page {attendanceHistoryPage} of {attendanceHistoryTotalPages}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={attendanceHistoryPage <= 1 || attendanceLoading}
+                      onClick={() => fetchAttendanceHistory(attendanceHistoryPage - 1)}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={attendanceHistoryPage >= attendanceHistoryTotalPages || attendanceLoading}
+                      onClick={() => fetchAttendanceHistory(attendanceHistoryPage + 1)}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              </>
             )}
           </Card>
 
@@ -2056,7 +2132,7 @@ export default function EmployeeDashboard() {
                 </div>
               </div>
               <Badge variant="outline" className="text-xs">
-                {breakHistory.length} Breaks
+                {breakHistoryTotal} Breaks
               </Badge>
             </div>
 
@@ -2070,55 +2146,82 @@ export default function EmployeeDashboard() {
                 <p className="text-muted-foreground">No break records found</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Break Type</TableHead>
-                      <TableHead>Start Time</TableHead>
-                      <TableHead>End Time</TableHead>
-                      <TableHead>Duration</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {breakHistory.slice(0, 10).map((breakRecord: BreakRecord, index: number) => (
-                      <TableRow key={index}>
-                        <TableCell className="font-medium">
-                          {breakRecord.date ? new Date(breakRecord.date).toLocaleDateString('en-US', {
-                            weekday: 'short',
-                            month: 'short',
-                            day: 'numeric'
-                          }) : 'N/A'}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={breakRecord.breakType === 'lunch' ? 'default' : 'secondary'}
-                            className="text-xs capitalize"
-                          >
-                            {breakRecord.breakType}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {breakRecord.startTime
-                            ? new Date(breakRecord.startTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-                            : '-'}
-                        </TableCell>
-                        <TableCell>
-                          {breakRecord.endTime
-                            ? new Date(breakRecord.endTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-                            : '-'}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="text-xs">
-                            {breakRecord.duration} min
-                          </Badge>
-                        </TableCell>
+              <>
+                <div className="overflow-x-auto mb-4">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Break Type</TableHead>
+                        <TableHead>Start Time</TableHead>
+                        <TableHead>End Time</TableHead>
+                        <TableHead>Duration</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {breakHistory.map((breakRecord: BreakRecord, index: number) => (
+                        <TableRow key={index}>
+                          <TableCell className="font-medium">
+                            {(breakRecord as any).displayDate || (breakRecord.date ? new Date(breakRecord.date).toLocaleDateString('en-US', {
+                              weekday: 'short',
+                              month: 'short',
+                              day: 'numeric'
+                            }) : 'N/A')}
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={(breakRecord.breakType || '').toLowerCase() === 'lunch' ? 'default' : 'secondary'}
+                              className="text-xs capitalize"
+                            >
+                              {breakRecord.breakType || 'Regular'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {breakRecord.startTime
+                              ? new Date(breakRecord.startTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                              : '-'}
+                          </TableCell>
+                          <TableCell>
+                            {breakRecord.endTime
+                              ? new Date(breakRecord.endTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                              : '-'}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-xs">
+                              {(breakRecord as any).durationMinutes || breakRecord.duration || 0} min
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                
+                {/* Pagination Controls */}
+                <div className="flex items-center justify-between mt-4 pt-4 border-t">
+                  <div className="text-sm text-muted-foreground">
+                    Page {breakHistoryPage} of {breakHistoryTotalPages}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={breakHistoryPage <= 1 || attendanceLoading}
+                      onClick={() => fetchBreakHistory(breakHistoryPage - 1)}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={breakHistoryPage >= breakHistoryTotalPages || attendanceLoading}
+                      onClick={() => fetchBreakHistory(breakHistoryPage + 1)}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              </>
             )}
           </Card>
         </div>

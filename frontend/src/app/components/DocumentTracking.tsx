@@ -60,7 +60,8 @@ interface Acknowledgment {
   employeeName: string;
   organizationId: string;
   acknowledgedAt: string;
-  status: 'Completed' | 'Pending';
+  status: 'Completed' | 'Pending' | 'Rejected';
+  accepted?: boolean;
   ipAddress: string;
   userAgent: string;
 }
@@ -87,6 +88,9 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
   const [successMessage, setSuccessMessage] = useState('');
   const [error, setError] = useState('');
 
+  // Helper: Normalize ID to string for consistent comparison
+  const getId = (value: any): string => String(value?._id || value?.id || value || '');
+
   useEffect(() => {
     loadData();
   }, [organizationId]);
@@ -101,7 +105,7 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
       ).catch(() => ({ data: [] }));
       const docsList = Array.isArray(docsJson?.data) ? docsJson.data : [];
       const mappedDocs: Document[] = docsList.map((d: Record<string, unknown>) => ({
-        id: String(d.id || d._id || ''),
+        id: getId(d),  // Normalize: use _id if available, else id
         title: String(d.title || 'Untitled'),
         description: String(d.description || ''),
         category: String(d.category || d.documentType || 'Other'),
@@ -130,7 +134,7 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
           ? empsJson.employees
           : [];
       const mappedEmployees: Employee[] = empsList.map((e: Record<string, unknown>) => ({
-        id: String(e.userId || e._id || e.id || ''),
+        id: String(e.userId || e._id || e.id || ''),  // Use userId if available (matches backend resolution)
         name: String(e.name || `${e.firstName || ''} ${e.lastName || ''}`.trim() || 'Employee'),
         email: String(e.email || ''),
         department: String(e.department || '—'),
@@ -144,12 +148,13 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
       const ackList = Array.isArray(ackJson?.data) ? ackJson.data : [];
       const mappedAcks: Acknowledgment[] = ackList.map((ack: Record<string, unknown>) => ({
         id: String(ack._id || ack.id || `${ack.documentId}-${ack.employeeId}`),
-        documentId: String(ack.documentId || ''),
-        employeeId: String(ack.employeeId || ''),
+        documentId: String(ack.documentId || ''),  // Backend stores custom document id
+        employeeId: String(ack.employeeId || ''),  // Backend stores User._id (req.user.userId)
         employeeName: String(ack.employeeName || ''),
         organizationId: String(ack.organizationId || organizationId),
         acknowledgedAt: String(ack.acknowledgedAt || ack.createdAt || new Date().toISOString()),
-        status: (ack.status === 'Completed' ? 'Completed' : 'Pending') as Acknowledgment['status'],
+        status: (ack.status === 'Completed' || ack.accepted === true ? 'Completed' : 'Pending') as Acknowledgment['status'],
+        accepted: ack.accepted === true,
         ipAddress: String(ack.ipAddress || '—'),
         userAgent: String(ack.userAgent || '—'),
       }));
@@ -166,7 +171,8 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
   };
 
   const getDocumentStats = (documentId: string) => {
-    const doc = documents.find(d => d.id === documentId);
+    const normalizedDocId = String(documentId || '');
+    const doc = documents.find(d => String(d.id || '') === normalizedDocId);
     if (!doc) return { total: 0, completed: 0, pending: 0 };
 
     let targetEmployees = employees;
@@ -175,8 +181,10 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
       targetEmployees = employees.filter((emp) => doc.targetUsers.includes(emp.id));
     }
 
+    // Match acknowledgments by normalized documentId and status
     const completedCount = acknowledgments.filter(ack => 
-      ack.documentId === documentId && ack.status === 'Completed'
+      String(ack.documentId || '') === normalizedDocId && 
+      (ack.status === 'Completed' || ack.accepted === true)
     ).length;
 
     return {
@@ -187,10 +195,13 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
   };
 
   const getEmployeeStatus = (documentId: string, employeeId: string) => {
+    const normalizedDocId = String(documentId || '');
+    const normalizedEmpId = String(employeeId || '');
     const acknowledgment = acknowledgments.find(ack => 
-      ack.documentId === documentId && ack.employeeId === employeeId
+      String(ack.documentId || '') === normalizedDocId && 
+      String(ack.employeeId || '') === normalizedEmpId
     );
-    return acknowledgment ? 'completed' : 'pending';
+    return acknowledgment?.status === 'Completed' ? 'completed' : 'pending';
   };
 
   const sendReminder = async (documentId: string, employeeId?: string) => {

@@ -1,0 +1,81 @@
+{
+  "name": "workplus-backend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "WorkPlus HRMS Backend - Production Ready",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "server": "node server.js",
+    "dev": "node server.js",
+    "build": "echo 'Backend is ready - no build required'",
+    "create-indexes": "node scripts/createIndexes.js",
+    "init-rbac": "node scripts/initializeRBAC.js",
+    "init-security": "node scripts/initializeSecurity.js",
+    "setup": "npm run init-rbac && npm run init-security",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "hrms",
+    "workforce",
+    "employee management",
+    "payroll",
+    "attendance",
+    "leave management"
+  ],
+  "author": "Hexerve",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
+    "apn": "^1.6.2",
+    "axios": "^1.16.1",
+    "bcrypt": "^6.0.0",
+    "compression": "^1.8.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "date-fns": "3.6.0",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.4.0",
+    "express-validator": "^7.3.2",
+    "firebase-admin": "^13.10.0",
+    "helmet": "^8.1.0",
+    "isomorphic-dompurify": "^2.16.0",
+    "joi": "^17.13.3",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.4.1",
+    "morgan": "^1.10.1",
+    "multer": "^2.1.1",
+    "node-fetch": "^3.3.2",
+    "nodemailer": "^8.0.7",
+    "qrcode": "1.5.4",
+    "redis": "^5.12.1",
+    "sharp": "^0.34.5",
+    "socket.io": "^4.8.3",
+    "speakeasy": "^2.0.0",
+    "twilio": "^5.3.5",
+    "uuid": "^14.0.0",
+    "validator": "^13.12.0",
+    "web-push": "^3.6.7",
+    "winston": "^3.19.0",
+    "xml2js": "^0.6.2",
+    "zxcvbn": "^4.4.2"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4",
+    "fast-check": "^4.7.0",
+    "@vitest/ui": "^3.0.0"
+  },
+  "overrides": {
+    "@tootallnate/once": "^3.0.1",
+    "axios": "^1.16.1",
+    "ws": "^8.20.1",
+    "dompurify": "^3.3.4"
+  }
+}

@@ -83,9 +83,6 @@ export default function InteractiveCalendar() {
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
 
-  // Water/Glass tile state for individual day cells
-  const [cellTilt, setCellTilt] = useState<{ [key: string]: { x: number; y: number } }>({});
-
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
     const handleChange = (e: MediaQueryListEvent) => {
@@ -95,63 +92,68 @@ export default function InteractiveCalendar() {
     return () => mediaQuery.removeEventListener('change', handleChange);
   }, []);
 
-  // Add CSS animations for floating effect
+  // Remove CSS animations for clean parallax tile tilt only
   useEffect(() => {
     const style = document.createElement('style');
     style.textContent = `
-      @keyframes floatingGlass {
-        0%, 100% { transform: translateY(0px); }
-        50% { transform: translateY(-2px); }
+      /* Parallax tile tilt on hover - mouse-tracking based */
+      .apply-leave-calendar .calendar-parallax-tile {
+        transform-style: preserve-3d;
+        transform:
+          perspective(750px)
+          rotateX(var(--rx, 0deg))
+          rotateY(var(--ry, 0deg))
+          translateY(0)
+          scale(1);
+        transition:
+          transform 180ms ease,
+          box-shadow 180ms ease,
+          border-color 180ms ease;
+        will-change: transform;
       }
-      
-      /* Apply floating animation to available day cells only */
-      .calendar-grid > div:nth-child(1) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0s; }
-      .calendar-grid > div:nth-child(2) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.3s; }
-      .calendar-grid > div:nth-child(3) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.6s; }
-      .calendar-grid > div:nth-child(4) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.9s; }
-      .calendar-grid > div:nth-child(5) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.2s; }
-      .calendar-grid > div:nth-child(6) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.5s; }
-      .calendar-grid > div:nth-child(7) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.8s; }
-      .calendar-grid > div:nth-child(8) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.1s; }
-      .calendar-grid > div:nth-child(9) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.4s; }
-      .calendar-grid > div:nth-child(10) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.7s; }
-      .calendar-grid > div:nth-child(11) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3s; }
-      .calendar-grid > div:nth-child(12) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.3s; }
-      .calendar-grid > div:nth-child(13) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.6s; }
-      .calendar-grid > div:nth-child(14) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.9s; }
-      .calendar-grid > div:nth-child(15) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.2s; }
-      .calendar-grid > div:nth-child(16) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.5s; }
-      .calendar-grid > div:nth-child(17) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.8s; }
-      .calendar-grid > div:nth-child(18) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.1s; }
-      .calendar-grid > div:nth-child(19) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.4s; }
-      .calendar-grid > div:nth-child(20) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.7s; }
-      .calendar-grid > div:nth-child(21) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.1s; }
-      .calendar-grid > div:nth-child(22) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.4s; }
-      .calendar-grid > div:nth-child(23) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.7s; }
-      .calendar-grid > div:nth-child(24) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1s; }
-      .calendar-grid > div:nth-child(25) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.3s; }
-      .calendar-grid > div:nth-child(26) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.6s; }
-      .calendar-grid > div:nth-child(27) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.9s; }
-      .calendar-grid > div:nth-child(28) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.2s; }
-      .calendar-grid > div:nth-child(29) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.5s; }
-      .calendar-grid > div:nth-child(30) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.8s; }
-      .calendar-grid > div:nth-child(31) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.1s; }
-      .calendar-grid > div:nth-child(32) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.4s; }
-      .calendar-grid > div:nth-child(33) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.7s; }
-      .calendar-grid > div:nth-child(34) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4s; }
-      .calendar-grid > div:nth-child(35) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.3s; }
-      .calendar-grid > div:nth-child(36) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.6s; }
-      .calendar-grid > div:nth-child(37) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.9s; }
-      .calendar-grid > div:nth-child(38) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.2s; }
-      .calendar-grid > div:nth-child(39) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.5s; }
-      .calendar-grid > div:nth-child(40) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.8s; }
-      .calendar-grid > div:nth-child(41) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.2s; }
-      .calendar-grid > div:nth-child(42) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.5s; }
-      
+
+      .apply-leave-calendar .calendar-parallax-tile:hover:not(:disabled) {
+        transform:
+          perspective(750px)
+          rotateX(var(--rx, 0deg))
+          rotateY(var(--ry, 0deg))
+          translateY(-6px)
+          scale(1.04);
+        box-shadow:
+          0 18px 35px rgba(0, 0, 0, 0.18),
+          inset 0 1px 0 rgba(255, 255, 255, 0.35);
+      }
+
+      .apply-leave-calendar .calendar-parallax-shine {
+        pointer-events: none;
+        opacity: 0;
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        background:
+          radial-gradient(
+            circle at var(--mx, 50%) var(--my, 50%),
+            rgba(255, 255, 255, 0.38),
+            rgba(255, 255, 255, 0.12) 28%,
+            transparent 58%
+          );
+        transition: opacity 180ms ease;
+        transform: translateZ(18px);
+      }
+
+      .apply-leave-calendar .calendar-parallax-tile:hover:not(:disabled) .calendar-parallax-shine {
+        opacity: 1;
+      }
+
       @media (prefers-reduced-motion: reduce) {
-        .floating-glass-tile {
-          animation: none !important;
-          transform: translateY(0) !important;
+        .apply-leave-calendar .calendar-parallax-tile,
+        .apply-leave-calendar .calendar-parallax-tile:hover:not(:disabled) {
+          transform: none;
+          transition: none;
+        }
+
+        .apply-leave-calendar .calendar-parallax-shine {
+          display: none;
         }
       }
     `;
@@ -163,7 +165,40 @@ export default function InteractiveCalendar() {
 
   const authUserId = user?.userId || user?.id || '';
 
-  // 3D Parallax Tilt Handlers
+  // Parallax tile mouse tracking handler
+  const handleTileMouseMove = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    if (prefersReducedMotion.current) return;
+
+    const tile = e.currentTarget;
+    const rect = tile.getBoundingClientRect();
+
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+
+    const rotateY = ((x - centerX) / centerX) * 8;
+    const rotateX = -((y - centerY) / centerY) * 8;
+
+    tile.style.setProperty('--rx', `${rotateX}deg`);
+    tile.style.setProperty('--ry', `${rotateY}deg`);
+    tile.style.setProperty('--mx', `${x}px`);
+    tile.style.setProperty('--my', `${y}px`);
+  }, []);
+
+  const handleTileMouseLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    if (prefersReducedMotion.current) return;
+
+    const tile = e.currentTarget;
+
+    tile.style.setProperty('--rx', '0deg');
+    tile.style.setProperty('--ry', '0deg');
+    tile.style.setProperty('--mx', '50%');
+    tile.style.setProperty('--my', '50%');
+  }, []);
+
+  // 3D Parallax Tilt Handlers (for card container)
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (prefersReducedMotion.current || !cardRef.current) return;
 
@@ -553,78 +588,46 @@ export default function InteractiveCalendar() {
     !isLastColumn ? 'border-r border-slate-300/80 dark:border-slate-700/80' : ''
   } ${!isLastRow ? 'border-b border-slate-300/80 dark:border-slate-700/80' : ''}`}
 >
-                    <motion.button
-                      type="button"
-                      onClick={() => isAvailableDate && openLeaveForm(day)}
-                      disabled={!isAvailableDate}
-                      aria-label={tooltipText}
-                      whileHover={isAvailableDate && !prefersReducedMotion.current ? { 
-                        y: -6, 
-                        scale: 1.04, 
-                        rotateX: 6, 
-                        rotateY: -6, 
-                        z: 40 
-                      } : undefined}
-                      whileTap={isAvailableDate && !prefersReducedMotion.current ? { 
-                        y: -2, 
-                        scale: 0.98, 
-                        rotateX: 0, 
-                        rotateY: 0, 
-                        z: 12 
-                      } : undefined}
-                      transition={{ type: "spring", stiffness: 350, damping: 28, mass: 0.35, restDelta: 0.001, restSpeed: 0.001 }}
-                      className={`
-                        w-full h-full relative group/tile flex flex-col items-center justify-center rounded-xl border overflow-hidden transform-gpu will-change-transform [transform-style:preserve-3d] [backface-visibility:hidden] font-medium text-xs
-                        transition-all duration-300 ease-out
-                        ${weekend ? 'bg-red-500/15 dark:bg-red-600/15 border-red-300/40 dark:border-red-700/40 text-red-700 dark:text-red-200 cursor-not-allowed backdrop-blur-sm shadow-inner' : ''}
-                        ${holiday ? 'bg-emerald-500/15 dark:bg-emerald-600/15 border-emerald-300/40 dark:border-emerald-700/40 text-emerald-700 dark:text-emerald-200 cursor-not-allowed backdrop-blur-sm shadow-inner' : ''}
-                        ${leave && leaveStatus === 'approved' ? 'bg-blue-500/15 dark:bg-blue-600/15 border-blue-300/40 dark:border-blue-700/40 text-blue-700 dark:text-blue-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
-                        ${leave && leaveStatus === 'pending' ? 'bg-yellow-500/15 dark:bg-yellow-600/15 border-yellow-300/40 dark:border-yellow-700/40 text-yellow-700 dark:text-yellow-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
-                        ${leave && leaveStatus === 'rejected' ? 'bg-red-500/15 dark:bg-red-600/15 border-red-300/40 dark:border-red-700/40 text-red-700 dark:text-red-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
-                        ${isAvailableDate ? `
-                          floating-glass-tile
-                          bg-white/35 dark:bg-slate-400/20
-                          border-white/45 dark:border-slate-300/40
-                          text-foreground 
-                          cursor-pointer 
-                          backdrop-blur-md
-                          shadow-lg shadow-white/10
-                          hover:bg-white/50 dark:hover:bg-slate-400/30
-                          hover:border-white/60 dark:hover:border-slate-300/60
-                          hover:shadow-[0_20px_60px_rgba(16,185,129,0.2),_0_0_40px_rgba(255,255,255,0.15)]
-                          hover:brightness-110
-                          dark:hover:shadow-[0_20px_60px_rgba(16,185,129,0.15),_0_0_40px_rgba(148,163,184,0.1)]
-                        ` : ''}
-                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60
-                      `}
-                    >
-                      {/* Premium water/glass shine overlay */}
+                    {/* Wrapper for parallax scope */}
+                    <div className="apply-leave-calendar w-full h-full">
+                      <motion.button
+                        type="button"
+                        onClick={() => isAvailableDate && openLeaveForm(day)}
+                        onMouseMove={isAvailableDate ? handleTileMouseMove : undefined}
+                        onMouseLeave={isAvailableDate ? handleTileMouseLeave : undefined}
+                        disabled={!isAvailableDate}
+                        aria-label={tooltipText}
+                        transition={{ type: "spring", stiffness: 350, damping: 28, mass: 0.35, restDelta: 0.001, restSpeed: 0.001 }}
+                        className={`
+                          calendar-parallax-tile
+                          w-full h-full relative group/tile flex flex-col items-center justify-center rounded-xl border overflow-hidden transform-gpu will-change-transform [transform-style:preserve-3d] [backface-visibility:hidden] font-medium text-xs
+                          transition-all duration-300 ease-out
+                          ${weekend ? 'bg-red-500/15 dark:bg-red-600/15 border-red-300/40 dark:border-red-700/40 text-red-700 dark:text-red-200 cursor-not-allowed backdrop-blur-sm shadow-inner' : ''}
+                          ${holiday ? 'bg-emerald-500/15 dark:bg-emerald-600/15 border-emerald-300/40 dark:border-emerald-700/40 text-emerald-700 dark:text-emerald-200 cursor-not-allowed backdrop-blur-sm shadow-inner' : ''}
+                          ${leave && leaveStatus === 'approved' ? 'bg-blue-500/15 dark:bg-blue-600/15 border-blue-300/40 dark:border-blue-700/40 text-blue-700 dark:text-blue-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
+                          ${leave && leaveStatus === 'pending' ? 'bg-yellow-500/15 dark:bg-yellow-600/15 border-yellow-300/40 dark:border-yellow-700/40 text-yellow-700 dark:text-yellow-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
+                          ${leave && leaveStatus === 'rejected' ? 'bg-red-500/15 dark:bg-red-600/15 border-red-300/40 dark:border-red-700/40 text-red-700 dark:text-red-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
+                          ${isAvailableDate ? `
+                            bg-white/35 dark:bg-slate-400/20
+                            border-white/45 dark:border-slate-300/40
+                            text-foreground 
+                            cursor-pointer 
+                            backdrop-blur-md
+                            shadow-lg shadow-white/10
+                            hover:bg-white/50 dark:hover:bg-slate-400/30
+                            hover:border-white/60 dark:hover:border-slate-300/60
+                            hover:shadow-[0_20px_60px_rgba(16,185,129,0.2),_0_0_40px_rgba(255,255,255,0.15)]
+                            hover:brightness-110
+                            dark:hover:shadow-[0_20px_60px_rgba(16,185,129,0.15),_0_0_40px_rgba(148,163,184,0.1)]
+                          ` : ''}
+                          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60
+                        `}
+                      >
+                      {/* Premium parallax shine overlay */}
                       {isAvailableDate && (
-                        <>
-                          {/* Top-left water shine gradient */}
-                          <span 
-                            aria-hidden="true" 
-                            className="pointer-events-none absolute inset-0 opacity-0 group-hover/tile:opacity-100 transition-opacity duration-200 bg-gradient-to-br from-white/60 via-white/20 to-transparent rounded-xl" 
-                          />
-                          
-                          {/* Subtle inner border highlight */}
-                          <span 
-                            aria-hidden="true" 
-                            className="pointer-events-none absolute inset-0 rounded-xl border border-white/50 dark:border-white/20 opacity-50 group-hover/tile:opacity-80 transition-opacity duration-200" 
-                          />
-                          
-                          {/* Water-like top light reflection */}
-                          <span 
-                            aria-hidden="true" 
-                            className="pointer-events-none absolute top-1 left-2 right-2 h-1 rounded-full opacity-0 group-hover/tile:opacity-80 transition-opacity duration-200 bg-gradient-to-r from-transparent via-white/70 to-transparent blur-sm" 
-                          />
-                          
-                          {/* Soft bottom glow for floating effect */}
-                          <span 
-                            aria-hidden="true" 
-                            className="pointer-events-none absolute -bottom-3 left-2 right-2 h-6 rounded-full opacity-0 blur-lg group-hover/tile:opacity-60 transition-opacity duration-300 bg-gradient-to-t from-white/30 to-transparent dark:from-emerald-400/20" 
-                          />
-                        </>
+                        <div 
+                          className="apply-leave-calendar calendar-parallax-shine"
+                        />
                       )}
                       
                       <span className="block relative z-10 text-base font-semibold">{day.getDate()}</span>
@@ -647,6 +650,7 @@ export default function InteractiveCalendar() {
                         )}
                       </div>
                     </motion.button>
+                    </div>
                   </div>
                 );
               })}

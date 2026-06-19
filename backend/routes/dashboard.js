@@ -1240,8 +1240,28 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
       Attendance.find({
         ...userIdMatch,
         date: { $gte: monthStart, $lt: monthEnd }
-      }).select('hoursWorked breaks checkIn checkOut').lean()
+      }).select('hoursWorked breaks checkIn checkOut date userId employeeId orgId _id').lean()
     ]);
+    
+    // DEBUG: Log monthly attendance query results
+    console.log('EMPLOYEE_MONTH_HOURS_DEBUG', {
+      userId: userId,
+      orgId: orgId,
+      monthStart: monthStart.toISOString(),
+      monthEnd: monthEnd.toISOString(),
+      attendanceRecordCount: monthAttendanceRecords?.length || 0,
+      sampleRecords: monthAttendanceRecords?.slice(0, 5).map(r => ({
+        _id: r._id?.toString?.(),
+        userId: r.userId?.toString?.(),
+        employeeId: r.employeeId?.toString?.(),
+        orgId: r.orgId,
+        date: r.date?.toISOString?.(),
+        checkIn: r.checkIn?.toISOString?.(),
+        checkOut: r.checkOut?.toISOString?.(),
+        hoursWorked: r.hoursWorked,
+        breaksCount: Array.isArray(r.breaks) ? r.breaks.length : 0
+      })) || []
+    });
     
     // Calculate total hours for current month (from completed sessions)
     let totalMonthHours = 0;
@@ -1281,6 +1301,16 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
     const minutesFloat = (totalMonthHours - hoursInt) * 60;
     const minutesInt = Math.round(minutesFloat);
     const totalHoursLabel = `${hoursInt}h ${minutesInt}m`;
+    
+    console.log('EMPLOYEE_MONTH_HOURS_FINAL', {
+      userId,
+      orgId,
+      totalMonthHours,
+      totalMonthHourMinutes: Math.round(totalMonthHours * 60),
+      totalHoursLabel,
+      hoursWorkedFromRecords: monthAttendanceRecords?.reduce((sum, r) => sum + (typeof r.hoursWorked === 'number' ? r.hoursWorked : 0), 0) || 0,
+      activeSessionAdded: todayAttendance?.checkIn && !todayAttendance?.checkOut ? 'yes' : 'no'
+    });
     
     const summary = {
       kpis: {

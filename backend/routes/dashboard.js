@@ -1188,6 +1188,7 @@ router.get("/admin/summary", authorize('admin', 'hr', 'manager'), asyncHandler(a
  * GET /api/dashboard/employee/summary
  * Optimized summary endpoint for employee dashboard
  * Returns only critical data: today's status, pending leaves, latest payslip, total hours this month
+ * CRITICAL FIX: Added missing orgId filter to ensure tenant-safe queries
  */
 router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'public, max-age=20');
@@ -1203,7 +1204,27 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
     }
     
     const { start: startOfDay, end: endOfDay } = getDayBounds();
-    const userIdMatch = { userId: new mongoose.Types.ObjectId(userId) };
+    
+    // Resolve employee record for identity matching fallback
+    const employee = await Employee.findOne({ userId: new mongoose.Types.ObjectId(userId), orgId })
+      .select('_id employeeId')
+      .lean();
+    
+    // Build identity query with fallback support (same approach as Hours This Week)
+    // Primary: userId, Secondary: employeeId if available
+    const identityOr = [
+      { userId: new mongoose.Types.ObjectId(userId) },
+      { userId: String(userId) }
+    ];
+    
+    if (employee?._id) {
+      identityOr.push({ employeeId: employee._id });
+      identityOr.push({ employeeId: String(employee._id) });
+    }
+    
+    if (employee?.employeeId) {
+      identityOr.push({ employeeId: employee.employeeId });
+    }
     
     // Get current month boundaries for total hours calculation
     const now = new Date();
@@ -1219,23 +1240,53 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
       monthAttendanceRecords
     ] = await Promise.all([
       Attendance.findOne({
-        ...userIdMatch,
+        orgId,
+        $or: identityOr,
         date: { $gte: startOfDay, $lt: endOfDay }
       }).select('checkIn checkOut status hoursWorked breaks').lean(),
       LeaveRequest.countDocuments({
         userId: new mongoose.Types.ObjectId(userId),
+        orgId,
         status: 'pending'
       }),
       Payslip.findOne({
-        userId: new mongoose.Types.ObjectId(userId)
+        userId: new mongoose.Types.ObjectId(userId),
+        orgId
       }).sort({ createdAt: -1 }).select('month year status netPay').lean(),
       Attendance.find({
-        ...userIdMatch,
+        orgId,
+        $or: identityOr,
         date: { $gte: monthStart, $lt: monthEnd }
-      }).select('hoursWorked').lean()
+      }).select('hoursWorked breaks checkIn checkOut date userId employeeId orgId _id').lean()
     ]);
     
-    // Calculate total hours for current month
+    // DEBUG: Log monthly attendance query results with identity matching info
+    console.log('EMPLOYEE_MONTH_HOURS_DEBUG', {
+      userId: userId,
+      orgId: orgId,
+      employeeId: employee?._id?.toString?.(),
+      identityOrCount: identityOr.length,
+      monthStart: monthStart.toISOString(),
+      monthEnd: monthEnd.toISOString(),
+      attendanceRecordCount: monthAttendanceRecords?.length || 0,
+      recordsByIdentity: {
+        byUserId: monthAttendanceRecords?.filter(r => r.userId).length || 0,
+        byEmployeeId: monthAttendanceRecords?.filter(r => r.employeeId).length || 0
+      },
+      sampleRecords: monthAttendanceRecords?.slice(0, 5).map(r => ({
+        _id: r._id?.toString?.(),
+        userId: r.userId?.toString?.(),
+        employeeId: r.employeeId?.toString?.(),
+        orgId: r.orgId,
+        date: r.date?.toISOString?.(),
+        checkIn: r.checkIn?.toISOString?.(),
+        checkOut: r.checkOut?.toISOString?.(),
+        hoursWorked: r.hoursWorked,
+        breaksCount: Array.isArray(r.breaks) ? r.breaks.length : 0
+      })) || []
+    });
+    
+    // Calculate total hours for current month (from completed sessions)
     let totalMonthHours = 0;
     if (Array.isArray(monthAttendanceRecords)) {
       totalMonthHours = monthAttendanceRecords.reduce((sum, record) => {
@@ -1243,10 +1294,9 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
       }, 0);
     }
     
-    // Add active session time if employee is currently checked in
+    // Add active session time if employee is currently checked in TODAY
     if (todayAttendance?.checkIn && !todayAttendance?.checkOut) {
       // Calculate live hours for active session
-      const now = new Date();
       const checkInTime = new Date(todayAttendance.checkIn);
       let grossHours = (now - checkInTime) / (1000 * 60 * 60);
       
@@ -1258,7 +1308,7 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
             const breakDuration = (new Date(breakItem.endTime) - new Date(breakItem.startTime)) / (1000 * 60 * 60);
             breakHours += breakDuration;
           } else if (breakItem?.startTime && !breakItem?.endTime) {
-            // Open break - don't count it towards working time
+            // Open break - count it towards break time (don't add to worked time)
             const breakDuration = (now - new Date(breakItem.startTime)) / (1000 * 60 * 60);
             breakHours += breakDuration;
           }
@@ -1274,6 +1324,17 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
     const minutesFloat = (totalMonthHours - hoursInt) * 60;
     const minutesInt = Math.round(minutesFloat);
     const totalHoursLabel = `${hoursInt}h ${minutesInt}m`;
+    
+    console.log('EMPLOYEE_MONTH_HOURS_FINAL', {
+      userId,
+      orgId,
+      employeeId: employee?._id?.toString?.(),
+      totalMonthHours,
+      totalMonthHourMinutes: Math.round(totalMonthHours * 60),
+      totalHoursLabel,
+      hoursWorkedFromRecords: monthAttendanceRecords?.reduce((sum, r) => sum + (typeof r.hoursWorked === 'number' ? r.hoursWorked : 0), 0) || 0,
+      activeSessionAdded: todayAttendance?.checkIn && !todayAttendance?.checkOut ? 'yes' : 'no'
+    });
     
     const summary = {
       kpis: {

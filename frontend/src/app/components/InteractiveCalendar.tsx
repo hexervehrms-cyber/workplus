@@ -83,6 +83,9 @@ export default function InteractiveCalendar() {
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
 
+  // Water/Glass tile state for individual day cells
+  const [cellTilt, setCellTilt] = useState<{ [key: string]: { x: number; y: number } }>({});
+
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
     const handleChange = (e: MediaQueryListEvent) => {
@@ -90,6 +93,75 @@ export default function InteractiveCalendar() {
     };
     mediaQuery.addEventListener('change', handleChange);
     return () => mediaQuery.removeEventListener('change', handleChange);
+  }, []);
+
+  // Add CSS animations for floating effect
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes floatingGlass {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-2px); }
+      }
+      
+      .floating-glass-tile {
+        animation: floatingGlass 5s ease-in-out infinite;
+      }
+      
+      .floating-glass-tile:nth-child(1) { animation-delay: 0s; }
+      .floating-glass-tile:nth-child(2) { animation-delay: 0.3s; }
+      .floating-glass-tile:nth-child(3) { animation-delay: 0.6s; }
+      .floating-glass-tile:nth-child(4) { animation-delay: 0.9s; }
+      .floating-glass-tile:nth-child(5) { animation-delay: 1.2s; }
+      .floating-glass-tile:nth-child(6) { animation-delay: 1.5s; }
+      .floating-glass-tile:nth-child(7) { animation-delay: 1.8s; }
+      .floating-glass-tile:nth-child(8) { animation-delay: 2.1s; }
+      .floating-glass-tile:nth-child(9) { animation-delay: 2.4s; }
+      .floating-glass-tile:nth-child(10) { animation-delay: 2.7s; }
+      .floating-glass-tile:nth-child(11) { animation-delay: 3s; }
+      .floating-glass-tile:nth-child(12) { animation-delay: 3.3s; }
+      .floating-glass-tile:nth-child(13) { animation-delay: 3.6s; }
+      .floating-glass-tile:nth-child(14) { animation-delay: 3.9s; }
+      .floating-glass-tile:nth-child(15) { animation-delay: 4.2s; }
+      .floating-glass-tile:nth-child(16) { animation-delay: 4.5s; }
+      .floating-glass-tile:nth-child(17) { animation-delay: 4.8s; }
+      .floating-glass-tile:nth-child(18) { animation-delay: 5.1s; }
+      .floating-glass-tile:nth-child(19) { animation-delay: 5.4s; }
+      .floating-glass-tile:nth-child(20) { animation-delay: 5.7s; }
+      .floating-glass-tile:nth-child(21) { animation-delay: 0.1s; }
+      .floating-glass-tile:nth-child(22) { animation-delay: 0.4s; }
+      .floating-glass-tile:nth-child(23) { animation-delay: 0.7s; }
+      .floating-glass-tile:nth-child(24) { animation-delay: 1s; }
+      .floating-glass-tile:nth-child(25) { animation-delay: 1.3s; }
+      .floating-glass-tile:nth-child(26) { animation-delay: 1.6s; }
+      .floating-glass-tile:nth-child(27) { animation-delay: 1.9s; }
+      .floating-glass-tile:nth-child(28) { animation-delay: 2.2s; }
+      .floating-glass-tile:nth-child(29) { animation-delay: 2.5s; }
+      .floating-glass-tile:nth-child(30) { animation-delay: 2.8s; }
+      .floating-glass-tile:nth-child(31) { animation-delay: 3.1s; }
+      .floating-glass-tile:nth-child(32) { animation-delay: 3.4s; }
+      .floating-glass-tile:nth-child(33) { animation-delay: 3.7s; }
+      .floating-glass-tile:nth-child(34) { animation-delay: 4s; }
+      .floating-glass-tile:nth-child(35) { animation-delay: 4.3s; }
+      .floating-glass-tile:nth-child(36) { animation-delay: 4.6s; }
+      .floating-glass-tile:nth-child(37) { animation-delay: 4.9s; }
+      .floating-glass-tile:nth-child(38) { animation-delay: 5.2s; }
+      .floating-glass-tile:nth-child(39) { animation-delay: 5.5s; }
+      .floating-glass-tile:nth-child(40) { animation-delay: 5.8s; }
+      .floating-glass-tile:nth-child(41) { animation-delay: 0.2s; }
+      .floating-glass-tile:nth-child(42) { animation-delay: 0.5s; }
+      
+      @media (prefers-reduced-motion: reduce) {
+        .floating-glass-tile {
+          animation: none !important;
+          transform: translateY(0) !important;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+    return () => {
+      document.head.removeChild(style);
+    };
   }, []);
 
   const authUserId = user?.userId || user?.id || '';
@@ -489,42 +561,73 @@ export default function InteractiveCalendar() {
                       onClick={() => isAvailableDate && openLeaveForm(day)}
                       disabled={!isAvailableDate}
                       aria-label={tooltipText}
-                      whileHover={isAvailableDate && !prefersReducedMotion.current ? { y: -8, scale: 1.02, rotateX: 4, rotateY: -3, z: 32 } : undefined}
-                      whileTap={isAvailableDate && !prefersReducedMotion.current ? { y: -2, scale: 0.98, rotateX: 0, rotateY: 0, z: 8 } : undefined}
-                      transition={{ type: "spring", stiffness: 400, damping: 30, mass: 0.3, restDelta: 0.001, restSpeed: 0.001 }}
+                      whileHover={isAvailableDate && !prefersReducedMotion.current ? { 
+                        y: -6, 
+                        scale: 1.04, 
+                        rotateX: 6, 
+                        rotateY: -6, 
+                        z: 40 
+                      } : undefined}
+                      whileTap={isAvailableDate && !prefersReducedMotion.current ? { 
+                        y: -2, 
+                        scale: 0.98, 
+                        rotateX: 0, 
+                        rotateY: 0, 
+                        z: 12 
+                      } : undefined}
+                      transition={{ type: "spring", stiffness: 350, damping: 28, mass: 0.35, restDelta: 0.001, restSpeed: 0.001 }}
                       className={`
-                        w-full h-full relative group/tile flex flex-col items-center justify-center rounded-none border overflow-hidden transform-gpu will-change-transform [transform-style:preserve-3d] [backface-visibility:hidden] font-medium text-xs
-                        ${weekend ? 'dark:bg-red-950/40 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out' : ''}
-                        ${holiday ? 'dark:bg-emerald-950/40 dark:text-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed font-semibold border-emerald-200/50 dark:border-emerald-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out' : ''}
-                        ${leave && leaveStatus === 'approved' ? 'dark:bg-blue-950/50 dark:text-blue-200 bg-blue-50 text-blue-700 font-semibold border-blue-200/50 dark:border-blue-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out cursor-default' : ''}
-                        ${leave && leaveStatus === 'pending' ? 'dark:bg-yellow-950/50 dark:text-yellow-200 bg-yellow-50 text-yellow-700 font-semibold border-yellow-200/50 dark:border-yellow-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out cursor-default' : ''}
-                        ${leave && leaveStatus === 'rejected' ? 'dark:bg-red-950/50 dark:text-red-200 bg-red-50 text-red-700 font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out cursor-default' : ''}
-                        ${isAvailableDate ? 'border-transparent bg-background/95 text-foreground cursor-pointer dark:bg-slate-800/60 dark:text-foreground transition-[background-color,border-color,box-shadow,color,opacity,filter] duration-150 ease-out hover:z-50 hover:border-emerald-400/90 hover:bg-emerald-50/90 hover:text-emerald-700 hover:shadow-[0_18px_40px_rgba(16,185,129,0.26),0_0_22px_rgba(16,185,129,0.14)] hover:brightness-[1.03] dark:hover:bg-emerald-950/30 dark:hover:border-emerald-500/80 dark:hover:text-emerald-200 dark:hover:shadow-[0_18px_40px_rgba(16,185,129,0.18),0_0_26px_rgba(16,185,129,0.16)]' : ''}
+                        w-full h-full relative group/tile flex flex-col items-center justify-center rounded-xl border overflow-hidden transform-gpu will-change-transform [transform-style:preserve-3d] [backface-visibility:hidden] font-medium text-xs
+                        transition-all duration-300 ease-out
+                        ${weekend ? 'bg-red-500/15 dark:bg-red-600/15 border-red-300/40 dark:border-red-700/40 text-red-700 dark:text-red-200 cursor-not-allowed backdrop-blur-sm shadow-inner' : ''}
+                        ${holiday ? 'bg-emerald-500/15 dark:bg-emerald-600/15 border-emerald-300/40 dark:border-emerald-700/40 text-emerald-700 dark:text-emerald-200 cursor-not-allowed backdrop-blur-sm shadow-inner' : ''}
+                        ${leave && leaveStatus === 'approved' ? 'bg-blue-500/15 dark:bg-blue-600/15 border-blue-300/40 dark:border-blue-700/40 text-blue-700 dark:text-blue-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
+                        ${leave && leaveStatus === 'pending' ? 'bg-yellow-500/15 dark:bg-yellow-600/15 border-yellow-300/40 dark:border-yellow-700/40 text-yellow-700 dark:text-yellow-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
+                        ${leave && leaveStatus === 'rejected' ? 'bg-red-500/15 dark:bg-red-600/15 border-red-300/40 dark:border-red-700/40 text-red-700 dark:text-red-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
+                        ${isAvailableDate ? `
+                          floating-glass-tile
+                          bg-white/35 dark:bg-slate-400/20
+                          border-white/45 dark:border-slate-300/40
+                          text-foreground 
+                          cursor-pointer 
+                          backdrop-blur-md
+                          shadow-lg shadow-white/10
+                          hover:bg-white/50 dark:hover:bg-slate-400/30
+                          hover:border-white/60 dark:hover:border-slate-300/60
+                          hover:shadow-[0_20px_60px_rgba(16,185,129,0.2),_0_0_40px_rgba(255,255,255,0.15)]
+                          hover:brightness-110
+                          dark:hover:shadow-[0_20px_60px_rgba(16,185,129,0.15),_0_0_40px_rgba(148,163,184,0.1)]
+                        ` : ''}
                         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60
                       `}
                     >
-                      {/* Floating glass glow overlay for available cells */}
+                      {/* Premium water/glass shine overlay */}
                       {isAvailableDate && (
-                        <span 
-                          aria-hidden="true" 
-                          className="pointer-events-none absolute inset-0 opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 bg-gradient-to-br from-white/35 via-emerald-300/12 to-emerald-500/18 dark:from-white/8 dark:via-emerald-400/12 dark:to-emerald-900/24" 
-                        />
-                      )}
-
-                      {/* Top highlight for floating glass effect */}
-                      {isAvailableDate && (
-                        <span 
-                          aria-hidden="true" 
-                          className="pointer-events-none absolute inset-x-2 top-1 h-px opacity-0 group-hover/tile:opacity-100 transition-opacity duration-150 bg-white/70 dark:bg-white/15" 
-                        />
-                      )}
-
-                      {/* Floating underside glow */}
-                      {isAvailableDate && (
-                        <span 
-                          aria-hidden="true" 
-                          className="pointer-events-none absolute -bottom-2 left-3 right-3 h-4 rounded-full opacity-0 blur-md group-hover/tile:opacity-70 transition-opacity duration-150 bg-emerald-400/30 dark:bg-emerald-500/20" 
-                        />
+                        <>
+                          {/* Top-left water shine gradient */}
+                          <span 
+                            aria-hidden="true" 
+                            className="pointer-events-none absolute inset-0 opacity-0 group-hover/tile:opacity-100 transition-opacity duration-200 bg-gradient-to-br from-white/60 via-white/20 to-transparent rounded-xl" 
+                          />
+                          
+                          {/* Subtle inner border highlight */}
+                          <span 
+                            aria-hidden="true" 
+                            className="pointer-events-none absolute inset-0 rounded-xl border border-white/50 dark:border-white/20 opacity-50 group-hover/tile:opacity-80 transition-opacity duration-200" 
+                          />
+                          
+                          {/* Water-like top light reflection */}
+                          <span 
+                            aria-hidden="true" 
+                            className="pointer-events-none absolute top-1 left-2 right-2 h-1 rounded-full opacity-0 group-hover/tile:opacity-80 transition-opacity duration-200 bg-gradient-to-r from-transparent via-white/70 to-transparent blur-sm" 
+                          />
+                          
+                          {/* Soft bottom glow for floating effect */}
+                          <span 
+                            aria-hidden="true" 
+                            className="pointer-events-none absolute -bottom-3 left-2 right-2 h-6 rounded-full opacity-0 blur-lg group-hover/tile:opacity-60 transition-opacity duration-300 bg-gradient-to-t from-white/30 to-transparent dark:from-emerald-400/20" 
+                          />
+                        </>
                       )}
                       
                       <span className="block relative z-10 text-base font-semibold">{day.getDate()}</span>

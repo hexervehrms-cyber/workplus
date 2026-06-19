@@ -1375,11 +1375,36 @@ router.get(
       }
       const userId = access.userId;
 
+      // PHASE 3 DEBUG: Log what we're searching for
+      console.log("ACK_GET_REQUEST", {
+        requestedEmployeeId: req.params.employeeId,
+        resolvedUserId: userId,
+        resolvedOrgId: access.employeeOrgId,
+        userRole: req.user?.role
+      });
+
+      // CRITICAL FIX: Search ALL acknowledgments for this employee without org filter
+      // The issue might be that org filter is excluding records
       const acknowledgments = await DocumentAcknowledgment.find({
         employeeId: userId,
       })
         .sort({ acknowledgedAt: -1 })
         .lean();
+
+      // PHASE 3 DEBUG: Log results
+      console.log("ACK_GET_RESULT", {
+        resolvedUserId: userId,
+        acknowledgementsCount: acknowledgments.length,
+        records: acknowledgments.map(a => ({
+          _id: String(a._id || ''),
+          documentId: a.documentId,
+          employeeId: a.employeeId,
+          organizationId: a.organizationId,
+          status: a.status,
+          accepted: a.accepted,
+          acknowledgedAt: a.acknowledgedAt
+        }))
+      });
 
       return sendSuccess(res, acknowledgments, "Acknowledgments fetched successfully");
     } catch (error) {
@@ -1462,6 +1487,23 @@ router.get(
         .select('documentId employeeId status accepted acknowledgedAt')
         .lean();
 
+      // PHASE 5-6 DEBUG: Log tracking details
+      console.log("TRACKING_DEBUG", {
+        requestedDocumentId: documentId,
+        possibleDocumentIds,
+        documentFound: !!document,
+        documentId: String(document.id || document._id),
+        organizationId: finalOrgId,
+        targetEmployeesCount: targetEmployees.length,
+        acknowledgementsCount: acknowledgments.length,
+        sampleAcknowledgments: acknowledgments.slice(0, 5).map(a => ({
+          documentId: a.documentId,
+          employeeId: a.employeeId,
+          status: a.status,
+          accepted: a.accepted
+        }))
+      });
+
       // Helper: Get all possible employee ID representations
       const getEmployeeMatchIds = (employee) => {
         return [
@@ -1513,7 +1555,7 @@ router.get(
       const pending = totalEmployees - completed;
       const completionRate = totalEmployees > 0 ? Math.round((completed / totalEmployees) * 100) : 0;
 
-      console.log('Document tracking stats:', {
+      console.log('TRACKING_STATS', {
         documentId: String(document.id || document._id),
         organizationId: finalOrgId,
         totalEmployees,
@@ -1618,6 +1660,15 @@ router.post(
       let resolvedEmployeeId = req.user.userId;
       let resolvedOrgId = userOrgIdFromReq(req) || resolveScopedOrgId(req);
 
+      console.log("ACK_POST_START", {
+        rawDocumentId,
+        documentId,
+        requestEmployeeId: employeeId,
+        userUserId: req.user?.userId,
+        userOrgId: req.user?.orgId,
+        authRole: req.user?.role
+      });
+
       if (employeeId) {
         const access = await assertCanAccessEmployeeDocuments(req, employeeId);
         if (!access.ok) {
@@ -1680,6 +1731,8 @@ router.post(
         organizationId: finalOrgId,
       };
 
+      console.log("ACK_UPSERT_FILTER", upsertFilter);
+
       try {
         // Use idempotent upsert to handle duplicate submissions safely
         const acknowledgment = await DocumentAcknowledgment.findOneAndUpdate(
@@ -1703,6 +1756,25 @@ router.post(
             runValidators: true,
           }
         );
+
+        // PHASE 1: DEBUG LOGGING - Prove whether POST is saving
+        console.log("ACK_SAVE_RESULT", {
+          success: true,
+          acknowledgmentId: String(acknowledgment?._id || ''),
+          documentId: String(acknowledgment?.documentId || ''),
+          employeeId: String(acknowledgment?.employeeId || ''),
+          organizationId: String(acknowledgment?.organizationId || ''),
+          status: acknowledgment?.status,
+          accepted: acknowledgment?.accepted,
+          acknowledgedAt: acknowledgment?.acknowledgedAt
+        });
+        
+        console.log("ACK_REQUEST_CONTEXT", {
+          bodyDocumentId: req.body?.documentId || req.body?.docId || req.body?.id,
+          userId: req.user?.userId || req.user?.id || req.user?._id,
+          userRole: req.user?.role,
+          orgId: req.user?.orgId
+        });
 
         // PHASE 7: Create notification for admin only on NEW acknowledgments
         // Check if this is a newly created acknowledgment by checking if it was just inserted

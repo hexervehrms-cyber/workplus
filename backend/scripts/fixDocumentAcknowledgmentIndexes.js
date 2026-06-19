@@ -45,25 +45,30 @@ async function fixIndexes() {
 
     // Get current indexes
     console.log('\n📋 CURRENT INDEXES:');
-    const indexes = await collection.getIndexes();
-    console.log(JSON.stringify(indexes, null, 2));
+    const indexes = await collection.listIndexes().toArray();
+    const indexMap = {};
+    indexes.forEach(idx => {
+      const keyStr = JSON.stringify(idx.key);
+      indexMap[idx.name || keyStr] = { ...idx.key, ...idx };
+    });
+    console.log(JSON.stringify(indexMap, null, 2));
 
-    const indexNames = Object.keys(indexes);
+    const indexNames = indexes.map(i => i.name || 'unnamed');
     console.log('\n📋 Index names found:', indexNames.join(', '));
 
     // List of bad/problematic indexes to drop
     const indexesToDrop = [];
 
     // 1. Check for bad id_1 unique index
-    if (indexes.id_1) {
+    if (indexMap.id_1) {
       console.log('\n⚠️  Found bad index: id_1');
       indexesToDrop.push('id_1');
     }
 
     // 2. Check for old documentId_1_employeeId_1 unique index (cross-tenant risk)
     // This index is unsafe if documentId can overlap across organizations
-    if (indexes.documentId_1_employeeId_1) {
-      const docIdEmpIdIndex = indexes.documentId_1_employeeId_1;
+    if (indexMap.documentId_1_employeeId_1) {
+      const docIdEmpIdIndex = indexMap.documentId_1_employeeId_1;
       if (docIdEmpIdIndex.unique === true) {
         console.log('\n⚠️  Found potentially unsafe index: documentId_1_employeeId_1 (UNIQUE)');
         console.log('   This index can cause cross-tenant conflicts if documentId overlaps across orgs.');
@@ -159,13 +164,17 @@ async function fixIndexes() {
 
     // Final verification
     console.log('\n📋 FINAL INDEXES:');
-    const finalIndexes = await collection.getIndexes();
-    console.log(JSON.stringify(finalIndexes, null, 2));
+    const finalIndexes = await collection.listIndexes().toArray();
+    const finalIndexMap = {};
+    finalIndexes.forEach(idx => {
+      finalIndexMap[idx.name || JSON.stringify(idx.key)] = idx.key;
+    });
+    console.log(JSON.stringify(finalIndexMap, null, 2));
 
     console.log('\n✅ Index migration completed successfully!');
     console.log('\n📊 MIGRATION SUMMARY:');
     console.log(`   Indexes dropped: ${indexesToDrop.length > 0 ? indexesToDrop.join(', ') : 'none'}`);
-    console.log(`   Final index count: ${Object.keys(finalIndexes).length}`);
+    console.log(`   Final index count: ${finalIndexes.length}`);
     console.log(`   Tenant-safe unique index: documentId_employeeId_organizationId_unique ✅`);
     console.log(`   Documents deleted: 0 (preserved for audit trail) ✅`);
 

@@ -1205,11 +1205,26 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
     
     const { start: startOfDay, end: endOfDay } = getDayBounds();
     
-    // CRITICAL FIX: Include orgId in all queries for tenant isolation
-    const userIdMatch = { 
-      userId: new mongoose.Types.ObjectId(userId),
-      orgId  // Add org filter
-    };
+    // Resolve employee record for identity matching fallback
+    const employee = await Employee.findOne({ userId: new mongoose.Types.ObjectId(userId), orgId })
+      .select('_id employeeId')
+      .lean();
+    
+    // Build identity query with fallback support (same approach as Hours This Week)
+    // Primary: userId, Secondary: employeeId if available
+    const identityOr = [
+      { userId: new mongoose.Types.ObjectId(userId) },
+      { userId: String(userId) }
+    ];
+    
+    if (employee?._id) {
+      identityOr.push({ employeeId: employee._id });
+      identityOr.push({ employeeId: String(employee._id) });
+    }
+    
+    if (employee?.employeeId) {
+      identityOr.push({ employeeId: employee.employeeId });
+    }
     
     // Get current month boundaries for total hours calculation
     const now = new Date();
@@ -1225,7 +1240,8 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
       monthAttendanceRecords
     ] = await Promise.all([
       Attendance.findOne({
-        ...userIdMatch,
+        orgId,
+        $or: identityOr,
         date: { $gte: startOfDay, $lt: endOfDay }
       }).select('checkIn checkOut status hoursWorked breaks').lean(),
       LeaveRequest.countDocuments({
@@ -1238,18 +1254,25 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
         orgId
       }).sort({ createdAt: -1 }).select('month year status netPay').lean(),
       Attendance.find({
-        ...userIdMatch,
+        orgId,
+        $or: identityOr,
         date: { $gte: monthStart, $lt: monthEnd }
       }).select('hoursWorked breaks checkIn checkOut date userId employeeId orgId _id').lean()
     ]);
     
-    // DEBUG: Log monthly attendance query results
+    // DEBUG: Log monthly attendance query results with identity matching info
     console.log('EMPLOYEE_MONTH_HOURS_DEBUG', {
       userId: userId,
       orgId: orgId,
+      employeeId: employee?._id?.toString?.(),
+      identityOrCount: identityOr.length,
       monthStart: monthStart.toISOString(),
       monthEnd: monthEnd.toISOString(),
       attendanceRecordCount: monthAttendanceRecords?.length || 0,
+      recordsByIdentity: {
+        byUserId: monthAttendanceRecords?.filter(r => r.userId).length || 0,
+        byEmployeeId: monthAttendanceRecords?.filter(r => r.employeeId).length || 0
+      },
       sampleRecords: monthAttendanceRecords?.slice(0, 5).map(r => ({
         _id: r._id?.toString?.(),
         userId: r.userId?.toString?.(),
@@ -1305,6 +1328,7 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
     console.log('EMPLOYEE_MONTH_HOURS_FINAL', {
       userId,
       orgId,
+      employeeId: employee?._id?.toString?.(),
       totalMonthHours,
       totalMonthHourMinutes: Math.round(totalMonthHours * 60),
       totalHoursLabel,

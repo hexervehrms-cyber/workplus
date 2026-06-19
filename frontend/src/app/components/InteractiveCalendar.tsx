@@ -83,16 +83,12 @@ export default function InteractiveCalendar() {
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
 
-  // Water/Glass tile state for individual day cells
-  const [cellTilt, setCellTilt] = useState<{ [key: string]: { x: number; y: number } }>({});
-
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
     const handleChange = (e: MediaQueryListEvent) => {
       prefersReducedMotion.current = e.matches;
     };
     mediaQuery.addEventListener('change', handleChange);
-    console.log('[InteractiveCalendar] prefersReducedMotion initial:', prefersReducedMotion.current);
     return () => mediaQuery.removeEventListener('change', handleChange);
   }, []);
 
@@ -159,11 +155,6 @@ export default function InteractiveCalendar() {
           animation: none !important;
           transform: translateY(0) !important;
         }
-      }
-      
-      /* TEMPORARY DEBUG: Purple outline to verify selector works */
-      .calendar-grid > div:nth-child(3) .floating-glass-tile {
-        outline: 3px solid rgb(168, 85, 247) !important;
       }
       
       /* CSS-based 3D hover transform for day tiles */

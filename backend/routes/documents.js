@@ -1393,6 +1393,164 @@ router.get(
 );
 
 /**
+ * GET /api/documents/:documentId/tracking
+ * Get complete tracking data for a document (admin/hr only)
+ * Returns: { document, stats, records }
+ */
+router.get(
+  "/:documentId/tracking",
+  authenticate,
+  authorize("admin", "hr", "super_admin"),
+  asyncHandler(async (req, res) => {
+    const { documentId } = req.params;
+    const finalOrgId = userOrgIdFromReq(req) || req.validatedOrgId || req.user?.orgId;
+
+    // Validate org ID
+    if (!finalOrgId) {
+      return sendError(res, "Organization ID required", 400, "VALIDATION_ERROR");
+    }
+
+    try {
+      // Load document - support both custom id and Mongo _id
+      const document = await GeneratedDocument.findOne({
+        $or: [
+          { id: String(documentId) },
+          { _id: mongoose.Types.ObjectId.isValid(documentId) ? documentId : undefined }
+        ],
+        organizationId: String(finalOrgId)
+      }).lean();
+
+      if (!document) {
+        return sendError(res, "Document not found", 404, "NOT_FOUND");
+      }
+
+      // Determine target employees
+      let targetEmployees = [];
+      
+      if (document.assignTo === "specific" && Array.isArray(document.targetUsers) && document.targetUsers.length > 0) {
+        // Document assigned to specific employees
+        const targetUserIds = document.targetUsers.map(u => String(u));
+        targetEmployees = await Employee.find({
+          $or: [
+            { userId: { $in: targetUserIds } },
+            { _id: { $in: targetUserIds.map(id => mongoose.Types.ObjectId.isValid(id) ? id : null).filter(Boolean) } }
+          ],
+          organizationId: String(finalOrgId)
+        })
+          .select('_id id userId name firstName lastName email department designation')
+          .lean();
+      } else {
+        // Document is company-wide/published to all
+        targetEmployees = await Employee.find({
+          organizationId: String(finalOrgId),
+          status: { $ne: 'inactive' }
+        })
+          .select('_id id userId name firstName lastName email department designation')
+          .lean();
+      }
+
+      // Load acknowledgments for this document
+      const possibleDocumentIds = [
+        String(document.id || ''),
+        String(document._id || '')
+      ].filter(Boolean);
+
+      const acknowledgments = await DocumentAcknowledgment.find({
+        organizationId: String(finalOrgId),
+        documentId: { $in: possibleDocumentIds }
+      })
+        .select('documentId employeeId status accepted acknowledgedAt')
+        .lean();
+
+      // Helper: Get all possible employee ID representations
+      const getEmployeeMatchIds = (employee) => {
+        return [
+          String(employee._id || ''),
+          String(employee.id || ''),
+          String(employee.userId || '')
+        ].filter(Boolean);
+      };
+
+      // Helper: Check if employee has acknowledged
+      const isAcknowledged = (employee) => {
+        const employeeMatchIds = getEmployeeMatchIds(employee);
+        return acknowledgments.some(ack =>
+          employeeMatchIds.includes(String(ack.employeeId || '')) &&
+          (ack.status === 'Completed' || ack.accepted === true)
+        );
+      };
+
+      // Helper: Get acknowledgment for an employee
+      const getEmployeeAcknowledgment = (employee) => {
+        const employeeMatchIds = getEmployeeMatchIds(employee);
+        return acknowledgments.find(ack =>
+          employeeMatchIds.includes(String(ack.employeeId || ''))
+        );
+      };
+
+      // Build tracking records
+      const records = targetEmployees.map(employee => {
+        const ack = getEmployeeAcknowledgment(employee);
+        const acknowledged = isAcknowledged(employee);
+
+        return {
+          employeeId: String(employee._id || ''),
+          userId: String(employee.userId || ''),
+          employeeName: String(employee.name || `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || 'Employee'),
+          email: String(employee.email || ''),
+          department: String(employee.department || '—'),
+          designation: String(employee.designation || '—'),
+          status: acknowledged ? 'Acknowledged' : 'Pending',
+          acknowledgedAt: ack ? String(ack.acknowledgedAt || '') : null,
+          acknowledgmentId: ack ? String(ack._id || '') : null,
+          accepted: ack ? Boolean(ack.accepted) : false
+        };
+      });
+
+      // Calculate stats
+      const totalEmployees = records.length;
+      const completed = records.filter(r => r.status === 'Acknowledged').length;
+      const pending = totalEmployees - completed;
+      const completionRate = totalEmployees > 0 ? Math.round((completed / totalEmployees) * 100) : 0;
+
+      console.log('Document tracking stats:', {
+        documentId: String(document.id || document._id),
+        organizationId: finalOrgId,
+        totalEmployees,
+        completed,
+        pending,
+        completionRate,
+        acknowledgementsCount: acknowledgments.length
+      });
+
+      return sendSuccess(res, {
+        document: {
+          id: String(document.id || document._id),
+          _id: String(document._id || ''),
+          title: String(document.title || ''),
+          description: String(document.description || ''),
+          status: String(document.status || 'Published')
+        },
+        stats: {
+          totalEmployees,
+          completed,
+          pending,
+          completionRate
+        },
+        records
+      }, 'Tracking data retrieved successfully');
+    } catch (error) {
+      logger.error('Get document tracking error', {
+        documentId,
+        organizationId: finalOrgId,
+        error: error.message
+      });
+      return sendError(res, error.message || 'Failed to retrieve tracking data', 500, 'TRACKING_ERROR');
+    }
+  })
+);
+
+/**
  * POST /api/documents/acknowledgments
  * Employee-only endpoint to acknowledge a document
  */

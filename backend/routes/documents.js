@@ -605,7 +605,15 @@ router.get(
   asyncHandler(async (req, res) => {
     try {
       const { id } = req.params;
-      const document = await Document.findById(id).lean();
+      
+      // Handle both valid MongoDB ObjectIds and invalid formats
+      let document;
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        document = await Document.findById(id).lean();
+      } else {
+        // If not a valid ObjectId, search by _id as string (shouldn't happen, but handle gracefully)
+        document = null;
+      }
 
       if (!document) {
         return sendError(res, "Document not found", 404, "NOT_FOUND");
@@ -676,7 +684,13 @@ router.get(
     try {
       const { id } = req.params;
 
-      const document = await Document.findById(id).lean();
+      // Handle both valid MongoDB ObjectIds and invalid formats
+      let document;
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        document = await Document.findById(id).lean();
+      } else {
+        document = null;
+      }
 
       if (!document) {
         return sendError(res, "Document not found", 404, "NOT_FOUND");
@@ -711,7 +725,13 @@ router.delete(
     try {
       const { id } = req.params;
 
-      const document = await Document.findById(id);
+      // Handle both valid MongoDB ObjectIds and invalid formats
+      let document;
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        document = await Document.findById(id);
+      } else {
+        document = null;
+      }
 
       if (!document) {
         return sendError(res, "Document not found", 404, "NOT_FOUND");
@@ -735,7 +755,9 @@ router.delete(
         }
       }
 
-      await Document.findByIdAndDelete(id);
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        await Document.findByIdAndDelete(id);
+      }
 
       logger.info("Document deleted", { documentId: id });
 

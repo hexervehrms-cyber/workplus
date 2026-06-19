@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
@@ -74,7 +74,51 @@ export default function InteractiveCalendar() {
     reason: ''
   });
 
+  // 3D Parallax Tilt State
+  const [tiltX, setTiltX] = useState(0);
+  const [tiltY, setTiltY] = useState(0);
+  const [glowOpacity, setGlowOpacity] = useState(0);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const prefersReducedMotion = useRef(
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const handleChange = (e: MediaQueryListEvent) => {
+      prefersReducedMotion.current = e.matches;
+    };
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, []);
+
   const authUserId = user?.userId || user?.id || '';
+
+  // 3D Parallax Tilt Handlers
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (prefersReducedMotion.current || !cardRef.current) return;
+
+    const rect = cardRef.current.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const mouseX = e.clientX - centerX;
+    const mouseY = e.clientY - centerY;
+
+    const rotateX = (mouseY / (rect.height / 2)) * -4;
+    const rotateY = (mouseX / (rect.width / 2)) * 4;
+
+    setTiltX(rotateX);
+    setTiltY(rotateY);
+    setGlowOpacity(1);
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    if (!prefersReducedMotion.current) {
+      setTiltX(0);
+      setTiltY(0);
+      setGlowOpacity(0);
+    }
+  }, []);
 
   const loadHolidays = useCallback(async () => {
     const year = new Date().getFullYear();
@@ -328,8 +372,31 @@ export default function InteractiveCalendar() {
   return (
     <>
       {/* Interactive Calendar */}
-      <Card className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-visible flex flex-col w-full h-full">
-        <div className="space-y-5 flex-1 flex flex-col min-w-0 w-full h-full">
+      <Card 
+        ref={cardRef}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+        className="p-6 rounded-2xl shadow-lg border-0 bg-gradient-to-br from-background to-muted/20 overflow-visible flex flex-col w-full h-full"
+        style={{
+          perspective: '1000px',
+          transform: prefersReducedMotion.current 
+            ? undefined 
+            : `perspective(1000px) rotateX(${tiltX}deg) rotateY(${tiltY}deg) scale(${1 + Math.abs(tiltX + tiltY) * 0.001})`,
+          transition: tiltX === 0 && tiltY === 0 ? 'transform 0.6s cubic-bezier(0.23, 1, 0.320, 1)' : 'transform 0.05s linear',
+          willChange: 'transform',
+        }}
+      >
+        {/* Glow overlay for 3D effect */}
+        {!prefersReducedMotion.current && (
+          <div 
+            className="absolute inset-0 rounded-2xl pointer-events-none opacity-0 transition-opacity duration-300"
+            style={{
+              background: `radial-gradient(ellipse at ${50 + (tiltY / 4) * 10}% ${50 + (tiltX / 4) * 10}%, rgba(16, 185, 129, 0.15) 0%, transparent 70%)`,
+              opacity: glowOpacity * 0.3,
+            }}
+          />
+        )}
+        <div className="space-y-5 flex-1 flex flex-col min-w-0 w-full h-full relative z-10">
           {/* Calendar Header */}
           <div className="flex items-center justify-between p-1 bg-muted/20 rounded-xl border border-foreground/10 flex-shrink-0">
             <h3 className="font-semibold text-lg text-foreground ml-4">Apply Leave</h3>
@@ -422,9 +489,9 @@ export default function InteractiveCalendar() {
                       onClick={() => isAvailableDate && openLeaveForm(day)}
                       disabled={!isAvailableDate}
                       aria-label={tooltipText}
-                      whileHover={isAvailableDate ? { y: -7, scale: 1.016, rotateX: 3, rotateY: -2, z: 28 } : undefined}
-                      whileTap={isAvailableDate ? { y: -2, scale: 0.992, rotateX: 0, rotateY: 0, z: 8 } : undefined}
-                      transition={{ type: "spring", stiffness: 560, damping: 36, mass: 0.28, restDelta: 0.001, restSpeed: 0.001 }}
+                      whileHover={isAvailableDate && !prefersReducedMotion.current ? { y: -8, scale: 1.02, rotateX: 4, rotateY: -3, z: 32 } : undefined}
+                      whileTap={isAvailableDate && !prefersReducedMotion.current ? { y: -2, scale: 0.98, rotateX: 0, rotateY: 0, z: 8 } : undefined}
+                      transition={{ type: "spring", stiffness: 400, damping: 30, mass: 0.3, restDelta: 0.001, restSpeed: 0.001 }}
                       className={`
                         w-full h-full relative group/tile flex flex-col items-center justify-center rounded-none border overflow-hidden transform-gpu will-change-transform [transform-style:preserve-3d] [backface-visibility:hidden] font-medium text-xs
                         ${weekend ? 'dark:bg-red-950/40 dark:text-red-200 bg-red-50 text-red-700 cursor-not-allowed font-semibold border-red-200/50 dark:border-red-900/50 transition-[background-color,border-color,box-shadow,opacity] duration-100 ease-out' : ''}

@@ -1922,7 +1922,30 @@ export default function EmployeeDashboard() {
           </div>
 
           {/* Holidays */}
-          <Card className="rounded-2xl overflow-visible flex flex-col h-auto min-w-0 shadow-lg border-0 bg-gradient-to-br from-background to-muted/20">
+          <Card className="rounded-2xl overflow-visible flex flex-col h-auto min-w-0 shadow-lg border-0 bg-gradient-to-br from-background to-muted/20"
+            style={{
+              perspective: '800px',
+              transition: 'transform 0.4s cubic-bezier(0.23, 1, 0.320, 1)',
+            }}
+            onMouseMove={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const centerX = rect.left + rect.width / 2;
+              const centerY = rect.top + rect.height / 2;
+              const mouseX = e.clientX - centerX;
+              const mouseY = e.clientY - centerY;
+              
+              const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+              if (!prefersReduced) {
+                const rotateX = (mouseY / (rect.height / 2)) * -2;
+                const rotateY = (mouseX / (rect.width / 2)) * 2;
+                
+                e.currentTarget.style.transform = `perspective(800px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale(${1 + Math.abs(rotateX + rotateY) * 0.0008})`;
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'perspective(800px) rotateX(0deg) rotateY(0deg) scale(1)';
+            }}
+          >
             <div className="px-6 py-5 border-b border-foreground/10 flex-shrink-0 bg-muted/30">
               <h3 className="font-semibold text-lg text-foreground">Holidays</h3>
               <p className="text-sm text-muted-foreground mt-1">
@@ -1947,8 +1970,15 @@ export default function EmployeeDashboard() {
                         return (
                           <motion.div
                             key={holiday._id || holiday.id}
-                            whileHover={{ y: -5, scale: 1.015, transition: { type: "spring", stiffness: 240, damping: 24, mass: 0.75 } }}
-                            whileTap={{ scale: 0.99 }}
+                            initial={{ opacity: 0, y: 8 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                            whileHover={!window.matchMedia('(prefers-reduced-motion: reduce)').matches ? { 
+                              y: -6, 
+                              scale: 1.018, 
+                              transition: { type: "spring", stiffness: 280, damping: 22, mass: 0.8 } 
+                            } : undefined}
+                            whileTap={!window.matchMedia('(prefers-reduced-motion: reduce)').matches ? { scale: 0.98 } : undefined}
                             className={`relative group/holiday overflow-visible p-4 rounded-xl border transition-all duration-300 ease-out box-border w-full flex flex-col gap-2 transform-gpu will-change-transform hover:z-30 ${
                               isUpcoming
                                 ? 'dark:bg-emerald-950/50 dark:border-emerald-800/70 dark:text-emerald-200 bg-emerald-50/80 border-emerald-200/70 shadow-sm hover:border-emerald-300 hover:bg-emerald-50/95 hover:shadow-[0_16px_40px_rgba(16,185,129,0.18)] dark:hover:bg-emerald-950/70 dark:hover:border-emerald-700/80'

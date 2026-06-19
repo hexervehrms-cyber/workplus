@@ -1188,6 +1188,7 @@ router.get("/admin/summary", authorize('admin', 'hr', 'manager'), asyncHandler(a
  * GET /api/dashboard/employee/summary
  * Optimized summary endpoint for employee dashboard
  * Returns only critical data: today's status, pending leaves, latest payslip, total hours this month
+ * CRITICAL FIX: Added missing orgId filter to ensure tenant-safe queries
  */
 router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'public, max-age=20');
@@ -1203,7 +1204,12 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
     }
     
     const { start: startOfDay, end: endOfDay } = getDayBounds();
-    const userIdMatch = { userId: new mongoose.Types.ObjectId(userId) };
+    
+    // CRITICAL FIX: Include orgId in all queries for tenant isolation
+    const userIdMatch = { 
+      userId: new mongoose.Types.ObjectId(userId),
+      orgId  // Add org filter
+    };
     
     // Get current month boundaries for total hours calculation
     const now = new Date();
@@ -1224,18 +1230,20 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
       }).select('checkIn checkOut status hoursWorked breaks').lean(),
       LeaveRequest.countDocuments({
         userId: new mongoose.Types.ObjectId(userId),
+        orgId,
         status: 'pending'
       }),
       Payslip.findOne({
-        userId: new mongoose.Types.ObjectId(userId)
+        userId: new mongoose.Types.ObjectId(userId),
+        orgId
       }).sort({ createdAt: -1 }).select('month year status netPay').lean(),
       Attendance.find({
         ...userIdMatch,
         date: { $gte: monthStart, $lt: monthEnd }
-      }).select('hoursWorked').lean()
+      }).select('hoursWorked breaks checkIn checkOut').lean()
     ]);
     
-    // Calculate total hours for current month
+    // Calculate total hours for current month (from completed sessions)
     let totalMonthHours = 0;
     if (Array.isArray(monthAttendanceRecords)) {
       totalMonthHours = monthAttendanceRecords.reduce((sum, record) => {
@@ -1243,10 +1251,9 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
       }, 0);
     }
     
-    // Add active session time if employee is currently checked in
+    // Add active session time if employee is currently checked in TODAY
     if (todayAttendance?.checkIn && !todayAttendance?.checkOut) {
       // Calculate live hours for active session
-      const now = new Date();
       const checkInTime = new Date(todayAttendance.checkIn);
       let grossHours = (now - checkInTime) / (1000 * 60 * 60);
       
@@ -1258,7 +1265,7 @@ router.get("/employee/summary", authenticate, asyncHandler(async (req, res) => {
             const breakDuration = (new Date(breakItem.endTime) - new Date(breakItem.startTime)) / (1000 * 60 * 60);
             breakHours += breakDuration;
           } else if (breakItem?.startTime && !breakItem?.endTime) {
-            // Open break - don't count it towards working time
+            // Open break - count it towards break time (don't add to worked time)
             const breakDuration = (now - new Date(breakItem.startTime)) / (1000 * 60 * 60);
             breakHours += breakDuration;
           }

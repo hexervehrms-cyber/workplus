@@ -104,52 +104,49 @@ export default function InteractiveCalendar() {
         50% { transform: translateY(-2px); }
       }
       
-      .floating-glass-tile {
-        animation: floatingGlass 5s ease-in-out infinite;
-      }
-      
-      .floating-glass-tile:nth-child(1) { animation-delay: 0s; }
-      .floating-glass-tile:nth-child(2) { animation-delay: 0.3s; }
-      .floating-glass-tile:nth-child(3) { animation-delay: 0.6s; }
-      .floating-glass-tile:nth-child(4) { animation-delay: 0.9s; }
-      .floating-glass-tile:nth-child(5) { animation-delay: 1.2s; }
-      .floating-glass-tile:nth-child(6) { animation-delay: 1.5s; }
-      .floating-glass-tile:nth-child(7) { animation-delay: 1.8s; }
-      .floating-glass-tile:nth-child(8) { animation-delay: 2.1s; }
-      .floating-glass-tile:nth-child(9) { animation-delay: 2.4s; }
-      .floating-glass-tile:nth-child(10) { animation-delay: 2.7s; }
-      .floating-glass-tile:nth-child(11) { animation-delay: 3s; }
-      .floating-glass-tile:nth-child(12) { animation-delay: 3.3s; }
-      .floating-glass-tile:nth-child(13) { animation-delay: 3.6s; }
-      .floating-glass-tile:nth-child(14) { animation-delay: 3.9s; }
-      .floating-glass-tile:nth-child(15) { animation-delay: 4.2s; }
-      .floating-glass-tile:nth-child(16) { animation-delay: 4.5s; }
-      .floating-glass-tile:nth-child(17) { animation-delay: 4.8s; }
-      .floating-glass-tile:nth-child(18) { animation-delay: 5.1s; }
-      .floating-glass-tile:nth-child(19) { animation-delay: 5.4s; }
-      .floating-glass-tile:nth-child(20) { animation-delay: 5.7s; }
-      .floating-glass-tile:nth-child(21) { animation-delay: 0.1s; }
-      .floating-glass-tile:nth-child(22) { animation-delay: 0.4s; }
-      .floating-glass-tile:nth-child(23) { animation-delay: 0.7s; }
-      .floating-glass-tile:nth-child(24) { animation-delay: 1s; }
-      .floating-glass-tile:nth-child(25) { animation-delay: 1.3s; }
-      .floating-glass-tile:nth-child(26) { animation-delay: 1.6s; }
-      .floating-glass-tile:nth-child(27) { animation-delay: 1.9s; }
-      .floating-glass-tile:nth-child(28) { animation-delay: 2.2s; }
-      .floating-glass-tile:nth-child(29) { animation-delay: 2.5s; }
-      .floating-glass-tile:nth-child(30) { animation-delay: 2.8s; }
-      .floating-glass-tile:nth-child(31) { animation-delay: 3.1s; }
-      .floating-glass-tile:nth-child(32) { animation-delay: 3.4s; }
-      .floating-glass-tile:nth-child(33) { animation-delay: 3.7s; }
-      .floating-glass-tile:nth-child(34) { animation-delay: 4s; }
-      .floating-glass-tile:nth-child(35) { animation-delay: 4.3s; }
-      .floating-glass-tile:nth-child(36) { animation-delay: 4.6s; }
-      .floating-glass-tile:nth-child(37) { animation-delay: 4.9s; }
-      .floating-glass-tile:nth-child(38) { animation-delay: 5.2s; }
-      .floating-glass-tile:nth-child(39) { animation-delay: 5.5s; }
-      .floating-glass-tile:nth-child(40) { animation-delay: 5.8s; }
-      .floating-glass-tile:nth-child(41) { animation-delay: 0.2s; }
-      .floating-glass-tile:nth-child(42) { animation-delay: 0.5s; }
+      /* Apply floating animation to available day cells only */
+      .calendar-grid > div:nth-child(1) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0s; }
+      .calendar-grid > div:nth-child(2) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.3s; }
+      .calendar-grid > div:nth-child(3) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.6s; }
+      .calendar-grid > div:nth-child(4) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.9s; }
+      .calendar-grid > div:nth-child(5) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.2s; }
+      .calendar-grid > div:nth-child(6) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.5s; }
+      .calendar-grid > div:nth-child(7) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.8s; }
+      .calendar-grid > div:nth-child(8) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.1s; }
+      .calendar-grid > div:nth-child(9) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.4s; }
+      .calendar-grid > div:nth-child(10) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.7s; }
+      .calendar-grid > div:nth-child(11) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3s; }
+      .calendar-grid > div:nth-child(12) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.3s; }
+      .calendar-grid > div:nth-child(13) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.6s; }
+      .calendar-grid > div:nth-child(14) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.9s; }
+      .calendar-grid > div:nth-child(15) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.2s; }
+      .calendar-grid > div:nth-child(16) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.5s; }
+      .calendar-grid > div:nth-child(17) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.8s; }
+      .calendar-grid > div:nth-child(18) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.1s; }
+      .calendar-grid > div:nth-child(19) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.4s; }
+      .calendar-grid > div:nth-child(20) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.7s; }
+      .calendar-grid > div:nth-child(21) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.1s; }
+      .calendar-grid > div:nth-child(22) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.4s; }
+      .calendar-grid > div:nth-child(23) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.7s; }
+      .calendar-grid > div:nth-child(24) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1s; }
+      .calendar-grid > div:nth-child(25) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.3s; }
+      .calendar-grid > div:nth-child(26) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.6s; }
+      .calendar-grid > div:nth-child(27) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 1.9s; }
+      .calendar-grid > div:nth-child(28) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.2s; }
+      .calendar-grid > div:nth-child(29) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.5s; }
+      .calendar-grid > div:nth-child(30) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 2.8s; }
+      .calendar-grid > div:nth-child(31) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.1s; }
+      .calendar-grid > div:nth-child(32) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.4s; }
+      .calendar-grid > div:nth-child(33) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 3.7s; }
+      .calendar-grid > div:nth-child(34) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4s; }
+      .calendar-grid > div:nth-child(35) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.3s; }
+      .calendar-grid > div:nth-child(36) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.6s; }
+      .calendar-grid > div:nth-child(37) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 4.9s; }
+      .calendar-grid > div:nth-child(38) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.2s; }
+      .calendar-grid > div:nth-child(39) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.5s; }
+      .calendar-grid > div:nth-child(40) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 5.8s; }
+      .calendar-grid > div:nth-child(41) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.2s; }
+      .calendar-grid > div:nth-child(42) .floating-glass-tile { animation: floatingGlass 5s ease-in-out infinite; animation-delay: 0.5s; }
       
       @media (prefers-reduced-motion: reduce) {
         .floating-glass-tile {
@@ -519,7 +516,7 @@ export default function InteractiveCalendar() {
             </div>
 
             {/* Calendar Days */}
-            <div className="grid grid-cols-7 gap-0 bg-background flex-1 overflow-visible relative">
+            <div className="calendar-grid grid grid-cols-7 gap-0 bg-background flex-1 overflow-visible relative">
               {calendarDays.map((day, _index) => {
                 const isLastColumn = (_index + 1) % 7 === 0;
                 const isLastRow = _index >= calendarDays.length - 7;

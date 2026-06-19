@@ -516,7 +516,7 @@ export default function InteractiveCalendar() {
             </div>
 
             {/* Calendar Days */}
-            <div className="grid grid-cols-7 gap-0 bg-background flex-1 overflow-visible relative">
+            <div className="calendar-grid grid grid-cols-7 gap-0 bg-background flex-1 overflow-visible relative">
               {calendarDays.map((day, _index) => {
                 const isLastColumn = (_index + 1) % 7 === 0;
                 const isLastRow = _index >= calendarDays.length - 7;

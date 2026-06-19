@@ -588,42 +588,41 @@ export default function InteractiveCalendar() {
     !isLastColumn ? 'border-r border-slate-300/80 dark:border-slate-700/80' : ''
   } ${!isLastRow ? 'border-b border-slate-300/80 dark:border-slate-700/80' : ''}`}
 >
-                    <motion.button
-                      type="button"
-                      onClick={() => isAvailableDate && openLeaveForm(day)}
-                      onMouseMove={isAvailableDate ? handleTileMouseMove : undefined}
-                      onMouseLeave={isAvailableDate ? handleTileMouseLeave : undefined}
-                      disabled={!isAvailableDate}
-                      aria-label={tooltipText}
-                      whileTap={isAvailableDate && !prefersReducedMotion.current ? { 
-                        y: -1
-                      } : undefined}
-                      transition={{ type: "spring", stiffness: 350, damping: 28, mass: 0.35, restDelta: 0.001, restSpeed: 0.001 }}
-                      className={`
-                        apply-leave-calendar calendar-parallax-tile
-                        w-full h-full relative group/tile flex flex-col items-center justify-center rounded-xl border overflow-hidden transform-gpu will-change-transform [transform-style:preserve-3d] [backface-visibility:hidden] font-medium text-xs
-                        transition-all duration-300 ease-out
-                        ${weekend ? 'bg-red-500/15 dark:bg-red-600/15 border-red-300/40 dark:border-red-700/40 text-red-700 dark:text-red-200 cursor-not-allowed backdrop-blur-sm shadow-inner' : ''}
-                        ${holiday ? 'bg-emerald-500/15 dark:bg-emerald-600/15 border-emerald-300/40 dark:border-emerald-700/40 text-emerald-700 dark:text-emerald-200 cursor-not-allowed backdrop-blur-sm shadow-inner' : ''}
-                        ${leave && leaveStatus === 'approved' ? 'bg-blue-500/15 dark:bg-blue-600/15 border-blue-300/40 dark:border-blue-700/40 text-blue-700 dark:text-blue-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
-                        ${leave && leaveStatus === 'pending' ? 'bg-yellow-500/15 dark:bg-yellow-600/15 border-yellow-300/40 dark:border-yellow-700/40 text-yellow-700 dark:text-yellow-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
-                        ${leave && leaveStatus === 'rejected' ? 'bg-red-500/15 dark:bg-red-600/15 border-red-300/40 dark:border-red-700/40 text-red-700 dark:text-red-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
-                        ${isAvailableDate ? `
-                          bg-white/35 dark:bg-slate-400/20
-                          border-white/45 dark:border-slate-300/40
-                          text-foreground 
-                          cursor-pointer 
-                          backdrop-blur-md
-                          shadow-lg shadow-white/10
-                          hover:bg-white/50 dark:hover:bg-slate-400/30
-                          hover:border-white/60 dark:hover:border-slate-300/60
-                          hover:shadow-[0_20px_60px_rgba(16,185,129,0.2),_0_0_40px_rgba(255,255,255,0.15)]
-                          hover:brightness-110
-                          dark:hover:shadow-[0_20px_60px_rgba(16,185,129,0.15),_0_0_40px_rgba(148,163,184,0.1)]
-                        ` : ''}
-                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60
-                      `}
-                    >
+                    {/* Wrapper for parallax scope */}
+                    <div className="apply-leave-calendar w-full h-full">
+                      <motion.button
+                        type="button"
+                        onClick={() => isAvailableDate && openLeaveForm(day)}
+                        onMouseMove={isAvailableDate ? handleTileMouseMove : undefined}
+                        onMouseLeave={isAvailableDate ? handleTileMouseLeave : undefined}
+                        disabled={!isAvailableDate}
+                        aria-label={tooltipText}
+                        transition={{ type: "spring", stiffness: 350, damping: 28, mass: 0.35, restDelta: 0.001, restSpeed: 0.001 }}
+                        className={`
+                          calendar-parallax-tile
+                          w-full h-full relative group/tile flex flex-col items-center justify-center rounded-xl border overflow-hidden transform-gpu will-change-transform [transform-style:preserve-3d] [backface-visibility:hidden] font-medium text-xs
+                          transition-all duration-300 ease-out
+                          ${weekend ? 'bg-red-500/15 dark:bg-red-600/15 border-red-300/40 dark:border-red-700/40 text-red-700 dark:text-red-200 cursor-not-allowed backdrop-blur-sm shadow-inner' : ''}
+                          ${holiday ? 'bg-emerald-500/15 dark:bg-emerald-600/15 border-emerald-300/40 dark:border-emerald-700/40 text-emerald-700 dark:text-emerald-200 cursor-not-allowed backdrop-blur-sm shadow-inner' : ''}
+                          ${leave && leaveStatus === 'approved' ? 'bg-blue-500/15 dark:bg-blue-600/15 border-blue-300/40 dark:border-blue-700/40 text-blue-700 dark:text-blue-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
+                          ${leave && leaveStatus === 'pending' ? 'bg-yellow-500/15 dark:bg-yellow-600/15 border-yellow-300/40 dark:border-yellow-700/40 text-yellow-700 dark:text-yellow-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
+                          ${leave && leaveStatus === 'rejected' ? 'bg-red-500/15 dark:bg-red-600/15 border-red-300/40 dark:border-red-700/40 text-red-700 dark:text-red-200 backdrop-blur-sm shadow-sm cursor-default' : ''}
+                          ${isAvailableDate ? `
+                            bg-white/35 dark:bg-slate-400/20
+                            border-white/45 dark:border-slate-300/40
+                            text-foreground 
+                            cursor-pointer 
+                            backdrop-blur-md
+                            shadow-lg shadow-white/10
+                            hover:bg-white/50 dark:hover:bg-slate-400/30
+                            hover:border-white/60 dark:hover:border-slate-300/60
+                            hover:shadow-[0_20px_60px_rgba(16,185,129,0.2),_0_0_40px_rgba(255,255,255,0.15)]
+                            hover:brightness-110
+                            dark:hover:shadow-[0_20px_60px_rgba(16,185,129,0.15),_0_0_40px_rgba(148,163,184,0.1)]
+                          ` : ''}
+                          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60
+                        `}
+                      >
                       {/* Premium parallax shine overlay */}
                       {isAvailableDate && (
                         <div 
@@ -651,6 +650,7 @@ export default function InteractiveCalendar() {
                         )}
                       </div>
                     </motion.button>
+                    </div>
                   </div>
                 );
               })}

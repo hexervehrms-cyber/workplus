@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { apiGet } from '../utils/apiHelper';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
@@ -88,6 +88,8 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
   const [successMessage, setSuccessMessage] = useState('');
   const [error, setError] = useState('');
 
+  const finalOrgId = organizationId;
+
   // Document-specific ID helper: prefer custom 'id' over '_id'
   // GeneratedDocument stores custom id that acknowledgments use
   const getDocumentId = (value: any): string =>
@@ -102,6 +104,47 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
       employee.user?._id,
       employee._id,
     ].filter(Boolean).map(String);
+
+  const handleDocumentSelect = useCallback(async (documentId: string) => {
+    setSelectedDocument(documentId);
+    try {
+      // Use new tracking endpoint that returns joined data
+      const response = await apiGet<{
+        data?: {
+          stats?: { totalEmployees: number; completed: number; pending: number; completionRate: number };
+          records?: any[];
+          document?: any;
+        };
+      }>(`documents/${encodeURIComponent(documentId)}/tracking`, false);
+
+      if (response?.data?.stats && response?.data?.records) {
+        // Backend provides stats - use them directly
+        const stats = response.data.stats;
+        const records = response.data.records || [];
+
+        // Map records to employee format
+        const mappedAcks: Acknowledgment[] = records.map((r: any) => ({
+          id: String(r.acknowledgmentId || `${documentId}-${r.employeeId}`),
+          documentId: String(documentId),
+          employeeId: String(r.userId || r.employeeId || ''),
+          employeeName: String(r.employeeName || ''),
+          organizationId: finalOrgId,
+          acknowledgedAt: String(r.acknowledgedAt || new Date().toISOString()),
+          status: r.status === 'Acknowledged' ? 'Completed' : 'Pending',
+          accepted: r.accepted === true,
+          ipAddress: '—',
+          userAgent: '—'
+        }));
+
+        setAcknowledgments(mappedAcks);
+        console.log('Tracking data loaded:', { stats, recordsCount: records.length });
+      }
+    } catch (error) {
+      console.error('Error loading tracking data:', error);
+      setError('Failed to load tracking data');
+      setTimeout(() => setError(''), 3000);
+    }
+  }, [finalOrgId]);
 
   useEffect(() => {
     loadData();
@@ -183,6 +226,21 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
   };
 
   const getDocumentStats = (documentId: string) => {
+    // If we have acknowledgments loaded from tracking endpoint, use those
+    if (acknowledgments.length > 0) {
+      const completed = acknowledgments.filter(ack => ack.status === 'Completed').length;
+      const total = acknowledgments.length + (acknowledgments.filter(ack => ack.status === 'Pending').length);
+      
+      // For the stats card, calculate totals from the full records
+      // This will be overridden when tracking endpoint is called
+      const pending = acknowledgments.filter(ack => ack.status === 'Pending').length;
+      return { 
+        total: Math.max(completed + pending, employees.length), 
+        completed, 
+        pending 
+      };
+    }
+
     const normalizedDocId = String(documentId || '');
     const doc = documents.find(d => String(d.id || '') === normalizedDocId);
     if (!doc) return { total: 0, completed: 0, pending: 0 };
@@ -293,7 +351,7 @@ const DocumentTracking: React.FC<DocumentTrackingProps> = ({
       {/* Document Selection */}
       <div className="mb-6">
         <Label>Select Document</Label>
-        <Select value={selectedDocument} onValueChange={setSelectedDocument}>
+        <Select value={selectedDocument} onValueChange={handleDocumentSelect}>
           <SelectTrigger className="mt-2 rounded-xl">
             <SelectValue placeholder="Choose a document to track" />
           </SelectTrigger>
